@@ -6,6 +6,7 @@ Only wiring lives here — the CLI is a thin front-end that will call the
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -13,6 +14,7 @@ import typer
 
 from comparo import __version__
 from comparo.adapters.httpx_client import HttpxClient
+from comparo.adapters.reporters import REPORTERS
 from comparo.core.compare import CellDiff
 from comparo.core.compare import diff_run
 from comparo.core.diagnostics import LoadError
@@ -22,6 +24,8 @@ from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
 from comparo.core.models import Request
+from comparo.core.report import RunReport
+from comparo.core.report import build_report
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
@@ -178,6 +182,13 @@ def diff(
     candidate: Annotated[
         str | None, typer.Option("--candidate", "-c", help="Candidate environment.")
     ] = None,
+    report: Annotated[
+        list[str] | None,
+        typer.Option("--report", help="Report format(s): junit, sarif, json, markdown."),
+    ] = None,
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Directory for report files.")
+    ] = Path("reports"),
 ) -> None:
     """Diff every request-cell across two environments and report drift.
 
@@ -187,6 +198,8 @@ def diff(
         pair: A named diff pair from the manifest.
         baseline: An explicit baseline environment (overrides the pair).
         candidate: An explicit candidate environment (overrides the pair).
+        report: Report format(s) to write.
+        output: The directory report files are written to.
     """
     try:
         loaded = load_project(project)
@@ -204,8 +217,32 @@ def diff(
         raise typer.Exit(1)
     results = asyncio.run(_diff(loaded, base_env, candidate_env, requests))
     passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name)
+    if report:
+        run_report = build_report(base_env.metadata.name, candidate_env.metadata.name, results)
+        _write_reports(run_report, report, output)
     if not passed:
         raise typer.Exit(1)
+
+
+def _write_reports(report: RunReport, formats: list[str], output: Path) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    for name in formats:
+        reporter = REPORTERS.get(name)
+        if reporter is None:
+            known = ", ".join(sorted(REPORTERS))
+            typer.secho(
+                f"unknown report format '{name}' (known: {known})", fg=typer.colors.YELLOW, err=True
+            )
+            continue
+        rendered = reporter.render(report)
+        destination = output / reporter.filename
+        destination.write_text(rendered, encoding="utf-8")
+        typer.secho(f"  wrote {destination}", dim=True)
+        if name == "markdown":
+            summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary:
+                with Path(summary).open("a", encoding="utf-8") as handle:
+                    handle.write(rendered + "\n")
 
 
 async def _diff(

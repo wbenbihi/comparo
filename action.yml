@@ -1,0 +1,56 @@
+name: comparo diff
+description: Diff HTTP responses across two environments and fail on regressions.
+author: Walid Benbihi
+branding:
+  icon: git-commit
+  color: blue
+
+inputs:
+  project:
+    description: Path to the comparo project directory.
+    required: true
+  pair:
+    description: A named diff pair from the project manifest.
+    required: false
+    default: ""
+  baseline:
+    description: Baseline environment (overrides the pair).
+    required: false
+    default: ""
+  candidate:
+    description: Candidate environment (overrides the pair).
+    required: false
+    default: ""
+  version:
+    description: comparo version specifier to install (e.g. "==1.2.0").
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        python-version: "3.13"
+
+    - name: Install comparo
+      shell: bash
+      run: uv tool install "comparo${{ inputs.version }}"
+
+    - name: Run comparo diff
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+        PAIR: ${{ inputs.pair }}
+        BASELINE: ${{ inputs.baseline }}
+        CANDIDATE: ${{ inputs.candidate }}
+      run: |
+        args=("$PROJECT")
+        [ -n "$PAIR" ] && args+=(--pair "$PAIR")
+        [ -n "$BASELINE" ] && args+=(--baseline "$BASELINE")
+        [ -n "$CANDIDATE" ] && args+=(--candidate "$CANDIDATE")
+        # The markdown reporter appends to $GITHUB_STEP_SUMMARY automatically.
+        comparo diff "${args[@]}" \
+          --report markdown --report junit --report sarif \
+          --output "$RUNNER_TEMP/comparo"
