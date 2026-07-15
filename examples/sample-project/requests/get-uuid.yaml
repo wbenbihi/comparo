@@ -1,0 +1,20 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Get UUID
+  id: request.get-uuid
+  description: Demonstrates volatile-field handling — the response differs every call.
+  tags:
+    - smoke
+    - volatile
+spec:
+  request:
+    method: GET
+    endpoint: /uuid
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    # The lenient profile ignores $.uuid, so a fresh value per call is not a regression.
+    diff:
+      $ref: diff.lenient

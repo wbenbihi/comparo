@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Lenient
+  id: diff.lenient
+  description: Ignore volatile fields; compare the parts we control by shape and value.
+spec:
+  # Unlisted paths: same shape (keys + types), values ignored.
+  default: shape
+  rules:
+    - path: $.uuid
+      mode: ignore          # /uuid returns a fresh value every call
+    - path: $.origin
+      mode: ignore          # caller IP address
+    - path: $.url
+      mode: ignore          # host differs between local and prod
+    - path: $.headers
+      mode: ignore          # Host, X-Amzn-Trace-Id, Authorization all vary
+    - path: $.args
+      mode: exact           # the query args we injected must round-trip exactly
+    - path: $.json
+      mode: exact           # the request body we sent must echo back identically

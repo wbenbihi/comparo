@@ -1,0 +1,42 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: httpbin-showcase
+  description: A runnable comparo project that diffs httpbin responses across environments.
+spec:
+  # Where the object tree lives, relative to this file.
+  data: .
+
+  environments:
+    default: prod
+    # A/B live comparison: replay every request against both and diff the responses.
+    diffPairs:
+      - name: local-vs-prod
+        baseline: local
+        candidate: prod
+
+  run:
+    concurrency: 4
+    retry:
+      attempts: 3
+      backoff: exponential
+
+  # Global default comparison profile; a request may override it with its own `diff:`.
+  diff:
+    default:
+      $ref: diff.lenient
+
+  # Headless default selection.
+  selection:
+    tags:
+      - smoke
+
+  report:
+    formats:
+      - junit
+      - markdown
+    output: ./reports
+
+  redaction:
+    # Mask anything equal to a known secret value, even if it arrives untainted.
+    stringMatchBackstop: true

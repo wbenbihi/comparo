@@ -1,0 +1,28 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Anything Echo
+  id: schema.anything-echo
+  description: The structure httpbin's /anything endpoint echoes back.
+spec:
+  type: object
+  required:
+    - method
+    - url
+    - headers
+    - json
+  properties:
+    method:
+      type: string
+    url:
+      type: string
+    origin:
+      type: string
+    headers:
+      type: object
+    args:
+      type: object
+    json:
+      type:
+        - object
+        - "null"

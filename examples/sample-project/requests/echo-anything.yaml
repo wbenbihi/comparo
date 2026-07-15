@@ -1,0 +1,31 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Echo Anything
+  id: request.echo-anything
+  description: >-
+    POST an order to /anything once per locale. Showcases matrix expansion,
+    variable interpolation, and a secret-bearing header.
+  tags:
+    - smoke
+    - matrix
+spec:
+  # Run once per locale; each case is merged into request.query (see matrix.locales).
+  matrix:
+    - $ref: matrix.locales
+  request:
+    method: POST
+    endpoint: /anything
+    headers:
+      $val: instance.auth-headers
+    body:
+      order:
+        sku: WIDGET-1
+        quantity: 3
+        note: Locale is ${DEFAULT_LOCALE}
+  response:
+    status: 200
+    schema:
+      $ref: schema.anything-echo
+    diff:
+      $ref: diff.lenient

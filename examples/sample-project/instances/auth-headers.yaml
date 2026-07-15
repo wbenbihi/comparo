@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Instance
+metadata:
+  name: Auth Headers
+  id: instance.auth-headers
+  description: Default headers plus a bearer token sourced from a secret.
+spec:
+  value:
+    - key: accept
+      value: application/json
+    - key: user-agent
+      value: comparo-showcase
+    - key: authorization
+      # ${API_TOKEN} resolves to the secret (secret-priority), so the value is
+      # tainted: masked in the TUI and scrubbed from reports and snapshots.
+      value: Bearer ${API_TOKEN}

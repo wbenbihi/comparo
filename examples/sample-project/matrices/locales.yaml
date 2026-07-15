@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Matrix
+metadata:
+  name: Locales
+  id: matrix.locales
+  description: Run a request once per locale, injecting the pair into the query string.
+spec:
+  # Injection target — each case is merged into the request's query map.
+  target: request.query
+  mode: merge
+  values:
+    - locale: en-US
+      currency: USD
+    - locale: fr-FR
+      currency: EUR
+    - locale: ja-JP
+      currency: JPY

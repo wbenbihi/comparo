@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Local
+  id: environment.local
+  description: A local httpbin (docker run -p 8080:80 kennethreitz/httpbin).
+spec:
+  baseUrl: http://localhost:8080
+  timeout:
+    connect: 2s
+    read: 10s
+  secrets:
+    # Dummy value via $literal — keeps the secret key-set identical across envs,
+    # so requests stay env-agnostic and taint never flips per environment.
+    API_TOKEN:
+      $literal: local-demo-token
+  variables:
+    DEFAULT_LOCALE: en-US
+  health:
+    - method: GET
+      endpoint: /status/200

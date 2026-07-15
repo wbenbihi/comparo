@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Get JSON
+  id: request.get-json
+  description: Fetch httpbin's static slideshow document and validate its structure.
+  tags:
+    - smoke
+    - structural
+spec:
+  request:
+    method: GET
+    endpoint: /json
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.slideshow
+    # /json is static, so it should match exactly across environments.
+    diff:
+      $ref: diff.strict

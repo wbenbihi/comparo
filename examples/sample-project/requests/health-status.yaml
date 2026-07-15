@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Health Status
+  id: request.health-status
+  description: A minimal status-only check — asserts the endpoint returns 200.
+  tags:
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /status/200
+  response:
+    status: 200
