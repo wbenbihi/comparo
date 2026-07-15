@@ -224,6 +224,28 @@ def diff(
         raise typer.Exit(1)
 
 
+@app.command()
+def tui(
+    project: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, help="Project directory."),
+    ],
+) -> None:
+    """Launch the terminal UI to explore a project.
+
+    Args:
+        project: The project directory to open.
+    """
+    try:
+        loaded = load_project(project)
+    except LoadError as error:
+        _print_load_error(error)
+        raise typer.Exit(1) from error
+    from comparo.tui.app import ComparoApp
+
+    ComparoApp(loaded).run()
+
+
 def _write_reports(report: RunReport, formats: list[str], output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     for name in formats:

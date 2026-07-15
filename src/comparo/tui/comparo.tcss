@@ -1,0 +1,50 @@
+/* comparo ink — meaning-named tokens as a Textual theme. */
+
+Screen {
+    background: #0d1017;
+    color: #c5d0de;
+}
+
+#topbar {
+    height: 1;
+    background: #131822;
+    color: #6d9eff;
+    padding: 0 1;
+}
+
+#body {
+    height: 1fr;
+}
+
+#tree {
+    width: 34;
+    background: #131822;
+    border-right: solid #28313f;
+    padding: 0 1;
+}
+
+#tree > .tree--cursor {
+    background: #182030;
+    color: #eaf0f8;
+    text-style: bold;
+}
+
+#tree > .tree--guides {
+    color: #28313f;
+}
+
+#detail {
+    width: 1fr;
+    padding: 0 2;
+    background: #0d1017;
+}
+
+Footer {
+    background: #131822;
+    color: #5c6878;
+}
+
+Footer > .footer--key {
+    background: #182030;
+    color: #6d9eff;
+}

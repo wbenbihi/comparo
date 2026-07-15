@@ -129,7 +129,8 @@ include_external_packages = true
 name = "Interfaces and adapters may depend on core; core depends on neither"
 type = "layers"
 layers = [
-  "comparo.cli | comparo.tui",
+  "comparo.cli",
+  "comparo.tui",
   "comparo.adapters",
   "comparo.core",
 ]
