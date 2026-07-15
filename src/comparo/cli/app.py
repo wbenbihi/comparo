@@ -13,6 +13,8 @@ import typer
 
 from comparo import __version__
 from comparo.adapters.httpx_client import HttpxClient
+from comparo.core.compare import CellDiff
+from comparo.core.compare import diff_run
 from comparo.core.diagnostics import LoadError
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_all
@@ -23,6 +25,7 @@ from comparo.core.models import Request
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
+from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
 
 app = typer.Typer(
@@ -157,6 +160,91 @@ def run_requests(
     _print_results(results, environment.metadata.name)
     if any(not execution.ok for execution in results):
         raise typer.Exit(1)
+
+
+@app.command()
+def diff(
+    project: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, help="Project directory."),
+    ],
+    request_id: Annotated[
+        str | None, typer.Argument(help="A single request id; omit to diff all.")
+    ] = None,
+    pair: Annotated[str | None, typer.Option("--pair", "-p", help="Named diff pair.")] = None,
+    baseline: Annotated[
+        str | None, typer.Option("--baseline", "-b", help="Baseline environment.")
+    ] = None,
+    candidate: Annotated[
+        str | None, typer.Option("--candidate", "-c", help="Candidate environment.")
+    ] = None,
+) -> None:
+    """Diff every request-cell across two environments and report drift.
+
+    Args:
+        project: The project directory to load.
+        request_id: A single request id to diff, or ``None`` for all.
+        pair: A named diff pair from the manifest.
+        baseline: An explicit baseline environment (overrides the pair).
+        candidate: An explicit candidate environment (overrides the pair).
+    """
+    try:
+        loaded = load_project(project)
+    except LoadError as error:
+        _print_load_error(error)
+        raise typer.Exit(1) from error
+    try:
+        base_env, candidate_env = resolve_pair(loaded, pair, baseline, candidate)
+    except EnvironmentSelectionError as error:
+        typer.secho(str(error), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from error
+    requests = _select_requests(loaded, request_id)
+    if not requests:
+        typer.secho("no requests to diff", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    results = asyncio.run(_diff(loaded, base_env, candidate_env, requests))
+    passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name)
+    if not passed:
+        raise typer.Exit(1)
+
+
+async def _diff(
+    loaded: LoadedProject, baseline: Environment, candidate: Environment, requests: list[Request]
+) -> list[CellDiff]:
+    client = HttpxClient()
+    try:
+        return await diff_run(loaded, baseline, candidate, requests, client)
+    finally:
+        await client.aclose()
+
+
+def _print_diffs(results: list[CellDiff], baseline_name: str, candidate_name: str) -> bool:
+    typer.secho(f"diff · {baseline_name} ⇄ {candidate_name}", bold=True)
+    same = drift = errors = skipped = 0
+    for cell in results:
+        identifier = cell.request.metadata.id or cell.request.metadata.name
+        if cell.cell_key:
+            identifier = f"{identifier} [{cell.cell_key}]"
+        skipped += cell.skipped
+        if cell.error is not None:
+            errors += 1
+            typer.secho(f"  ! {identifier:<44} {cell.error}", fg=typer.colors.YELLOW)
+        elif cell.drifted:
+            drift += 1
+            typer.secho(f"  ✗ {identifier:<44} drift", fg=typer.colors.RED)
+            for field in cell.drifts:
+                typer.echo(f"      {field.path}  {field.detail}")
+        else:
+            note = f"  ({cell.skipped} skipped)" if cell.skipped else ""
+            typer.secho(f"  ✓ {identifier:<44} same{note}", fg=typer.colors.GREEN)
+            same += 1
+    summary = f"{same} same · {drift} drift · {errors} error · {skipped} fields skipped"
+    typer.echo()
+    typer.secho(f"summary: {summary}", bold=True)
+    passed = drift == 0 and errors == 0
+    color = typer.colors.GREEN if passed else typer.colors.RED
+    typer.secho("gate: PASS" if passed else "gate: FAIL", fg=color)
+    return passed
 
 
 def _select_requests(loaded: LoadedProject, request_id: str | None) -> list[Request]:

@@ -61,6 +61,53 @@ def select_environment(project: LoadedProject, requested: str | None) -> Environ
     raise EnvironmentSelectionError(message)
 
 
+def resolve_pair(
+    project: LoadedProject, pair: str | None, baseline: str | None, candidate: str | None
+) -> tuple[Environment, Environment]:
+    """Resolve a baseline/candidate environment pair.
+
+    Explicit ``baseline`` and ``candidate`` win; otherwise a named (or the only)
+    ``diffPair`` from the project manifest is used.
+
+    Args:
+        project: The loaded project.
+        pair: A diff-pair name, or ``None`` for the first declared pair.
+        baseline: An explicit baseline environment name or id.
+        candidate: An explicit candidate environment name or id.
+
+    Returns:
+        The resolved (baseline, candidate) environments.
+
+    Raises:
+        EnvironmentSelectionError: If neither an explicit pair nor a manifest pair applies.
+    """
+    if baseline is not None and candidate is not None:
+        return select_environment(project, baseline), select_environment(project, candidate)
+    found = _find_pair(project, pair)
+    if found is not None:
+        return select_environment(project, found[0]), select_environment(project, found[1])
+    message = "specify --pair, or both --baseline and --candidate"
+    raise EnvironmentSelectionError(message)
+
+
+def _find_pair(project: LoadedProject, pair: str | None) -> tuple[str | None, str | None] | None:
+    if project.project is None:
+        return None
+    config = project.project.spec.environments
+    pairs = config.get("diffPairs") if isinstance(config, dict) else None
+    if not isinstance(pairs, list):
+        return None
+    for entry in pairs:
+        if isinstance(entry, dict) and (pair is None or entry.get("name") == pair):
+            found_baseline = entry.get("baseline")
+            found_candidate = entry.get("candidate")
+            return (
+                found_baseline if isinstance(found_baseline, str) else None,
+                found_candidate if isinstance(found_candidate, str) else None,
+            )
+    return None
+
+
 class Sink(enum.Enum):
     """Which resolution sink to produce."""
 
