@@ -123,6 +123,7 @@ skip_covered = true
 # ── Architecture guard: core must not import interfaces/adapters ─────────────
 [tool.importlinter]
 root_package = "comparo"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Interfaces and adapters may depend on core; core depends on neither"
@@ -132,6 +133,12 @@ layers = [
   "comparo.adapters",
   "comparo.core",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Core must not import an HTTP library directly"
+type = "forbidden"
+source_modules = ["comparo.core"]
+forbidden_modules = ["httpx"]
 
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]

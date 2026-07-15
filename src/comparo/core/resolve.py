@@ -17,8 +17,7 @@ from comparo.core.models import Instance
 from comparo.core.models import Request
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
-
-_SECRET_SIGILS = ("$secret", "$env", "$file")
+from comparo.core.secrets import ExecuteSecrets
 
 
 class EnvironmentSelectionError(Exception):
@@ -94,10 +93,20 @@ class Resolver:
         self.project = project
         self.environment = environment
         self.sink = sink
-        self.context = Context(
-            variables=dict(environment.spec.variables or {}),
-            secret_names=frozenset((environment.spec.secrets or {}).keys()),
-        )
+        secret_sources = environment.spec.secrets or {}
+        secret_names = frozenset(secret_sources)
+        if sink is Sink.EXECUTE:
+            self.context = Context(
+                variables=dict(environment.spec.variables or {}),
+                secret_names=secret_names,
+                mask_secrets=False,
+                secret_values=ExecuteSecrets(dict(secret_sources), project.root),
+            )
+        else:
+            self.context = Context(
+                variables=dict(environment.spec.variables or {}),
+                secret_names=secret_names,
+            )
 
     def resolve_request(self, request: Request) -> ResolvedRequest:
         """Resolve *request* into a concrete tree with a provenance trail.
@@ -167,7 +176,12 @@ class Resolver:
             return self._value(self._instance_value(target), path, trail)
         if sigil == "$literal":
             return target
-        if sigil in _SECRET_SIGILS:
+        if sigil == "$secret" and isinstance(target, str):
+            trail.append(Trail(path, Origin.SECRET, f"$secret:{target}"))
+            if self.context.mask_secrets:
+                return self.context.mask
+            return self.context.secret_values[target]
+        if sigil in ("$env", "$file"):
             trail.append(Trail(path, Origin.SECRET, f"{sigil}:{target}"))
             return self.context.mask
         return {sigil: target}

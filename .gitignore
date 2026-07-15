@@ -17,11 +17,15 @@ coverage.xml
 htmlcov/
 
 # Secrets — never commit resolved credentials or snapshot artifacts
+# (patterns target credential *files*, not source like secrets.py)
 .env
 .env.*
-*secret*
 *.pem
-secrets/
+*.key
+*-secret.txt
+*-secret.json
+*.credentials
+/secrets/
 
 # Editor / OS
 .idea/

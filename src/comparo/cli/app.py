@@ -4,6 +4,7 @@ Only wiring lives here — the CLI is a thin front-end that will call the
 :mod:`comparo.core` engine. No engine logic belongs in this module.
 """
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Annotated
@@ -11,8 +12,13 @@ from typing import Annotated
 import typer
 
 from comparo import __version__
+from comparo.adapters.httpx_client import HttpxClient
 from comparo.core.diagnostics import LoadError
+from comparo.core.execute import Execution
+from comparo.core.execute import execute_all
+from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
+from comparo.core.models import Environment
 from comparo.core.models import Request
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
@@ -113,6 +119,76 @@ def render(
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from error
     _print_resolved(Resolver(loaded, environment).resolve_request(obj), environment.metadata.name)
+
+
+@app.command(name="run")
+def run_requests(
+    project: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, dir_okay=True, help="Project directory."),
+    ],
+    request_id: Annotated[
+        str | None, typer.Argument(help="A single request id; omit to run all.")
+    ] = None,
+    env: Annotated[str | None, typer.Option("--env", "-e", help="Environment name or id.")] = None,
+) -> None:
+    """Execute requests against an environment and report status and latency.
+
+    Args:
+        project: The project directory to load.
+        request_id: A single request id to run, or ``None`` to run every request.
+        env: The environment to run against; defaults to the project default.
+    """
+    try:
+        loaded = load_project(project)
+    except LoadError as error:
+        _print_load_error(error)
+        raise typer.Exit(1) from error
+    try:
+        environment = select_environment(loaded, env)
+    except EnvironmentSelectionError as error:
+        typer.secho(str(error), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from error
+    requests = _select_requests(loaded, request_id)
+    if not requests:
+        typer.secho("no requests to run", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    results = asyncio.run(_execute(loaded, environment, requests))
+    _print_results(results, environment.metadata.name)
+    if any(not execution.ok for execution in results):
+        raise typer.Exit(1)
+
+
+def _select_requests(loaded: LoadedProject, request_id: str | None) -> list[Request]:
+    if request_id is not None:
+        obj = loaded.objects.get(request_id)
+        return [obj] if isinstance(obj, Request) else []
+    return sorted(
+        (o for o in loaded.objects.values() if isinstance(o, Request)),
+        key=lambda request: request.metadata.id or "",
+    )
+
+
+async def _execute(
+    loaded: LoadedProject, environment: Environment, requests: list[Request]
+) -> list[Execution]:
+    client = HttpxClient()
+    try:
+        return await execute_all(loaded, environment, requests, client)
+    finally:
+        await client.aclose()
+
+
+def _print_results(results: list[Execution], environment_name: str) -> None:
+    typer.secho(f"run · {environment_name}", bold=True)
+    for execution in results:
+        identifier = execution.request.metadata.id or execution.request.metadata.name
+        response = execution.response
+        if response is not None:
+            latency = f"{response.elapsed_ms:.0f}ms"
+            typer.secho(f"  ✓ {identifier:<28} {response.status}  {latency}", fg=typer.colors.GREEN)
+        else:
+            typer.secho(f"  ✗ {identifier:<28} {execution.error}", fg=typer.colors.RED)
 
 
 def _print_load_error(error: LoadError) -> None:

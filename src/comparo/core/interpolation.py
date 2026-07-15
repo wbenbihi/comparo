@@ -14,6 +14,7 @@ never be surfaced by writing it as a plain variable.
 
 import dataclasses
 import re
+from typing import Protocol
 
 from comparo.core.provenance import Origin
 
@@ -26,13 +27,32 @@ class InterpolationError(Exception):
     """Raised when a required variable is unset or a value cannot be cast."""
 
 
+class Secrets(Protocol):
+    """Resolves a secret name to its value; raises if it cannot."""
+
+    def __getitem__(self, name: str, /) -> str:
+        """Return the value of the secret named *name*."""
+        ...
+
+
+def _empty_secrets() -> Secrets:
+    return {}
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Context:
-    """The environment context interpolation resolves against."""
+    """The environment context interpolation resolves against.
+
+    In the display sink ``mask_secrets`` is true and every secret renders as
+    ``mask``; in the execute sink it is false and ``secret_values`` resolves the
+    real value lazily — so an unused, unavailable secret never fails a run.
+    """
 
     variables: dict[str, str]
     secret_names: frozenset[str]
     mask: str = "••••••"
+    mask_secrets: bool = True
+    secret_values: Secrets = dataclasses.field(default_factory=_empty_secrets)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -86,7 +106,8 @@ def interpolate(text: str, context: Context) -> Interpolated:
 def _resolve_one(inner: str, context: Context) -> Interpolated:
     name, cast, optional, default = _parse(inner)
     if name in context.secret_names:
-        return Interpolated(context.mask, Origin.SECRET, f"${{{name}}} → secret")
+        value = context.mask if context.mask_secrets else context.secret_values[name]
+        return Interpolated(value, Origin.SECRET, f"${{{name}}} → secret")
     if name in context.variables:
         return Interpolated(_cast(context.variables[name], cast), Origin.VARIABLE, f"${{{name}}}")
     if default is not None:
