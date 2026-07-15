@@ -183,12 +183,14 @@ def _print_results(results: list[Execution], environment_name: str) -> None:
     typer.secho(f"run · {environment_name}", bold=True)
     for execution in results:
         identifier = execution.request.metadata.id or execution.request.metadata.name
+        if execution.cell_key:
+            identifier = f"{identifier} [{execution.cell_key}]"
         response = execution.response
         if response is not None:
             latency = f"{response.elapsed_ms:.0f}ms"
-            typer.secho(f"  ✓ {identifier:<28} {response.status}  {latency}", fg=typer.colors.GREEN)
+            typer.secho(f"  ✓ {identifier:<44} {response.status}  {latency}", fg=typer.colors.GREEN)
         else:
-            typer.secho(f"  ✗ {identifier:<28} {execution.error}", fg=typer.colors.RED)
+            typer.secho(f"  ✗ {identifier:<44} {execution.error}", fg=typer.colors.RED)
 
 
 def _print_load_error(error: LoadError) -> None:

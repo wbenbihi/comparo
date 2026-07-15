@@ -12,6 +12,9 @@ import enum
 from comparo.core.interpolation import Context
 from comparo.core.interpolation import interpolate
 from comparo.core.loader import LoadedProject
+from comparo.core.matrix import Injection
+from comparo.core.matrix import MatrixCell
+from comparo.core.matrix import case_key
 from comparo.core.models import Environment
 from comparo.core.models import Instance
 from comparo.core.models import Request
@@ -108,11 +111,12 @@ class Resolver:
                 secret_names=secret_names,
             )
 
-    def resolve_request(self, request: Request) -> ResolvedRequest:
+    def resolve_request(self, request: Request, cell: MatrixCell | None = None) -> ResolvedRequest:
         """Resolve *request* into a concrete tree with a provenance trail.
 
         Args:
             request: The request object to resolve.
+            cell: The matrix cell to inject, or ``None`` for the base request.
 
         Returns:
             The resolved request; secret-tainted values are masked.
@@ -127,7 +131,24 @@ class Resolver:
             for key, value in (outbound.query or {}).items()
         }
         body = None if outbound.body is None else self._value(outbound.body, "body", trail)
-        return ResolvedRequest(outbound.method, url, headers, query, body, trail)
+        resolved = ResolvedRequest(outbound.method, url, headers, query, body, trail)
+        if cell is not None:
+            for injection in cell.injections:
+                self._inject(resolved, injection, trail)
+        return resolved
+
+    def _inject(self, resolved: ResolvedRequest, injection: Injection, trail: list[Trail]) -> None:
+        parts = injection.target.split(".")
+        if parts and parts[0] == "request":
+            parts = parts[1:]
+        if not parts:
+            return
+        trail.append(Trail(".".join(parts), Origin.MATRIX, case_key(injection.case)))
+        top, rest = parts[0], parts[1:]
+        if top == "query":
+            resolved.query = _as_dict(_apply(resolved.query, rest, injection))
+        elif top == "body":
+            resolved.body = _apply(resolved.body, rest, injection)
 
     def _headers(self, request_headers: object, trail: list[Trail]) -> list[tuple[str, object]]:
         merged: dict[str, tuple[str, object]] = {}
@@ -202,3 +223,26 @@ def _hole(node: dict[object, object]) -> tuple[str, object] | None:
 
 def _join(path: str, key: object) -> str:
     return f"{path}.{key}" if path else str(key)
+
+
+def _apply(container: object, path: list[str], injection: Injection) -> object:
+    if not path:
+        if injection.mode == "replace":
+            return dict(injection.case)
+        merged = dict(container) if isinstance(container, dict) else {}
+        merged.update(injection.case)
+        return merged
+    current = container if isinstance(container, dict) else ({} if injection.create_path else None)
+    if current is None:
+        return container
+    key = path[0]
+    child = current.get(key)
+    if child is None and injection.create_path:
+        child = {}
+    updated = dict(current)
+    updated[key] = _apply(child, path[1:], injection)
+    return updated
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}

@@ -15,6 +15,8 @@ from comparo.core.http import HttpResponse
 from comparo.core.http import TimeoutBudget
 from comparo.core.interpolation import InterpolationError
 from comparo.core.loader import LoadedProject
+from comparo.core.matrix import MatrixCell
+from comparo.core.matrix import expand
 from comparo.core.models import Environment
 from comparo.core.models import Request
 from comparo.core.resolve import Resolver
@@ -24,10 +26,11 @@ from comparo.core.secrets import SecretError
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Execution:
-    """The outcome of executing one request: a response, or an error."""
+    """The outcome of executing one request cell: a response, or an error."""
 
     request: Request
     environment: Environment
+    cell_key: str
     response: HttpResponse | None
     error: str | None = None
 
@@ -38,26 +41,32 @@ class Execution:
 
 
 async def execute_request(
-    project: LoadedProject, environment: Environment, request: Request, client: HttpClient
+    project: LoadedProject,
+    environment: Environment,
+    request: Request,
+    client: HttpClient,
+    cell: MatrixCell | None = None,
 ) -> Execution:
-    """Resolve and send one request, capturing any failure on the result.
+    """Resolve and send one request cell, capturing any failure on the result.
 
     Args:
         project: The loaded project (for reference resolution).
         environment: The environment to execute against.
         request: The request to execute.
         client: The transport to send through.
+        cell: The matrix cell to inject, or ``None`` for the base request.
 
     Returns:
         The execution outcome, with either a response or an error message.
     """
+    key = cell.key if cell is not None else ""
     try:
-        resolved = Resolver(project, environment, Sink.EXECUTE).resolve_request(request)
+        resolved = Resolver(project, environment, Sink.EXECUTE).resolve_request(request, cell)
         timeout = TimeoutBudget.resolve(request.spec.timeout, environment.spec.timeout)
         response = await client.send(resolved, timeout)
     except (SecretError, HttpError, InterpolationError) as error:
-        return Execution(request, environment, None, str(error))
-    return Execution(request, environment, response, None)
+        return Execution(request, environment, key, None, str(error))
+    return Execution(request, environment, key, response, None)
 
 
 async def execute_all(
@@ -67,7 +76,7 @@ async def execute_all(
     client: HttpClient,
     concurrency: int = 4,
 ) -> list[Execution]:
-    """Execute *requests* against *environment* with bounded concurrency.
+    """Execute every request, expanded across its matrices, with bounded concurrency.
 
     Args:
         project: The loaded project.
@@ -77,12 +86,13 @@ async def execute_all(
         concurrency: The maximum number of in-flight requests.
 
     Returns:
-        One execution outcome per request, in the input order.
+        One execution outcome per request cell.
     """
     limit = asyncio.Semaphore(concurrency)
 
-    async def _one(request: Request) -> Execution:
+    async def _one(request: Request, cell: MatrixCell) -> Execution:
         async with limit:
-            return await execute_request(project, environment, request, client)
+            return await execute_request(project, environment, request, client, cell)
 
-    return await asyncio.gather(*(_one(request) for request in requests))
+    coroutines = [_one(request, cell) for request in requests for cell in expand(project, request)]
+    return await asyncio.gather(*coroutines)

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from comparo.adapters.httpx_client import HttpxClient
+from comparo.core.execute import execute_all
 from comparo.core.execute import execute_request
 from comparo.core.http import HttpResponse
 from comparo.core.http import TimeoutBudget
@@ -67,6 +68,16 @@ def test_unused_secret_does_not_block(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeClient(HttpResponse(200, [], b"{}", 5.0))
     result = asyncio.run(execute_request(loaded, env, request, fake))
     assert result.ok
+
+
+def test_execute_all_expands_matrix() -> None:
+    loaded = load_project(SAMPLE)
+    env = select_environment(loaded, "local")
+    requests = [obj for obj in loaded.objects.values() if isinstance(obj, Request)]
+    fake = _FakeClient(HttpResponse(200, [], b"{}", 1.0))
+    results = asyncio.run(execute_all(loaded, env, requests, fake))
+    assert len(results) == 6  # echo-anything expands to 3 cells; the other 3 are 1 each
+    assert any("ja-JP" in execution.cell_key for execution in results)
 
 
 def test_timeout_budget_request_wins() -> None:
