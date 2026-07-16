@@ -236,13 +236,13 @@ def tui(
     Args:
         project: The project directory to open.
     """
+    from comparo.tui.app import ComparoApp
+
     try:
         loaded = load_project(project)
     except LoadError as error:
-        _print_load_error(error)
+        ComparoApp.from_error(error).run()
         raise typer.Exit(1) from error
-    from comparo.tui.app import ComparoApp
-
     ComparoApp(loaded).run()
 
 

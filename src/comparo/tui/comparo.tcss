@@ -126,6 +126,61 @@ Screen {
     height: 1fr;
 }
 
+/* ── error / replacement screen ──────────────────────────────────────────── */
+#error-view {
+    height: 1fr;
+    margin: 1 1 0 1;
+    padding: 1 2;
+    background: $surface;
+    border: round $error;
+    border-title-color: $error;
+    border-title-align: left;
+    border-subtitle-color: $text-muted;
+    border-subtitle-align: right;
+}
+
+/* ── modals (filter, graph) ──────────────────────────────────────────────── */
+FilterModal, GraphModal {
+    align: center middle;
+    background: $background 65%;
+}
+
+.modal {
+    background: $surface;
+    border: round $accent;
+    border-title-color: $accent;
+    border-title-align: left;
+    border-subtitle-color: $text-muted;
+    border-subtitle-align: right;
+    padding: 1 2;
+}
+
+#filter-dialog {
+    width: 56;
+    height: auto;
+}
+
+#filter-input {
+    margin: 0;
+    border: round $border;
+    background: $background;
+}
+
+#filter-input:focus {
+    border: round $accent;
+}
+
+#filter-count {
+    padding: 1 0 0 0;
+    color: $text-muted;
+}
+
+#graph-dialog {
+    width: 88;
+    max-width: 92%;
+    height: 80%;
+}
+
 /* ── status bar ──────────────────────────────────────────────────────────── */
 #statusbar {
     dock: bottom;
