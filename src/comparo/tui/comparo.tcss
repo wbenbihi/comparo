@@ -305,15 +305,42 @@ Screen {
 }
 
 /* ── Diff ────────────────────────────────────────────────────────────────── */
-#drift-panel {
-    width: 34;
+#diff-progress {
+    height: 1;
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+#diff-cols {
+    height: 1fr;
+}
+
+#col-drift {
+    width: 42;
     height: 1fr;
     margin-right: 1;
 }
 
-#diffpane-panel {
+#col-compare {
     width: 1fr;
     height: 1fr;
+}
+
+#drift-table {
+    background: transparent;
+    width: 1fr;
+    height: 1fr;
+}
+
+#drift-table > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: none;
+}
+
+#drift-table > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
 }
 
 /* ── error / replacement screen ──────────────────────────────────────────── */

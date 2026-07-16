@@ -49,9 +49,11 @@ from comparo.core.checks import passed as checks_passed
 from comparo.core.checks import run_checks
 from comparo.core.compare import CellDiff
 from comparo.core.compare import diff_run
+from comparo.core.compare import profile_for
 from comparo.core.curl import to_curl
 from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
+from comparo.core.diff import FieldDiff
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_request
 from comparo.core.export import RunEntry
@@ -82,6 +84,8 @@ from comparo.core.resolve import Sink
 from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
 from comparo.core.secrets import SecretError
+from comparo.core.triage import TriageError
+from comparo.core.triage import silence
 from comparo.tui.theme import COMPARO_INK
 
 _INK = "#0d1017"
@@ -182,8 +186,9 @@ _RUNNING_DONE_KEYS = (
     ("q", "quit"),
 )
 _DIFF_KEYS = (
-    ("↑↓", "cells"),
+    ("↑↓", "fields"),
     ("x", "run diff"),
+    ("i", "ignore field"),
     ("?", "help"),
     ("q", "quit"),
 )
@@ -280,8 +285,9 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("s", "RUNNING — save the finished run's results (secrets masked)"),
     ),
     "diff": (
-        ("x", "replay every request against both environments and diff"),
-        ("↑ ↓", "move through the cells"),
+        ("x", "replay every request against the baseline ⇄ candidate pair"),
+        ("↑ ↓", "move through the drifted fields (grouped across cells)"),
+        ("i", "silence the selected field — writes an ignore rule to its DiffProfile"),
     ),
     "report": (
         ("j", "export JUnit XML"),
@@ -1355,8 +1361,18 @@ class RunView(Vertical):
         return next((c for c in expand(self.project, request) if c.key == cell_key), None)
 
 
-class DiffView(Horizontal):
-    """Replay every request against a baseline/candidate pair and diff the results."""
+class DiffView(Vertical):
+    """The signature diff: replay a pair, group drift by field, silence to config.
+
+    ``x`` runs the manifest's baseline ⇄ candidate pair; drifts collapse to one
+    row per field (a field that drifts on three cells is one bug, not three).
+    Selecting a field shows the tri-state comparison; ``i`` silences it by
+    writing an ignore rule into the request's committed DiffProfile.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("i", "silence", "ignore field"),
+    ]
 
     def __init__(self, project: LoadedProject) -> None:
         """Build the diff view.
@@ -1368,16 +1384,21 @@ class DiffView(Horizontal):
         self.project = project
         self._cells: list[CellDiff] = []
         self._pair: tuple[Environment, Environment] | None = None
+        self._groups: list[tuple[str, list[tuple[CellDiff, FieldDiff]]]] = []
+        self._run_id: str | None = None
+        self._done = False
 
     def compose(self) -> ComposeResult:
-        """Yield the cell list and the field-diff panel."""
-        with Vertical(id="drift-panel", classes="panel"):
-            yield Static(id="drift-content")
-        with VerticalScroll(id="diffpane-panel", classes="panel hero"):
-            yield Static(id="diff-detail")
+        """Yield the progress line, the drift table, and the comparison panel."""
+        yield Static(id="diff-progress")
+        with Horizontal(id="diff-cols"):
+            with Vertical(id="col-drift", classes="panel"):
+                yield DataTable(id="drift-table", cursor_type="row")
+            with VerticalScroll(id="col-compare", classes="panel hero"):
+                yield Static(id="compare-content")
 
     def on_mount(self) -> None:
-        """Resolve the diff pair and render."""
+        """Resolve the diff pair and render the ready state."""
         self.refresh_screen()
 
     def refresh_screen(self) -> None:
@@ -1386,27 +1407,45 @@ class DiffView(Horizontal):
             self._pair = resolve_pair(self.project, None, None, None)
         except EnvironmentSelectionError:
             self._pair = None
-        self.query_one("#drift-panel").border_title = "CELLS"
-        pane = self.query_one("#diffpane-panel")
-        if self._pair is not None:
-            baseline, candidate = self._pair
-            pane.border_title = Text.from_markup(
-                f"{baseline.metadata.name}  [{_DIM}]⇄[/]  {candidate.metadata.name}"
-            )
-        else:
-            pane.border_title = "DIFF"
-        drift = sum(1 for cell in self._cells if cell.drifted)
-        pane.border_subtitle = f"{drift} drift" if self._cells else "press x to run"
-        self.query_one("#drift-content", Static).update(_diff_cells(self._cells))
-        self.query_one("#diff-detail", Static).update(_diff_pane(self._cells, self._pair))
+        self._render_progress()
+        self._populate_drift()
+        self.query_one("#drift-table", DataTable).focus()
 
     def execute(self) -> None:
         """Run the diff across the pair."""
         if self._pair is None:
             self.app.notify("No diffPairs configured in the project manifest", severity="warning")
             return
-        self.query_one("#diffpane-panel").border_subtitle = "running…"
+        self._run_id = uuid4().hex[:6]
+        self._done = False
+        self._render_progress()
         self.run_worker(self._run(self._pair), exclusive=True, group="diff")
+
+    def action_silence(self) -> None:
+        """Write an ignore rule for the selected drifted field into its DiffProfile."""
+        group = self._selected_group()
+        if group is None:
+            self.app.notify("Select a drifted field to silence", severity="information")
+            return
+        path, entries = group
+        written: set[str] = set()
+        for cell, _ in entries:
+            profile = profile_for(self.project, cell.request)
+            if profile is None or profile.metadata.id is None:
+                continue
+            try:
+                file = silence(self.project, profile.metadata.id, path)
+            except TriageError as error:
+                self.app.notify(str(error), title="Could not silence", severity="error")
+                return
+            written.add(str(file))
+        if not written:
+            self.app.notify("No diff profile to write to", severity="warning")
+            return
+        self.app.notify(
+            f"Ignoring {path} — wrote {', '.join(sorted(written))}. Re-run to confirm.",
+            title="Silenced",
+        )
 
     async def _run(self, pair: tuple[Environment, Environment]) -> None:
         from comparo.adapters.httpx_client import HttpxClient
@@ -1421,7 +1460,10 @@ class DiffView(Horizontal):
             await client.aclose()
         report = build_report(baseline.metadata.name, candidate.metadata.name, self._cells)
         cast("ComparoApp", self.app).last_report = report
-        self.refresh_screen()
+        self._done = True
+        self._regroup()
+        self._render_progress()
+        self._populate_drift()
         drift = sum(1 for cell in self._cells if cell.drifted)
         errors = sum(1 for cell in self._cells if cell.error is not None)
         passed = drift == 0 and errors == 0
@@ -1430,6 +1472,103 @@ class DiffView(Horizontal):
             title="Diff complete",
             severity="information" if passed else "error",
         )
+
+    def _regroup(self) -> None:
+        groups: dict[str, list[tuple[CellDiff, FieldDiff]]] = {}
+        for cell in self._cells:
+            for field in cell.drifts:
+                groups.setdefault(field.path, []).append((cell, field))
+        self._groups = sorted(groups.items())
+
+    def _populate_drift(self) -> None:
+        table = self.query_one("#drift-table", DataTable)
+        table.clear(columns=True)
+        table.add_column("", key="st", width=3)
+        table.add_column("FIELD", key="field")
+        table.add_column("CELLS", key="cells", width=7)
+        table.add_column("MODE", key="mode", width=10)
+        if not self._groups:
+            self.query_one("#col-drift").border_title = "DRIFT"
+            self.query_one("#compare-content", Static).update(_diff_ready(self._cells, self._pair))
+            return
+        errors = [c for c in self._cells if c.error is not None]
+        for path, entries in self._groups:
+            table.add_row(
+                Text("✗", style=_DRIFT),
+                Text(path, style=_TEXT_HI),
+                Text(f"×{len(entries)}", style=_AXIS),
+                Text(entries[0][1].mode, style=_MODE.get(entries[0][1].mode, _DIM)),
+                key=f"drift::{path}",
+            )
+        for cell in errors:
+            table.add_row(
+                Text("!", style=_WARN),
+                Text(cell.request.metadata.name, style=_WARN),
+                Text("err", style=_DIM),
+                Text("", style=_DIM),
+                key=f"error::{cell.cell_key}::{id(cell)}",
+            )
+        self.query_one("#col-drift").border_title = Text.from_markup(
+            f"DRIFT [{_DIM}]· grouped by field[/]"
+        )
+        self._show_field(self._groups[0][0])
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Show the field comparison for the highlighted drift."""
+        key = event.row_key.value
+        if key is not None and key.startswith("drift::"):
+            self._show_field(key.removeprefix("drift::"))
+
+    def _selected_group(self) -> tuple[str, list[tuple[CellDiff, FieldDiff]]] | None:
+        table = self.query_one("#drift-table", DataTable)
+        if table.row_count == 0:
+            return None
+        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if key is None or not key.startswith("drift::"):
+            return None
+        path = key.removeprefix("drift::")
+        return next((group for group in self._groups if group[0] == path), None)
+
+    def _show_field(self, path: str) -> None:
+        group = next((g for g in self._groups if g[0] == path), None)
+        wrap = self.query_one("#col-compare")
+        if group is None:
+            wrap.border_title = "COMPARE"
+            return
+        wrap.border_title = Text.from_markup(f"COMPARE [{_DIM}]·[/] {path}")
+        self.query_one("#compare-content", Static).update(_diff_field(group, self._pair))
+
+    def _render_progress(self) -> None:
+        text = Text()
+        if self._pair is None:
+            text.append("no diff pair configured", style=_WARN)
+            self.query_one("#diff-progress", Static).update(text)
+            return
+        baseline, candidate = self._pair
+        text.append("diff ", style=_DIM)
+        if self._run_id:
+            text.append(self._run_id, style=f"bold {_ACCENT}")
+            text.append("  ", style=_DIM)
+        text.append(baseline.metadata.name, style=_TEXT_HI)
+        text.append(" ⇄ ", style=_DIM)
+        text.append(candidate.metadata.name, style=_TEXT_HI)
+        if self._cells:
+            same = sum(1 for c in self._cells if not c.drifted and c.error is None)
+            drift = sum(1 for c in self._cells if c.drifted)
+            errors = sum(1 for c in self._cells if c.error is not None)
+            skipped = sum(c.skipped for c in self._cells)
+            text.append(f"    {same} same", style=_SAME)
+            text.append(" · ", style=_DIM)
+            text.append(f"{drift} drift", style=_DRIFT if drift else _DIM)
+            text.append(" · ", style=_DIM)
+            text.append(f"{errors} error", style=_WARN if errors else _DIM)
+            text.append(" · ", style=_DIM)
+            text.append(f"{skipped} skipped", style=_SKIP)
+        else:
+            text.append("    press ", style=_DIM)
+            text.append("x", style=f"bold {_ACCENT}")
+            text.append(" to run", style=_DIM)
+        self.query_one("#diff-progress", Static).update(text)
 
 
 class ReportView(Vertical):
@@ -2829,72 +2968,78 @@ class _HtmlOutline(HTMLParser):
             self._stack[-1].add_leaf(Text(text[:200], style=_TEXT))
 
 
-def _diff_cells(cells: list[CellDiff]) -> Text:
-    if not cells:
-        return Text("press x to run the diff", style=_DIM)
-    text = Text()
-    for cell in cells:
-        if cell.error is not None:
-            glyph, colour = "!", _WARN
-        elif cell.drifted:
-            glyph, colour = "✗", _DRIFT
-        else:
-            glyph, colour = "✓", _SAME
-        text.append(f" {glyph} ", style=f"bold {colour}")
-        text.append(cell.request.metadata.name, style=_TEXT_HI if cell.drifted else _TEXT)
-        if cell.cell_key:
-            text.append(f"\n    {cell.cell_key}", style=_AXIS)
-        text.append("\n")
-    return text
-
-
-def _diff_pane(cells: list[CellDiff], pair: tuple[Environment, Environment] | None) -> Text:
-    if not cells:
-        return _diff_empty(pair)
-    notable = [cell for cell in cells if cell.drifted or cell.error is not None]
-    if not notable:
-        return Text("✓ every cell is identical — gate PASS", style=f"bold {_SAME}")
-    text = Text()
-    for cell in notable:
-        name = cell.request.metadata.id or cell.request.metadata.name
-        title = f"{name} · {cell.cell_key}" if cell.cell_key else name
-        if cell.error is not None:
-            text.append(f"! {title}\n", style=f"bold {_WARN}")
-            text.append(f"  {cell.error}\n\n", style=_DIM)
-            continue
-        text.append(f"✗ {title}\n", style=f"bold {_DRIFT}")
-        for field in cell.drifts:
-            text.append("  ▌ ", style=_DRIFT)
-            text.append(f"{field.path}  ", style=_TEXT_HI)
-            text.append(f"{field.detail}\n", style=_DIM)
-        text.append("\n")
-    return text
-
-
-def _diff_empty(pair: tuple[Environment, Environment] | None) -> Text:
-    text = Text()
+def _diff_ready(cells: list[CellDiff], pair: tuple[Environment, Environment] | None) -> Group:
+    parts: list[RenderableType] = []
     if pair is None:
-        text.append("No diff pair configured.\n\n", style=f"bold {_WARN}")
+        text = Text("No diff pair configured.\n\n", style=f"bold {_WARN}")
         text.append("Add one to the project manifest:\n\n", style=_DIM)
         text.append(
             "  environments:\n    diffPairs:\n      - name: local-vs-prod\n"
             "        baseline: local\n        candidate: prod",
             style=_TEXT,
         )
-        return text
+        return Group(text)
     baseline, candidate = pair
-    ready = f"Ready to diff {baseline.metadata.name} ⇄ {candidate.metadata.name}.\n\n"
-    text.append(ready, style=_TEXT_HI)
-    text.append("Press ", style=_DIM)
-    text.append("x", style=f"bold {_ACCENT}")
-    text.append(" to replay every request against both and compare.\n\n", style=_DIM)
+    if cells:
+        parts.append(Text("✓ every compared field is identical — gate PASS", style=f"bold {_SAME}"))
+    else:
+        head = Text(style=_TEXT_HI)
+        head.append(f"Ready to diff {baseline.metadata.name} ⇄ {candidate.metadata.name}.\n\n")
+        head.append("Press ", style=_DIM)
+        head.append("x", style=f"bold {_ACCENT}")
+        head.append(" to replay every request against both and compare.", style=_DIM)
+        parts.append(head)
+    parts.append(_diff_legend())
+    return Group(*parts)
+
+
+def _diff_legend() -> Text:
+    text = Text("\n")
     text.append("▏", style=_SAME)
-    text.append(" identical    ", style=_DIM)
+    text.append(" compared · identical    ", style=_DIM)
     text.append("▌", style=_DRIFT)
-    text.append(" drift    ", style=_DIM)
-    text.append("╎", style=_SKIP)
+    text.append(" compared · ", style=_DIM)
+    text.append("drift", style=_DRIFT)
+    text.append("    ╎", style=_SKIP)
     text.append(" not compared", style=_DIM)
     return text
+
+
+def _diff_field(
+    group: tuple[str, list[tuple[CellDiff, FieldDiff]]],
+    pair: tuple[Environment, Environment] | None,
+) -> Group:
+    path, entries = group
+    baseline = pair[0].metadata.name if pair else "A"
+    candidate = pair[1].metadata.name if pair else "B"
+    parts: list[RenderableType] = []
+    header = Text(f"{path}", style=f"bold {_DRIFT}")
+    header.append(f"   drifts on {len(entries)} cell{'' if len(entries) == 1 else 's'}", style=_DIM)
+    parts.append(header)
+    for cell, field in entries:
+        block = Text("\n")
+        block.append(f"{cell.cell_key or cell.request.metadata.name}", style=_AXIS)
+        block.append(f"   {field.mode}\n", style=_MODE.get(field.mode, _DIM))
+        before, sep, after = field.detail.partition(" → ")
+        if sep:
+            block.append("  ▌ ", style=_DRIFT)
+            block.append(f"{baseline:<10}", style=_DIM)
+            block.append(before, style=_SAME)
+            block.append("\n  ▌ ", style=_DRIFT)
+            block.append(f"{candidate:<10}", style=_DIM)
+            block.append(after, style=_DRIFT)
+            block.append("\n")
+        else:
+            block.append("  ▌ ", style=_DRIFT)
+            block.append(field.detail or "differs", style=_TEXT)
+            block.append("\n")
+        parts.append(block)
+    parts.append(_diff_legend())
+    hint = Text("\npress ", style=_DIM)
+    hint.append("i", style=f"bold {_ACCENT}")
+    hint.append(" to silence this field — writes an ignore rule to the profile", style=_DIM)
+    parts.append(hint)
+    return Group(*parts)
 
 
 def _report_breakdown(report: RunReport) -> Table:
