@@ -43,6 +43,7 @@ from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 from textual.worker import Worker
 
+from comparo.adapters.reporters import REPORTERS
 from comparo.core.checks import Check
 from comparo.core.checks import passed as checks_passed
 from comparo.core.checks import run_checks
@@ -187,7 +188,8 @@ _DIFF_KEYS = (
     ("q", "quit"),
 )
 _REPORT_KEYS = (
-    ("↑↓", "scroll"),
+    ("j/s/m/o", "export"),
+    ("enter", "write all"),
     ("?", "help"),
     ("q", "quit"),
 )
@@ -281,7 +283,13 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("x", "replay every request against both environments and diff"),
         ("↑ ↓", "move through the cells"),
     ),
-    "report": (("(read-only)", "the report of the most recent diff run"),),
+    "report": (
+        ("j", "export JUnit XML"),
+        ("s", "export SARIF"),
+        ("m", "export Markdown (GitHub step summary)"),
+        ("o", "export JSON"),
+        ("enter", "write every report format"),
+    ),
     "settings": (("(read-only)", "the effective project configuration"),),
     "error": (("r", "re-check the project after editing the files"),),
 }
@@ -1425,16 +1433,41 @@ class DiffView(Horizontal):
 
 
 class ReportView(Vertical):
-    """Render the report of the most recent diff run."""
+    """The CI pillar: a verdict-first gate, a breakdown, and exporters.
 
-    def __init__(self) -> None:
-        """Build the report view."""
+    Reads the most recent diff run. ``j`` / ``s`` / ``m`` / ``o`` write JUnit,
+    SARIF, Markdown, or JSON; ``enter`` writes them all — the same reporters the
+    headless ``comparo diff --report`` uses, so the gate matches CI exactly.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("j", "export('junit')", "JUnit"),
+        Binding("s", "export('sarif')", "SARIF"),
+        Binding("m", "export('markdown')", "Markdown"),
+        Binding("o", "export('json')", "JSON"),
+        Binding("enter", "export_all", "write all"),
+    ]
+
+    def __init__(self, project: LoadedProject) -> None:
+        """Build the report view.
+
+        Args:
+            project: The project (used to locate the report output directory).
+        """
         super().__init__(id="report-view", classes="view")
+        self.project = project
 
     def compose(self) -> ComposeResult:
-        """Yield the report panel."""
-        with VerticalScroll(id="report-panel", classes="panel hero"):
-            yield Static(id="report-content")
+        """Yield the gate banner, the stat pills, and the breakdown/export columns."""
+        yield Static(id="report-gate", classes="panel")
+        with Horizontal(id="report-pills"):
+            for stat in ("calls", "same", "drift", "error", "skipped"):
+                yield Static(id=f"pill-{stat}", classes="pill")
+        with Horizontal(id="report-cols"):
+            with VerticalScroll(id="report-breakdown", classes="panel hero"):
+                yield Static(id="report-breakdown-content")
+            with VerticalScroll(id="report-export", classes="panel"):
+                yield Static(id="report-export-content")
 
     def on_mount(self) -> None:
         """Render the last report, if any."""
@@ -1443,18 +1476,88 @@ class ReportView(Vertical):
     def refresh_screen(self) -> None:
         """Re-render from the app's last diff report."""
         report = cast("ComparoApp", self.app).last_report
-        panel = self.query_one("#report-panel")
-        content = self.query_one("#report-content", Static)
+        gate = self.query_one("#report-gate")
+        pills = self.query_one("#report-pills")
+        cols = self.query_one("#report-cols")
         if report is None:
-            panel.border_title = "REPORT"
-            panel.border_subtitle = "no run yet"
-            content.update(Text("Run a diff (press x on the Diff screen) to build a report.", _DIM))
+            gate.remove_class("pass", "fail")
+            gate.border_title = "GATE"
+            self.query_one("#report-gate", Static).update(
+                Text("Run a diff (press x on the Diff screen) to build a report.", style=_DIM)
+            )
+            pills.display = False
+            cols.display = False
             return
-        panel.border_title = Text.from_markup(
-            f"REPORT  [{_DIM}]{report.baseline} ⇄ {report.candidate}[/]"
-        )
-        panel.border_subtitle = "gate PASS" if report.passed else "gate FAIL"
-        content.update(_report_render(report))
+        pills.display = True
+        cols.display = True
+        self._render_gate(report)
+        self._render_pills(report)
+        self.query_one("#report-breakdown", VerticalScroll).border_title = "BREAKDOWN"
+        self.query_one("#report-export", VerticalScroll).border_title = "EXPORT"
+        self.query_one("#report-breakdown-content", Static).update(_report_breakdown(report))
+        self.query_one("#report-export-content", Static).update(_report_export(self._output()))
+
+    def action_export(self, fmt: str) -> None:
+        """Write a single report format."""
+        self._write([fmt])
+
+    def action_export_all(self) -> None:
+        """Write every report format."""
+        self._write(["junit", "sarif", "markdown", "json"])
+
+    def _write(self, formats: list[str]) -> None:
+        report = cast("ComparoApp", self.app).last_report
+        if report is None:
+            self.app.notify("No report yet — run a diff first", severity="information")
+            return
+        output = self._output()
+        try:
+            output.mkdir(parents=True, exist_ok=True)
+            written = []
+            for name in formats:
+                reporter = REPORTERS[name]
+                (output / reporter.filename).write_text(reporter.render(report), encoding="utf-8")
+                written.append(reporter.filename)
+        except OSError as error:
+            self.app.notify(str(error), title="Export failed", severity="error")
+            return
+        self.app.notify(f"Wrote {', '.join(written)} to {output}", title="Exported")
+
+    def _output(self) -> Path:
+        manifest = self.project.project
+        config = manifest.spec.report if manifest else None
+        output = config.get("output") if isinstance(config, dict) else None
+        return self.project.root / (output if isinstance(output, str) else "reports")
+
+    def _render_gate(self, report: RunReport) -> None:
+        gate = self.query_one("#report-gate")
+        gate.set_class(report.passed, "pass")
+        gate.set_class(not report.passed, "fail")
+        gate.border_title = "GATE"
+        text = Text()
+        if report.passed:
+            text.append("✓  gate PASS", style=f"bold {_SAME}")
+            text.append("   CI would pass", style=_DIM)
+        else:
+            text.append("✗  gate FAIL", style=f"bold {_DRIFT}")
+            text.append(
+                f"   {report.drift} drift · {report.errors} error block the run", style=_DIM
+            )
+        self.query_one("#report-gate", Static).update(text)
+
+    def _render_pills(self, report: RunReport) -> None:
+        stats = [
+            ("calls", len(report.cells), _TEXT_HI),
+            ("same", report.same, _SAME),
+            ("drift", report.drift, _DRIFT if report.drift else _DIM),
+            ("error", report.errors, _WARN if report.errors else _DIM),
+            ("skipped", report.skipped, _SKIP),
+        ]
+        for name, value, colour in stats:
+            pill = Text()
+            pill.append(f"{value}\n", style=f"bold {colour}")
+            pill.append(name, style=_DIM)
+            self.query_one(f"#pill-{name}", Static).update(pill)
 
 
 class SettingsView(Vertical):
@@ -1874,7 +1977,7 @@ class ComparoApp(App[None]):
                 yield ExplorerView(project, self.environment)
                 yield RunView(project)
                 yield DiffView(project)
-                yield ReportView()
+                yield ReportView(project)
                 yield SettingsView(project)
         yield StatusBar()
 
@@ -2794,30 +2897,52 @@ def _diff_empty(pair: tuple[Environment, Environment] | None) -> Text:
     return text
 
 
-def _report_render(report: RunReport) -> Group:
-    header = Text()
-    verdict = "PASS\n" if report.passed else "FAIL\n"
-    header.append(f"gate {verdict}", style=f"bold {_SAME if report.passed else _DRIFT}")
-    header.append(
-        f"{report.same} same · {report.drift} drift · {report.errors} error"
-        f" · {report.skipped} fields skipped\n",
-        style=_TEXT,
-    )
-    table = _table()
-    table.add_column("", width=2)
-    table.add_column("REQUEST", style=_TEXT_HI, no_wrap=True)
-    table.add_column("CASE", style=_AXIS)
-    table.add_column("STATE", justify="right")
-    glyphs = {"same": ("✓", _SAME), "drift": ("✗", _DRIFT), "error": ("!", _WARN)}
+def _report_breakdown(report: RunReport) -> Table:
+    grouped: dict[str, dict[str, int]] = {}
     for cell in report.cells:
-        glyph, colour = glyphs.get(cell.state, ("○", _DIM))
+        tally = grouped.setdefault(cell.request_id, {"same": 0, "drift": 0, "error": 0, "skip": 0})
+        tally[cell.state] = tally.get(cell.state, 0) + 1
+        tally["skip"] += cell.skipped
+    table = _table()
+    table.add_column("REQUEST", style=_TEXT_HI, no_wrap=True)
+    table.add_column("SAME", justify="right", width=6)
+    table.add_column("DRIFT", justify="right", width=6)
+    table.add_column("SKIP", justify="right", width=6)
+    table.add_column("VERDICT", justify="right", width=9)
+    for request_id, tally in grouped.items():
+        if tally["error"]:
+            verdict = Text("! error", style=_WARN)
+        elif tally["drift"]:
+            verdict = Text("✗ drift", style=_DRIFT)
+        else:
+            verdict = Text("✓ pass", style=_SAME)
         table.add_row(
-            Text(glyph, style=colour),
-            Text(cell.request_id, style=_TEXT_HI),
-            Text(cell.cell_key or "—", style=_AXIS),
-            Text(cell.state, style=colour),
+            Text(request_id, style=_TEXT_HI),
+            Text(str(tally["same"]), style=_SAME if tally["same"] else _DIM),
+            Text(str(tally["drift"]), style=_DRIFT if tally["drift"] else _DIM),
+            Text(str(tally["skip"]), style=_SKIP if tally["skip"] else _DIM),
+            verdict,
         )
-    return Group(header, table)
+    return table
+
+
+def _report_export(output: Path) -> Text:
+    text = Text()
+    for key, name, filename in (
+        ("j", "JUnit", "junit.xml"),
+        ("s", "SARIF", "comparo.sarif"),
+        ("m", "Markdown", "summary.md"),
+        ("o", "JSON", "report.json"),
+    ):
+        text.append(f"  {key}  ", style=f"bold {_ACCENT}")
+        text.append(f"{name:<10}", style=_TEXT_HI)
+        text.append(f"→ {output}/{filename}\n", style=_DIM)
+    text.append("\n  enter", style=f"bold {_ACCENT}")
+    text.append("  write every format\n\n", style=_TEXT)
+    text.append("the same reporters ", style=_DIM)
+    text.append("comparo diff --report", style=_ACCENT)
+    text.append(" uses —\nso the gate here matches CI exactly.", style=_DIM)
+    return text
 
 
 def _settings_render(project: LoadedProject, environment: Environment | None) -> Text:
