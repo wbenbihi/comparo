@@ -9,9 +9,12 @@ this module.
 
 import asyncio
 import json
+from datetime import datetime
+from pathlib import Path
 from typing import ClassVar
 from typing import Literal
 from typing import cast
+from uuid import uuid4
 
 import msgspec
 from rich.console import Group
@@ -37,6 +40,7 @@ from textual.widgets import SelectionList
 from textual.widgets import Static
 from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
+from textual.worker import Worker
 
 from comparo.core.checks import Check
 from comparo.core.checks import passed as checks_passed
@@ -48,6 +52,8 @@ from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_request
+from comparo.core.export import RunEntry
+from comparo.core.export import export_run
 from comparo.core.health import Health
 from comparo.core.health import HealthReport
 from comparo.core.health import check_health
@@ -600,18 +606,20 @@ class ExplorerView(Horizontal):
 
 
 class RunView(Vertical):
-    """A drill-down of tables: requests → matrix cells → a full per-cell report.
+    """The Run screen: a PREPARE state to pick work, a RUNNING state to watch it.
 
-    The requests table shows each request's cell count, aggregate status, and
-    how many cells are handled. ``enter`` drills in — to a request's matrix
-    cells (with status code and checks), and from there to a full report of one
-    cell. ``space`` toggles selection, ``m`` picks cases, ``x`` runs, ``esc``
-    goes back up a level.
+    The two states use different layouts on purpose. PREPARE is a calm checklist
+    of requests (``space`` toggles, ``m`` picks matrix cases, ``x`` runs).
+    RUNNING is a progress bar over three Miller columns — requests, the selected
+    request's variants, and a full per-cell report — that stream live. ``a``
+    aborts back to PREPARE; ``s`` saves masked results once a run finishes.
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "up", "back"),
-        Binding("space", "toggle_selection", "toggle"),
+        Binding("escape", "back", "back"),
+        Binding("backspace", "back", "back"),
+        Binding("a", "abort", "abort"),
+        Binding("s", "save", "save"),
     ]
 
     def __init__(self, project: LoadedProject) -> None:
@@ -626,81 +634,94 @@ class RunView(Vertical):
         self._state: dict[tuple[str, str], str] = {}
         self._exec: dict[tuple[str, str], Execution] = {}
         self._checks: dict[tuple[str, str], list[Check]] = {}
-        self._level = "requests"
+        self._prep_nodes: dict[tuple[str, str], TreeNode[object]] = {}
+        self._prep_branches: dict[str, TreeNode[object]] = {}
+        self._view = "requests"
+        self._run_id: str | None = None
         self._focus: Request | None = None
         self._focus_cell: MatrixCell | None = None
-        self._busy = False
+        self._worker: Worker[None] | None = None
+        self._done = False
 
     def compose(self) -> ComposeResult:
-        """Yield the switchable table and report panels."""
-        with ContentSwitcher(initial="run-table-wrap", id="run-switch"):
-            with Vertical(id="run-table-wrap", classes="panel hero"):
-                yield DataTable(id="run-table", cursor_type="row", zebra_stripes=True)
-            with VerticalScroll(id="run-report-wrap", classes="panel hero"):
-                yield Static(id="run-report")
+        """Yield the two states behind a switcher."""
+        with ContentSwitcher(initial="prepare", id="run-mode"):
+            with Vertical(id="prepare"), Vertical(id="prepare-panel", classes="panel hero"):
+                yield Static(id="prepare-head")
+                yield Tree("requests", id="prepare-tree")
+                yield Static(id="prepare-cta")
+            with Vertical(id="running"):
+                yield Static(id="run-progress")
+                with Horizontal(id="run-columns", classes="only-r"):
+                    with Vertical(id="col-requests", classes="panel"):
+                        yield DataTable(id="req-table", cursor_type="row")
+                    with Vertical(id="col-variants", classes="panel"):
+                        yield DataTable(id="var-table", cursor_type="row")
+                    with VerticalScroll(id="col-details", classes="panel"):
+                        yield Static(id="run-details")
 
     def on_mount(self) -> None:
-        """Select everything by default and show the requests table."""
+        """Select everything and build the prepare checklist."""
         for request in _requests(self.project):
             for cell in expand(self.project, request):
                 self._selected.add(_run_key(request, cell))
-        self._show_requests()
+        tree: Tree[object] = self.query_one("#prepare-tree", Tree)
+        tree.show_root = False
+        tree.guide_depth = 2
+        self._build_prepare()
 
     def refresh_screen(self) -> None:
-        """Re-render the current level for the current environment."""
-        if self._level == "cells" and self._focus is not None:
-            self._show_cells(self._focus)
-        elif self._level == "report" and self._focus is not None and self._focus_cell is not None:
-            self._show_report(self._focus, self._focus_cell)
+        """Re-title and focus the primary widget of the current state."""
+        if self.query_one("#run-mode", ContentSwitcher).current == "prepare":
+            self._title_prepare()
+            self.query_one("#prepare-tree", Tree).focus()
         else:
-            self._show_requests()
+            self._render_progress()
+            self._layout()
 
-    def execute(self) -> None:
-        """Run the selected request cells against the current environment."""
-        environment = _app_env(self)
-        if environment is None:
-            self.app.notify("Pick an environment in the Explorer first", severity="warning")
-            return
-        plan = self._plan()
-        if not plan:
-            self.app.notify("Nothing selected to run", severity="warning")
-            return
-        self.run_worker(self._run(environment, plan), exclusive=True, group="run")
-
-    def action_up(self) -> None:
-        """Go back up one level."""
-        if self._level == "report" and self._focus is not None:
-            if len(expand(self.project, self._focus)) > 1:
-                self._show_cells(self._focus)
+    # ── PREPARE ──────────────────────────────────────────────────────────────
+    def _build_prepare(self) -> None:
+        tree: Tree[object] = self.query_one("#prepare-tree", Tree)
+        tree.clear()
+        self._prep_nodes = {}
+        self._prep_branches = {}
+        for request in _requests(self.project):
+            cells = expand(self.project, request)
+            if len(cells) == 1:
+                node = tree.root.add_leaf(
+                    self._prep_label(request, cells[0]), data=(request, cells[0])
+                )
+                self._prep_nodes[_run_key(request, cells[0])] = node
             else:
-                self._show_requests()
-        elif self._level == "cells":
-            self._show_requests()
+                branch = tree.root.add(
+                    self._prep_request_label(request), data=(request, None), expand=False
+                )
+                self._prep_branches[request.metadata.id or request.metadata.name] = branch
+                for cell in cells:
+                    leaf = branch.add_leaf(self._prep_label(request, cell), data=(request, cell))
+                    self._prep_nodes[_run_key(request, cell)] = leaf
+        self._title_prepare()
 
-    def action_toggle_selection(self) -> None:
-        """Toggle the cursor row in or out of the run."""
-        if self._busy or self._level == "report":
+    def on_tree_node_selected(self, event: Tree.NodeSelected[object]) -> None:
+        """Toggle the node in or out of the run on Enter."""
+        request, cell = _pair(event.node)
+        if request is None:
             return
-        key = self._cursor_key()
-        if key is None:
-            return
-        if self._level == "requests":
-            request = self._by_id(key)
-            if request is None:
-                return
-            keys = {_run_key(request, cell) for cell in expand(self.project, request)}
+        if cell is None:  # a request branch — toggle all its cells
+            keys = {_run_key(request, c) for c in expand(self.project, request)}
             if keys <= self._selected:
                 self._selected -= keys
             else:
                 self._selected |= keys
-        elif self._focus is not None:
-            self._selected ^= {(self._focus.metadata.id or self._focus.metadata.name, key)}
-        self._refresh_row(key)
-        self._title()
+        else:
+            self._selected ^= {_run_key(request, cell)}
+        self._relabel_prepare(request)
+        self._title_prepare()
 
     def open_case_picker(self) -> None:
-        """Open the matrix-case multi-select for the current request."""
-        request = self._current_request()
+        """Open the matrix-case multi-select for the highlighted request."""
+        node = self.query_one("#prepare-tree", Tree).cursor_node
+        request, _ = _pair(node)
         if request is None:
             return
         cells = expand(self.project, request)
@@ -714,206 +735,6 @@ class RunView(Vertical):
             lambda keys: self._apply_cases(request, cells, keys),
         )
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Drill into the selected row."""
-        key = event.row_key.value
-        if key is None:
-            return
-        if self._level == "requests":
-            request = self._by_id(key)
-            if request is None:
-                return
-            cells = expand(self.project, request)
-            if len(cells) > 1:
-                self._show_cells(request)
-            else:
-                self._show_report(request, cells[0])
-        elif self._level == "cells" and self._focus is not None:
-            cell = self._cell_by_key(self._focus, key)
-            if cell is not None:
-                self._show_report(self._focus, cell)
-
-    async def _run(self, environment: Environment, plan: list[tuple[Request, MatrixCell]]) -> None:
-        from comparo.adapters.httpx_client import HttpxClient
-
-        self._busy = True
-        for request, cell in plan:
-            self._state[_run_key(request, cell)] = "running"
-        self._refresh_current()
-        client = HttpxClient()
-        limit = asyncio.Semaphore(4)
-
-        async def one(request: Request, cell: MatrixCell) -> None:
-            async with limit:
-                execution = await execute_request(self.project, environment, request, client, cell)
-            key = _run_key(request, cell)
-            self._exec[key] = execution
-            self._checks[key] = run_checks(self.project, request, execution)
-            self._state[key] = "ok" if execution.ok else "failed"
-            self._on_cell_done(request, cell)
-
-        try:
-            await asyncio.gather(*(one(request, cell) for request, cell in plan))
-        finally:
-            await client.aclose()
-            self._busy = False
-        ok = sum(1 for request, cell in plan if self._cell_ok(request, cell))
-        self.app.notify(
-            f"{ok}/{len(plan)} cells passed every check",
-            title="Run complete",
-            severity="information" if ok == len(plan) else "warning",
-        )
-
-    # ── level renders ──────────────────────────────────────────────────────
-    def _show_requests(self) -> None:
-        self._level = "requests"
-        self.query_one("#run-switch", ContentSwitcher).current = "run-table-wrap"
-        table = self.query_one("#run-table", DataTable)
-        table.clear(columns=True)
-        table.add_column("", key="sel", width=3)
-        table.add_column("REQUEST", key="name")
-        table.add_column("METHOD", key="method", width=8)
-        table.add_column("CELLS", key="cells", width=6)
-        table.add_column("STATUS", key="status", width=12)
-        table.add_column("HANDLED", key="handled", width=9)
-        for request in _requests(self.project):
-            row_key = request.metadata.id or request.metadata.name
-            table.add_row(*self._request_row(request), key=row_key)
-        self._title()
-        table.focus()
-
-    def _show_cells(self, request: Request) -> None:
-        self._level = "cells"
-        self._focus = request
-        self.query_one("#run-switch", ContentSwitcher).current = "run-table-wrap"
-        table = self.query_one("#run-table", DataTable)
-        table.clear(columns=True)
-        table.add_column("", key="sel", width=3)
-        table.add_column("CASE", key="case")
-        table.add_column("STATUS", key="status", width=8)
-        table.add_column("CODE", key="code", width=6)
-        table.add_column("CHECKS", key="checks", width=18)
-        table.add_column("LATENCY", key="latency", width=9)
-        for cell in expand(self.project, request):
-            table.add_row(*self._cell_row(request, cell), key=cell.key)
-        self._title()
-        table.focus()
-
-    def _show_report(self, request: Request, cell: MatrixCell) -> None:
-        self._level = "report"
-        self._focus = request
-        self._focus_cell = cell
-        self.query_one("#run-switch", ContentSwitcher).current = "run-report-wrap"
-        environment = _app_env(self)
-        key = _run_key(request, cell)
-        self.query_one("#run-report", Static).update(
-            _report_full(
-                self.project,
-                environment,
-                request,
-                cell,
-                self._exec.get(key),
-                self._state.get(key, "pending"),
-                self._checks.get(key, []),
-            )
-        )
-        self._title()
-
-    def _title(self) -> None:
-        environment = _app_env(self)
-        env = environment.metadata.name if environment else "no environment"
-        sep = f" [{_DIM}]›[/] "
-        if self._level == "requests":
-            wrap = self.query_one("#run-table-wrap")
-            wrap.border_title = "REQUESTS"
-            wrap.border_subtitle = f"{env} · {len(self._selected)} selected"
-        elif self._level == "cells" and self._focus is not None:
-            wrap = self.query_one("#run-table-wrap")
-            wrap.border_title = Text.from_markup(f"REQUESTS{sep}{self._focus.metadata.name}")
-            wrap.border_subtitle = f"{len(expand(self.project, self._focus))} cases · esc back"
-        elif self._level == "report" and self._focus is not None and self._focus_cell is not None:
-            wrap = self.query_one("#run-report-wrap")
-            crumb = f"REQUESTS{sep}{self._focus.metadata.name}"
-            if self._focus_cell.key:
-                crumb += f"{sep}{self._focus_cell.key}"
-            wrap.border_title = Text.from_markup(crumb)
-            wrap.border_subtitle = "esc back"
-
-    # ── rows ───────────────────────────────────────────────────────────────
-    def _request_row(self, request: Request) -> list[Text]:
-        cells = expand(self.project, request)
-        keys = {_run_key(request, cell) for cell in cells}
-        chosen = len(keys & self._selected)
-        box = "[✓]" if chosen == len(keys) else "[~]" if chosen else "[ ]"
-        status = self._request_status(request)
-        glyph, colour = _STATUS[status]
-        method = request.spec.request.method
-        return [
-            Text(box, style=_ACCENT if chosen else _DIM),
-            Text(request.metadata.name, style=_TEXT_HI),
-            Text(method, style=_METHOD.get(method, _TEXT)),
-            Text(f"×{len(cells)}", style=_AXIS),
-            Text(f"{glyph} {status}", style=colour),
-            Text(self._handled(request), style=_DIM),
-        ]
-
-    def _cell_row(self, request: Request, cell: MatrixCell) -> list[Text]:
-        key = _run_key(request, cell)
-        selected = key in self._selected
-        state = self._state.get(key, "pending")
-        glyph, colour = _RUN_GLYPH[state]
-        execution = self._exec.get(key)
-        response = execution.response if execution else None
-        code = str(response.status) if response else "—"
-        latency = f"{response.elapsed_ms:.0f}ms" if response else "—"
-        code_colour = _SAME if code.startswith("2") else _DIM if code == "—" else _WARN
-        return [
-            Text("[✓]" if selected else "[ ]", style=_ACCENT if selected else _DIM),
-            Text(cell.key or "base", style=_TEXT),
-            Text(glyph, style=colour),
-            Text(code, style=code_colour),
-            _checks_cell(self._checks.get(key, [])),
-            Text(latency, style=_DIM),
-        ]
-
-    def _refresh_row(self, key: str) -> None:
-        table = self.query_one("#run-table", DataTable)
-        if self._level == "requests":
-            request = self._by_id(key)
-            if request is None:
-                return
-            columns = ("sel", "name", "method", "cells", "status", "handled")
-            for column, value in zip(columns, self._request_row(request), strict=True):
-                table.update_cell(key, column, value)
-        elif self._level == "cells" and self._focus is not None:
-            cell = self._cell_by_key(self._focus, key)
-            if cell is None:
-                return
-            columns = ("sel", "case", "status", "code", "checks", "latency")
-            for column, value in zip(columns, self._cell_row(self._focus, cell), strict=True):
-                table.update_cell(key, column, value)
-
-    def _refresh_current(self) -> None:
-        if self._level == "requests":
-            for request in _requests(self.project):
-                self._refresh_row(request.metadata.id or request.metadata.name)
-        elif self._level == "cells" and self._focus is not None:
-            for cell in expand(self.project, self._focus):
-                self._refresh_row(cell.key)
-
-    def _on_cell_done(self, request: Request, cell: MatrixCell) -> None:
-        if self._level == "requests":
-            self._refresh_row(request.metadata.id or request.metadata.name)
-        elif self._level == "cells" and self._focus is request:
-            self._refresh_row(cell.key)
-        elif (
-            self._level == "report"
-            and self._focus is request
-            and self._focus_cell is not None
-            and self._focus_cell.key == cell.key
-        ):
-            self._show_report(request, cell)
-
     def _apply_cases(
         self, request: Request, cells: list[MatrixCell], keys: set[str] | None
     ) -> None:
@@ -921,16 +742,399 @@ class RunView(Vertical):
             return
         request_id = request.metadata.id or request.metadata.name
         for cell in cells:
-            key = (request_id, cell.key)
-            self._selected.add(key) if cell.key in keys else self._selected.discard(key)
-        if self._level == "requests":
-            self._refresh_row(request_id)
-        elif self._level == "cells" and self._focus is request:
-            for cell in cells:
-                self._refresh_row(cell.key)
-        self._title()
+            self._selected.add(
+                (request_id, cell.key)
+            ) if cell.key in keys else self._selected.discard((request_id, cell.key))
+        self._relabel_prepare(request)
+        self._title_prepare()
 
-    # ── status model ───────────────────────────────────────────────────────
+    def _relabel_prepare(self, request: Request) -> None:
+        for cell in expand(self.project, request):
+            node = self._prep_nodes.get(_run_key(request, cell))
+            if node is not None:
+                node.set_label(self._prep_label(request, cell))
+        branch = self._prep_branches.get(request.metadata.id or request.metadata.name)
+        if branch is not None:
+            branch.set_label(self._prep_request_label(request))
+
+    def _prep_label(self, request: Request, cell: MatrixCell) -> Text:
+        key = _run_key(request, cell)
+        on = key in self._selected
+        row = Text()
+        row.append("◉ " if on else "○ ", style=_ACCENT if on else _DIM)
+        row.append(cell.key or request.metadata.name, style=_TEXT if on else _DIM)
+        return row
+
+    def _prep_request_label(self, request: Request) -> Text:
+        cells = expand(self.project, request)
+        chosen = sum(1 for c in cells if _run_key(request, c) in self._selected)
+        on = chosen > 0
+        row = Text()
+        row.append(
+            "◉ " if chosen == len(cells) else "◐ " if on else "○ ", style=_ACCENT if on else _DIM
+        )
+        row.append(request.metadata.name, style=f"bold {_TEXT_HI}" if on else _DIM)
+        method = request.spec.request.method
+        row.append(f"  {method}", style=_METHOD.get(method, _DIM))
+        row.append(f"  {chosen}/{len(cells)} cases", style=_AXIS if on else _DIM)
+        return row
+
+    def _title_prepare(self) -> None:
+        environment = _app_env(self)
+        env = environment.metadata.name if environment else "no environment"
+        panel = self.query_one("#prepare-panel")
+        panel.border_title = "PREPARE"
+        panel.border_subtitle = "space select · m cases · x run"
+        head = Text()
+        head.append("environment   ", style=_LABEL)
+        head.append(env, style=_ACCENT if environment else _DIM)
+        self.query_one("#prepare-head", Static).update(head)
+        requests = sum(
+            1
+            for r in _requests(self.project)
+            if any(_run_key(r, c) in self._selected for c in expand(self.project, r))
+        )
+        cells = len(self._selected)
+        cta = Text()
+        cta.append("▶ ", style=f"bold {_ACCENT}")
+        cta.append(f"{cells} case{'' if cells == 1 else 's'}", style=f"bold {_TEXT_HI}")
+        cta.append(f" across {requests} request{'' if requests == 1 else 's'}", style=_TEXT)
+        cta.append("   press ", style=_DIM)
+        cta.append("x", style=f"bold {_ACCENT}")
+        cta.append(" to run", style=_DIM)
+        self.query_one("#prepare-cta", Static).update(cta)
+
+    # ── RUN LIFECYCLE ────────────────────────────────────────────────────────
+    def execute(self) -> None:
+        """Start a run of the selected cells; switch to the RUNNING state."""
+        environment = _app_env(self)
+        if environment is None:
+            self.app.notify("Pick an environment in the Explorer first", severity="warning")
+            return
+        plan = self._plan()
+        if not plan:
+            self.app.notify("Nothing selected to run", severity="warning")
+            return
+        self._done = False
+        self._run_id = uuid4().hex[:6]
+        self._focus = None
+        self._focus_cell = None
+        self._view = "requests"
+        for request, cell in plan:
+            key = _run_key(request, cell)
+            self._state[key] = "pending"
+            self._exec.pop(key, None)
+            self._checks.pop(key, None)
+        self.query_one("#run-mode", ContentSwitcher).current = "running"
+        self._populate_requests()
+        self._layout()
+        self._render_progress()
+        self._worker = self.run_worker(self._run(environment, plan), exclusive=True, group="run")
+
+    async def _run(self, environment: Environment, plan: list[tuple[Request, MatrixCell]]) -> None:
+        from comparo.adapters.httpx_client import HttpxClient
+
+        client = HttpxClient()
+        limit = asyncio.Semaphore(4)
+
+        async def one(request: Request, cell: MatrixCell) -> None:
+            key = _run_key(request, cell)
+            self._state[key] = "running"
+            self._on_progress(request, cell)
+            async with limit:
+                execution = await execute_request(self.project, environment, request, client, cell)
+            self._exec[key] = execution
+            self._checks[key] = run_checks(self.project, request, execution)
+            self._state[key] = "ok" if execution.ok else "failed"
+            self._on_progress(request, cell)
+
+        try:
+            await asyncio.gather(*(one(request, cell) for request, cell in plan))
+        finally:
+            await client.aclose()
+        self._done = True
+        self._render_progress()
+        ok = sum(1 for request, cell in plan if self._cell_ok(request, cell))
+        self.app.notify(
+            f"{ok}/{len(plan)} cells passed — press s to save",
+            title="Run complete",
+            severity="information" if ok == len(plan) else "warning",
+        )
+
+    def action_abort(self) -> None:
+        """Cancel a running run and return to PREPARE."""
+        if self.query_one("#run-mode", ContentSwitcher).current != "running" or self._done:
+            return
+        if self._worker is not None:
+            self._worker.cancel()
+        for key, state in list(self._state.items()):
+            if state in ("running", "pending"):
+                self._state[key] = "pending"
+        self.query_one("#run-mode", ContentSwitcher).current = "prepare"
+        self.query_one("#prepare-tree", Tree).focus()
+        self.app.notify("Run aborted", severity="warning")
+
+    def action_save(self) -> None:
+        """Save the completed run's results to a masked JSON file."""
+        mode = self.query_one("#run-mode", ContentSwitcher).current
+        if mode != "running" or not self._done or self._run_id is None:
+            self.app.notify("Finish a run before saving", severity="information")
+            return
+        environment = _app_env(self)
+        if environment is None:
+            return
+        entries = [
+            RunEntry(request, cell, self._exec[key], self._checks.get(key, []))
+            for request, cell in self._plan()
+            if (key := _run_key(request, cell)) in self._exec
+        ]
+        try:
+            path = _save_run(self.project, environment, self._run_id, entries)
+        except OSError as error:
+            self.app.notify(str(error), title="Could not save", severity="error")
+            return
+        self.app.notify(f"Saved run {self._run_id} to {path}", title="Saved")
+
+    def action_back(self) -> None:
+        """Collapse one split, or from the requests column back to PREPARE."""
+        if self.query_one("#run-mode", ContentSwitcher).current != "running":
+            return
+        if self._view == "details":
+            self._view = "variants" if self._has_variants() else "requests"
+            self._layout()
+        elif self._view == "variants":
+            self._view = "requests"
+            self._layout()
+        else:
+            self.query_one("#run-mode", ContentSwitcher).current = "prepare"
+            self.query_one("#prepare-tree", Tree).focus()
+
+    # ── RUNNING COLUMNS ──────────────────────────────────────────────────────
+    def _has_variants(self) -> bool:
+        return self._focus is not None and len(self._plan_cells(self._focus)) > 1
+
+    def _layout(self) -> None:
+        if self._view == "requests":
+            cls, focus = "only-r", "#req-table"
+        elif self._view == "variants":
+            cls, focus = "r-v", "#var-table"
+        elif self._has_variants():
+            cls, focus = "r-v-d", "#var-table"
+        else:
+            cls, focus = "r-d", "#req-table"
+        self.query_one("#run-columns").set_classes(cls)
+        self.query_one(focus).focus()
+
+    def _open_request(self, request: Request) -> None:
+        cells = self._plan_cells(request)
+        if not cells:
+            return
+        self._focus = request
+        if len(cells) == 1:
+            self._focus_cell = cells[0]
+            self._populate_details(request, cells[0])
+            self._view = "details"
+        else:
+            self._populate_variants(request)
+            self._view = "variants"
+        self._layout()
+
+    def _open_variant(self, cell: MatrixCell) -> None:
+        if self._focus is None:
+            return
+        self._focus_cell = cell
+        self._populate_details(self._focus, cell)
+        self._view = "details"
+        self._layout()
+
+    def _populate_requests(self) -> None:
+        table = self.query_one("#req-table", DataTable)
+        table.clear(columns=True)
+        table.add_column("", key="state", width=3)
+        table.add_column("REQUEST", key="name")
+        table.add_column("VARIANTS", key="strip")
+        table.add_column("P50", key="p50", width=8)
+        for request in self._plan_requests():
+            table.add_row(
+                *self._request_row(request), key=request.metadata.id or request.metadata.name
+            )
+
+    def _populate_variants(self, request: Request) -> None:
+        self._focus = request
+        wrap = self.query_one("#col-variants")
+        wrap.border_title = Text.from_markup(f"VARIANTS [{_DIM}]·[/] {request.metadata.name}")
+        table = self.query_one("#var-table", DataTable)
+        table.clear(columns=True)
+        table.add_column("", key="st", width=3)
+        table.add_column("CASE", key="case")
+        table.add_column("HTTP", key="http", width=6)
+        table.add_column("TIME", key="time", width=8)
+        table.add_column("RESULT", key="result")
+        for cell in self._plan_cells(request):
+            table.add_row(*self._variant_row(request, cell), key=cell.key)
+
+    def _populate_details(self, request: Request, cell: MatrixCell) -> None:
+        self._focus_cell = cell
+        wrap = self.query_one("#col-details")
+        crumb = cell.key or request.metadata.name
+        wrap.border_title = Text.from_markup(f"DETAIL [{_DIM}]·[/] {crumb}")
+        key = _run_key(request, cell)
+        self.query_one("#run-details", Static).update(
+            _report_full(
+                self.project,
+                _app_env(self),
+                request,
+                cell,
+                self._exec.get(key),
+                self._state.get(key, "pending"),
+                self._checks.get(key, []),
+            )
+        )
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Preview the child column as the cursor moves."""
+        key = event.row_key.value
+        if key is None:
+            return
+        if event.data_table.id == "req-table":
+            request = self._by_id(key)
+            if request is not None and self._view == "details":
+                self._focus = request
+                cells = self._plan_cells(request)
+                if cells:
+                    self._populate_details(request, cells[0])
+        elif event.data_table.id == "var-table" and self._view == "details" and self._focus:
+            cell = self._cell_by_key(self._focus, key)
+            if cell is not None:
+                self._populate_details(self._focus, cell)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Drill into the next split on Enter."""
+        key = event.row_key.value
+        if key is None:
+            return
+        if event.data_table.id == "req-table":
+            request = self._by_id(key)
+            if request is not None:
+                self._open_request(request)
+        elif event.data_table.id == "var-table" and self._focus is not None:
+            cell = self._cell_by_key(self._focus, key)
+            if cell is not None:
+                self._open_variant(cell)
+
+    def _on_progress(self, request: Request, cell: MatrixCell) -> None:
+        request_id = request.metadata.id or request.metadata.name
+        table = self.query_one("#req-table", DataTable)
+        if request_id in {row.value for row in table.rows}:
+            request_columns = ("state", "name", "strip", "p50")
+            for column, value in zip(request_columns, self._request_row(request), strict=True):
+                table.update_cell(request_id, column, value)
+        if self._focus is request and self._view in ("variants", "details"):
+            var_table = self.query_one("#var-table", DataTable)
+            if cell.key in {row.value for row in var_table.rows}:
+                variant_columns = ("st", "case", "http", "time", "result")
+                for column, value in zip(
+                    variant_columns, self._variant_row(request, cell), strict=True
+                ):
+                    var_table.update_cell(cell.key, column, value)
+        if (
+            self._view == "details"
+            and self._focus is request
+            and self._focus_cell is not None
+            and self._focus_cell.key == cell.key
+        ):
+            self._populate_details(request, cell)
+        self._render_progress()
+
+    def _render_progress(self) -> None:
+        environment = _app_env(self)
+        self.query_one("#col-requests").border_title = "REQUESTS"
+        plan = self._plan()
+        total = len(plan)
+        done = sum(1 for r, c in plan if self._state.get(_run_key(r, c)) in ("ok", "failed"))
+        ok = sum(1 for r, c in plan if self._cell_ok(r, c))
+        failed = done - ok
+        text = Text()
+        text.append("run ", style=_DIM)
+        text.append(self._run_id or "—", style=f"bold {_ACCENT}")
+        text.append(f"   {environment.metadata.name if environment else '—'}", style=_TEXT_HI)
+        text.append("   ", style=_DIM)
+        width = 24
+        filled = round(width * done / total) if total else 0
+        fill_tint = _SAME if self._done and not failed else _WARN if self._done else _ACCENT
+        text.append("━" * filled, style=fill_tint)
+        text.append("━" * (width - filled), style=_DIM)
+        text.append(f"   {done}/{total}", style=f"bold {_TEXT_HI}")
+        text.append("  ·  ", style=_DIM)
+        text.append(f"{ok} ✓", style=_SAME)
+        text.append("  ", style=_DIM)
+        text.append(f"{failed} ✗", style=_DRIFT if failed else _DIM)
+        if self._done:
+            text.append("    press ", style=_DIM)
+            text.append("s", style=f"bold {_ACCENT}")
+            text.append(" to save", style=_DIM)
+        self.query_one("#run-progress", Static).update(text)
+
+    # ── rows ─────────────────────────────────────────────────────────────────
+    def _request_row(self, request: Request) -> list[Text]:
+        glyph, colour = _STATUS[self._request_status(request)]
+        latencies: list[float] = []
+        for cell in self._plan_cells(request):
+            execution = self._exec.get(_run_key(request, cell))
+            if execution is not None and execution.response is not None:
+                latencies.append(execution.response.elapsed_ms)
+        p50 = f"{sorted(latencies)[len(latencies) // 2]:.0f}ms" if latencies else "—"
+        return [
+            Text(glyph, style=colour),
+            Text(request.metadata.name, style=_TEXT_HI),
+            self._strip(request),
+            Text(p50, style=_DIM),
+        ]
+
+    def _variant_row(self, request: Request, cell: MatrixCell) -> list[Text]:
+        key = _run_key(request, cell)
+        state = self._state.get(key, "pending")
+        glyph, colour = _RUN_GLYPH[state]
+        execution = self._exec.get(key)
+        response = execution.response if execution else None
+        code = str(response.status) if response else "—"
+        time = f"{response.elapsed_ms:.0f}ms" if response else "—"
+        return [
+            Text(glyph, style=colour),
+            Text(cell.key or "base", style=_AXIS),
+            Text(code, style=_SAME if code.startswith("2") else _DIM if code == "—" else _WARN),
+            Text(time, style=_DIM),
+            self._assert_cell(request, cell),
+        ]
+
+    def _assert_cell(self, request: Request, cell: MatrixCell) -> Text:
+        key = _run_key(request, cell)
+        state = self._state.get(key, "pending")
+        if state in ("pending", "running"):
+            return Text("—", style=_DIM)
+        checks = self._checks.get(key, [])
+        failed = [check.name for check in checks if not check.ok]
+        if failed:
+            return Text("✗ " + ", ".join(failed), style=_DRIFT)
+        passed = sum(1 for check in checks if check.ok)
+        return Text(f"✓ {passed} passed", style=_SAME)
+
+    def _strip(self, request: Request) -> Text:
+        strip = Text()
+        for cell in self._plan_cells(request):
+            state = self._state.get(_run_key(request, cell), "pending")
+            if state == "ok":
+                mark, tint = ("✓", _SAME) if self._cell_ok(request, cell) else ("✗", _DRIFT)
+            elif state == "failed":
+                mark, tint = "✗", _DRIFT
+            elif state == "running":
+                mark, tint = "◐", _WARN
+            else:
+                mark, tint = "·", _DIM
+            strip.append(mark, style=tint)
+        return strip
+
+    # ── model ────────────────────────────────────────────────────────────────
     def _plan(self) -> list[tuple[Request, MatrixCell]]:
         return [
             (request, cell)
@@ -939,45 +1143,35 @@ class RunView(Vertical):
             if _run_key(request, cell) in self._selected
         ]
 
+    def _plan_requests(self) -> list[Request]:
+        return [
+            request
+            for request in _requests(self.project)
+            if any(_run_key(request, c) in self._selected for c in expand(self.project, request))
+        ]
+
+    def _plan_cells(self, request: Request) -> list[MatrixCell]:
+        return [c for c in expand(self.project, request) if _run_key(request, c) in self._selected]
+
     def _cell_ok(self, request: Request, cell: MatrixCell) -> bool:
         key = _run_key(request, cell)
         return self._state.get(key) == "ok" and checks_passed(self._checks.get(key, []))
 
     def _request_status(self, request: Request) -> str:
-        cells = [c for c in expand(self.project, request) if _run_key(request, c) in self._selected]
+        cells = self._plan_cells(request)
         if not cells:
             return "skipped"
         states = [self._state.get(_run_key(request, c), "pending") for c in cells]
-        if any(state == "running" for state in states):
+        if any(s == "running" for s in states):
             return "running"
-        if all(state == "pending" for state in states):
+        if all(s == "pending" for s in states):
             return "pending"
-        if any(state == "pending" for state in states):
+        if any(s == "pending" for s in states):
             return "running"
         passing = sum(1 for c in cells if self._cell_ok(request, c))
         if passing == len(cells):
             return "success"
         return "failed" if passing == 0 else "partial"
-
-    def _handled(self, request: Request) -> str:
-        cells = [c for c in expand(self.project, request) if _run_key(request, c) in self._selected]
-        if not cells:
-            return "–"
-        done = sum(1 for c in cells if self._state.get(_run_key(request, c)) in ("ok", "failed"))
-        return f"{done}/{len(cells)}"
-
-    # ── lookups ────────────────────────────────────────────────────────────
-    def _cursor_key(self) -> str | None:
-        table = self.query_one("#run-table", DataTable)
-        if table.row_count == 0:
-            return None
-        return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-
-    def _current_request(self) -> Request | None:
-        if self._level == "requests":
-            key = self._cursor_key()
-            return self._by_id(key) if key is not None else None
-        return self._focus
 
     def _by_id(self, request_id: str) -> Request | None:
         obj = self.project.objects.get(request_id)
@@ -2116,6 +2310,25 @@ def _table() -> Table:
 
 def _run_key(request: Request, cell: MatrixCell) -> tuple[str, str]:
     return (request.metadata.id or request.metadata.name, cell.key)
+
+
+def _pair(node: TreeNode[object] | None) -> tuple[Request | None, MatrixCell | None]:
+    data = getattr(node, "data", None)
+    if isinstance(data, tuple) and len(data) == 2 and isinstance(data[0], Request):
+        cell = data[1] if isinstance(data[1], MatrixCell) else None
+        return data[0], cell
+    return None, None
+
+
+def _save_run(
+    project: LoadedProject, environment: Environment, run_id: str, entries: list[RunEntry]
+) -> Path:
+    document = export_run(project, environment, entries)
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    destination = project.root / "runs" / f"{run_id}-{stamp}.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(document, encoding="utf-8")
+    return destination
 
 
 def _checks_cell(checks: list[Check]) -> Text:

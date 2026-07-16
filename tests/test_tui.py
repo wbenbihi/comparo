@@ -114,7 +114,7 @@ def test_run_screen_selection_toggles_cells() -> None:
             run = app.query_one(RunView)
             full = len(run._plan())
             assert full > 1  # every cell selected by default
-            await pilot.press("space")  # toggle the cursor request out of the run
+            await pilot.press("enter")  # toggle the cursor request out of the run
             assert len(run._plan()) < full
 
     asyncio.run(go())
