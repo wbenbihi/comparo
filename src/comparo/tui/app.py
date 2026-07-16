@@ -146,7 +146,7 @@ class NavBar(Horizontal):
         for index, (tab_id, label) in enumerate(self.TABS):
             if index:
                 yield Label("", classes="nav-sep")
-            yield Label(f" {label} ", id=f"nav-{tab_id}", classes="nav-item")
+            yield Label(label, id=f"nav-{tab_id}", classes="nav-item")
         yield Label(Text.from_markup(self._status), id="nav-status")
 
     def on_mount(self) -> None:

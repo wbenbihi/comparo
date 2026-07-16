@@ -11,8 +11,7 @@ Screen {
     dock: top;
     height: 3;
     background: #131822;
-    padding: 0 3;
-    align-vertical: middle;
+    padding: 1 3 0 3;
     border-bottom: solid #28313f;
 }
 
@@ -24,17 +23,22 @@ Screen {
 
 .nav-item {
     color: $text-muted;
-    padding: 0 1;
+    padding: 0 2;
+}
+
+.nav-item:hover {
+    color: $text;
+    background: #182233;
 }
 
 .nav-item.-active {
     color: $text;
-    background: #1e2b45;
+    background: #26365a;
     text-style: bold;
 }
 
 .nav-sep {
-    width: 2;
+    width: 1;
 }
 
 #nav-status {
