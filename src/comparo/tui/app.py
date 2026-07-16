@@ -85,6 +85,7 @@ from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
 from comparo.core.secrets import SecretError
 from comparo.core.triage import TriageError
+from comparo.core.triage import profile_path
 from comparo.core.triage import silence
 from comparo.tui.theme import COMPARO_INK
 
@@ -1425,16 +1426,65 @@ class DiffView(Vertical):
         self.run_worker(self._run(self._pair), exclusive=True, group="diff")
 
     def action_silence(self) -> None:
-        """Write an ignore rule for the selected drifted field into its DiffProfile."""
+        """Ask before writing an ignore rule for the selected field into its DiffProfile.
+
+        The TUI never edits a version-controlled file silently, so this opens a
+        confirmation overlay naming the field and the exact file(s) it would
+        touch; the write only happens if the user confirms.
+        """
         group = self._selected_group()
         if group is None:
             self.app.notify("Select a drifted field to silence", severity="information")
             return
         path, entries = group
-        written: set[str] = set()
+        profiles = self._silence_profiles(entries)
+        if not profiles:
+            self.app.notify("No diff profile to write to", severity="warning")
+            return
+        self.app.push_screen(
+            ConfirmModal(self._silence_prompt(path, profiles), title="SILENCE FIELD"),
+            lambda ok: self._write_silence(path, profiles) if ok else None,
+        )
+
+    def _silence_profiles(self, entries: list[tuple[CellDiff, FieldDiff]]) -> list[DiffProfile]:
+        profiles: dict[str, DiffProfile] = {}
         for cell, _ in entries:
             profile = profile_for(self.project, cell.request)
-            if profile is None or profile.metadata.id is None:
+            if profile is not None and profile.metadata.id is not None:
+                profiles.setdefault(profile.metadata.id, profile)
+        return list(profiles.values())
+
+    def _silence_prompt(self, path: str, profiles: list[DiffProfile]) -> Text:
+        text = Text(justify="left")
+        text.append("Write an ignore rule for ", style=_TEXT)
+        text.append(path, style=f"bold {_TEXT_HI}")
+        text.append("\ninto ", style=_TEXT)
+        text.append(
+            "this diff profile" if len(profiles) == 1 else "these diff profiles",
+            style=_TEXT,
+        )
+        text.append(":\n\n", style=_TEXT)
+        for profile in profiles:
+            text.append("  ")
+            text.append(profile.metadata.name, style=_TEXT_HI)
+            identifier = profile.metadata.id or "?"
+            text.append(f"  ({identifier})", style=_DIM)
+            file = profile_path(self.project, identifier) if profile.metadata.id else None
+            if file is not None:
+                try:
+                    location = str(file.relative_to(self.project.root))
+                except ValueError:
+                    location = str(file)
+                text.append("\n  → ", style=_DIM)
+                text.append(location, style=_ACCENT)
+            text.append("\n")
+        text.append("\ncomparo never edits your files without asking.", style=_DIM)
+        return text
+
+    def _write_silence(self, path: str, profiles: list[DiffProfile]) -> None:
+        written: set[str] = set()
+        for profile in profiles:
+            if profile.metadata.id is None:
                 continue
             try:
                 file = silence(self.project, profile.metadata.id, path)
@@ -1816,6 +1866,62 @@ class FilterModal(ModalScreen[None]):
             return
         colour = _SAME if count else _DRIFT
         label.update(Text(f"{count} match{'' if count == 1 else 'es'}", style=colour))
+
+
+class ConfirmModal(ModalScreen[bool]):
+    """A small yes/no overlay that gates a write so the TUI never edits files silently.
+
+    Returns ``True`` when the user confirms and ``False`` (or on ``escape``) when
+    they decline, so the caller can act only on an explicit yes.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("y,enter", "confirm", "confirm"),
+        Binding("n,escape", "cancel", "cancel"),
+    ]
+
+    def __init__(
+        self, body: RenderableType, *, title: str = "CONFIRM", confirm: str = "write"
+    ) -> None:
+        """Build the confirmation overlay.
+
+        Args:
+            body: The renderable explaining exactly what will happen.
+            title: The dialog title.
+            confirm: The verb shown on the confirm key hint.
+        """
+        super().__init__()
+        self._body = body
+        self._title = title
+        self._confirm = confirm
+
+    def compose(self) -> ComposeResult:
+        """Yield the dialog: the explanation and the key hints."""
+        with Vertical(id="confirm-dialog", classes="modal"):
+            yield Static(self._body, id="confirm-body")
+            yield Static(self._hints(), id="confirm-hints")
+
+    def on_mount(self) -> None:
+        """Title the dialog."""
+        dialog = self.query_one("#confirm-dialog")
+        dialog.border_title = self._title
+        dialog.border_subtitle = "y or n"
+
+    def _hints(self) -> Text:
+        text = Text()
+        text.append("y", style=f"bold {_ACCENT}")
+        text.append(f" {self._confirm}     ", style=_DIM)
+        text.append("n", style=f"bold {_ACCENT}")
+        text.append(" cancel", style=_DIM)
+        return text
+
+    def action_confirm(self) -> None:
+        """Confirm the write."""
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        """Decline; nothing is written."""
+        self.dismiss(False)
 
 
 class GraphModal(ModalScreen[None]):

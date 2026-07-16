@@ -1,16 +1,22 @@
 """Tests for the terminal UI, driven headlessly via Textual's test harness."""
 
 import asyncio
+import shutil
 from pathlib import Path
 
 import pytest
 from textual.widgets import Static
 from textual.widgets import Tree
 
+from comparo.core.compare import CellDiff
 from comparo.core.diagnostics import LoadError
+from comparo.core.diff import FieldDiff
+from comparo.core.diff import State
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
+from comparo.core.models import Request
 from comparo.tui.app import ComparoApp
+from comparo.tui.app import ConfirmModal
 from comparo.tui.app import DiffView
 from comparo.tui.app import ErrorView
 from comparo.tui.app import ExplorerView
@@ -148,6 +154,51 @@ def test_number_keys_switch_between_every_screen() -> None:
                 await pilot.press(key)
                 await pilot.pause()
                 assert app.query_one(view) is not None
+
+    asyncio.run(go())
+
+
+def test_silencing_a_drift_is_gated_by_a_confirmation(tmp_path: Path) -> None:
+    # Copy the sample so the triage write lands in a throwaway tree, not the repo.
+    root = tmp_path / "proj"
+    shutil.copytree(SAMPLE, root)
+    loaded = load_project(root)
+    request = loaded.objects["request.get-json"]  # -> diff.strict -> diff/strict.yaml
+    assert isinstance(request, Request)
+    profile_file = root / "diff" / "strict.yaml"
+    before = profile_file.read_text(encoding="utf-8")
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")  # Diff screen — sets the pair
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            # Inject a synthetic drift so we never touch the network.
+            drift = FieldDiff("$.headers.x-trace", State.DRIFT, "exact", '"a" → "b"')
+            diff._cells = [CellDiff(request, "", [drift])]
+            diff._done = True
+            diff._regroup()
+            diff._populate_drift()
+            await pilot.pause()
+
+            diff.action_silence()  # opens the confirmation — must NOT write yet
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmModal)
+            assert profile_file.read_text(encoding="utf-8") == before
+
+            await pilot.press("n")  # decline — still no write
+            await pilot.pause()
+            assert profile_file.read_text(encoding="utf-8") == before
+
+            diff.action_silence()
+            await pilot.pause()
+            await pilot.press("y")  # confirm — now it writes
+            await pilot.pause()
+            after = profile_file.read_text(encoding="utf-8")
+            assert after != before
+            assert "$.headers.x-trace" in after
 
     asyncio.run(go())
 

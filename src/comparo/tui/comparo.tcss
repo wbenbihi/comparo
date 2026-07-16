@@ -383,9 +383,20 @@ Screen {
 }
 
 /* ── modals (filter, graph, help, matrix picker, curl, cases) ────────────── */
-FilterModal, GraphModal, HelpModal, MatrixPickerModal, CurlModal, GlobalMatrixModal {
+FilterModal, GraphModal, HelpModal, MatrixPickerModal, CurlModal, GlobalMatrixModal,
+ConfirmModal {
     align: center middle;
     background: $background 65%;
+}
+
+#confirm-dialog {
+    width: 64;
+    max-width: 92%;
+    height: auto;
+}
+
+#confirm-hints {
+    padding: 1 0 0 0;
 }
 
 .modal {
