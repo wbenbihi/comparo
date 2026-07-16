@@ -277,7 +277,7 @@ Screen {
 }
 
 /* ── modals (filter, graph, help, matrix picker, curl, cases) ────────────── */
-FilterModal, GraphModal, HelpModal, MatrixPickerModal, CurlModal, MatrixSelectModal {
+FilterModal, GraphModal, HelpModal, MatrixPickerModal, CurlModal, GlobalMatrixModal {
     align: center middle;
     background: $background 65%;
 }

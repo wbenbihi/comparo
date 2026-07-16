@@ -61,6 +61,7 @@ from comparo.core.health import check_health
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
 from comparo.core.matrix import MatrixCell
+from comparo.core.matrix import case_key
 from comparo.core.matrix import expand
 from comparo.core.models import DiffProfile
 from comparo.core.models import Environment
@@ -657,6 +658,7 @@ class RunView(Vertical):
         super().__init__(id="run-view", classes="view")
         self.project = project
         self._selected: set[tuple[str, str]] = set()
+        self._disabled_values: set[tuple[str, int]] = set()
         self._state: dict[tuple[str, str], str] = {}
         self._exec: dict[tuple[str, str], Execution] = {}
         self._checks: dict[tuple[str, str], list[Check]] = {}
@@ -727,7 +729,9 @@ class RunView(Vertical):
         self._prep_nodes = {}
         self._prep_branches = {}
         for request in _requests(self.project):
-            cells = expand(self.project, request)
+            cells = self._visible_cells(request)
+            if not cells:
+                continue
             if len(cells) == 1:
                 node = tree.root.add_leaf(
                     self._prep_label(request, cells[0]), data=(request, cells[0])
@@ -748,8 +752,8 @@ class RunView(Vertical):
         request, cell = _pair(event.node)
         if request is None:
             return
-        if cell is None:  # a request branch — toggle all its cells
-            keys = {_run_key(request, c) for c in expand(self.project, request)}
+        if cell is None:  # a request branch — toggle all its visible cells
+            keys = {_run_key(request, c) for c in self._visible_cells(request)}
             if keys <= self._selected:
                 self._selected -= keys
             else:
@@ -760,37 +764,25 @@ class RunView(Vertical):
         self._title_prepare()
 
     def open_case_picker(self) -> None:
-        """Open the matrix-case multi-select for the highlighted request."""
-        node = self.query_one("#prepare-tree", Tree).cursor_node
-        request, _ = _pair(node)
-        if request is None:
+        """Open the global matrix-value picker (applies across every request)."""
+        matrices = [obj for obj in self.project.objects.values() if isinstance(obj, Matrix)]
+        if not matrices:
+            self.app.notify("This project has no matrices", severity="information")
             return
-        cells = expand(self.project, request)
-        if len(cells) <= 1:
-            self.app.notify("This request has no matrix cases", severity="information")
-            return
-        request_id = request.metadata.id or request.metadata.name
-        chosen = {key for (rid, key) in self._selected if rid == request_id}
         self.app.push_screen(
-            MatrixSelectModal(request, cells, chosen),
-            lambda keys: self._apply_cases(request, cells, keys),
+            GlobalMatrixModal(matrices, self._disabled_values),
+            self._apply_matrix_values,
         )
 
-    def _apply_cases(
-        self, request: Request, cells: list[MatrixCell], keys: set[str] | None
-    ) -> None:
-        if keys is None:
+    def _apply_matrix_values(self, disabled: set[tuple[str, int]] | None) -> None:
+        if disabled is None:
             return
-        request_id = request.metadata.id or request.metadata.name
-        for cell in cells:
-            self._selected.add(
-                (request_id, cell.key)
-            ) if cell.key in keys else self._selected.discard((request_id, cell.key))
-        self._relabel_prepare(request)
+        self._disabled_values = disabled
+        self._build_prepare()
         self._title_prepare()
 
     def _relabel_prepare(self, request: Request) -> None:
-        for cell in expand(self.project, request):
+        for cell in self._visible_cells(request):
             node = self._prep_nodes.get(_run_key(request, cell))
             if node is not None:
                 node.set_label(self._prep_label(request, cell))
@@ -807,7 +799,7 @@ class RunView(Vertical):
         return row
 
     def _prep_request_label(self, request: Request) -> Text:
-        cells = expand(self.project, request)
+        cells = self._visible_cells(request)
         chosen = sum(1 for c in cells if _run_key(request, c) in self._selected)
         on = chosen > 0
         row = Text()
@@ -1201,19 +1193,38 @@ class RunView(Vertical):
         return [
             (request, cell)
             for request in _requests(self.project)
-            for cell in expand(self.project, request)
-            if _run_key(request, cell) in self._selected
+            for cell in self._plan_cells(request)
         ]
 
     def _plan_requests(self) -> list[Request]:
-        return [
-            request
-            for request in _requests(self.project)
-            if any(_run_key(request, c) in self._selected for c in expand(self.project, request))
-        ]
+        return [r for r in _requests(self.project) if self._plan_cells(r)]
 
     def _plan_cells(self, request: Request) -> list[MatrixCell]:
-        return [c for c in expand(self.project, request) if _run_key(request, c) in self._selected]
+        return [c for c in self._visible_cells(request) if _run_key(request, c) in self._selected]
+
+    def _visible_cells(self, request: Request) -> list[MatrixCell]:
+        """Cells left after the global matrix-value filter."""
+        return [c for c in expand(self.project, request) if self._cell_enabled(c)]
+
+    def _cell_enabled(self, cell: MatrixCell) -> bool:
+        for injection in cell.injections:
+            matrix = self._matrix_for(injection.target)
+            if matrix is None:
+                continue
+            matrix_id = matrix.metadata.id or matrix.metadata.name
+            try:
+                index = matrix.spec.values.index(injection.case)
+            except ValueError:
+                continue
+            if (matrix_id, index) in self._disabled_values:
+                return False
+        return True
+
+    def _matrix_for(self, target: str) -> Matrix | None:
+        for obj in self.project.objects.values():
+            if isinstance(obj, Matrix) and obj.spec.target == target:
+                return obj
+        return None
 
     def _cell_ok(self, request: Request, cell: MatrixCell) -> bool:
         key = _run_key(request, cell)
@@ -1593,8 +1604,8 @@ class CurlModal(ModalScreen[None]):
         return to_curl(resolver.resolve_request(self._request, self._cell))
 
 
-class MatrixSelectModal(ModalScreen["set[str] | None"]):
-    """A multi-select overlay for choosing which matrix cases run."""
+class GlobalMatrixModal(ModalScreen["set[tuple[str, int]] | None"]):
+    """Choose which matrix values run — globally, across every request that uses them."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "apply", "apply"),
@@ -1602,46 +1613,56 @@ class MatrixSelectModal(ModalScreen["set[str] | None"]):
         Binding("n", "none", "none"),
     ]
 
-    def __init__(self, request: Request, cells: list[MatrixCell], selected: set[str]) -> None:
-        """Build the case picker.
+    def __init__(self, matrices: list[Matrix], disabled: set[tuple[str, int]]) -> None:
+        """Build the global matrix-value picker.
 
         Args:
-            request: The request whose cases are picked.
-            cells: Every matrix cell of the request.
-            selected: The currently-selected cell keys.
+            matrices: Every matrix in the project.
+            disabled: The currently-disabled ``(matrix_id, value_index)`` pairs.
         """
         super().__init__()
-        self._request = request
-        self._cells = cells
-        self._selected = selected
+        self._matrices = matrices
+        self._disabled = disabled
 
     def compose(self) -> ComposeResult:
-        """Yield the selection list of cases."""
-        with Vertical(id="mselect-dialog", classes="modal"):
-            yield SelectionList[str](
-                *(
-                    (cell.key or "base", cell.key, cell.key in self._selected)
-                    for cell in self._cells
+        """Yield one selection entry per matrix value, labelled by matrix."""
+        options: list[tuple[Text, str, bool]] = []
+        for matrix in self._matrices:
+            matrix_id = matrix.metadata.id or matrix.metadata.name
+            for index, value in enumerate(matrix.spec.values):
+                prompt = Text.assemble(
+                    (f"{matrix.metadata.name}  ", _AXIS), (case_key(value), _TEXT)
                 )
-            )
+                options.append(
+                    (prompt, f"{matrix_id}#{index}", (matrix_id, index) not in self._disabled)
+                )
+        with Vertical(id="mselect-dialog", classes="modal"):
+            yield SelectionList[str](*options)
 
     def on_mount(self) -> None:
         """Title the dialog and focus the list."""
         dialog = self.query_one("#mselect-dialog")
-        dialog.border_title = f"CASES · {self._request.metadata.name}"
+        dialog.border_title = "MATRIX VALUES"
         dialog.border_subtitle = "space toggle · a all · n none · esc apply"
         self.query_one(SelectionList).focus()
 
     def action_apply(self) -> None:
-        """Apply the current selection and close."""
-        self.dismiss(set(self.query_one(SelectionList).selected))
+        """Turn the enabled selection into the disabled set and close."""
+        enabled = set(self.query_one(SelectionList).selected)
+        disabled: set[tuple[str, int]] = set()
+        for matrix in self._matrices:
+            matrix_id = matrix.metadata.id or matrix.metadata.name
+            for index in range(len(matrix.spec.values)):
+                if f"{matrix_id}#{index}" not in enabled:
+                    disabled.add((matrix_id, index))
+        self.dismiss(disabled)
 
     def action_all(self) -> None:
-        """Select every case."""
+        """Enable every value."""
         self.query_one(SelectionList).select_all()
 
     def action_none(self) -> None:
-        """Deselect every case."""
+        """Disable every value."""
         self.query_one(SelectionList).deselect_all()
 
 
