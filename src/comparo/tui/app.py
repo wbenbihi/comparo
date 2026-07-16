@@ -121,43 +121,80 @@ _KINDS: tuple[tuple[str, type], ...] = (
     ("Diff Profiles", DiffProfile),
 )
 
+# Footer key hints, ordered nav → context actions → meta, ending in help + quit.
 _EXPLORER_KEYS = (
     ("↑↓", "move"),
     ("space", "fold"),
     ("tab", "panel"),
     ("/", "filter"),
     ("g", "graph"),
-    ("3", "diff"),
-    ("q", "quit"),
-)
-_DIFF_KEYS = (
-    ("x", "run diff"),
-    ("↑↓", "cells"),
-    ("1-5", "tabs"),
     ("?", "help"),
     ("q", "quit"),
 )
-_RUN_KEYS = (
+_ENV_KEYS = (
+    ("↑↓", "move"),
+    ("enter", "default"),
+    ("h", "health"),
+    ("/", "filter"),
+    ("g", "graph"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_RESOLVE_KEYS = (
+    ("↑↓", "move"),
+    ("r", "raw/resolved"),
+    ("p", "curl"),
+    ("/", "filter"),
+    ("g", "graph"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_PREPARE_KEYS = (
+    ("↑↓", "move"),
+    ("space", "fold"),
+    ("enter", "select"),
+    ("m", "matrix"),
+    ("x", "run"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_RUNNING_KEYS = (
     ("↑↓", "move"),
     ("enter", "open"),
-    ("space", "select"),
-    ("m", "cases"),
-    ("x", "run"),
-    ("esc", "back"),
+    ("bksp", "back"),
+    ("z", "max"),
+    ("a", "abort"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_RUNNING_DONE_KEYS = (
+    ("↑↓", "move"),
+    ("enter", "open"),
+    ("bksp", "back"),
+    ("z", "max"),
+    ("s", "save"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_DIFF_KEYS = (
+    ("↑↓", "cells"),
+    ("x", "run diff"),
+    ("?", "help"),
     ("q", "quit"),
 )
 _REPORT_KEYS = (
-    ("1-5", "tabs"),
+    ("↑↓", "scroll"),
     ("?", "help"),
     ("q", "quit"),
 )
 _SETTINGS_KEYS = (
-    ("1-5", "tabs"),
+    ("↑↓", "scroll"),
     ("?", "help"),
     ("q", "quit"),
 )
 _ERROR_KEYS = (
     ("r", "re-check"),
+    ("?", "help"),
     ("q", "quit"),
 )
 _RUN_GLYPH: dict[str, tuple[str, str]] = {
@@ -196,22 +233,6 @@ _HEALTH_LABEL: dict[Health, str] = {
     Health.FAIL: "unreachable",
 }
 
-_ENV_KEYS = (
-    ("↑↓", "move"),
-    ("h", "health"),
-    ("enter", "default"),
-    ("/", "filter"),
-    ("g", "graph"),
-    ("q", "quit"),
-)
-_RESOLVE_KEYS = (
-    ("↑↓", "move"),
-    ("r", "raw/resolved"),
-    ("p", "curl"),
-    ("/", "filter"),
-    ("g", "graph"),
-    ("q", "quit"),
-)
 _HEALTH_SEVERITY: dict[Health, Literal["information", "warning", "error"]] = {
     Health.UNKNOWN: "information",
     Health.PASS: "information",
@@ -240,12 +261,15 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("g", "open the reference graph — what links to what"),
     ),
     "run": (
-        ("↑ ↓", "move through the rows"),
-        ("enter", "drill in — request → its matrix cells → a full report"),
-        ("space", "toggle a request or cell in / out of the run"),
-        ("m", "on a matrix request: pick which cases run"),
-        ("x", "execute the selected cells"),
-        ("esc", "go back up a level"),
+        ("↑ ↓", "move through rows / the detail tree"),
+        ("space", "PREPARE — fold a request to show its cases"),
+        ("enter", "PREPARE select · RUNNING drill into the next split"),
+        ("m", "PREPARE — choose matrix values (applies to every request)"),
+        ("x", "run the selected cells against the current environment"),
+        ("bksp", "RUNNING — collapse a split (or return to PREPARE)"),
+        ("z", "RUNNING — maximize the detail panel"),
+        ("a", "RUNNING — abort the run and return to PREPARE"),
+        ("s", "RUNNING — save the finished run's results (secrets masked)"),
     ),
     "diff": (
         ("x", "replay every request against both environments and diff"),
@@ -681,6 +705,20 @@ class RunView(Vertical):
         else:
             self._render_progress()
             self._layout()
+        self.update_footer()
+
+    def update_footer(self) -> None:
+        """Show the footer keys for the current run state."""
+        if cast("ComparoApp", self.app).query_one(NavBar).active != "run":
+            return
+        if self.query_one("#run-mode", ContentSwitcher).current == "prepare":
+            keys = _PREPARE_KEYS
+            cells = len(self._selected)
+            context = f"{cells} case{'' if cells == 1 else 's'} selected"
+        else:
+            keys = _RUNNING_DONE_KEYS if self._done else _RUNNING_KEYS
+            context = f"run {self._run_id}" if self._run_id else ""
+        self.app.query_one(StatusBar).show(keys, context)
 
     # ── PREPARE ──────────────────────────────────────────────────────────────
     def _build_prepare(self) -> None:
@@ -806,6 +844,7 @@ class RunView(Vertical):
         cta.append("x", style=f"bold {_ACCENT}")
         cta.append(" to run", style=_DIM)
         self.query_one("#prepare-cta", Static).update(cta)
+        self.update_footer()
 
     # ── RUN LIFECYCLE ────────────────────────────────────────────────────────
     def execute(self) -> None:
@@ -875,6 +914,7 @@ class RunView(Vertical):
                 self._state[key] = "pending"
         self.query_one("#run-mode", ContentSwitcher).current = "prepare"
         self.query_one("#prepare-tree", Tree).focus()
+        self._title_prepare()
         self.app.notify("Run aborted", severity="warning")
 
     def action_save(self) -> None:
@@ -932,6 +972,7 @@ class RunView(Vertical):
             cls, focus = "only-r", "#req-table"
         self.query_one("#run-columns").set_classes(cls)
         self.query_one(focus).focus()
+        self.update_footer()
 
     def action_zoom(self) -> None:
         """Maximize (or restore) the detail panel."""
@@ -1094,6 +1135,7 @@ class RunView(Vertical):
             text.append("s", style=f"bold {_ACCENT}")
             text.append(" to save", style=_DIM)
         self.query_one("#run-progress", Static).update(text)
+        self.update_footer()
 
     # ── rows ─────────────────────────────────────────────────────────────────
     def _request_row(self, request: Request) -> list[Text]:
@@ -1835,9 +1877,10 @@ class ComparoApp(App[None]):
         if screen == "explorer":
             self.query_one(ExplorerView).refresh_footer()
             return
-        env = self.environment.metadata.name if self.environment else "—"
+        if screen == "run":
+            self.query_one(RunView).update_footer()
+            return
         keys, context = {
-            "run": (_RUN_KEYS, f"env · {env}"),
             "diff": (_DIFF_KEYS, "baseline ⇄ candidate"),
             "report": (_REPORT_KEYS, "last diff run"),
             "settings": (_SETTINGS_KEYS, "read-only"),
