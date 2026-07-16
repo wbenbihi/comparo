@@ -22,6 +22,19 @@ One engine (`comparo.core`) powers three front-ends that never leak back into it
 Pre-1.0, under active development — a first beta. A runnable, self-contained example lives in
 [`examples/sample-project`](examples/sample-project).
 
+> [!WARNING] Warning: AI Disclaimer
+>
+> `comparo` was created as a personal intiative to learn and play with terminal user interface frameworks
+> and coding agents for real life use cases. This tools has been really handy for both my personal and corporate projects.
+> Due to its **AI co-Authoring** and despite the fact I tried to require good development practice from an LLM agent,
+> I cannot advise you to rely on this tool for production purpose in its current state. This warning will stay here until I have fully
+> audited the code and can confidently release a prod-ready version.
+>
+> To be clear:
+>
+> **AI CODED THIS PROJECT BECAUSE I DIDN'T HAD TIME TO SPEND ON THIS. DO NOT TRUST BLINDLY THIS PROJECT NOR ANY VIBE CODED PROJECT YOU**
+> **HAVE NOT FULLY UNDERSTOOD OR AUDITED.**
+
 ## Install
 
 ```console
