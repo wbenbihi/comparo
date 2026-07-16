@@ -162,8 +162,9 @@ _PREPARE_KEYS = (
 _RUNNING_KEYS = (
     ("↑↓", "move"),
     ("enter", "open"),
-    ("bksp", "back"),
+    ("f", "failures"),
     ("z", "max"),
+    ("bksp", "back"),
     ("a", "abort"),
     ("?", "help"),
     ("q", "quit"),
@@ -171,8 +172,9 @@ _RUNNING_KEYS = (
 _RUNNING_DONE_KEYS = (
     ("↑↓", "move"),
     ("enter", "open"),
-    ("bksp", "back"),
+    ("f", "failures"),
     ("z", "max"),
+    ("bksp", "back"),
     ("s", "save"),
     ("?", "help"),
     ("q", "quit"),
@@ -267,6 +269,7 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("enter", "PREPARE select · RUNNING drill into the next split"),
         ("m", "PREPARE — choose matrix values (applies to every request)"),
         ("x", "run the selected cells against the current environment"),
+        ("f", "RUNNING — filter the tables to failures only"),
         ("bksp", "RUNNING — collapse a split (or return to PREPARE)"),
         ("z", "RUNNING — maximize the detail panel"),
         ("a", "RUNNING — abort the run and return to PREPARE"),
@@ -644,6 +647,7 @@ class RunView(Vertical):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "back", "back"),
         Binding("backspace", "back", "back"),
+        Binding("f", "filter", "failures"),
         Binding("z", "zoom", "maximize"),
         Binding("a", "abort", "abort"),
         Binding("s", "save", "save"),
@@ -667,6 +671,7 @@ class RunView(Vertical):
         self._view = "requests"
         self._run_id: str | None = None
         self._max = False
+        self._failures_only = False
         self._focus: Request | None = None
         self._focus_cell: MatrixCell | None = None
         self._worker: Worker[None] | None = None
@@ -713,6 +718,7 @@ class RunView(Vertical):
         """Show the footer keys for the current run state."""
         if cast("ComparoApp", self.app).query_one(NavBar).active != "run":
             return
+        keys: tuple[tuple[str, str], ...]
         if self.query_one("#run-mode", ContentSwitcher).current == "prepare":
             keys = _PREPARE_KEYS
             cells = len(self._selected)
@@ -997,6 +1003,39 @@ class RunView(Vertical):
         self._view = "details"
         self._layout()
 
+    def action_filter(self) -> None:
+        """Toggle the failures-only filter on the run tables."""
+        if self.query_one("#run-mode", ContentSwitcher).current != "running":
+            return
+        self._failures_only = not self._failures_only
+        self._populate_requests()
+        if self._focus is not None and self._view in ("variants", "details"):
+            self._populate_variants(self._focus)
+        self.app.notify(
+            "Showing failures only" if self._failures_only else "Showing all",
+            severity="information",
+        )
+
+    def _shown_requests(self) -> list[Request]:
+        requests = self._plan_requests()
+        if self._failures_only:
+            requests = [r for r in requests if self._request_status(r) in ("failed", "partial")]
+        return requests
+
+    def _shown_cells(self, request: Request) -> list[MatrixCell]:
+        cells = self._plan_cells(request)
+        if self._failures_only:
+            cells = [
+                c
+                for c in cells
+                if self._state.get(_run_key(request, c)) in ("ok", "failed")
+                and not self._cell_ok(request, c)
+            ]
+        return cells
+
+    def _filter_suffix(self) -> str:
+        return f"  [{_WARN}]· failures only[/]" if self._failures_only else ""
+
     def _populate_requests(self) -> None:
         table = self.query_one("#req-table", DataTable)
         table.clear(columns=True)
@@ -1004,15 +1043,20 @@ class RunView(Vertical):
         table.add_column("REQUEST", key="name")
         table.add_column("VARIANTS", key="strip")
         table.add_column("P50", key="p50", width=8)
-        for request in self._plan_requests():
+        for request in self._shown_requests():
             table.add_row(
                 *self._request_row(request), key=request.metadata.id or request.metadata.name
             )
+        self.query_one("#col-requests").border_title = Text.from_markup(
+            f"REQUESTS{self._filter_suffix()}"
+        )
 
     def _populate_variants(self, request: Request) -> None:
         self._focus = request
         wrap = self.query_one("#col-variants")
-        wrap.border_title = Text.from_markup(f"VARIANTS [{_DIM}]·[/] {request.metadata.name}")
+        wrap.border_title = Text.from_markup(
+            f"VARIANTS [{_DIM}]·[/] {request.metadata.name}{self._filter_suffix()}"
+        )
         table = self.query_one("#var-table", DataTable)
         table.clear(columns=True)
         table.add_column("", key="st", width=3)
@@ -1020,7 +1064,7 @@ class RunView(Vertical):
         table.add_column("HTTP", key="http", width=6)
         table.add_column("TIME", key="time", width=8)
         table.add_column("RESULT", key="result")
-        for cell in self._plan_cells(request):
+        for cell in self._shown_cells(request):
             table.add_row(*self._variant_row(request, cell), key=cell.key)
 
     def _populate_details(self, request: Request, cell: MatrixCell) -> None:
@@ -1101,7 +1145,9 @@ class RunView(Vertical):
 
     def _render_progress(self) -> None:
         environment = _app_env(self)
-        self.query_one("#col-requests").border_title = "REQUESTS"
+        self.query_one("#col-requests").border_title = Text.from_markup(
+            f"REQUESTS{self._filter_suffix()}"
+        )
         plan = self._plan()
         total = len(plan)
         done = sum(1 for r, c in plan if self._state.get(_run_key(r, c)) in ("ok", "failed"))
