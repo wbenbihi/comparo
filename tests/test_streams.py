@@ -1,0 +1,27 @@
+"""Tests for parsing a streamed response into its ordered records."""
+
+from comparo.core.streams import parse_stream
+
+
+def test_parse_sse_events() -> None:
+    body = b"event: message\ndata: hello\n\ndata: line1\ndata: line2\n\n"
+    assert parse_stream(body, "text/event-stream") == [
+        {"event": "message", "data": "hello"},
+        {"data": "line1\nline2"},
+    ]
+
+
+def test_parse_concatenated_json() -> None:
+    assert parse_stream(b'{"n": 1}{"n": 2}{"n": 3}', "application/json") == [
+        {"n": 1},
+        {"n": 2},
+        {"n": 3},
+    ]
+
+
+def test_parse_ndjson() -> None:
+    assert parse_stream(b'{"a": 1}\n{"a": 2}\n', "application/x-ndjson") == [{"a": 1}, {"a": 2}]
+
+
+def test_parse_falls_back_to_whole_text() -> None:
+    assert parse_stream(b"just text", "text/plain") == ["just text"]

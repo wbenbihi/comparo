@@ -19,12 +19,18 @@ class HttpError(Exception):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class HttpResponse:
-    """A response materialized from the wire."""
+    """A response materialized from the wire.
+
+    For a streamed response (``streaming: true``), ``events`` holds the ordered
+    records — parsed SSE events or the JSON objects of a chunked stream — so a
+    front-end can diff the sequence, not just the assembled body.
+    """
 
     status: int
     headers: list[tuple[str, str]]
     body: bytes
     elapsed_ms: float
+    events: list[object] | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

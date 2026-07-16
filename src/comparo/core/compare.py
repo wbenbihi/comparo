@@ -125,13 +125,23 @@ def _compare(
     baseline_response, candidate_response = baseline.response, candidate.response
     if baseline_response is None or candidate_response is None:
         return CellDiff(request, key, [], "missing response")
+    default_mode, rules = _compose_diff(project, request, diff_override)
+    if baseline_response.events is not None and candidate_response.events is not None:
+        # Streamed responses diff as their ordered event sequence, not raw bytes.
+        events_a, events_b = baseline_response.events, candidate_response.events
+        return CellDiff(
+            request,
+            key,
+            diff(events_a, events_b, default_mode, rules),
+            baseline_body=events_a,
+            candidate_body=events_b,
+        )
     try:
         baseline_body = json.loads(baseline_response.body)
         candidate_body = json.loads(candidate_response.body)
     except ValueError:
         # Empty or non-JSON responses (e.g. a status-only check) diff as raw bytes.
         return _raw_compare(request, key, baseline_response.body, candidate_response.body)
-    default_mode, rules = _compose_diff(project, request, diff_override)
     return CellDiff(
         request,
         key,

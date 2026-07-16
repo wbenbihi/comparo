@@ -16,6 +16,7 @@ from comparo.core.http import HttpError
 from comparo.core.http import HttpResponse
 from comparo.core.http import TimeoutBudget
 from comparo.core.resolve import ResolvedRequest
+from comparo.core.streams import parse_stream
 
 
 class HttpxClient:
@@ -50,30 +51,47 @@ class HttpxClient:
         if auth_header is not None:
             headers.append(auth_header)
         cookies = {key: str(value) for key, value in (request.cookies or {}).items()} or None
+        build = self._client.build_request(
+            request.method,
+            request.url,
+            headers=headers,
+            params=params,
+            json=json_body,
+            data=data_body,
+            content=content_body,
+            cookies=cookies,
+            timeout=httpx_timeout,
+        )
         start = time.perf_counter()
         try:
-            response = await self._client.request(
-                request.method,
-                request.url,
-                headers=headers,
-                params=params,
-                json=json_body,
-                data=data_body,
-                content=content_body,
-                cookies=cookies,
-                auth=auth,
-                timeout=httpx_timeout,
+            status, resp_headers, body = await self._roundtrip(
+                build, auth, streaming=request.streaming
             )
         except httpx.HTTPError as error:
             message = f"{type(error).__name__}: {error}"
             raise HttpError(message) from error
         elapsed_ms = (time.perf_counter() - start) * 1000
+        events = parse_stream(body, _content_type(resp_headers)) if request.streaming else None
         return HttpResponse(
-            status=response.status_code,
-            headers=list(response.headers.items()),
-            body=response.content,
-            elapsed_ms=elapsed_ms,
+            status=status, headers=resp_headers, body=body, elapsed_ms=elapsed_ms, events=events
         )
+
+    async def _roundtrip(
+        self,
+        request: httpx.Request,
+        auth: httpx.Auth | None,
+        *,
+        streaming: bool,
+    ) -> tuple[int, list[tuple[str, str]], bytes]:
+        if streaming:
+            response = await self._client.send(request, auth=auth, stream=True)
+            try:
+                chunks = [chunk async for chunk in response.aiter_bytes()]
+            finally:
+                await response.aclose()
+            return response.status_code, list(response.headers.items()), b"".join(chunks)
+        response = await self._client.send(request, auth=auth)
+        return response.status_code, list(response.headers.items()), response.content
 
     async def aclose(self) -> None:
         """Close the underlying httpx client."""
@@ -93,6 +111,13 @@ def _encode_body(
         content = body if isinstance(body, str | bytes) else json.dumps(body)
         return None, None, content
     return body, None, None
+
+
+def _content_type(headers: list[tuple[str, str]]) -> str:
+    for key, value in headers:
+        if key.lower() == "content-type":
+            return value
+    return ""
 
 
 def _auth(auth: object) -> tuple[httpx.Auth | None, tuple[str, str] | None]:

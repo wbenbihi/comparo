@@ -48,6 +48,24 @@ class _ConstClient:
         return None
 
 
+def test_compare_cell_diffs_streamed_event_sequences() -> None:
+    from comparo.core.compare import compare_cell
+    from comparo.core.execute import Execution
+
+    loaded = load_project(SAMPLE)
+    request = loaded.objects["request.get-json"]  # -> diff.strict (exact)
+    assert isinstance(request, Request)
+    env = select_environment(loaded, "local")
+
+    def execution(events: list[object]) -> Execution:
+        return Execution(request, env, "", HttpResponse(200, [], b"", 1.0, events=events))
+
+    cell = compare_cell(loaded, execution([{"n": 1}, {"n": 2}]), execution([{"n": 1}, {"n": 9}]))
+    assert cell.drifted
+    assert any("[1]" in field.path for field in cell.drifts)  # the second event drifted
+    assert cell.baseline_body == [{"n": 1}, {"n": 2}]  # the event sequence is the diffed body
+
+
 def test_diff_run_routes_candidate_to_its_own_client() -> None:
     loaded = load_project(SAMPLE)
     baseline = select_environment(loaded, "local")

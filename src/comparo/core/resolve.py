@@ -128,6 +128,7 @@ class ResolvedRequest:
     body_type: str = "json"
     auth: object = None
     cookies: dict[str, object] | None = None
+    streaming: bool = False
 
 
 class Resolver:
@@ -206,6 +207,7 @@ class Resolver:
             key: self._value(value, f"cookies.{key}", trail)
             for key, value in (outbound.cookies or {}).items()
         }
+        response = request.spec.response
         resolved = ResolvedRequest(
             outbound.method,
             url,
@@ -216,6 +218,7 @@ class Resolver:
             body_type=outbound.body_type or "json",
             auth=auth,
             cookies=cookies or None,
+            streaming=bool(response.streaming) if response is not None else False,
         )
         if cell is not None:
             for injection in cell.injections:
