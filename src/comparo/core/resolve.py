@@ -190,7 +190,8 @@ class Resolver:
         """
         outbound = request.spec.request
         base = self.environment.spec.base_url.rstrip("/")
-        url = f"{base}/{outbound.endpoint.lstrip('/')}"
+        endpoint = _inject_path(outbound.endpoint, cell)
+        url = f"{base}/{endpoint.lstrip('/')}"
         trail: list[Trail] = []
         headers = self._headers(outbound.headers, trail)
         query = {
@@ -324,3 +325,26 @@ def _apply(container: object, path: list[str], injection: Injection) -> object:
 
 def _as_dict(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
+
+
+def _inject_path(endpoint: str, cell: MatrixCell | None) -> str:
+    """Substitute a path matrix's case into ``${key}`` holes in the endpoint.
+
+    A matrix whose ``target`` is ``request.path`` fills placeholders in the
+    endpoint template — so ``/status/${code}`` matrixed over codes becomes
+    ``/status/200``, ``/status/404``, and so on.
+
+    Args:
+        endpoint: The endpoint template.
+        cell: The matrix cell to inject, or ``None``.
+
+    Returns:
+        The endpoint with any path-matrix placeholders filled.
+    """
+    if cell is None:
+        return endpoint
+    for injection in cell.injections:
+        if injection.target.split(".")[-1] == "path":
+            for key, value in injection.case.items():
+                endpoint = endpoint.replace(f"${{{key}}}", str(value))
+    return endpoint

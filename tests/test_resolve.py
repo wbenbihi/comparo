@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from comparo.core.loader import load_project
+from comparo.core.matrix import expand
 from comparo.core.models import Request
 from comparo.core.provenance import Origin
 from comparo.core.resolve import Resolver
@@ -10,6 +11,34 @@ from comparo.core.resolve import Sink
 from comparo.core.resolve import select_environment
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
+
+
+def test_matrix_injects_into_the_endpoint_path(tmp_path: Path) -> None:
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata:\n  name: E\n  id: environment.e\nspec:\n  baseUrl: https://api.test\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "codes.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Matrix\n"
+        "metadata:\n  name: Codes\n  id: matrix.codes\n"
+        "spec:\n  target: request.path\n  values:\n    - code: 200\n    - code: 404\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata:\n  name: Status\n  id: request.status\n"
+        "spec:\n  matrix:\n    - $ref: matrix.codes\n"
+        "  request:\n    method: GET\n    endpoint: /status/${code}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path)
+    env = select_environment(loaded, "environment.e")
+    request = loaded.objects["request.status"]
+    assert isinstance(request, Request)
+    resolver = Resolver(loaded, env)
+    urls = sorted(resolver.resolve_request(request, cell).url for cell in expand(loaded, request))
+    assert urls == ["https://api.test/status/200", "https://api.test/status/404"]
 
 
 def test_resolve_carries_body_type_and_masks_auth(tmp_path: Path) -> None:
