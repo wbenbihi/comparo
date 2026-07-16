@@ -1,8 +1,8 @@
 # Examples
 
 Runnable comparo projects, each built on [httpbin](https://httpbin.org) and focused on a
-different feature. Every valid project passes `comparo validate examples/<name>`; the broken one
-fails on purpose.
+different feature. Every valid project passes
+`comparo validate --config examples/<name>/comparo.yaml`; the broken one fails on purpose.
 
 | Project | What it exercises |
 | --- | --- |
@@ -16,17 +16,17 @@ fails on purpose.
 
 ```console
 # the happy path
-comparo tui examples/sample-project
+comparo tui --config examples/sample-project/comparo.yaml
 
 # two matrices → six cells; press m to scope them
-comparo run examples/matrix-project --env prod
+comparo run --config examples/matrix-project/comparo.yaml --env prod
 
 # some assertions pass, some fail
-comparo run examples/checks-project --env prod
+comparo run --config examples/checks-project/comparo.yaml --env prod
 
 # probe health: green / orange / red
-comparo tui examples/health-project      # select an env, press h
+comparo tui --config examples/health-project/comparo.yaml      # select an env, press h
 
 # see every diagnostic at once
-comparo validate examples/broken-project
+comparo validate --config examples/broken-project/comparo.yaml
 ```

@@ -10,15 +10,19 @@ The CLI, the TUI, and the GitHub Action are all thin front-ends over one engine
 ## Table of contents
 
 - [Installation](#installation)
+- [Getting started](#getting-started)
+- [Projects and `--config`](#projects-and---config)
 - [Synopsis](#synopsis)
 - [Global options](#global-options)
 - [Exit codes](#exit-codes)
 - [Commands](#commands)
+  - [`comparo init`](#comparo-init)
   - [`comparo validate`](#comparo-validate)
   - [`comparo render`](#comparo-render)
   - [`comparo run`](#comparo-run)
   - [`comparo diff`](#comparo-diff)
   - [`comparo tui`](#comparo-tui)
+  - [`comparo help`](#comparo-help)
 - [Selecting environments](#selecting-environments)
 - [Report formats](#report-formats)
 - [The gate](#the-gate)
@@ -41,24 +45,88 @@ $ comparo --version
 comparo 0.0.0
 ```
 
+## Getting started
+
+Scaffold a new project with `comparo init`, then open it:
+
+```console
+$ comparo init
+Project name: my-api
+✓ created comparo.yaml
+✓ created .comparo/ with a sample environment and request
+
+Next:
+  comparo validate    # check it loads
+  comparo             # open the TUI
+```
+
+`init` writes a `comparo.yaml` manifest plus a `.comparo/` data directory holding a
+runnable starter environment and request (pointed at
+[postman-echo](https://postman-echo.com)), so the project validates and runs
+immediately. It never overwrites an existing manifest or data directory.
+
+From a directory that already has a `comparo.yaml`, every command works with **no
+path argument** — the manifest is picked up automatically:
+
+```console
+comparo validate            # check it loads
+comparo run --env prod      # run every request
+comparo diff --pair …       # diff a pair
+comparo                     # open the TUI (same as `comparo tui`)
+```
+
+To work on a project somewhere else, point [`--config`](#projects-and---config) at
+its manifest.
+
+## Projects and `--config`
+
+A comparo project is a `comparo.yaml` **manifest** — the `Project` object — plus the
+objects (environments, requests, matrices, schemas, …) it references. The manifest's
+`spec.data` field says where those objects live, **relative to the manifest**:
+
+- Projects created by `comparo init` use `data: .comparo`, a hidden directory that
+  never collides with the rest of your repository.
+- The bundled [examples](../examples) are **self-contained** — they set `data: .`, so
+  their object files sit right beside the manifest.
+
+Every command that loads a project accepts `--config` / `-C` to choose it:
+
+| You pass | comparo loads |
+| --- | --- |
+| _nothing_ | `./comparo.yaml` in the current directory (the default) |
+| `--config path/to/comparo.yaml` | that manifest, and the objects under its `spec.data` |
+| `--config path/to/dir` | a directory — **every** `*.yaml` beneath it (back-compat) |
+
+Pointing `--config` at a **manifest file** loads only that manifest's `spec.data`;
+pointing it at a **directory** loads every YAML object under the directory, regardless
+of any manifest. Both forms are validated identically.
+
+If the config does not exist, the command exits `1` with a friendly message:
+
+```
+no project at 'comparo.yaml' — run `comparo init` to create one, or point --config at a manifest
+```
+
 ## Synopsis
 
 ```
 comparo [OPTIONS] COMMAND [ARGS]...
 ```
 
-Running `comparo` with no command prints help. Shell-completion commands are not
-installed.
+Running `comparo` with **no command** opens the terminal UI on `./comparo.yaml` — the
+same as `comparo tui`. Shell-completion commands are not installed.
 
-Every command takes a `PROJECT` **positional argument** — the path to a project
-directory (it must exist and be a directory). It is not a `--project` option.
+Every command that loads a project takes `--config` / `-C` to select the manifest (or a
+project directory); it defaults to `comparo.yaml` in the current directory.
 
 ```
-comparo validate PROJECT
-comparo render   PROJECT REQUEST_ID [--env NAME]
-comparo run      PROJECT [REQUEST_ID] [--env NAME]
-comparo diff     PROJECT [REQUEST_ID] [--pair NAME | --baseline NAME --candidate NAME] [--report FMT]... [--output DIR]
-comparo tui      PROJECT
+comparo init     [DIRECTORY] [--name NAME] [--data DIR] [--config FILE] [--description TEXT]
+comparo validate [--config CONFIG]
+comparo render   REQUEST_ID [--config CONFIG] [--env NAME]
+comparo run      [REQUEST_ID] [--config CONFIG] [--env NAME]
+comparo diff     [REQUEST_ID] [--config CONFIG] [--pair NAME | --baseline NAME --candidate NAME] [--report FMT]... [--output DIR]
+comparo tui      [--config CONFIG]
+comparo help
 ```
 
 ## Global options
@@ -73,13 +141,71 @@ comparo tui      PROJECT
 | Code | Meaning |
 | --- | --- |
 | `0` | Success — the command completed and (for `run`/`diff`) the gate passed. |
-| `1` | Failure — the project failed to load, an argument could not be resolved, an execution failed, or the diff gate failed. |
+| `1` | Failure — the config was missing, the project failed to load, an argument could not be resolved, an execution failed, or the diff gate failed. |
 
-Every command exits `1` when the project cannot be loaded, printing each
-diagnostic to standard error followed by a `✗ N problem(s)` summary. The
-command-specific failure conditions are listed under each command below.
+Every command that loads a project exits `1` when the config is missing (`no project at
+'…'`) or the project cannot be loaded, printing each diagnostic to standard error
+followed by a `✗ N problem(s)` summary. The command-specific failure conditions are
+listed under each command below.
 
 ## Commands
+
+### `comparo init`
+
+Scaffold a new project — a `comparo.yaml` manifest plus a starter data directory that
+validates and runs immediately.
+
+```
+comparo init [DIRECTORY] [--name NAME] [--data DIR] [--config FILE] [--description TEXT]
+```
+
+**Arguments**
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `DIRECTORY` | no | Where to create the project. Defaults to the current directory (`.`). |
+
+**Options**
+
+| Option | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--name` | `-n` | prompted | The project name. If omitted, `comparo` prompts for it. |
+| `--data` | | `.comparo` | Directory the project's objects live in, relative to `DIRECTORY`. |
+| `--config` | `-C` | `comparo.yaml` | Filename for the manifest. |
+| `--description` | | — | A one-line project description. |
+
+**Behavior & exit code**
+
+Writes the manifest and a `<data>/` directory containing `environments/local.yaml` and
+`requests/example.yaml` — a runnable starter pointed at `https://postman-echo.com`, so
+the project validates and runs immediately. It **refuses to overwrite** an existing
+manifest or data directory, exiting `1` without touching your files. On success it
+prints what it created and the next commands to run, then exits `0`.
+
+**Example**
+
+```console
+$ comparo init
+Project name: my-api
+✓ created comparo.yaml
+✓ created .comparo/ with a sample environment and request
+
+Next:
+  comparo validate    # check it loads
+  comparo             # open the TUI
+```
+
+Scaffold into a new directory, naming the project non-interactively:
+
+```console
+$ comparo init services/checkout --name checkout
+✓ created services/checkout/comparo.yaml
+✓ created services/checkout/.comparo/ with a sample environment and request
+
+Next:
+  comparo validate --config services/checkout/comparo.yaml    # check it loads
+  comparo --config services/checkout/comparo.yaml             # open the TUI
+```
 
 ### `comparo validate`
 
@@ -87,14 +213,14 @@ Validate a project's envelope, ids, and references without making any network
 requests.
 
 ```
-comparo validate PROJECT
+comparo validate [--config CONFIG]
 ```
 
-**Arguments**
+**Options**
 
-| Argument | Required | Description |
-| --- | --- | --- |
-| `PROJECT` | yes | Path to the project directory to validate. |
+| Option | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to validate. |
 
 **Behavior & exit code**
 
@@ -104,8 +230,17 @@ comparo validate PROJECT
 
 **Example**
 
+From a project directory, the `comparo.yaml` is picked up automatically:
+
 ```console
-$ comparo validate examples/sample-project
+$ comparo validate
+✓ 13 object(s) valid
+```
+
+Or point `--config` at a manifest anywhere:
+
+```console
+$ comparo validate --config examples/sample-project/comparo.yaml
 ✓ 13 object(s) valid
 ```
 
@@ -116,20 +251,20 @@ query, and body — with a provenance trail. Secret values are **masked**; they 
 never printed.
 
 ```
-comparo render PROJECT REQUEST_ID [--env NAME]
+comparo render REQUEST_ID [--config CONFIG] [--env NAME]
 ```
 
 **Arguments**
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `PROJECT` | yes | Path to the project directory. |
 | `REQUEST_ID` | yes | The `metadata.id` of the request to render (e.g. `request.get-uuid`). |
 
 **Options**
 
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
+| `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
 | `--env` | `-e` | project default | Environment name or id to resolve against. See [Selecting environments](#selecting-environments). |
 
 **Behavior & exit code**
@@ -142,7 +277,7 @@ each filled value came from (literal, variable, instance, matrix, or `secret`).
 **Example**
 
 ```console
-$ comparo render examples/sample-project request.get-uuid --env prod
+$ comparo render --config examples/sample-project/comparo.yaml request.get-uuid --env prod
 GET https://httpbin.org/uuid
   env: Production
 
@@ -160,20 +295,20 @@ Execute requests against a single environment and report each cell's status code
 and latency. Matrix requests expand to one cell per case.
 
 ```
-comparo run PROJECT [REQUEST_ID] [--env NAME]
+comparo run [REQUEST_ID] [--config CONFIG] [--env NAME]
 ```
 
 **Arguments**
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `PROJECT` | yes | Path to the project directory. |
 | `REQUEST_ID` | no | A single request id to run. Omit to run every request. |
 
 **Options**
 
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
+| `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
 | `--env` | `-e` | project default | Environment name or id to run against. |
 
 **Behavior & exit code**
@@ -186,7 +321,7 @@ comparo run PROJECT [REQUEST_ID] [--env NAME]
 **Example**
 
 ```console
-$ comparo run examples/sample-project --env prod
+$ comparo run --config examples/sample-project/comparo.yaml --env prod
 run · Production
   ✗ request.echo-anything [currency=USD, locale=en-US] secret 'API_TOKEN': environment variable 'COMPARO_DEMO_TOKEN' is not set
   ✗ request.echo-anything [currency=EUR, locale=fr-FR] secret 'API_TOKEN': environment variable 'COMPARO_DEMO_TOKEN' is not set
@@ -200,7 +335,7 @@ That run exits `1` because three cells failed (the demo secret was not provided)
 Run a single request that has everything it needs, and it passes:
 
 ```console
-$ comparo run examples/sample-project request.get-json --env prod
+$ comparo run --config examples/sample-project/comparo.yaml request.get-json --env prod
 run · Production
   ✓ request.get-json                             200  443ms
 ```
@@ -212,7 +347,7 @@ Replay every request cell against two environments — a **baseline** and a
 is the command CI runs.
 
 ```
-comparo diff PROJECT [REQUEST_ID] \
+comparo diff [REQUEST_ID] [--config CONFIG] \
   [--pair NAME | --baseline NAME --candidate NAME] \
   [--report FMT]... [--output DIR]
 ```
@@ -221,13 +356,13 @@ comparo diff PROJECT [REQUEST_ID] \
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `PROJECT` | yes | Path to the project directory. |
 | `REQUEST_ID` | no | A single request id to diff. Omit to diff every request. |
 
 **Options**
 
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
+| `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
 | `--pair` | `-p` | first declared pair | A named diff pair from the project manifest. |
 | `--baseline` | `-b` | — | Baseline environment name or id. |
 | `--candidate` | `-c` | — | Candidate environment name or id. |
@@ -259,7 +394,7 @@ comparo diff PROJECT [REQUEST_ID] \
 Diff the project's default pair and write CI reports:
 
 ```console
-$ comparo diff examples/sample-project --pair local-vs-prod \
+$ comparo diff --config examples/sample-project/comparo.yaml --pair local-vs-prod \
     --report junit --report markdown --output reports
 diff · Local ⇄ Production
   ✓ request.get-json                             same
@@ -275,7 +410,7 @@ gate: PASS
 Diff an explicit environment pair, overriding any manifest pair:
 
 ```console
-$ comparo diff examples/sample-project --baseline local --candidate prod
+$ comparo diff --config examples/sample-project/comparo.yaml --baseline local --candidate prod
 ```
 
 > The `local` environment in the sample project points at `http://localhost:8080`;
@@ -284,17 +419,18 @@ $ comparo diff examples/sample-project --baseline local --candidate prod
 
 ### `comparo tui`
 
-Launch the interactive terminal UI to explore a project.
+Launch the interactive terminal UI to explore a project. Running `comparo` with **no
+command** is equivalent to `comparo tui` on `./comparo.yaml`.
 
 ```
-comparo tui PROJECT
+comparo tui [--config CONFIG]
 ```
 
-**Arguments**
+**Options**
 
-| Argument | Required | Description |
-| --- | --- | --- |
-| `PROJECT` | yes | Path to the project directory to open. |
+| Option | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to open. |
 
 **Behavior & exit code**
 
@@ -304,9 +440,28 @@ the process exits `1` when you leave it.
 
 **Example**
 
+Open the project in the current directory:
+
 ```console
-$ comparo tui examples/sample-project
+$ comparo
 ```
+
+Or open one elsewhere:
+
+```console
+$ comparo tui --config examples/sample-project/comparo.yaml
+```
+
+### `comparo help`
+
+Print the full command reference — identical to `comparo --help`.
+
+```
+comparo help
+```
+
+Writes the root help (every command and global option) to standard output and exits
+`0`.
 
 ## Selecting environments
 
@@ -363,7 +518,7 @@ the job passes or fails — matches `comparo diff` exactly (see [The gate](#the-
 
 | Input | Required | Default | Description |
 | --- | --- | --- | --- |
-| `project` | yes | — | Path to the comparo project directory. |
+| `project` | yes | — | Path to the comparo project (its `comparo.yaml` manifest, or the project directory). |
 | `pair` | no | `""` | A named diff pair from the project manifest. |
 | `baseline` | no | `""` | Baseline environment (with `candidate`, overrides `pair`). |
 | `candidate` | no | `""` | Candidate environment (with `baseline`, overrides `pair`). |
@@ -382,13 +537,8 @@ The action:
 
 1. installs [uv](https://github.com/astral-sh/setup-uv) with Python 3.13;
 2. installs comparo with `uv tool install "comparo<version>"`; and
-3. runs the equivalent of:
-
-   ```bash
-   comparo diff "<project>" [--pair …] [--baseline …] [--candidate …] \
-     --report markdown --report junit --report sarif \
-     --output "$RUNNER_TEMP/comparo"
-   ```
+3. runs `comparo diff` on the given project, writing the `markdown`, `junit`, and
+   `sarif` reports to `$RUNNER_TEMP/comparo`.
 
 The `--pair`, `--baseline`, and `--candidate` flags are only passed when the
 corresponding input is non-empty. The `markdown`, `junit`, and `sarif` reports are
@@ -412,7 +562,7 @@ jobs:
       - name: Diff staging against prod
         uses: wbenbihi/comparo@v1
         with:
-          project: examples/sample-project
+          project: examples/sample-project/comparo.yaml
           pair: local-vs-prod
           # or, overriding the manifest pair:
           # baseline: local

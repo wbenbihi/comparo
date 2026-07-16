@@ -1,13 +1,17 @@
 # Terminal UI guide
 
-> `comparo tui <project>` — explore, run, diff, report, and configure, without leaving the terminal.
+> `comparo` (or `comparo tui --config <manifest>`) — explore, run, diff, report, and configure, without leaving the terminal.
 
 The TUI is one of three front-ends over the shared engine (alongside the [CLI](cli.md) and the
 GitHub Action). It never contains diff or execution logic of its own — it drives
 `comparo.core`, so anything you do here behaves exactly like the headless commands.
 
+Run `comparo` with no command to open the TUI on `./comparo.yaml` (the manifest in the current
+directory); point `--config` at a manifest to open one elsewhere:
+
 ```console
-comparo tui examples/sample-project
+comparo                                                    # opens ./comparo.yaml
+comparo tui --config examples/sample-project/comparo.yaml
 ```
 
 If the project does not compile, the TUI opens on a full-screen **error report** instead of the

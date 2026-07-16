@@ -34,7 +34,7 @@ set globally, for every request that references them.
 ## Run it
 
 ```console
-comparo validate examples/matrix-project
-comparo tui examples/matrix-project        # Run tab → Prepare → m to scope the matrices
-comparo run examples/matrix-project --env prod
+comparo validate --config examples/matrix-project/comparo.yaml
+comparo tui --config examples/matrix-project/comparo.yaml        # Run tab → Prepare → m to scope the matrices
+comparo run --config examples/matrix-project/comparo.yaml --env prod
 ```

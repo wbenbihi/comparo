@@ -20,9 +20,9 @@ request that is up but wrong — exactly the case the ASSERT column exists to su
 ## Run it
 
 ```console
-comparo validate examples/checks-project
-comparo run examples/checks-project --env prod
-comparo tui examples/checks-project    # Run tab → run all → watch the ASSERT column
+comparo validate --config examples/checks-project/comparo.yaml
+comparo run --config examples/checks-project/comparo.yaml --env prod
+comparo tui --config examples/checks-project/comparo.yaml    # Run tab → run all → watch the ASSERT column
 ```
 
 Expect a **partial** run: two requests green, two red. The Report screen's gate reads **FAIL**

@@ -2,16 +2,17 @@
 
 > The `comparo/v1` object model — every `kind`, field, sigil, and rule.
 
-A comparo project is a directory of version-controlled YAML objects. Each object shares a
-Kubernetes-style envelope (`apiVersion` / `kind` / `metadata` / `spec`), is decoded strictly,
-and is indexed by its `metadata.id` so other objects can reference it. This document is the
-authoritative reference for that format.
+A comparo project is a `comparo.yaml` **manifest** plus a set of version-controlled YAML
+objects it references. Each object shares a Kubernetes-style envelope (`apiVersion` / `kind` /
+`metadata` / `spec`), is decoded strictly, and is indexed by its `metadata.id` so other
+objects can reference it. This document is the authoritative reference for that format.
 
 Every example below is drawn from or is consistent with the runnable
 [`examples/sample-project`](../examples/sample-project).
 
 ## Table of contents
 
+- [Project layout](#project-layout)
 - [The object envelope](#the-object-envelope)
   - [`apiVersion`](#apiversion)
   - [`kind`](#kind)
@@ -49,6 +50,36 @@ Every example below is drawn from or is consistent with the runnable
   - [Path matching and precedence](#path-matching-and-precedence)
 
 ---
+
+## Project layout
+
+A project has two parts: the **manifest** — a single `Project` object, by convention named
+`comparo.yaml` — and the **objects** it references (environments, requests, matrices, schemas,
+instances, diff profiles). The manifest's `spec.data` field points at the directory those
+objects live in, **relative to the manifest**:
+
+```yaml
+# comparo.yaml
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: my-api
+spec:
+  data: .comparo   # objects live in ./.comparo/, relative to this file
+```
+
+Two conventions are in use:
+
+- **User projects** — what [`comparo init`](cli.md#comparo-init) scaffolds — set
+  `data: .comparo`, a hidden directory that never collides with the rest of your repository.
+  `init` writes the manifest plus a starter `.comparo/environments/` and `.comparo/requests/`,
+  so the project validates and runs immediately.
+- **Self-contained projects** — the bundled [examples](../examples) — set `data: .`, so the
+  object files sit right beside the manifest.
+
+You do not have to build this layout by hand: `comparo init` creates it for you (see the
+[CLI reference](cli.md#comparo-init)). Loading either a manifest file or a plain directory is
+supported — see [How objects are loaded](#how-objects-are-loaded).
 
 ## The object envelope
 
@@ -113,8 +144,9 @@ The kind-specific body. Each kind is documented under [Object kinds](#object-kin
 
 ### How objects are loaded
 
-- The loader reads every `*.yaml` file under the project root recursively; **one object per
-  file**.
+- Given a **manifest file** (e.g. `comparo.yaml`), the loader reads the objects under its
+  `spec.data` directory (see [Project layout](#project-layout)); given a **directory**, it
+  reads every `*.yaml` beneath it. Either way it is **one object per file**.
 - Objects are indexed by `metadata.id`. A missing `id` (on a non-`Project` kind), a
   **duplicate `id`**, or a **second `Project` manifest** is an error.
 - Every `$ref` and `$val` target is checked against the index. A dangling reference is a hard
@@ -177,7 +209,7 @@ sub-fields below as the conventional structure the sample project uses.
 
 | Field        | YAML key       | Description                                                                       |
 | ------------ | -------------- | --------------------------------------------------------------------------------- |
-| data         | `data`         | Path to the object tree, relative to this file (e.g. `.`).                         |
+| data         | `data`         | Path to the object tree, relative to this file (e.g. `.comparo` or `.`).           |
 | environments | `environments` | Default environment and named diff pairs — see below.                             |
 | run          | `run`          | Execution defaults such as `concurrency` and `retry`.                             |
 | diff         | `diff`         | Global default comparison profile (a `$ref` to a `DiffProfile`).                  |

@@ -16,7 +16,7 @@ requests across two environments and diffs the responses.
 | `matrices/locales.yaml` | run a request once per locale, injected into the query |
 | `schemas/*.yaml` | structural validation of responses |
 | `diff/{lenient,strict}.yaml` | per-path comparison profiles |
-| `project.yaml` | the `local ⇄ prod` diff pair, concurrency, reporting |
+| `comparo.yaml` | the manifest — the `local ⇄ prod` diff pair, concurrency, reporting |
 
 ## Run it
 
@@ -35,7 +35,7 @@ export COMPARO_DEMO_TOKEN=demo-123
 Then diff `local` against `prod`:
 
 ```console
-comparo diff examples/sample-project --pair local-vs-prod
+comparo diff --config examples/sample-project/comparo.yaml --pair local-vs-prod
 ```
 
 Because both environments front the same httpbin image, the controlled fields (`$.args`,

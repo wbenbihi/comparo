@@ -43,18 +43,27 @@ pipx install comparo
 
 ## Quickstart
 
+Scaffold a project (a `comparo.yaml` manifest plus a `.comparo/` starter), then explore it —
+from a directory with a `comparo.yaml`, commands need no path and a bare `comparo` opens the TUI:
+
 ```console
-# validate a project's envelope, ids, and references
-comparo validate examples/sample-project
+# create a new project and open the terminal UI
+comparo init
+comparo
 
-# explore it interactively
-comparo tui examples/sample-project
+# validate, run, and diff — the ./comparo.yaml is picked up automatically
+comparo validate
+comparo run --env prod
+comparo diff --pair local-vs-prod --report junit --report markdown
+```
 
-# run every request against an environment
-comparo run examples/sample-project --env prod
+Or work on a project elsewhere by pointing `--config` at its manifest — for example the
+runnable, self-contained [`examples/sample-project`](examples/sample-project):
 
-# diff two environments and write CI reports
-comparo diff examples/sample-project --report junit --report markdown
+```console
+comparo validate --config examples/sample-project/comparo.yaml
+comparo tui      --config examples/sample-project/comparo.yaml
+comparo diff     --config examples/sample-project/comparo.yaml --pair local-vs-prod
 ```
 
 The [Terminal UI guide](docs/tui.md) walks through each screen; the [CLI reference](docs/cli.md)

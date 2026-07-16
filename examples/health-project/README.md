@@ -19,8 +19,8 @@ never resolves, so the probe raises a transport error and nothing passes.
 ## Run it
 
 ```console
-comparo validate examples/health-project
-comparo tui examples/health-project    # Explorer → select an env → h to probe → watch the dot
+comparo validate --config examples/health-project/comparo.yaml
+comparo tui --config examples/health-project/comparo.yaml    # Explorer → select an env → h to probe → watch the dot
 ```
 
 In the TUI, select each environment and press `h`; the dot recolors to match the table above and a

@@ -257,10 +257,11 @@ and Markdown reporters. The core stays format-agnostic.
 
 **CLI** (`cli/app.py`) — a [Typer](https://typer.tiangolo.com/) app whose module
 docstring is explicit: *"Only wiring lives here … No engine logic belongs in this
-module."* Its commands (`validate`, `render`, `run`, `diff`, `tui`) load a
-project, call engine functions, construct an `HttpxClient` adapter, and print or
-write the results. The `diff` command drives the report gate and writes any
-requested reporter outputs (appending the Markdown reporter to
+module."* `init` scaffolds a new project; `validate`, `render`, `run`, `diff`, and
+`tui` load one, call engine functions, construct an `HttpxClient` adapter, and print
+or write the results; `help` prints the command reference. Running `comparo` with no
+command opens the TUI on `./comparo.yaml`. The `diff` command drives the report gate
+and writes any requested reporter outputs (appending the Markdown reporter to
 `$GITHUB_STEP_SUMMARY` when run inside Actions).
 
 **TUI** (`tui/app.py`) — a [Textual](https://textual.textualize.io/) application

@@ -22,8 +22,8 @@ near-miss to suggest.
 ## See it
 
 ```console
-comparo validate examples/broken-project    # prints all six, exits 1
-comparo tui examples/broken-project          # renders the error screen
+comparo validate --config examples/broken-project/comparo.yaml    # prints all six, exits 1
+comparo tui --config examples/broken-project/comparo.yaml          # renders the error screen
 ```
 
 The loader collects **every** problem in one pass rather than stopping at the first, so a single
