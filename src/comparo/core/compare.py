@@ -103,6 +103,19 @@ def _raw_compare(request: Request, key: str, baseline: bytes, candidate: bytes) 
     return CellDiff(request, key, [FieldDiff("$", State.DRIFT, "exact", "response bodies differ")])
 
 
+def profile_for(project: LoadedProject, request: Request) -> DiffProfile | None:
+    """Return the diff profile that applies to *request*, if any.
+
+    Args:
+        project: The loaded project.
+        request: The request whose effective profile is resolved.
+
+    Returns:
+        The request's own profile, else the project default, else ``None``.
+    """
+    return _profile_for(project, request)
+
+
 def _profile_for(project: LoadedProject, request: Request) -> DiffProfile | None:
     response = request.spec.response
     if response is not None:
