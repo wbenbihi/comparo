@@ -18,16 +18,80 @@ from comparo.core.models import Request
 from comparo.tui.app import ComparoApp
 from comparo.tui.app import ConfirmModal
 from comparo.tui.app import DiffView
+from comparo.tui.app import EnvPickerModal
 from comparo.tui.app import ErrorView
 from comparo.tui.app import ExplorerView
 from comparo.tui.app import ReportView
 from comparo.tui.app import RunView
 from comparo.tui.app import SettingsView
+from comparo.tui.app import _body_diff_lines
 from comparo.tui.app import _edges
+from comparo.tui.app import _environments
 from comparo.tui.app import _help_body
 from comparo.tui.app import _parse_sse
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
+
+
+def test_body_diff_lines_marks_drift_skip_and_same() -> None:
+    base = {"args": {"a": "1", "b": "2"}, "headers": {"h": "x"}}
+    cand = {"args": {"a": "1", "b": "3"}, "headers": {"h": "y"}}
+    states = {
+        "$.args.a": FieldDiff("$.args.a", State.SAME, "exact"),
+        "$.args.b": FieldDiff("$.args.b", State.DRIFT, "exact", '"2" → "3"'),
+        "$.headers": FieldDiff("$.headers", State.SKIP, "ignore"),
+    }
+    lines = _body_diff_lines(base, cand, states)
+    # the drifted leaf carries both sides under the drift state
+    assert any(state == "drift" and '"2"' in left for _, left, _, state, _ in lines)
+    assert any(state == "drift" and '"3"' in right for _, _, right, state, _ in lines)
+    # the same leaf is not drift
+    assert any(state == "same" and '"a": "1"' in left for _, left, _, state, _ in lines)
+    # the ignored container collapses to a single skip line, not recursed into
+    assert any(state == "skip" and "headers" in left for _, left, _, state, _ in lines)
+    assert not any('"h"' in left for _, left, _, _, _ in lines)
+
+
+def test_diff_candidate_picker_updates_the_pair() -> None:
+    loaded = load_project(SAMPLE)  # has local + prod environments
+    environments = _environments(loaded)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")  # Diff
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            diff.action_pick_candidate()
+            await pilot.pause()
+            assert isinstance(app.screen, EnvPickerModal)
+            await pilot.press("enter")  # choose the first (highlighted) environment
+            await pilot.pause()
+            assert diff._pair is not None
+            assert diff._pair[1].metadata.id == environments[0].metadata.id
+
+    asyncio.run(go())
+
+
+def test_diff_toggles_flip_view_and_index() -> None:
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            unified = diff._unified
+            diff.action_toggle_view()
+            assert diff._unified != unified
+            assert diff._index_mode == "fields"
+            diff.action_toggle_index()
+            assert diff._index_mode == "rules"
+
+    asyncio.run(go())
 
 
 def test_tui_launches_and_builds_tree() -> None:

@@ -316,7 +316,7 @@ Screen {
 }
 
 #col-drift {
-    width: 42;
+    width: 48;
     height: 1fr;
     margin-right: 1;
 }
@@ -384,7 +384,7 @@ Screen {
 
 /* ── modals (filter, graph, help, matrix picker, curl, cases) ────────────── */
 FilterModal, GraphModal, HelpModal, MatrixPickerModal, CurlModal, GlobalMatrixModal,
-ConfirmModal {
+ConfirmModal, EnvPickerModal {
     align: center middle;
     background: $background 65%;
 }

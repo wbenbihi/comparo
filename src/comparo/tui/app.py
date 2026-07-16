@@ -162,6 +162,7 @@ _PREPARE_KEYS = (
     ("enter", "select"),
     ("/", "filter"),
     ("m", "matrix"),
+    ("e", "env"),
     ("x", "run"),
     ("?", "help"),
     ("q", "quit"),
@@ -188,7 +189,10 @@ _RUNNING_DONE_KEYS = (
 )
 _DIFF_KEYS = (
     ("↑↓", "fields"),
+    ("b/c", "baseline / candidate"),
     ("x", "run diff"),
+    ("r", "fields/rules"),
+    ("v", "unified/side"),
     ("i", "ignore field"),
     ("?", "help"),
     ("q", "quit"),
@@ -665,6 +669,7 @@ class RunView(Vertical):
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("e", "pick_env", "environment"),
         Binding("escape", "back", "back"),
         Binding("backspace", "back", "back"),
         Binding("f", "filter", "failures"),
@@ -672,6 +677,21 @@ class RunView(Vertical):
         Binding("a", "abort", "abort"),
         Binding("s", "save", "save"),
     ]
+
+    def action_pick_env(self) -> None:
+        """Choose the environment this run executes against."""
+        environments = _environments(self.project)
+        if not environments:
+            self.app.notify("This project has no environments", severity="warning")
+            return
+        self.app.push_screen(
+            EnvPickerModal(environments, "RUN ENVIRONMENT"),
+            lambda env: self._set_run_env(env) if env is not None else None,
+        )
+
+    def _set_run_env(self, env: Environment) -> None:
+        cast("ComparoApp", self.app).set_default_environment(env)
+        self.app.notify(f"Runs will execute against {env.metadata.name}", title="Environment")
 
     def __init__(self, project: LoadedProject) -> None:
         """Build the run view.
@@ -1368,13 +1388,19 @@ class RunView(Vertical):
 class DiffView(Vertical):
     """The signature diff: replay a pair, group drift by field, silence to config.
 
-    ``x`` runs the manifest's baseline ⇄ candidate pair; drifts collapse to one
-    row per field (a field that drifts on three cells is one bug, not three).
-    Selecting a field shows the tri-state comparison; ``i`` silences it by
-    writing an ignore rule into the request's committed DiffProfile.
+    ``b`` / ``c`` pick the baseline / candidate environment inline; ``x`` replays
+    every request against both. Drifts collapse to one row per field (a field that
+    drifts on three cells is one bug, not three); ``r`` toggles that index between
+    grouped-by-field and broken-rules. Selecting a field shows a git-style body
+    diff — ``v`` flips it between unified and side-by-side. ``i`` silences a field
+    by writing an ignore rule into the request's committed DiffProfile.
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("b", "pick_baseline", "baseline"),
+        Binding("c", "pick_candidate", "candidate"),
+        Binding("r", "toggle_index", "fields/rules"),
+        Binding("v", "toggle_view", "unified/side-by-side"),
         Binding("i", "silence", "ignore field"),
     ]
 
@@ -1391,6 +1417,49 @@ class DiffView(Vertical):
         self._groups: list[tuple[str, list[tuple[CellDiff, FieldDiff]]]] = []
         self._run_id: str | None = None
         self._done = False
+        self._unified = True
+        self._index_mode = "fields"
+
+    def action_toggle_index(self) -> None:
+        """Flip the drift index between grouped-by-field and broken-rules."""
+        self._index_mode = "rules" if self._index_mode == "fields" else "fields"
+        self._populate_drift()
+
+    def action_toggle_view(self) -> None:
+        """Flip the body diff between unified and side-by-side."""
+        self._unified = not self._unified
+        group = self._selected_group()
+        if group is not None:
+            self._show_field(group[0])
+
+    def action_pick_baseline(self) -> None:
+        """Choose the baseline environment for the diff."""
+        self._pick_env(0, "BASELINE ENVIRONMENT")
+
+    def action_pick_candidate(self) -> None:
+        """Choose the candidate environment for the diff."""
+        self._pick_env(1, "CANDIDATE ENVIRONMENT")
+
+    def _pick_env(self, index: int, title: str) -> None:
+        environments = _environments(self.project)
+        if not environments:
+            self.app.notify("This project has no environments", severity="warning")
+            return
+        self.app.push_screen(
+            EnvPickerModal(environments, title),
+            lambda env: self._set_env(index, env) if env is not None else None,
+        )
+
+    def _set_env(self, index: int, env: Environment) -> None:
+        base, candidate = self._pair if self._pair is not None else (env, env)
+        self._pair = (env, candidate) if index == 0 else (base, env)
+        # The previous results no longer describe this pair — clear and re-run.
+        self._cells = []
+        self._groups = []
+        self._done = False
+        self._run_id = None
+        self._render_progress()
+        self._populate_drift()
 
     def compose(self) -> ComposeResult:
         """Yield the progress line, the drift table, and the comparison panel."""
@@ -1410,7 +1479,7 @@ class DiffView(Vertical):
         try:
             self._pair = resolve_pair(self.project, None, None, None)
         except EnvironmentSelectionError:
-            self._pair = None
+            self._pair = _default_pair(self.project)
         self._render_progress()
         self._populate_drift()
         self.query_one("#drift-table", DataTable).focus()
@@ -1536,15 +1605,36 @@ class DiffView(Vertical):
     def _populate_drift(self) -> None:
         table = self.query_one("#drift-table", DataTable)
         table.clear(columns=True)
+        if not self._groups:
+            table.add_column("", key="st", width=3)
+            table.add_column("FIELD", key="field")
+            self.query_one("#col-drift").border_title = "DRIFT"
+            self.query_one("#compare-content", Static).update(_diff_ready(self._cells, self._pair))
+            return
+        if self._index_mode == "rules":
+            self._populate_rules(table)
+            subtitle = "broken rules"
+        else:
+            self._populate_fields(table)
+            subtitle = "grouped by field"
+        for cell in (c for c in self._cells if c.error is not None):
+            table.add_row(
+                Text("!", style=_WARN),
+                Text(cell.request.metadata.name, style=_WARN),
+                Text("", style=_DIM),
+                Text("error", style=_WARN),
+                key=f"error::{cell.cell_key}::{id(cell)}",
+            )
+        self.query_one("#col-drift").border_title = Text.from_markup(
+            f"DRIFT [{_DIM}]· {subtitle}[/]"
+        )
+        self._show_field(self._groups[0][0])
+
+    def _populate_fields(self, table: DataTable[Text]) -> None:
         table.add_column("", key="st", width=3)
         table.add_column("FIELD", key="field")
         table.add_column("CELLS", key="cells", width=7)
         table.add_column("MODE", key="mode", width=10)
-        if not self._groups:
-            self.query_one("#col-drift").border_title = "DRIFT"
-            self.query_one("#compare-content", Static).update(_diff_ready(self._cells, self._pair))
-            return
-        errors = [c for c in self._cells if c.error is not None]
         for path, entries in self._groups:
             table.add_row(
                 Text("✗", style=_DRIFT),
@@ -1553,18 +1643,22 @@ class DiffView(Vertical):
                 Text(entries[0][1].mode, style=_MODE.get(entries[0][1].mode, _DIM)),
                 key=f"drift::{path}",
             )
-        for cell in errors:
+
+    def _populate_rules(self, table: DataTable[Text]) -> None:
+        # One row per fired rule: which mode flagged which field, and the change.
+        table.add_column("", key="st", width=3)
+        table.add_column("RULE", key="mode", width=10)
+        table.add_column("FIELD", key="field")
+        table.add_column("CHANGE", key="detail")
+        for path, entries in self._groups:
+            field = entries[0][1]
             table.add_row(
-                Text("!", style=_WARN),
-                Text(cell.request.metadata.name, style=_WARN),
-                Text("err", style=_DIM),
-                Text("", style=_DIM),
-                key=f"error::{cell.cell_key}::{id(cell)}",
+                Text("✗", style=_DRIFT),
+                Text(field.mode, style=_MODE.get(field.mode, _DIM)),
+                Text(path, style=_TEXT_HI),
+                Text(field.detail or "differs", style=_DRIFT),
+                key=f"drift::{path}",
             )
-        self.query_one("#col-drift").border_title = Text.from_markup(
-            f"DRIFT [{_DIM}]· grouped by field[/]"
-        )
-        self._show_field(self._groups[0][0])
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Show the field comparison for the highlighted drift."""
@@ -1588,8 +1682,11 @@ class DiffView(Vertical):
         if group is None:
             wrap.border_title = "COMPARE"
             return
-        wrap.border_title = Text.from_markup(f"COMPARE [{_DIM}]·[/] {path}")
-        self.query_one("#compare-content", Static).update(_diff_field(group, self._pair))
+        mode = "unified" if self._unified else "side-by-side"
+        wrap.border_title = Text.from_markup(f"COMPARE [{_DIM}]·[/] {path} [{_DIM}]· {mode}[/]")
+        self.query_one("#compare-content", Static).update(
+            _diff_body_view(group, self._pair, unified=self._unified)
+        )
 
     def _render_progress(self) -> None:
         text = Text()
@@ -1992,6 +2089,50 @@ class HelpModal(ModalScreen[None]):
         self.dismiss(None)
 
 
+class EnvPickerModal(ModalScreen["Environment | None"]):
+    """Pick an environment for a role — a diff baseline/candidate, or the run env."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, environments: list[Environment], title: str) -> None:
+        """Build the picker.
+
+        Args:
+            environments: The environments to choose from.
+            title: The dialog title naming the role being set.
+        """
+        super().__init__()
+        self._environments = environments
+        self._title = title
+
+    def compose(self) -> ComposeResult:
+        """Yield the environment list."""
+        with Vertical(id="picker-dialog", classes="modal"):
+            yield OptionList(*(self._label(env) for env in self._environments))
+
+    def on_mount(self) -> None:
+        """Title the dialog and focus the list."""
+        dialog = self.query_one("#picker-dialog")
+        dialog.border_title = self._title
+        dialog.border_subtitle = "↑↓ · enter · esc"
+        self.query_one(OptionList).focus()
+
+    def _label(self, env: Environment) -> Text:
+        text = Text()
+        text.append(env.metadata.name, style=_TEXT_HI)
+        if env.metadata.id:
+            text.append(f"   {env.metadata.id}", style=_DIM)
+        return text
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Return the chosen environment."""
+        self.dismiss(self._environments[event.option_index])
+
+    def action_cancel(self) -> None:
+        """Close without choosing."""
+        self.dismiss(None)
+
+
 class MatrixPickerModal(ModalScreen["MatrixCell | None"]):
     """A small overlay to pick which matrix case a curl is generated for."""
 
@@ -2391,6 +2532,27 @@ class ComparoApp(App[None]):
             "settings": (_SETTINGS_KEYS, "read-only"),
         }.get(screen, (_EXPLORER_KEYS, ""))
         self.query_one(StatusBar).show(keys, context)
+
+
+def _environments(project: LoadedProject) -> list[Environment]:
+    """Every environment in the project, sorted by id."""
+    envs = [obj for obj in project.objects.values() if isinstance(obj, Environment)]
+    return sorted(envs, key=lambda env: env.metadata.id or env.metadata.name)
+
+
+def _default_pair(project: LoadedProject) -> tuple[Environment, Environment] | None:
+    """A baseline ⇄ candidate pair to seed the Diff screen when none is configured.
+
+    Args:
+        project: The loaded project.
+
+    Returns:
+        The first two environments, the only one twice, or ``None`` if there are none.
+    """
+    envs = _environments(project)
+    if not envs:
+        return None
+    return (envs[0], envs[1]) if len(envs) > 1 else (envs[0], envs[0])
 
 
 def _default_environment(project: LoadedProject) -> Environment | None:
@@ -3174,6 +3336,152 @@ def _diff_field(
     hint.append(" to silence this field — writes an ignore rule to the profile", style=_DIM)
     parts.append(hint)
     return Group(*parts)
+
+
+def _sv(value: object) -> str:
+    rendered = json.dumps(value, ensure_ascii=False)
+    return rendered if len(rendered) <= 60 else f"{rendered[:57]}..."
+
+
+def _is_container(value: object) -> bool:
+    return isinstance(value, dict | list)
+
+
+def _body_diff_lines(
+    base: object,
+    cand: object,
+    states: dict[str, FieldDiff],
+    path: str = "$",
+    depth: int = 0,
+    key: str | None = None,
+    trailing: str = "",
+) -> list[tuple[int, str, str, str, str]]:
+    """Walk both response trees, yielding (depth, left, right, state, note) rows.
+
+    ``state`` is ``same`` / ``drift`` / ``skip`` from the profile's FieldDiff at
+    that path (``context`` for structural braces); ``note`` carries the skip mode.
+    """
+    label = f'"{key}": ' if key is not None else ""
+    decided = states.get(path)
+    if decided is not None and decided.state.value in ("skip", "drift") and _is_container(base):
+        # The profile decided this whole node at once (e.g. an ignored $.headers,
+        # or a type/length drift) — collapse it rather than recursing in.
+        placeholder = "{ … }" if isinstance(base, dict) else "[ … ]"
+        note = decided.mode if decided.state.value == "skip" else ""
+        line = f"{label}{placeholder}{trailing}"
+        return [(depth, line, line, decided.state.value, note)]
+    if isinstance(base, dict) and isinstance(cand, dict):
+        rows: list[tuple[int, str, str, str, str]] = [
+            (depth, f"{label}{{", f"{label}{{", "context", "")
+        ]
+        names = sorted(set(base) | set(cand))
+        for index, name in enumerate(names):
+            child = f"{path}.{name}"
+            tail = "," if index < len(names) - 1 else ""
+            if name in base and name in cand:
+                rows += _body_diff_lines(
+                    base[name], cand[name], states, child, depth + 1, name, tail
+                )
+            elif name in base:
+                rows.append((depth + 1, f'"{name}": {_sv(base[name])}{tail}', "", "drift", ""))
+            else:
+                rows.append((depth + 1, "", f'"{name}": {_sv(cand[name])}{tail}', "drift", ""))
+        rows.append((depth, f"}}{trailing}", f"}}{trailing}", "context", ""))
+        return rows
+    if isinstance(base, list) and isinstance(cand, list):
+        rows = [(depth, f"{label}[", f"{label}[", "context", "")]
+        size = max(len(base), len(cand))
+        for index in range(size):
+            child = f"{path}[{index}]"
+            tail = "," if index < size - 1 else ""
+            if index < len(base) and index < len(cand):
+                rows += _body_diff_lines(
+                    base[index], cand[index], states, child, depth + 1, None, tail
+                )
+            elif index < len(base):
+                rows.append((depth + 1, f"{_sv(base[index])}{tail}", "", "drift", ""))
+            else:
+                rows.append((depth + 1, "", f"{_sv(cand[index])}{tail}", "drift", ""))
+        rows.append((depth, f"]{trailing}", f"]{trailing}", "context", ""))
+        return rows
+    field = states.get(path)
+    state = field.state.value if field is not None else "same"
+    note = field.mode if field is not None and state == "skip" else ""
+    return [(depth, f"{label}{_sv(base)}{trailing}", f"{label}{_sv(cand)}{trailing}", state, note)]
+
+
+def _diff_unified(lines: list[tuple[int, str, str, str, str]]) -> Text:
+    text = Text()
+    for depth, left, right, state, note in lines:
+        pad = "  " * depth
+        if state == "drift":
+            if left:
+                text.append("- ", style=f"bold {_DRIFT}")
+                text.append(f"{pad}{left}\n", style=_DRIFT)
+            if right:
+                text.append("+ ", style=f"bold {_SAME}")
+                text.append(f"{pad}{right}\n", style=_SAME)
+        elif state == "skip":
+            text.append("  ", style=_DIM)
+            text.append(f"{pad}{left}", style=_SKIP)
+            text.append(f"   ⋯ skipped · {note}\n", style=_DIM)
+        else:
+            text.append(f"  {pad}{left}\n", style=_DIM)
+    return text
+
+
+def _diff_side_by_side(
+    lines: list[tuple[int, str, str, str, str]], pair: tuple[Environment, Environment] | None
+) -> Table:
+    baseline = pair[0].metadata.name if pair else "baseline"
+    candidate = pair[1].metadata.name if pair else "candidate"
+    table = Table(box=None, show_header=True, header_style=f"bold {_DIM}", padding=(0, 3, 0, 0))
+    table.add_column(baseline, no_wrap=True)
+    table.add_column(candidate, no_wrap=True)
+    for depth, left, right, state, note in lines:
+        pad = "  " * depth
+        if state == "drift":
+            left_cell = Text(f"{pad}{left}", style=_DRIFT) if left else Text("")
+            right_cell = Text(f"{pad}{right}", style=_SAME) if right else Text("")
+        elif state == "skip":
+            left_cell = Text(f"{pad}{left}  ⋯ {note}", style=_SKIP)
+            right_cell = Text(f"{pad}{right}", style=_SKIP)
+        else:
+            left_cell = Text(f"{pad}{left}", style=_DIM)
+            right_cell = Text(f"{pad}{right}", style=_DIM)
+        table.add_row(left_cell, right_cell)
+    return table
+
+
+def _diff_body_view(
+    group: tuple[str, list[tuple[CellDiff, FieldDiff]]],
+    pair: tuple[Environment, Environment] | None,
+    *,
+    unified: bool,
+) -> Group:
+    path, entries = group
+    cell = entries[0][0]
+    if cell.baseline_body is None or cell.candidate_body is None:
+        return _diff_field(group, pair)  # non-JSON / error cell — fall back
+    baseline = pair[0].metadata.name if pair else "A"
+    candidate = pair[1].metadata.name if pair else "B"
+    header = Text()
+    header.append(path, style=f"bold {_DRIFT}")
+    header.append(
+        f"   drifts on {len(entries)} cell{'' if len(entries) == 1 else 's'}\n", style=_DIM
+    )
+    githead = Text()
+    githead.append(f"diff  {baseline} → {candidate}", style=_DIM)
+    githead.append(f"   {cell.cell_key or cell.request.metadata.name}\n", style=_AXIS)
+    states = {field.path: field for field in cell.fields}
+    lines = _body_diff_lines(cell.baseline_body, cell.candidate_body, states)
+    body = _diff_unified(lines) if unified else _diff_side_by_side(lines, pair)
+    hint = Text("\npress ", style=_DIM)
+    hint.append("v", style=f"bold {_ACCENT}")
+    hint.append(f" for {'side-by-side' if unified else 'unified'}    ", style=_DIM)
+    hint.append("i", style=f"bold {_ACCENT}")
+    hint.append(" to silence this field", style=_DIM)
+    return Group(header, githead, body, _diff_legend(), hint)
 
 
 def _report_breakdown(report: RunReport) -> Table:
