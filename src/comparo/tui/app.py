@@ -9,6 +9,7 @@ this module.
 
 import json
 from typing import ClassVar
+from typing import Literal
 from typing import cast
 
 import msgspec
@@ -28,10 +29,12 @@ from textual.screen import ModalScreen
 from textual.widgets import ContentSwitcher
 from textual.widgets import Input
 from textual.widgets import Label
+from textual.widgets import OptionList
 from textual.widgets import Static
 from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 
+from comparo.core.curl import to_curl
 from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
 from comparo.core.health import Health
@@ -39,6 +42,8 @@ from comparo.core.health import HealthReport
 from comparo.core.health import check_health
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
+from comparo.core.matrix import MatrixCell
+from comparo.core.matrix import expand
 from comparo.core.models import DiffProfile
 from comparo.core.models import Environment
 from comparo.core.models import Instance
@@ -50,7 +55,9 @@ from comparo.core.provenance import Trail
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
+from comparo.core.resolve import Sink
 from comparo.core.resolve import select_environment
+from comparo.core.secrets import SecretError
 from comparo.tui.theme import COMPARO_INK
 
 _INK = "#0d1017"
@@ -145,11 +152,17 @@ _ENV_KEYS = (
 _RESOLVE_KEYS = (
     ("↑↓", "move"),
     ("r", "raw/resolved"),
-    ("tab", "panel"),
+    ("p", "curl"),
     ("/", "filter"),
     ("g", "graph"),
     ("q", "quit"),
 )
+_HEALTH_SEVERITY: dict[Health, Literal["information", "warning", "error"]] = {
+    Health.UNKNOWN: "information",
+    Health.PASS: "information",
+    Health.PARTIAL: "warning",
+    Health.FAIL: "error",
+}
 
 _HELP_TITLE: dict[str, str] = {
     "explorer": "EXPLORER — understand how the project is configured",
@@ -167,6 +180,7 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("enter", "on an environment: make it the default for resolution"),
         ("h", "on an environment: run its health checks live"),
         ("r", "on a request or instance: toggle raw ⇄ resolved"),
+        ("p", "on a request: show its curl (c inside copies real secrets)"),
         ("/", "filter the tree by name, kind, or tag"),
         ("g", "open the reference graph — what links to what"),
     ),
@@ -337,6 +351,27 @@ class ExplorerView(Horizontal):
         self.query_one("#detail-panel").border_subtitle = "running health checks…"
         self.run_worker(self._run_health(environment), exclusive=True, group="health")
 
+    def print_curl(self) -> None:
+        """Show the curl for the selected request, picking a matrix case first."""
+        request = self._selected()
+        environment = self.environment
+        if not isinstance(request, Request) or environment is None:
+            return
+        cells = expand(self.project, request)
+        if len(cells) > 1:
+            self.app.push_screen(
+                MatrixPickerModal(cells),
+                lambda cell: self._open_curl(request, environment, cell),
+            )
+        else:
+            self._open_curl(request, environment, cells[0])
+
+    def _open_curl(
+        self, request: Request, environment: Environment, cell: MatrixCell | None
+    ) -> None:
+        if cell is not None:
+            self.app.push_screen(CurlModal(self.project, environment, request, cell))
+
     def set_default(self, environment: Environment) -> None:
         """Make *environment* the default all requests resolve against."""
         self.environment = environment
@@ -363,6 +398,13 @@ class ExplorerView(Horizontal):
             node.set_label(self._env_label(environment, env_id))
         if self._selected() is environment:
             self._show(environment)
+        passed = sum(1 for result in report.results if result.ok)
+        summary = f"{passed}/{len(report.results)} checks passed" if report.results else "no checks"
+        self.app.notify(
+            f"{environment.metadata.name}: {_HEALTH_LABEL[report.status]} · {summary}",
+            title="Health check",
+            severity=_HEALTH_SEVERITY[report.status],
+        )
 
     def _populate(self, query: str, *, prefer_request: bool = False) -> int:
         tree: Tree[object] = self.query_one("#tree", Tree)
@@ -630,6 +672,96 @@ class HelpModal(ModalScreen[None]):
         self.dismiss(None)
 
 
+class MatrixPickerModal(ModalScreen["MatrixCell | None"]):
+    """A small overlay to pick which matrix case a curl is generated for."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, cells: list[MatrixCell]) -> None:
+        """Build the picker over a request's expanded matrix cells.
+
+        Args:
+            cells: Every matrix combination for the request.
+        """
+        super().__init__()
+        self._cells = cells
+
+    def compose(self) -> ComposeResult:
+        """Yield the option list of matrix cases."""
+        with Vertical(id="picker-dialog", classes="modal"):
+            yield OptionList(*(cell.key or "base (no matrix)" for cell in self._cells))
+
+    def on_mount(self) -> None:
+        """Title the dialog and focus the list."""
+        self.query_one("#picker-dialog").border_title = "SELECT MATRIX CASE"
+        self.query_one(OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Return the chosen cell."""
+        self.dismiss(self._cells[event.option_index])
+
+    def action_cancel(self) -> None:
+        """Close without choosing."""
+        self.dismiss(None)
+
+
+class CurlModal(ModalScreen[None]):
+    """Shows the masked curl for a request; ``c`` copies the real one."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "close", "close"),
+        Binding("q", "close", "close"),
+        Binding("c", "copy", "copy"),
+    ]
+
+    def __init__(
+        self, project: LoadedProject, environment: Environment, request: Request, cell: MatrixCell
+    ) -> None:
+        """Build the curl overlay.
+
+        Args:
+            project: The loaded project.
+            environment: The environment to resolve against.
+            request: The request to render.
+            cell: The matrix case to inject.
+        """
+        super().__init__()
+        self._project = project
+        self._environment = environment
+        self._request = request
+        self._cell = cell
+
+    def compose(self) -> ComposeResult:
+        """Yield the scrollable curl body."""
+        with VerticalScroll(id="curl-dialog", classes="modal"):
+            yield Static(id="curl-content")
+
+    def on_mount(self) -> None:
+        """Render the masked curl and title the dialog."""
+        dialog = self.query_one("#curl-dialog")
+        dialog.border_title = "CURL" + (f" · {self._cell.key}" if self._cell.key else "")
+        dialog.border_subtitle = "c copy with real secrets · esc close"
+        self.query_one("#curl-content", Static).update(_bash(self._curl(Sink.DISPLAY)))
+
+    def action_copy(self) -> None:
+        """Copy the real (unmasked) curl to the clipboard."""
+        try:
+            command = self._curl(Sink.EXECUTE)
+        except SecretError as error:
+            self.app.notify(str(error), title="Cannot copy", severity="error")
+            return
+        self.app.copy_to_clipboard(command)
+        self.app.notify("Real curl copied to clipboard", title="Copied", severity="information")
+
+    def action_close(self) -> None:
+        """Close the overlay."""
+        self.dismiss(None)
+
+    def _curl(self, sink: Sink) -> str:
+        resolver = Resolver(self._project, self._environment, sink)
+        return to_curl(resolver.resolve_request(self._request, self._cell))
+
+
 class ErrorView(VerticalScroll):
     """The replacement screen shown when a project will not load.
 
@@ -703,6 +835,7 @@ class ComparoApp(App[None]):
         Binding("slash", "filter", "Filter"),
         Binding("g", "graph", "Graph"),
         Binding("h", "health", "Health"),
+        Binding("p", "curl", "curl"),
         Binding("r", "raw_or_reload", "Raw / reload"),
         Binding("question_mark", "help", "Help"),
     ]
@@ -782,6 +915,12 @@ class ComparoApp(App[None]):
         if self.error is not None or self.query_one(NavBar).active != "explorer":
             return
         self.query_one(ExplorerView).run_health_on_selected()
+
+    def action_curl(self) -> None:
+        """Show the curl for the selected request."""
+        if self.error is not None or self.query_one(NavBar).active != "explorer":
+            return
+        self.query_one(ExplorerView).print_curl()
 
     def action_help(self) -> None:
         """Open the help overlay for the current screen."""
@@ -1117,6 +1256,10 @@ def _help_row(text: Text, key: str, description: str) -> None:
 def _json(value: object) -> Syntax:
     rendered = json.dumps(value, indent=2, ensure_ascii=False)
     return Syntax(rendered, "json", theme="one-dark", background_color=_SYNTAX_BG, word_wrap=True)
+
+
+def _bash(command: str) -> Syntax:
+    return Syntax(command, "bash", theme="one-dark", background_color=_SYNTAX_BG, word_wrap=True)
 
 
 def _matrix_summary(project: LoadedProject, matrix: list[object] | None) -> str:
