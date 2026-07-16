@@ -23,12 +23,19 @@ from comparo.core.models import Request
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class CellDiff:
-    """The diff outcome for one request cell across the environment pair."""
+    """The diff outcome for one request cell across the environment pair.
+
+    ``baseline_body`` and ``candidate_body`` carry the parsed response trees so a
+    front-end can render a git-style body diff; they are ``None`` for error or
+    non-JSON cells. They are not part of the serialized report.
+    """
 
     request: Request
     cell_key: str
     fields: list[FieldDiff]
     error: str | None = None
+    baseline_body: object = None
+    candidate_body: object = None
 
     @property
     def drifted(self) -> bool:
@@ -94,7 +101,13 @@ def _compare(project: LoadedProject, baseline: Execution, candidate: Execution |
         # Empty or non-JSON responses (e.g. a status-only check) diff as raw bytes.
         return _raw_compare(request, key, baseline_response.body, candidate_response.body)
     default_mode, rules = profile_rules(_profile_for(project, request))
-    return CellDiff(request, key, diff(baseline_body, candidate_body, default_mode, rules))
+    return CellDiff(
+        request,
+        key,
+        diff(baseline_body, candidate_body, default_mode, rules),
+        baseline_body=baseline_body,
+        candidate_body=candidate_body,
+    )
 
 
 def _raw_compare(request: Request, key: str, baseline: bytes, candidate: bytes) -> CellDiff:
