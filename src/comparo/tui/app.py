@@ -48,6 +48,7 @@ from comparo.core.models import DiffProfile
 from comparo.core.models import Environment
 from comparo.core.models import Instance
 from comparo.core.models import Matrix
+from comparo.core.models import Project
 from comparo.core.models import Request
 from comparo.core.models import Schema
 from comparo.core.provenance import Origin
@@ -192,8 +193,8 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
     "error": (("r", "re-check the project after editing the files"),),
 }
 _HELP_GLOBAL = (
-    ("1", "go to the Explorer"),
-    ("3", "go to the Diff"),
+    ("1 … 5", "switch screens — Explorer, Run, Diff, Report, Settings"),
+    ("&é\"'(", "same tabs on an AZERTY top row (no Shift needed)"),
     ("?", "show this help"),
     ("q", "quit comparo"),
 )
@@ -414,6 +415,10 @@ class ExplorerView(Horizontal):
         first_leaf: TreeNode[object] | None = None
         first_request: TreeNode[object] | None = None
         total = 0
+        manifest = self.project.project
+        if manifest is not None and _matches(manifest, Project, needle):
+            first_leaf = tree.root.add_leaf(_project_leaf(manifest), data=manifest)
+            total += 1
         for label, kind in _KINDS:
             objects: list[object] = [
                 obj
@@ -481,6 +486,12 @@ class ExplorerView(Horizontal):
             detail.border_title = _title(obj, "ENVIRONMENT")
             detail.border_subtitle = _HEALTH_LABEL[self.health.get(env_id, Health.UNKNOWN)]
             self._set_detail(_environment_detail(obj, self.health_reports.get(env_id)))
+            context.border_title = "DESCRIPTION"
+            self._set_context(_description(obj))
+        elif isinstance(obj, Project):
+            detail.border_title = _title(obj, "PROJECT")
+            detail.border_subtitle = "the manifest"
+            self._set_detail(_project_detail(obj))
             context.border_title = "DESCRIPTION"
             self._set_context(_description(obj))
         elif isinstance(obj, Instance):
@@ -830,8 +841,13 @@ class ComparoApp(App[None]):
     TITLE = "comparo"
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit"),
-        Binding("1", "screen('explorer')", "Explorer"),
-        Binding("3", "screen('diff')", "Diff"),
+        # Each tab is on a top-row key: the digit (QWERTY) and the AZERTY
+        # unshifted character on the same physical key, so no Shift is needed.
+        Binding("1,ampersand", "screen('explorer')", "Explorer"),
+        Binding("2,é", "screen('run')", "Run"),
+        Binding("3,quotation_mark", "screen('diff')", "Diff"),
+        Binding("4,apostrophe", "screen('report')", "Report"),
+        Binding("5,left_parenthesis", "screen('settings')", "Settings"),
         Binding("slash", "filter", "Filter"),
         Binding("g", "graph", "Graph"),
         Binding("h", "health", "Health"),
@@ -1022,6 +1038,52 @@ def _leaf(obj: object, *, health: Health = Health.UNKNOWN, default: bool = False
     else:
         row.append(name, style=_TEXT)
     return row
+
+
+def _project_leaf(manifest: Project) -> Text:
+    row = Text()
+    row.append("◆ ", style=_ACCENT)
+    row.append(str(manifest.metadata.name or "project"), style=f"bold {_TEXT_HI}")
+    row.append("  project", style=_DIM)
+    return row
+
+
+def _project_detail(manifest: Project) -> Group:
+    spec = manifest.spec
+    parts: list[RenderableType] = []
+    head = Text()
+    if spec.data:
+        head.append("data       ", style=_LABEL)
+        head.append(f"{spec.data}\n", style=_TEXT)
+    environments = spec.environments if isinstance(spec.environments, dict) else {}
+    default = environments.get("default")
+    if isinstance(default, str):
+        head.append("default    ", style=_LABEL)
+        head.append(f"{default}\n", style=_ACCENT)
+    parts.append(head)
+    pairs = environments.get("diffPairs")
+    if isinstance(pairs, list) and pairs:
+        block = Text("\nDIFF PAIRS", style=_LABEL)
+        for pair in pairs:
+            if isinstance(pair, dict):
+                block.append(f"\n  {pair.get('name', '')!s:<16}", style=_TEXT)
+                block.append(
+                    f"{pair.get('baseline', '')} ⇄ {pair.get('candidate', '')}", style=_AXIS
+                )
+        parts.append(block)
+    sections: tuple[tuple[str, object], ...] = (
+        ("run", spec.run),
+        ("diff", spec.diff),
+        ("selection", spec.selection),
+        ("report", spec.report),
+        ("redaction", spec.redaction),
+        ("plugins", spec.plugins),
+    )
+    for label, value in sections:
+        if value:
+            parts.append(Text(f"\n\n{label.upper()}", style=_LABEL))
+            parts.append(_json(value))
+    return Group(*parts)
 
 
 def _is_remote(environment: Environment) -> bool:
