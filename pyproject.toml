@@ -88,8 +88,8 @@ known-first-party = ["comparo"]     # sections: stdlib, third-party, first-party
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# Test functions are self-describing; require module docstrings, not per-test ones.
-"tests/*" = ["S101", "D103"]
+# Test functions and fakes are self-describing; require module docstrings only.
+"tests/*" = ["S101", "D102", "D103", "D107"]
 # The TUI uses design glyphs (×, ·, ▌, ╎, ●) that trip the confusable-unicode rule.
 "src/comparo/tui/*.py" = ["RUF001"]
 

@@ -158,6 +158,23 @@ class Resolver:
                 secret_names=secret_names,
             )
 
+    def resolve_tree(self, value: object) -> tuple[object, list[Trail]]:
+        """Resolve an arbitrary value tree, returning it with a provenance trail.
+
+        Used to resolve a standalone value such as an ``Instance`` — every
+        ``${...}`` hole and ``$val``/``$secret`` reference is filled the same way
+        it would be inside a request.
+
+        Args:
+            value: The value tree to resolve.
+
+        Returns:
+            The resolved value and the provenance trail of everything filled.
+        """
+        trail: list[Trail] = []
+        resolved = self._value(value, "", trail)
+        return resolved, trail
+
     def resolve_request(self, request: Request, cell: MatrixCell | None = None) -> ResolvedRequest:
         """Resolve *request* into a concrete tree with a provenance trail.
 
