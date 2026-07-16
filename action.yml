@@ -7,7 +7,7 @@ branding:
 
 inputs:
   project:
-    description: Path to the comparo project directory.
+    description: Path to the comparo.yaml manifest, or the project directory.
     required: true
   pair:
     description: A named diff pair from the project manifest.
@@ -46,7 +46,7 @@ runs:
         BASELINE: ${{ inputs.baseline }}
         CANDIDATE: ${{ inputs.candidate }}
       run: |
-        args=("$PROJECT")
+        args=(--config "$PROJECT")
         [ -n "$PAIR" ] && args+=(--pair "$PAIR")
         [ -n "$BASELINE" ] && args+=(--baseline "$BASELINE")
         [ -n "$CANDIDATE" ] && args+=(--candidate "$CANDIDATE")
