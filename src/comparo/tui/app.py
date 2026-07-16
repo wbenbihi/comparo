@@ -721,8 +721,8 @@ class RunView(Vertical):
         keys: tuple[tuple[str, str], ...]
         if self.query_one("#run-mode", ContentSwitcher).current == "prepare":
             keys = _PREPARE_KEYS
-            cells = len(self._selected)
-            context = f"{cells} case{'' if cells == 1 else 's'} selected"
+            cells = len(self._plan())
+            context = f"{cells} case{'' if cells == 1 else 's'} will run"
         else:
             keys = _RUNNING_DONE_KEYS if self._done else _RUNNING_KEYS
             context = f"run {self._run_id}" if self._run_id else ""
@@ -735,9 +735,7 @@ class RunView(Vertical):
         self._prep_nodes = {}
         self._prep_branches = {}
         for request in _requests(self.project):
-            cells = self._visible_cells(request)
-            if not cells:
-                continue
+            cells = expand(self.project, request)
             if len(cells) == 1:
                 node = tree.root.add_leaf(
                     self._prep_label(request, cells[0]), data=(request, cells[0])
@@ -758,8 +756,10 @@ class RunView(Vertical):
         request, cell = _pair(event.node)
         if request is None:
             return
-        if cell is None:  # a request branch — toggle all its visible cells
-            keys = {_run_key(request, c) for c in self._visible_cells(request)}
+        if cell is None:  # a request branch — toggle all its runnable cells
+            keys = {
+                _run_key(request, c) for c in expand(self.project, request) if self._cell_enabled(c)
+            }
             if keys <= self._selected:
                 self._selected -= keys
             else:
@@ -788,7 +788,7 @@ class RunView(Vertical):
         self._title_prepare()
 
     def _relabel_prepare(self, request: Request) -> None:
-        for cell in self._visible_cells(request):
+        for cell in expand(self.project, request):
             node = self._prep_nodes.get(_run_key(request, cell))
             if node is not None:
                 node.set_label(self._prep_label(request, cell))
@@ -798,24 +798,29 @@ class RunView(Vertical):
 
     def _prep_label(self, request: Request, cell: MatrixCell) -> Text:
         key = _run_key(request, cell)
-        on = key in self._selected
         row = Text()
-        row.append("◉ " if on else "○ ", style=_ACCENT if on else _DIM)
-        row.append(cell.key or request.metadata.name, style=_TEXT if on else _DIM)
+        if not self._cell_enabled(cell):  # turned off globally by the matrix picker
+            row.append("✕ ", style=_DIM)
+            row.append(cell.key or request.metadata.name, style=_DIM)
+            row.append("  matrix off", style=_WARN)
+        elif key in self._selected:
+            row.append("◉ ", style=_ACCENT)
+            row.append(cell.key or request.metadata.name, style=_TEXT)
+        else:
+            row.append("○ ", style=_DIM)
+            row.append(cell.key or request.metadata.name, style=_DIM)
         return row
 
     def _prep_request_label(self, request: Request) -> Text:
-        cells = self._visible_cells(request)
-        chosen = sum(1 for c in cells if _run_key(request, c) in self._selected)
-        on = chosen > 0
+        cells = expand(self.project, request)
+        will_run = len(self._plan_cells(request))
         row = Text()
-        row.append(
-            "◉ " if chosen == len(cells) else "◐ " if on else "○ ", style=_ACCENT if on else _DIM
-        )
-        row.append(request.metadata.name, style=f"bold {_TEXT_HI}" if on else _DIM)
+        icon = "◉ " if will_run == len(cells) else "◐ " if will_run else "○ "
+        row.append(icon, style=_ACCENT if will_run else _DIM)
+        row.append(request.metadata.name, style=f"bold {_TEXT_HI}" if will_run else _DIM)
         method = request.spec.request.method
         row.append(f"  {method}", style=_METHOD.get(method, _DIM))
-        row.append(f"  {chosen}/{len(cells)} cases", style=_AXIS if on else _DIM)
+        row.append(f"  {will_run}/{len(cells)} will run", style=_AXIS if will_run else _DIM)
         return row
 
     def _title_prepare(self) -> None:
@@ -823,20 +828,16 @@ class RunView(Vertical):
         env = environment.metadata.name if environment else "no environment"
         panel = self.query_one("#prepare-panel")
         panel.border_title = "PREPARE"
-        panel.border_subtitle = "space select · m cases · x run"
+        panel.border_subtitle = "space select · m matrix · x run"
         head = Text()
         head.append("environment   ", style=_LABEL)
         head.append(env, style=_ACCENT if environment else _DIM)
         self.query_one("#prepare-head", Static).update(head)
-        requests = sum(
-            1
-            for r in _requests(self.project)
-            if any(_run_key(r, c) in self._selected for c in expand(self.project, r))
-        )
-        cells = len(self._selected)
+        cells = len(self._plan())
+        requests = len(self._plan_requests())
         cta = Text()
         cta.append("▶ ", style=f"bold {_ACCENT}")
-        cta.append(f"{cells} case{'' if cells == 1 else 's'}", style=f"bold {_TEXT_HI}")
+        cta.append(f"{cells} case{'' if cells == 1 else 's'} will run", style=f"bold {_TEXT_HI}")
         cta.append(f" across {requests} request{'' if requests == 1 else 's'}", style=_TEXT)
         cta.append("   press ", style=_DIM)
         cta.append("x", style=f"bold {_ACCENT}")
@@ -1246,11 +1247,12 @@ class RunView(Vertical):
         return [r for r in _requests(self.project) if self._plan_cells(r)]
 
     def _plan_cells(self, request: Request) -> list[MatrixCell]:
-        return [c for c in self._visible_cells(request) if _run_key(request, c) in self._selected]
-
-    def _visible_cells(self, request: Request) -> list[MatrixCell]:
-        """Cells left after the global matrix-value filter."""
-        return [c for c in expand(self.project, request) if self._cell_enabled(c)]
+        """The cells that will actually run: selected and not turned off by matrix."""
+        return [
+            c
+            for c in expand(self.project, request)
+            if _run_key(request, c) in self._selected and self._cell_enabled(c)
+        ]
 
     def _cell_enabled(self, cell: MatrixCell) -> bool:
         for injection in cell.injections:
