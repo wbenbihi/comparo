@@ -4,6 +4,7 @@ from pathlib import Path
 
 from comparo.core.loader import load_project
 from comparo.core.triage import TriageError
+from comparo.core.triage import profile_path
 from comparo.core.triage import silence
 
 
@@ -55,3 +56,20 @@ def test_silence_unknown_profile_raises(tmp_path: Path) -> None:
     except TriageError:
         return
     raise AssertionError("expected TriageError")
+
+
+def test_profile_path_locates_the_file_without_writing(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    project = load_project(root)
+    before = (root / "profile.yaml").read_text(encoding="utf-8")
+
+    located = profile_path(project, "diff.lenient")
+
+    assert located == root / "profile.yaml"
+    # Locating must not modify the file — it is only a lookup.
+    assert (root / "profile.yaml").read_text(encoding="utf-8") == before
+
+
+def test_profile_path_returns_none_for_unknown_profile(tmp_path: Path) -> None:
+    project = load_project(_project(tmp_path))
+    assert profile_path(project, "diff.missing") is None
