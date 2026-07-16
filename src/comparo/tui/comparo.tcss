@@ -9,19 +9,22 @@ Screen {
 /* ── nav bar ─────────────────────────────────────────────────────────────── */
 #navbar {
     dock: top;
-    height: 1;
+    height: 3;
     background: #131822;
-    padding: 0 2;
+    padding: 0 3;
+    align-vertical: middle;
+    border-bottom: solid #28313f;
 }
 
 #nav-logo {
     color: $accent;
     text-style: bold;
-    padding: 0 3 0 0;
+    padding: 0 5 0 0;
 }
 
 .nav-item {
     color: $text-muted;
+    padding: 0 1;
 }
 
 .nav-item.-active {
@@ -31,7 +34,7 @@ Screen {
 }
 
 .nav-sep {
-    width: 1;
+    width: 2;
 }
 
 #nav-status {
@@ -88,6 +91,7 @@ Screen {
 #tree {
     background: transparent;
     padding: 1 1;
+    overflow-x: hidden;
     scrollbar-size-vertical: 1;
 }
 
