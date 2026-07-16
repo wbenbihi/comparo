@@ -44,6 +44,8 @@ from textual.widgets.tree import TreeNode
 from textual.worker import Worker
 
 from comparo.adapters.reporters import REPORTERS
+from comparo.core.assertions import AssertionResult
+from comparo.core.assertions import passed as assertions_passed
 from comparo.core.checks import Check
 from comparo.core.checks import passed as checks_passed
 from comparo.core.checks import run_checks
@@ -56,6 +58,9 @@ from comparo.core.diagnostics import LoadError
 from comparo.core.diff import FieldDiff
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_request
+from comparo.core.execution import CellOutcome
+from comparo.core.execution import ExecutionResult
+from comparo.core.execution import run_execution
 from comparo.core.export import RunEntry
 from comparo.core.export import export_run
 from comparo.core.health import Health
@@ -68,6 +73,7 @@ from comparo.core.matrix import case_key
 from comparo.core.matrix import expand
 from comparo.core.models import DiffProfile
 from comparo.core.models import Environment
+from comparo.core.models import ExecutionProfile
 from comparo.core.models import Instance
 from comparo.core.models import Matrix
 from comparo.core.models import Project
@@ -142,6 +148,14 @@ _ENV_KEYS = (
     ("↑↓", "move"),
     ("enter", "default"),
     ("h", "health"),
+    ("/", "filter"),
+    ("g", "graph"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_EXEC_KEYS = (
+    ("↑↓", "move"),
+    ("enter", "launch"),
     ("/", "filter"),
     ("g", "graph"),
     ("?", "help"),
@@ -573,9 +587,12 @@ class ExplorerView(Horizontal):
         self._show(event.node.data)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[object]) -> None:
-        """Make an environment the default when it is selected with Enter."""
-        if isinstance(event.node.data, Environment):
-            cast("ComparoApp", self.app).set_default_environment(event.node.data)
+        """Enter sets an environment as default, or launches an ExecutionProfile."""
+        data = event.node.data
+        if isinstance(data, Environment):
+            cast("ComparoApp", self.app).set_default_environment(data)
+        elif isinstance(data, ExecutionProfile):
+            cast("ComparoApp", self.app).launch_execution(data)
 
     def _selected(self) -> object:
         return self._current
@@ -644,6 +661,8 @@ class ExplorerView(Horizontal):
         keys: tuple[tuple[str, str], ...]
         if isinstance(obj, Environment):
             keys = _ENV_KEYS
+        elif isinstance(obj, ExecutionProfile):
+            keys = _EXEC_KEYS
         elif isinstance(obj, (Request, Instance)):
             keys = _RESOLVE_KEYS
         else:
@@ -2328,6 +2347,126 @@ class ErrorView(VerticalScroll):
         self.query_one("#error-content", Static).update(_ok_report())
 
 
+class ExecutionScreen(ModalScreen[None]):
+    """The complete report for one launched ExecutionProfile.
+
+    Run + Diff + Report consulted together: a cell list with per-cell assert and
+    diff status, and a detail panel that drills into the baseline and candidate
+    assertions plus the git-style body diff. ``v`` flips the diff view; ``esc``
+    returns to the Explorer.
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("v", "toggle_view", "unified/side-by-side"),
+        Binding("escape", "close", "close"),
+        Binding("q", "close", "close"),
+    ]
+
+    def __init__(self, result: ExecutionResult) -> None:
+        """Build the screen for a finished execution.
+
+        Args:
+            result: The execution outcome to display.
+        """
+        super().__init__()
+        self._result = result
+        self._unified = True
+
+    def compose(self) -> ComposeResult:
+        """Yield the header, the cell list, the detail panel, and the gate."""
+        with Vertical(id="exec-screen"):
+            yield Static(id="exec-header")
+            with Horizontal(id="exec-cols"):
+                with Vertical(id="exec-cells", classes="panel"):
+                    yield DataTable(id="exec-table", cursor_type="row")
+                with VerticalScroll(id="exec-detail", classes="panel hero"):
+                    yield Static(id="exec-detail-content")
+            yield Static(id="exec-gate")
+
+    def on_mount(self) -> None:
+        """Render the header, populate the cell list, and show the gate."""
+        result = self._result
+        header = Text()
+        header.append(result.profile_id, style=f"bold {_TEXT_HI}")
+        header.append("    baseline ", style=_DIM)
+        header.append(result.baseline, style=_TEXT_HI)
+        if result.candidate is not None:
+            header.append(" · candidate ", style=_DIM)
+            header.append(result.candidate, style=_TEXT_HI)
+        mode = " · ".join(
+            part
+            for part, on in (("assert", result.checked_assertions), ("diff", result.checked_diff))
+            if on
+        )
+        header.append(f"    mode {mode or 'none'}", style=_AXIS)
+        self.query_one("#exec-header", Static).update(header)
+        self._populate()
+        self._render_gate()
+        self.query_one("#exec-table", DataTable).focus()
+
+    def _populate(self) -> None:
+        table = self.query_one("#exec-table", DataTable)
+        table.clear(columns=True)
+        table.add_column("REQUEST", key="request")
+        table.add_column("CELL", key="cell")
+        table.add_column("ASSERT", key="assert", width=8)
+        table.add_column("DIFF", key="diff", width=6)
+        for index, outcome in enumerate(self._result.outcomes):
+            assert_glyph, diff_glyph = _exec_glyphs(outcome)
+            table.add_row(
+                Text(outcome.request_id, style=_TEXT_HI),
+                Text(outcome.cell_key or "—", style=_AXIS if outcome.cell_key else _DIM),
+                assert_glyph,
+                diff_glyph,
+                key=f"cell::{index}",
+            )
+        if self._result.outcomes:
+            self._show_cell(0)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Show the highlighted cell's detail."""
+        key = event.row_key.value
+        if key is not None and key.startswith("cell::"):
+            self._show_cell(int(key.removeprefix("cell::")))
+
+    def _show_cell(self, index: int) -> None:
+        outcome = self._result.outcomes[index]
+        detail = _execution_detail(
+            outcome, self._result.baseline, self._result.candidate, unified=self._unified
+        )
+        self.query_one("#exec-detail-content", Static).update(detail)
+        self.query_one("#exec-detail").border_title = Text.from_markup(
+            f"DETAIL [{_DIM}]·[/] {outcome.request_id}"
+        )
+
+    def _render_gate(self) -> None:
+        result = self._result
+        text = Text()
+        if result.passed:
+            text.append(" PASS ", style=f"bold black on {_SAME}")
+        else:
+            text.append(" FAIL ", style=f"bold white on {_DRIFT}")
+        failures = sum(1 for outcome in result.outcomes if not outcome.ok)
+        text.append(
+            f"   {len(result.outcomes)} cells · {failures} failing"
+            f" · {result.drift} drift · {result.errors} error",
+            style=_DIM,
+        )
+        self.query_one("#exec-gate", Static).update(text)
+
+    def action_toggle_view(self) -> None:
+        """Flip the body diff between unified and side-by-side."""
+        self._unified = not self._unified
+        table = self.query_one("#exec-table", DataTable)
+        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if key is not None and key.startswith("cell::"):
+            self._show_cell(int(key.removeprefix("cell::")))
+
+    def action_close(self) -> None:
+        """Return to the Explorer."""
+        self.dismiss(None)
+
+
 class ComparoApp(App[None]):
     """The comparo application shell."""
 
@@ -2483,6 +2622,32 @@ class ComparoApp(App[None]):
         self.environment = environment
         self.query_one(ExplorerView).set_default(environment)
         self.query_one(NavBar).set_status(self._nav_status())
+
+    def launch_execution(self, profile: ExecutionProfile) -> None:
+        """Run *profile* and open the Execution Screen with the result.
+
+        Args:
+            profile: The execution profile to run.
+        """
+        if self.project is None:
+            return
+        self.notify(f"Running {profile.metadata.name}…", title="Execution")
+        self.run_worker(
+            self._run_execution(self.project, profile), exclusive=True, group="execution"
+        )
+
+    async def _run_execution(self, project: LoadedProject, profile: ExecutionProfile) -> None:
+        from comparo.adapters.httpx_client import HttpxClient
+
+        client = HttpxClient()
+        try:
+            result = await run_execution(project, profile, client)
+        except EnvironmentSelectionError as error:
+            self.notify(str(error), title="Execution failed", severity="error")
+            return
+        finally:
+            await client.aclose()
+        self.push_screen(ExecutionScreen(result))
 
     def _reload(self) -> None:
         if self.error is None:
@@ -3482,6 +3647,70 @@ def _diff_body_view(
     hint.append("i", style=f"bold {_ACCENT}")
     hint.append(" to silence this field", style=_DIM)
     return Group(header, githead, body, _diff_legend(), hint)
+
+
+def _exec_glyphs(outcome: CellOutcome) -> tuple[Text, Text]:
+    both = outcome.baseline_assertions + outcome.candidate_assertions
+    if not both:
+        assert_glyph = Text("—", style=_DIM)
+    elif assertions_passed(outcome.baseline_assertions) and assertions_passed(
+        outcome.candidate_assertions
+    ):
+        assert_glyph = Text("✓ pass", style=_SAME)
+    else:
+        assert_glyph = Text("✗ fail", style=_DRIFT)
+    if outcome.diff is None:
+        diff_glyph = Text("—", style=_DIM)
+    elif outcome.diff.drifted:
+        diff_glyph = Text("✗", style=_DRIFT)
+    else:
+        diff_glyph = Text("✓", style=_SAME)
+    return assert_glyph, diff_glyph
+
+
+def _execution_detail(
+    outcome: CellOutcome, baseline: str, candidate: str | None, *, unified: bool
+) -> Group:
+    parts: list[RenderableType] = []
+    head = Text()
+    head.append(outcome.request_id, style=f"bold {_TEXT_HI}")
+    if outcome.cell_key:
+        head.append(f"   {outcome.cell_key}", style=_AXIS)
+    parts.append(head)
+    if outcome.error is not None:
+        parts.append(Text(f"\n! {outcome.error}", style=_WARN))
+    if outcome.baseline_assertions:
+        parts.append(_assert_block(f"ASSERTIONS · {baseline}", outcome.baseline_assertions))
+    if outcome.candidate_assertions and candidate is not None:
+        parts.append(_assert_block(f"ASSERTIONS · {candidate}", outcome.candidate_assertions))
+    if outcome.diff is not None:
+        parts.append(Text("\nDIFF", style=_DIM))
+        parts.append(_exec_body_diff(outcome.diff, unified=unified))
+        parts.append(_diff_legend())
+    return Group(*parts)
+
+
+def _assert_block(title: str, results: list[AssertionResult]) -> Text:
+    text = Text(f"\n{title}\n", style=_DIM)
+    for result in results:
+        if result.ok:
+            glyph, style = "✓", _SAME
+        elif result.severity == "warn":
+            glyph, style = "!", _WARN
+        else:
+            glyph, style = "✗", _DRIFT
+        text.append(f"  {glyph} ", style=style)
+        text.append(f"{result.target} {result.op}", style=_TEXT_HI)
+        text.append(f"   {result.detail}\n", style=_DIM)
+    return text
+
+
+def _exec_body_diff(diff: CellDiff, *, unified: bool) -> RenderableType:
+    if diff.baseline_body is None or diff.candidate_body is None:
+        return Text("(no JSON body to compare)", style=_DIM)
+    states = {field.path: field for field in diff.fields}
+    lines = _body_diff_lines(diff.baseline_body, diff.candidate_body, states)
+    return _diff_unified(lines) if unified else _diff_side_by_side(lines, None)
 
 
 def _report_breakdown(report: RunReport) -> Table:

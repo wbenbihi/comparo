@@ -5,13 +5,17 @@ import shutil
 from pathlib import Path
 
 import pytest
+from textual.widgets import DataTable
 from textual.widgets import Static
 from textual.widgets import Tree
 
+from comparo.core.assertions import AssertionResult
 from comparo.core.compare import CellDiff
 from comparo.core.diagnostics import LoadError
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
+from comparo.core.execution import CellOutcome
+from comparo.core.execution import ExecutionResult
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
 from comparo.core.models import Request
@@ -20,6 +24,7 @@ from comparo.tui.app import ConfirmModal
 from comparo.tui.app import DiffView
 from comparo.tui.app import EnvPickerModal
 from comparo.tui.app import ErrorView
+from comparo.tui.app import ExecutionScreen
 from comparo.tui.app import ExplorerView
 from comparo.tui.app import ReportView
 from comparo.tui.app import RunView
@@ -70,6 +75,43 @@ def test_diff_candidate_picker_updates_the_pair() -> None:
             await pilot.pause()
             assert diff._pair is not None
             assert diff._pair[1].metadata.id == environments[0].metadata.id
+
+    asyncio.run(go())
+
+
+def test_execution_screen_renders_outcomes_and_gate() -> None:
+    loaded = load_project(SAMPLE)
+    request = loaded.objects["request.get-json"]
+    assert isinstance(request, Request)
+    ok = AssertionResult("status", "equals", True, "error", "200 == 200")
+    diff = CellDiff(
+        request,
+        "",
+        [FieldDiff("$.a", State.DRIFT, "exact", '"x" → "y"')],
+        None,
+        {"a": "x"},
+        {"a": "y"},
+    )
+    result = ExecutionResult(
+        profile_id="exec.demo",
+        baseline="Base",
+        candidate="Cand",
+        checked_assertions=True,
+        checked_diff=True,
+        outcomes=[CellOutcome("request.get-json", "", [ok], [ok], diff)],
+    )
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            app.push_screen(ExecutionScreen(result))
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExecutionScreen)
+            assert screen.query_one("#exec-table", DataTable).row_count == 1
+            # the single drifting cell fails the gate
+            assert not result.passed
 
     asyncio.run(go())
 
