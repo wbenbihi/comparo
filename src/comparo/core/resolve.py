@@ -138,7 +138,8 @@ class Resolver:
         Args:
             project: The loaded project, used to resolve ``$val`` instances.
             environment: The environment whose variables and secrets apply.
-            sink: Which sink to produce; only ``DISPLAY`` is supported so far.
+            sink: Which sink to produce — ``DISPLAY`` masks secrets and records a
+                provenance trail; ``EXECUTE`` injects real secret values lazily.
         """
         self.project = project
         self.environment = environment

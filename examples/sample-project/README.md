@@ -35,7 +35,7 @@ export COMPARO_DEMO_TOKEN=demo-123
 Then diff `local` against `prod`:
 
 ```console
-comparo diff --project examples/sample-project --pair local-vs-prod
+comparo diff examples/sample-project --pair local-vs-prod
 ```
 
 Because both environments front the same httpbin image, the controlled fields (`$.args`,
