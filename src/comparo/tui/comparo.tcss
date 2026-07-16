@@ -1,50 +1,147 @@
-/* comparo ink — meaning-named tokens as a Textual theme. */
+/* comparo — layout over the comparo-ink theme (colors come from theme.py). */
 
 Screen {
-    background: #0d1017;
-    color: #c5d0de;
+    background: $background;
+    color: $foreground;
+    layout: vertical;
 }
 
-#topbar {
+/* ── nav bar ─────────────────────────────────────────────────────────────── */
+#navbar {
+    dock: top;
     height: 1;
     background: #131822;
-    color: #6d9eff;
-    padding: 0 1;
+    padding: 0 2;
 }
 
-#body {
-    height: 1fr;
+#nav-logo {
+    color: $accent;
+    text-style: bold;
+    padding: 0 3 0 0;
 }
 
-#tree {
-    width: 34;
-    background: #131822;
-    border-right: solid #28313f;
-    padding: 0 1;
+.nav-item {
+    color: $text-muted;
 }
 
-#tree > .tree--cursor {
-    background: #182030;
-    color: #eaf0f8;
+.nav-item.-active {
+    color: $text;
+    background: #1e2b45;
     text-style: bold;
 }
 
-#tree > .tree--guides {
-    color: #28313f;
+.nav-sep {
+    width: 1;
+}
+
+#nav-status {
+    width: 1fr;
+    content-align: right middle;
+    color: $text-muted;
+}
+
+/* ── content region ──────────────────────────────────────────────────────── */
+#content {
+    height: 1fr;
+}
+
+.view {
+    height: 1fr;
+    padding: 1 1 0 1;
+}
+
+.placeholder {
+    align: center middle;
+}
+
+/* ── panels ──────────────────────────────────────────────────────────────── */
+.panel {
+    background: $surface;
+    border: round $border;
+    border-title-color: $text-muted;
+    border-title-align: left;
+    border-subtitle-color: $text-muted;
+    border-subtitle-align: right;
+    padding: 0 1;
+}
+
+.panel.hero {
+    background: #182030;
+    border: round $accent;
+    border-title-color: $accent;
+}
+
+/* ── Explorer ────────────────────────────────────────────────────────────── */
+#tree-panel {
+    width: 36;
+    height: 1fr;
+    margin-right: 1;
+    padding: 0;
+}
+
+#tree {
+    background: transparent;
+    padding: 1 1;
+    scrollbar-size-vertical: 1;
+}
+
+#tree > .tree--guides,
+#tree > .tree--guides-hover,
+#tree > .tree--guides-selected {
+    color: #1c2532;
+}
+
+#tree > .tree--cursor {
+    background: #1e2b45;
+    color: $text;
+    text-style: bold;
 }
 
 #detail {
     width: 1fr;
-    padding: 0 2;
-    background: #0d1017;
+    height: 1fr;
+    layout: vertical;
 }
 
-Footer {
+#detail-panel {
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+#context-panel {
+    height: auto;
+    max-height: 11;
+    scrollbar-size-vertical: 0;
+}
+
+/* ── Diff ────────────────────────────────────────────────────────────────── */
+#drift-panel {
+    width: 34;
+    height: 1fr;
+    margin-right: 1;
+}
+
+#diffpane-panel {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* ── status bar ──────────────────────────────────────────────────────────── */
+#statusbar {
+    dock: bottom;
+    height: 1;
     background: #131822;
-    color: #5c6878;
+    padding: 0 1;
 }
 
-Footer > .footer--key {
-    background: #182030;
-    color: #6d9eff;
+#status-keys {
+    width: 1fr;
+    color: $text-muted;
+}
+
+#status-context {
+    width: auto;
+    content-align: right middle;
+    color: $text-muted;
+    padding: 0 1;
 }

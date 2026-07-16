@@ -12,15 +12,16 @@ from comparo.tui.app import ComparoApp
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
 
 
-def test_tui_launches_and_populates_tree() -> None:
+def test_tui_launches_and_builds_tree() -> None:
     loaded = load_project(SAMPLE)
 
     async def go() -> None:
         app = ComparoApp(loaded)
-        async with app.run_test(size=(120, 40)) as pilot:
+        async with app.run_test(size=(130, 40)) as pilot:
             await pilot.pause()
             tree = app.query_one("#tree", Tree)
-            assert len(tree.root.children) > 0
+            assert len(tree.root.children) == 6  # one foldable branch per object kind
             assert app.query_one("#detail-content", Static) is not None
+            assert app.query_one("#context-content", Static) is not None
 
     asyncio.run(go())
