@@ -154,6 +154,7 @@ _PREPARE_KEYS = (
     ("↑↓", "move"),
     ("space", "fold"),
     ("enter", "select"),
+    ("/", "filter"),
     ("m", "matrix"),
     ("x", "run"),
     ("?", "help"),
@@ -162,8 +163,8 @@ _PREPARE_KEYS = (
 _RUNNING_KEYS = (
     ("↑↓", "move"),
     ("enter", "open"),
+    ("/", "filter"),
     ("f", "failures"),
-    ("z", "max"),
     ("bksp", "back"),
     ("a", "abort"),
     ("?", "help"),
@@ -172,8 +173,8 @@ _RUNNING_KEYS = (
 _RUNNING_DONE_KEYS = (
     ("↑↓", "move"),
     ("enter", "open"),
+    ("/", "filter"),
     ("f", "failures"),
-    ("z", "max"),
     ("bksp", "back"),
     ("s", "save"),
     ("?", "help"),
@@ -269,6 +270,7 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("enter", "PREPARE select · RUNNING drill into the next split"),
         ("m", "PREPARE — choose matrix values (applies to every request)"),
         ("x", "run the selected cells against the current environment"),
+        ("/", "filter by request or case name (shown on the panel)"),
         ("f", "RUNNING — filter the tables to failures only"),
         ("bksp", "RUNNING — collapse a split (or return to PREPARE)"),
         ("z", "RUNNING — maximize the detail panel"),
@@ -672,6 +674,7 @@ class RunView(Vertical):
         self._run_id: str | None = None
         self._max = False
         self._failures_only = False
+        self.filter_query = ""
         self._focus: Request | None = None
         self._focus_cell: MatrixCell | None = None
         self._worker: Worker[None] | None = None
@@ -735,6 +738,8 @@ class RunView(Vertical):
         self._prep_nodes = {}
         self._prep_branches = {}
         for request in _requests(self.project):
+            if not self._matches_text(request.metadata.name):
+                continue
             cells = expand(self.project, request)
             if len(cells) == 1:
                 node = tree.root.add_leaf(
@@ -828,7 +833,8 @@ class RunView(Vertical):
         env = environment.metadata.name if environment else "no environment"
         panel = self.query_one("#prepare-panel")
         panel.border_title = "PREPARE"
-        panel.border_subtitle = "space select · m matrix · x run"
+        filt = f' · filter "{self.filter_query}"' if self.filter_query else ""
+        panel.border_subtitle = f"space select · m matrix · x run{filt}"
         head = Text()
         head.append("environment   ", style=_LABEL)
         head.append(env, style=_ACCENT if environment else _DIM)
@@ -1017,10 +1023,40 @@ class RunView(Vertical):
             severity="information",
         )
 
+    def open_text_filter(self) -> None:
+        """Open the text filter for the current table (or the prepare tree)."""
+        prepare = self.query_one("#run-mode", ContentSwitcher).current == "prepare"
+        placeholder = "request name…" if prepare else "request or case…"
+        self.app.push_screen(FilterModal(self, title="FILTER", placeholder=placeholder))
+
+    def apply_filter(self, query: str) -> int:
+        """Apply the live text filter; return how many rows survive.
+
+        Args:
+            query: The case-insensitive substring to match.
+
+        Returns:
+            The number of matching rows for the current state.
+        """
+        self.filter_query = query.strip().lower()
+        if self.query_one("#run-mode", ContentSwitcher).current == "prepare":
+            self._build_prepare()
+            self._title_prepare()
+            return len(self.query_one("#prepare-tree", Tree).root.children)
+        self._populate_requests()
+        if self._focus is not None and self._view in ("variants", "details"):
+            self._populate_variants(self._focus)
+        return sum(len(self._shown_cells(r)) for r in self._shown_requests())
+
+    def _matches_text(self, text: str) -> bool:
+        return not self.filter_query or self.filter_query in text.lower()
+
     def _shown_requests(self) -> list[Request]:
         requests = self._plan_requests()
         if self._failures_only:
             requests = [r for r in requests if self._request_status(r) in ("failed", "partial")]
+        if self.filter_query:
+            requests = [r for r in requests if self._matches_text(r.metadata.name)]
         return requests
 
     def _shown_cells(self, request: Request) -> list[MatrixCell]:
@@ -1032,10 +1068,17 @@ class RunView(Vertical):
                 if self._state.get(_run_key(request, c)) in ("ok", "failed")
                 and not self._cell_ok(request, c)
             ]
+        if self.filter_query:
+            cells = [c for c in cells if self._matches_text(c.key)]
         return cells
 
     def _filter_suffix(self) -> str:
-        return f"  [{_WARN}]· failures only[/]" if self._failures_only else ""
+        parts = []
+        if self._failures_only:
+            parts.append("failures")
+        if self.filter_query:
+            parts.append(f'"{self.filter_query}"')
+        return f"  [{_WARN}]· {' · '.join(parts)}[/]" if parts else ""
 
     def _populate_requests(self) -> None:
         table = self.query_one("#req-table", DataTable)
@@ -1447,33 +1490,44 @@ class SettingsView(Vertical):
 
 
 class FilterModal(ModalScreen[None]):
-    """A narrow overlay that live-filters the Explorer tree as you type."""
+    """A narrow overlay that live-filters a view (tree or tables) as you type."""
 
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, explorer: ExplorerView) -> None:
-        """Build the filter modal over an Explorer.
+    def __init__(
+        self,
+        target: "ExplorerView | RunView",
+        *,
+        title: str = "FILTER",
+        placeholder: str = "filter…",
+    ) -> None:
+        """Build the filter modal.
 
         Args:
-            explorer: The Explorer whose tree this modal filters.
+            target: The view to filter; must expose ``filter_query`` and
+                ``apply_filter(query) -> int`` (the number of matches).
+            title: The dialog title.
+            placeholder: The input placeholder text.
         """
         super().__init__()
-        self._explorer = explorer
+        self._target = target
+        self._title = title
+        self._placeholder = placeholder
 
     def compose(self) -> ComposeResult:
-        """Yield the dialog: a prompt, an input, and a live match count."""
+        """Yield the dialog: an input and a live match count."""
         with Vertical(id="filter-dialog", classes="modal"):
-            yield Input(placeholder="name, kind, or tag…", id="filter-input")
+            yield Input(placeholder=self._placeholder, id="filter-input")
             yield Static(id="filter-count")
 
     def on_mount(self) -> None:
         """Title the dialog and seed the input with the current filter."""
-        self.query_one("#filter-dialog").border_title = "FILTER"
-        self.query_one(Input).value = self._explorer.filter_query
+        self.query_one("#filter-dialog").border_title = self._title
+        self.query_one(Input).value = self._target.filter_query
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Re-filter the tree on every keystroke."""
-        count = self._explorer.apply_filter(event.value)
+        """Re-filter on every keystroke."""
+        count = self._target.apply_filter(event.value)
         self._show_count(count, event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -1482,7 +1536,7 @@ class FilterModal(ModalScreen[None]):
 
     def action_cancel(self) -> None:
         """Clear the filter and close."""
-        self._explorer.apply_filter("")
+        self._target.apply_filter("")
         self.dismiss(None)
 
     def _show_count(self, count: int, query: str) -> None:
@@ -1862,10 +1916,16 @@ class ComparoApp(App[None]):
         self.query_one(RunView).open_case_picker()
 
     def action_filter(self) -> None:
-        """Open the filter overlay on the Explorer."""
-        if self.error is not None or self.query_one(NavBar).active != "explorer":
+        """Open the text filter for the active screen."""
+        if self.error is not None:
             return
-        self.push_screen(FilterModal(self.query_one(ExplorerView)))
+        active = self.query_one(NavBar).active
+        if active == "explorer":
+            self.push_screen(
+                FilterModal(self.query_one(ExplorerView), placeholder="name, kind, or tag…")
+            )
+        elif active == "run":
+            self.query_one(RunView).open_text_filter()
 
     def action_graph(self) -> None:
         """Open the reference-graph overlay."""
