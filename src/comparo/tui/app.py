@@ -233,6 +233,7 @@ class ExplorerView(Horizontal):
         tree.show_root = False
         tree.guide_depth = 2
         self._populate("", prefer_request=True)
+        tree.focus()
 
     def apply_filter(self, query: str) -> int:
         """Rebuild the tree keeping only objects that match *query*.

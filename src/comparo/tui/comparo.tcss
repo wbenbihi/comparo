@@ -67,6 +67,12 @@ Screen {
 
 .panel.hero {
     background: #182030;
+}
+
+/* The accent border marks the panel the keyboard is driving. */
+#tree-panel:focus-within,
+#detail-panel:focus-within,
+#context-panel:focus-within {
     border: round $accent;
     border-title-color: $accent;
 }
@@ -124,6 +130,8 @@ Screen {
 #diffpane-panel {
     width: 1fr;
     height: 1fr;
+    border: round $accent;
+    border-title-color: $accent;
 }
 
 /* ── error / replacement screen ──────────────────────────────────────────── */
