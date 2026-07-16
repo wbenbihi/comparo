@@ -23,6 +23,27 @@ def test_sample_project_loads() -> None:
     assert "request.echo-anything" in loaded.objects
 
 
+def test_fractional_tolerance_loads(tmp_path: Path) -> None:
+    # Regression: the round-trip parser wraps floats as ScalarFloat, which strict
+    # msgspec convert rejected — so a fractional tolerance failed to load.
+    _write(
+        tmp_path,
+        "profile.yaml",
+        "apiVersion: comparo/v1\n"
+        "kind: DiffProfile\n"
+        "metadata:\n  name: Tol\n  id: diff.tol\n"
+        "spec:\n"
+        "  default: exact\n"
+        "  rules:\n"
+        "    - path: $.price\n      mode: tolerance\n      tolerance: 0.01\n",
+    )
+    loaded = load_project(tmp_path)
+    rules = loaded.objects["diff.tol"].spec.rules  # type: ignore[union-attr]
+    assert rules is not None
+    assert rules[0].tolerance == 0.01
+    assert type(rules[0].tolerance) is float
+
+
 def test_dangling_ref_suggests_near_miss(tmp_path: Path) -> None:
     _write(
         tmp_path,

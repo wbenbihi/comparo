@@ -47,11 +47,18 @@ class _Reference:
     line: int | None
 
 
-def load_project(root: Path) -> LoadedProject:
-    """Load every ``*.yaml`` object under *root*, validating envelope and references.
+def load_project(source: Path) -> LoadedProject:
+    """Load and validate a comparo project from a directory or a manifest file.
+
+    Two shapes are accepted. A **directory** is treated as a self-contained
+    project — every ``*.yaml`` under it is loaded. A **manifest file** (e.g.
+    ``comparo.yaml``) is the modern shape: the file is the ``Project`` manifest,
+    and its objects are loaded from ``spec.data`` resolved relative to the file
+    (defaulting to the file's own directory), so comparo's data can live in a
+    ``.comparo/`` folder that never collides with the user's own YAML.
 
     Args:
-        root: The project directory to load.
+        source: A project directory or the path to a manifest file.
 
     Returns:
         The validated project, with all objects indexed by ``metadata.id``.
@@ -59,11 +66,12 @@ def load_project(root: Path) -> LoadedProject:
     Raises:
         LoadError: If any object fails to parse, validate, or resolve a reference.
     """
+    root, files = _resolve_sources(source)
     yaml = YAML(typ="rt")
     diagnostics: list[Diagnostic] = []
     entries: list[_Entry] = []
 
-    for file in sorted(root.rglob("*.yaml")):
+    for file in files:
         with file.open() as handle:
             try:
                 raw = yaml.load(handle)
@@ -75,7 +83,7 @@ def load_project(root: Path) -> LoadedProject:
         if raw is None:
             continue
         try:
-            obj = msgspec.convert(raw, type=Object, strict=True)
+            obj = msgspec.convert(_plain(raw), type=Object, strict=True)
         except msgspec.ValidationError as error:
             diagnostics.append(Diagnostic(file, str(error)))
             continue
@@ -87,6 +95,76 @@ def load_project(root: Path) -> LoadedProject:
     if diagnostics:
         raise LoadError(diagnostics, root)
     return LoadedProject(root=root, project=project, objects=objects)
+
+
+def _resolve_sources(source: Path) -> tuple[Path, list[Path]]:
+    """Resolve *source* to a project root and the object files to load.
+
+    A directory loads every ``*.yaml`` beneath it. A manifest file loads its
+    ``spec.data`` directory (default: the manifest's own directory) plus the
+    manifest itself.
+
+    Args:
+        source: A project directory or a manifest file.
+
+    Returns:
+        The project root and the sorted list of files to parse.
+    """
+    if source.is_dir():
+        return source, sorted(source.rglob("*.yaml"))
+    data_dir = (source.parent / (_manifest_data(source) or ".")).resolve()
+    files = sorted(data_dir.rglob("*.yaml")) if data_dir.is_dir() else []
+    if source.resolve() not in {file.resolve() for file in files}:
+        files = [source, *files]
+    return data_dir, files
+
+
+def _plain(node: object) -> object:
+    """Reduce ruamel round-trip wrappers to plain Python types for strict convert.
+
+    The round-trip parser yields a ``ScalarFloat`` for every float — a ``float``
+    subclass that ``msgspec.convert(strict=True)`` rejects by exact type, so a
+    ``tolerance: 0.01`` would fail to load. Unwrapping floats (and recursing
+    containers) lets strict conversion see a real ``float``; the untouched
+    original tree keeps its line info for reference diagnostics.
+
+    Args:
+        node: A parsed value, possibly a ruamel container or scalar.
+
+    Returns:
+        The value with any ``ScalarFloat`` reduced to ``float``.
+    """
+    if isinstance(node, dict):
+        return {key: _plain(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_plain(item) for item in node]
+    if isinstance(node, float) and not isinstance(node, bool):
+        return float(node)
+    return node
+
+
+def _manifest_data(config: Path) -> str | None:
+    """Best-effort read of ``spec.data`` from a manifest, for locating objects.
+
+    Parse errors are swallowed here — the main load pass reports them against
+    the file with a line number.
+
+    Args:
+        config: The manifest file to peek at.
+
+    Returns:
+        The declared ``spec.data`` string, or ``None`` if absent or unreadable.
+    """
+    try:
+        with config.open() as handle:
+            raw = YAML(typ="safe").load(handle)
+    except (OSError, YAMLError):
+        return None
+    if isinstance(raw, dict):
+        spec = raw.get("spec")
+        if isinstance(spec, dict) and isinstance(spec.get("data"), str):
+            return str(spec["data"])
+    return None
 
 
 def _index(
