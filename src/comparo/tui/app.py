@@ -16,6 +16,7 @@ import msgspec
 from rich.console import Group
 from rich.console import RenderableType
 from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 from textual.app import App
 from textual.app import ComposeResult
@@ -34,9 +35,13 @@ from textual.widgets import Static
 from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 
+from comparo.core.compare import CellDiff
+from comparo.core.compare import diff_run
 from comparo.core.curl import to_curl
 from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
+from comparo.core.execute import Execution
+from comparo.core.execute import execute_all
 from comparo.core.health import Health
 from comparo.core.health import HealthReport
 from comparo.core.health import check_health
@@ -53,10 +58,13 @@ from comparo.core.models import Request
 from comparo.core.models import Schema
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
+from comparo.core.report import RunReport
+from comparo.core.report import build_report
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
+from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
 from comparo.core.secrets import SecretError
 from comparo.tui.theme import COMPARO_INK
@@ -110,10 +118,26 @@ _EXPLORER_KEYS = (
     ("q", "quit"),
 )
 _DIFF_KEYS = (
-    ("n/p", "drift"),
-    ("u", "unified"),
-    ("i/b/x", "triage"),
-    ("1", "explorer"),
+    ("x", "run diff"),
+    ("↑↓", "cells"),
+    ("1-5", "tabs"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_RUN_KEYS = (
+    ("x", "run"),
+    ("1-5", "tabs"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_REPORT_KEYS = (
+    ("1-5", "tabs"),
+    ("?", "help"),
+    ("q", "quit"),
+)
+_SETTINGS_KEYS = (
+    ("1-5", "tabs"),
+    ("?", "help"),
     ("q", "quit"),
 )
 _ERROR_KEYS = (
@@ -185,11 +209,16 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("/", "filter the tree by name, kind, or tag"),
         ("g", "open the reference graph — what links to what"),
     ),
-    "diff": (
-        ("n / p", "jump to the next / previous drift"),
-        ("u", "toggle the unified view"),
-        ("i / b / x", "triage a field — ignore, baseline, exclude"),
+    "run": (
+        ("x", "execute every request against the current environment"),
+        ("↑ ↓", "scroll the results"),
     ),
+    "diff": (
+        ("x", "replay every request against both environments and diff"),
+        ("↑ ↓", "move through the cells"),
+    ),
+    "report": (("(read-only)", "the report of the most recent diff run"),),
+    "settings": (("(read-only)", "the effective project configuration"),),
     "error": (("r", "re-check the project after editing the files"),),
 }
 _HELP_GLOBAL = (
@@ -543,28 +572,205 @@ class ExplorerView(Horizontal):
         self.query_one("#context-content", Static).update(content)
 
 
-class DiffView(Horizontal):
-    """The signature diff screen: drift grouped by field, side-by-side gutter."""
+class RunView(Vertical):
+    """Execute every request cell against the current environment."""
 
-    def __init__(self) -> None:
-        """Build the diff view."""
-        super().__init__(id="diff-view", classes="view")
+    def __init__(self, project: LoadedProject) -> None:
+        """Build the run view.
+
+        Args:
+            project: The project whose requests are executed.
+        """
+        super().__init__(id="run-view", classes="view")
+        self.project = project
+        self._results: list[Execution] = []
 
     def compose(self) -> ComposeResult:
-        """Yield the drift list and the side-by-side diff panel."""
-        with Vertical(id="drift-panel", classes="panel"):
-            yield Static(_drift_list(), id="drift-content")
-        with Vertical(id="diffpane-panel", classes="panel hero"):
-            yield Static(_diff_detail(), id="diff-detail")
+        """Yield the results panel."""
+        with VerticalScroll(id="run-panel", classes="panel hero"):
+            yield Static(id="run-content")
 
     def on_mount(self) -> None:
-        """Title the panels."""
-        self.query_one("#drift-panel").border_title = "DRIFT — grouped by field"
-        pane = self.query_one("#diffpane-panel")
-        pane.border_title = Text.from_markup(
-            f"[{_DRIFT}]$.json.order.quantity[/]  ·  echo-anything · ja-JP"
+        """Render the initial (pending) table."""
+        self.refresh_screen()
+
+    def refresh_screen(self) -> None:
+        """Re-render for the current environment."""
+        environment = _app_env(self)
+        panel = self.query_one("#run-panel")
+        panel.border_title = "RUN"
+        panel.border_subtitle = environment.metadata.name if environment else "no environment"
+        self.query_one("#run-content", Static).update(_run_render(self.project, self._results))
+
+    def execute(self) -> None:
+        """Run every request against the current environment."""
+        environment = _app_env(self)
+        if environment is None:
+            self.app.notify("Pick an environment in the Explorer first", severity="warning")
+            return
+        self.query_one("#run-panel").border_subtitle = f"running · {environment.metadata.name}…"
+        self.run_worker(self._run(environment), exclusive=True, group="run")
+
+    async def _run(self, environment: Environment) -> None:
+        from comparo.adapters.httpx_client import HttpxClient
+
+        client = HttpxClient()
+        try:
+            self._results = await execute_all(
+                self.project, environment, _requests(self.project), client
+            )
+        finally:
+            await client.aclose()
+        self.refresh_screen()
+        ok = sum(1 for execution in self._results if execution.ok)
+        total = len(self._results)
+        self.app.notify(
+            f"{ok}/{total} requests returned a response",
+            title="Run complete",
+            severity="information" if ok == total else "warning",
         )
-        pane.border_subtitle = "1 drift · 2 ignored · fails CI"
+
+
+class DiffView(Horizontal):
+    """Replay every request against a baseline/candidate pair and diff the results."""
+
+    def __init__(self, project: LoadedProject) -> None:
+        """Build the diff view.
+
+        Args:
+            project: The project whose requests are diffed.
+        """
+        super().__init__(id="diff-view", classes="view")
+        self.project = project
+        self._cells: list[CellDiff] = []
+        self._pair: tuple[Environment, Environment] | None = None
+
+    def compose(self) -> ComposeResult:
+        """Yield the cell list and the field-diff panel."""
+        with Vertical(id="drift-panel", classes="panel"):
+            yield Static(id="drift-content")
+        with VerticalScroll(id="diffpane-panel", classes="panel hero"):
+            yield Static(id="diff-detail")
+
+    def on_mount(self) -> None:
+        """Resolve the diff pair and render."""
+        self.refresh_screen()
+
+    def refresh_screen(self) -> None:
+        """Re-resolve the pair and re-render."""
+        try:
+            self._pair = resolve_pair(self.project, None, None, None)
+        except EnvironmentSelectionError:
+            self._pair = None
+        self.query_one("#drift-panel").border_title = "CELLS"
+        pane = self.query_one("#diffpane-panel")
+        if self._pair is not None:
+            baseline, candidate = self._pair
+            pane.border_title = Text.from_markup(
+                f"{baseline.metadata.name}  [{_DIM}]⇄[/]  {candidate.metadata.name}"
+            )
+        else:
+            pane.border_title = "DIFF"
+        drift = sum(1 for cell in self._cells if cell.drifted)
+        pane.border_subtitle = f"{drift} drift" if self._cells else "press x to run"
+        self.query_one("#drift-content", Static).update(_diff_cells(self._cells))
+        self.query_one("#diff-detail", Static).update(_diff_pane(self._cells, self._pair))
+
+    def execute(self) -> None:
+        """Run the diff across the pair."""
+        if self._pair is None:
+            self.app.notify("No diffPairs configured in the project manifest", severity="warning")
+            return
+        self.query_one("#diffpane-panel").border_subtitle = "running…"
+        self.run_worker(self._run(self._pair), exclusive=True, group="diff")
+
+    async def _run(self, pair: tuple[Environment, Environment]) -> None:
+        from comparo.adapters.httpx_client import HttpxClient
+
+        baseline, candidate = pair
+        client = HttpxClient()
+        try:
+            self._cells = await diff_run(
+                self.project, baseline, candidate, _requests(self.project), client
+            )
+        finally:
+            await client.aclose()
+        report = build_report(baseline.metadata.name, candidate.metadata.name, self._cells)
+        cast("ComparoApp", self.app).last_report = report
+        self.refresh_screen()
+        drift = sum(1 for cell in self._cells if cell.drifted)
+        errors = sum(1 for cell in self._cells if cell.error is not None)
+        passed = drift == 0 and errors == 0
+        self.app.notify(
+            f"{drift} drift · {errors} error — gate {'PASS' if passed else 'FAIL'}",
+            title="Diff complete",
+            severity="information" if passed else "error",
+        )
+
+
+class ReportView(Vertical):
+    """Render the report of the most recent diff run."""
+
+    def __init__(self) -> None:
+        """Build the report view."""
+        super().__init__(id="report-view", classes="view")
+
+    def compose(self) -> ComposeResult:
+        """Yield the report panel."""
+        with VerticalScroll(id="report-panel", classes="panel hero"):
+            yield Static(id="report-content")
+
+    def on_mount(self) -> None:
+        """Render the last report, if any."""
+        self.refresh_screen()
+
+    def refresh_screen(self) -> None:
+        """Re-render from the app's last diff report."""
+        report = cast("ComparoApp", self.app).last_report
+        panel = self.query_one("#report-panel")
+        content = self.query_one("#report-content", Static)
+        if report is None:
+            panel.border_title = "REPORT"
+            panel.border_subtitle = "no run yet"
+            content.update(Text("Run a diff (press x on the Diff screen) to build a report.", _DIM))
+            return
+        panel.border_title = Text.from_markup(
+            f"REPORT  [{_DIM}]{report.baseline} ⇄ {report.candidate}[/]"
+        )
+        panel.border_subtitle = "gate PASS" if report.passed else "gate FAIL"
+        content.update(_report_render(report))
+
+
+class SettingsView(Vertical):
+    """A read-only overview of the effective project configuration."""
+
+    def __init__(self, project: LoadedProject) -> None:
+        """Build the settings view.
+
+        Args:
+            project: The project whose configuration is shown.
+        """
+        super().__init__(id="settings-view", classes="view")
+        self.project = project
+
+    def compose(self) -> ComposeResult:
+        """Yield the settings panel."""
+        with VerticalScroll(id="settings-panel", classes="panel hero"):
+            yield Static(id="settings-content")
+
+    def on_mount(self) -> None:
+        """Render the configuration."""
+        self.refresh_screen()
+
+    def refresh_screen(self) -> None:
+        """Re-render the configuration for the current environment."""
+        panel = self.query_one("#settings-panel")
+        panel.border_title = "SETTINGS"
+        panel.border_subtitle = "read-only"
+        environment = _app_env(self)
+        self.query_one("#settings-content", Static).update(
+            _settings_render(self.project, environment)
+        )
 
 
 class FilterModal(ModalScreen[None]):
@@ -816,24 +1022,6 @@ class ErrorView(VerticalScroll):
         self.query_one("#error-content", Static).update(_ok_report())
 
 
-class Placeholder(Vertical):
-    """A stand-in for a screen not yet built."""
-
-    def __init__(self, view_id: str, name: str) -> None:
-        """Build a placeholder.
-
-        Args:
-            view_id: The widget id (drives the content switcher).
-            name: The screen name.
-        """
-        super().__init__(id=view_id, classes="view placeholder")
-        self._name = name
-
-    def compose(self) -> ComposeResult:
-        """Yield a centered hint."""
-        yield Static(Text(f"{self._name} — coming soon", style=_DIM))
-
-
 class ComparoApp(App[None]):
     """The comparo application shell."""
 
@@ -853,6 +1041,7 @@ class ComparoApp(App[None]):
         Binding("h", "health", "Health"),
         Binding("p", "curl", "curl"),
         Binding("r", "raw_or_reload", "Raw / reload"),
+        Binding("x", "execute", "Run"),
         Binding("question_mark", "help", "Help"),
     ]
 
@@ -869,6 +1058,7 @@ class ComparoApp(App[None]):
         self.project = project
         self.error = error
         self.environment = _default_environment(project) if project is not None else None
+        self.last_report: RunReport | None = None
 
     @classmethod
     def from_error(cls, error: LoadError) -> "ComparoApp":
@@ -888,12 +1078,14 @@ class ComparoApp(App[None]):
         if self.error is not None:
             yield ErrorView(self.error)
         else:
+            project = self.project
+            assert project is not None
             with ContentSwitcher(initial="explorer-view", id="content"):
-                yield ExplorerView(self.project, self.environment)  # type: ignore[arg-type]
-                yield Placeholder("run-view", "Run")
-                yield DiffView()
-                yield Placeholder("report-view", "Report")
-                yield Placeholder("settings-view", "Settings")
+                yield ExplorerView(project, self.environment)
+                yield RunView(project)
+                yield DiffView(project)
+                yield ReportView()
+                yield SettingsView(project)
         yield StatusBar()
 
     def on_mount(self) -> None:
@@ -912,7 +1104,20 @@ class ComparoApp(App[None]):
             return
         self.query_one("#content", ContentSwitcher).current = f"{name}-view"
         self.query_one(NavBar).active = name
+        view = self.query_one(f"#{name}-view")
+        if isinstance(view, (RunView, DiffView, ReportView, SettingsView)):
+            view.refresh_screen()
         self._status(name)
+
+    def action_execute(self) -> None:
+        """Run the active screen's action — execute (Run) or diff (Diff)."""
+        if self.error is not None:
+            return
+        active = self.query_one(NavBar).active
+        if active == "run":
+            self.query_one(RunView).execute()
+        elif active == "diff":
+            self.query_one(DiffView).execute()
 
     def action_filter(self) -> None:
         """Open the filter overlay on the Explorer."""
@@ -999,8 +1204,14 @@ class ComparoApp(App[None]):
         if screen == "explorer":
             self.query_one(ExplorerView).refresh_footer()
             return
-        context = ".runs/8c3e11 · local ⇄ prod" if screen == "diff" else ""
-        self.query_one(StatusBar).show(_DIFF_KEYS if screen == "diff" else _EXPLORER_KEYS, context)
+        env = self.environment.metadata.name if self.environment else "—"
+        keys, context = {
+            "run": (_RUN_KEYS, f"env · {env}"),
+            "diff": (_DIFF_KEYS, "baseline ⇄ candidate"),
+            "report": (_REPORT_KEYS, "last diff run"),
+            "settings": (_SETTINGS_KEYS, "read-only"),
+        }.get(screen, (_EXPLORER_KEYS, ""))
+        self.query_one(StatusBar).show(keys, context)
 
 
 def _default_environment(project: LoadedProject) -> Environment | None:
@@ -1470,73 +1681,190 @@ def _ok_report() -> Text:
     return text
 
 
-def _drift_list() -> Text:
-    text = Text()
-    text.append(" ✗ $.json.order.quantity\n", style=f"bold {_DRIFT}")
-    text.append("   echo-anything · all 3 ", style=_DIM)
-    text.append("locales\n\n", style=_AXIS)
-    for path in ("$.headers", "$.origin"):
-        text.append(f" ◐ {path}", style=_SKIP)
-        text.append("  ignored\n", style=_DIM)
-        text.append("   all requests · by profile\n\n", style=_DIM)
-    text.append("─" * 26 + "\n", style=_DIM)
-    text.append("a field that drifts on 3 locales\nis one bug, not three.", style=_DIM)
-    return text
+def _app_env(widget: object) -> Environment | None:
+    app = getattr(widget, "app", None)
+    return getattr(app, "environment", None)
 
 
-def _diff_detail() -> Text:
-    baseline = [
-        ("skip", '"json": {'),
-        ("skip", '  "order": {'),
-        ("skip", '    "sku": "WIDGET-1",'),
-        ("drift", '    "quantity": ', "3", _SAME),
-        ("skip", "  } },"),
-        ("gap", '"headers": { …not compared…'),
-        ("gap", '"origin": "127.0.0.1"'),
-    ]
-    candidate = [
-        ("skip", '"json": {'),
-        ("skip", '  "order": {'),
-        ("skip", '    "sku": "WIDGET-1",'),
-        ("drift", '    "quantity": ', '"3"', _DRIFT),
-        ("skip", "  } },"),
-        ("gap", '"headers": { …not compared…'),
-        ("gap", '"origin": "10.4.1.9"'),
-    ]
+def _requests(project: LoadedProject) -> list[Request]:
+    return sorted(
+        (obj for obj in project.objects.values() if isinstance(obj, Request)),
+        key=lambda request: request.metadata.id or "",
+    )
+
+
+def _table() -> Table:
+    return Table(box=None, expand=True, pad_edge=False, show_edge=False)
+
+
+def _run_render(project: LoadedProject, results: list[Execution]) -> Group:
+    table = _table()
+    table.add_column("", width=2)
+    table.add_column("REQUEST", style=_TEXT_HI, no_wrap=True)
+    table.add_column("CASE", style=_AXIS)
+    table.add_column("STATUS", justify="right")
+    table.add_column("LATENCY", justify="right")
+    if not results:
+        for request in _requests(project):
+            for cell in expand(project, request):
+                table.add_row(
+                    Text("○", style=_DIM),
+                    Text(request.metadata.name, style=_DIM),
+                    Text(cell.key or "—", style=_DIM),
+                    Text("—", style=_DIM),
+                    Text("not run", style=_DIM),
+                )
+        return Group(table, Text("\npress x to run every request", style=_DIM))
+    for execution in results:
+        response = execution.response
+        if response is not None:
+            glyph, colour = Text("✓", style=_SAME), _SAME if response.status < 400 else _WARN
+            status = Text(str(response.status), style=colour)
+            trailing = Text(f"{response.elapsed_ms:.0f}ms", style=_TEXT)
+        else:
+            glyph = Text("✗", style=_DRIFT)
+            status = Text("—", style=_DRIFT)
+            trailing = Text(str(execution.error or "error"), style=_DRIFT)
+        table.add_row(
+            glyph,
+            Text(execution.request.metadata.name, style=_TEXT_HI),
+            Text(execution.cell_key or "—", style=_AXIS),
+            status,
+            trailing,
+        )
+    ok = sum(1 for execution in results if execution.ok)
+    summary = Text(
+        f"\n{ok} ok · {len(results) - ok} failed",
+        style=f"bold {_SAME if ok == len(results) else _WARN}",
+    )
+    return Group(table, summary)
+
+
+def _diff_cells(cells: list[CellDiff]) -> Text:
+    if not cells:
+        return Text("press x to run the diff", style=_DIM)
     text = Text()
-    text.append(f"{'A local · working tree':<40}", style=_DIM)
-    text.append("B prod · candidate deploy\n", style=_DIM)
-    text.append("─" * 40 + " ─" * 8 + "\n", style=_DIM)
-    for left, right in zip(baseline, candidate, strict=True):
-        _diff_row(text, left, pad=40)
-        text.append("  ")
-        _diff_row(text, right, pad=0)
+    for cell in cells:
+        if cell.error is not None:
+            glyph, colour = "!", _WARN
+        elif cell.drifted:
+            glyph, colour = "✗", _DRIFT
+        else:
+            glyph, colour = "✓", _SAME
+        text.append(f" {glyph} ", style=f"bold {colour}")
+        text.append(cell.request.metadata.name, style=_TEXT_HI if cell.drifted else _TEXT)
+        if cell.cell_key:
+            text.append(f"\n    {cell.cell_key}", style=_AXIS)
         text.append("\n")
-    text.append("\n")
-    text.append("▏", style=_SAME)
-    text.append(" compared · identical    ", style=_DIM)
-    text.append("▌", style=_DRIFT)
-    text.append(" compared · ", style=_DIM)
-    text.append("drift", style=_DRIFT)
-    text.append("    ╎", style=_SKIP)
-    text.append(" not compared\n\n", style=_DIM)
-    text.append("outbound request diff · identical\n", style=_SAME)
-    text.append("both sides sent the same body — the drift is the service's", style=_DIM)
     return text
 
 
-def _diff_row(text: Text, row: tuple[object, ...], *, pad: int) -> None:
-    kind = str(row[0])
-    glyph, colour = {"skip": ("▏", _SKIP), "drift": ("▌", _DRIFT), "gap": ("╎", _SKIP)}[kind]
-    text.append(glyph, style=colour)
-    text.append(" ")
-    if kind == "drift":
-        body, value = str(row[1]), str(row[2])
-        line = f"{body}{value}"
-        text.append(body, style=_TEXT)
-        text.append(value, style=f"bold {row[3]}")
-    else:
-        line = str(row[1])
-        text.append(line, style=_DIM if kind == "gap" else _TEXT)
-    if pad:
-        text.append(" " * max(0, pad - len(line) - 2))
+def _diff_pane(cells: list[CellDiff], pair: tuple[Environment, Environment] | None) -> Text:
+    if not cells:
+        return _diff_empty(pair)
+    notable = [cell for cell in cells if cell.drifted or cell.error is not None]
+    if not notable:
+        return Text("✓ every cell is identical — gate PASS", style=f"bold {_SAME}")
+    text = Text()
+    for cell in notable:
+        name = cell.request.metadata.id or cell.request.metadata.name
+        title = f"{name} · {cell.cell_key}" if cell.cell_key else name
+        if cell.error is not None:
+            text.append(f"! {title}\n", style=f"bold {_WARN}")
+            text.append(f"  {cell.error}\n\n", style=_DIM)
+            continue
+        text.append(f"✗ {title}\n", style=f"bold {_DRIFT}")
+        for field in cell.drifts:
+            text.append("  ▌ ", style=_DRIFT)
+            text.append(f"{field.path}  ", style=_TEXT_HI)
+            text.append(f"{field.detail}\n", style=_DIM)
+        text.append("\n")
+    return text
+
+
+def _diff_empty(pair: tuple[Environment, Environment] | None) -> Text:
+    text = Text()
+    if pair is None:
+        text.append("No diff pair configured.\n\n", style=f"bold {_WARN}")
+        text.append("Add one to the project manifest:\n\n", style=_DIM)
+        text.append(
+            "  environments:\n    diffPairs:\n      - name: local-vs-prod\n"
+            "        baseline: local\n        candidate: prod",
+            style=_TEXT,
+        )
+        return text
+    baseline, candidate = pair
+    ready = f"Ready to diff {baseline.metadata.name} ⇄ {candidate.metadata.name}.\n\n"
+    text.append(ready, style=_TEXT_HI)
+    text.append("Press ", style=_DIM)
+    text.append("x", style=f"bold {_ACCENT}")
+    text.append(" to replay every request against both and compare.\n\n", style=_DIM)
+    text.append("▏", style=_SAME)
+    text.append(" identical    ", style=_DIM)
+    text.append("▌", style=_DRIFT)
+    text.append(" drift    ", style=_DIM)
+    text.append("╎", style=_SKIP)
+    text.append(" not compared", style=_DIM)
+    return text
+
+
+def _report_render(report: RunReport) -> Group:
+    header = Text()
+    verdict = "PASS\n" if report.passed else "FAIL\n"
+    header.append(f"gate {verdict}", style=f"bold {_SAME if report.passed else _DRIFT}")
+    header.append(
+        f"{report.same} same · {report.drift} drift · {report.errors} error"
+        f" · {report.skipped} fields skipped\n",
+        style=_TEXT,
+    )
+    table = _table()
+    table.add_column("", width=2)
+    table.add_column("REQUEST", style=_TEXT_HI, no_wrap=True)
+    table.add_column("CASE", style=_AXIS)
+    table.add_column("STATE", justify="right")
+    glyphs = {"same": ("✓", _SAME), "drift": ("✗", _DRIFT), "error": ("!", _WARN)}
+    for cell in report.cells:
+        glyph, colour = glyphs.get(cell.state, ("○", _DIM))
+        table.add_row(
+            Text(glyph, style=colour),
+            Text(cell.request_id, style=_TEXT_HI),
+            Text(cell.cell_key or "—", style=_AXIS),
+            Text(cell.state, style=colour),
+        )
+    return Group(header, table)
+
+
+def _settings_render(project: LoadedProject, environment: Environment | None) -> Text:
+    manifest = project.project
+    environments = [obj for obj in project.objects.values() if isinstance(obj, Environment)]
+    text = Text()
+    text.append("PROJECT\n", style=_LABEL)
+    text.append("  name        ", style=_DIM)
+    text.append(f"{manifest.metadata.name if manifest else '—'}\n", style=_TEXT_HI)
+    text.append("  root        ", style=_DIM)
+    text.append(f"{project.root}\n", style=_TEXT)
+    text.append("  objects     ", style=_DIM)
+    text.append(f"{len(project.objects)}\n", style=_TEXT)
+
+    text.append("\nACTIVE ENVIRONMENT\n", style=_LABEL)
+    text.append("  default     ", style=_DIM)
+    text.append(f"{environment.metadata.name if environment else '—'}\n", style=_ACCENT)
+    if environment is not None:
+        text.append("  baseUrl     ", style=_DIM)
+        text.append(f"{environment.spec.base_url}\n", style=_TEXT)
+
+    text.append(f"\nENVIRONMENTS  {len(environments)}\n", style=_LABEL)
+    for env in environments:
+        remote = _is_remote(env)
+        text.append(f"  ● {env.metadata.name:<12}", style=_HEALTH_COLOR[Health.UNKNOWN])
+        text.append(f"{env.spec.base_url}", style=_DIM)
+        text.append("  live\n" if remote else "  local\n", style=_DANGER if remote else _DIM)
+
+    run_config = manifest.spec.run if manifest else None
+    if run_config:
+        text.append("\nRUN\n", style=_LABEL)
+        text.append(f"  {json.dumps(run_config, ensure_ascii=False)}\n", style=_TEXT)
+
+    text.append("\nENGINE\n", style=_LABEL)
+    text.append("  core stays free of httpx and the interfaces — enforced in CI.\n", style=_DIM)
+    return text

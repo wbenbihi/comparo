@@ -11,8 +11,12 @@ from comparo.core.diagnostics import LoadError
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
 from comparo.tui.app import ComparoApp
+from comparo.tui.app import DiffView
 from comparo.tui.app import ErrorView
 from comparo.tui.app import ExplorerView
+from comparo.tui.app import ReportView
+from comparo.tui.app import RunView
+from comparo.tui.app import SettingsView
 from comparo.tui.app import _edges
 from comparo.tui.app import _help_body
 
@@ -27,7 +31,9 @@ def test_tui_launches_and_builds_tree() -> None:
         async with app.run_test(size=(130, 40)) as pilot:
             await pilot.pause()
             tree = app.query_one("#tree", Tree)
-            assert len(tree.root.children) == 6  # one foldable branch per object kind
+            # the project manifest root leaf, then one foldable branch per object kind
+            assert len(tree.root.children) == 7
+            assert not tree.root.children[0].allow_expand  # project node is a leaf
             assert app.query_one("#detail-content", Static) is not None
             assert app.query_one("#context-content", Static) is not None
 
@@ -94,6 +100,27 @@ def test_help_body_lists_screen_and_global_keys() -> None:
     body = _help_body("explorer").plain
     assert "health" in body  # screen-specific
     assert "quit comparo" in body  # global
+
+
+def test_number_keys_switch_between_every_screen() -> None:
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            for key, view in (
+                ("2", RunView),
+                ("3", DiffView),
+                ("4", ReportView),
+                ("5", SettingsView),
+                ("1", ExplorerView),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+                assert app.query_one(view) is not None
+
+    asyncio.run(go())
 
 
 def test_error_screen_replaces_the_explorer(tmp_path: Path) -> None:
