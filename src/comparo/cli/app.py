@@ -7,8 +7,10 @@ Only wiring lives here — the CLI is a thin front-end that will call the
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from typing import Annotated
+from typing import NoReturn
 
 import typer
 
@@ -35,9 +37,19 @@ from comparo.core.resolve import select_environment
 app = typer.Typer(
     name="comparo",
     help="HTTP regression & diff testing across environments.",
-    no_args_is_help=True,
     add_completion=False,
 )
+
+DEFAULT_CONFIG = Path("comparo.yaml")
+
+ConfigOption = Annotated[
+    Path,
+    typer.Option(
+        "--config",
+        "-C",
+        help="The comparo.yaml manifest to load (or a project directory).",
+    ),
+]
 
 
 def _version_callback(*, value: bool) -> None:
@@ -51,8 +63,9 @@ def _version_callback(*, value: bool) -> None:
         raise typer.Exit
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     *,
     version: Annotated[
         bool,
@@ -65,57 +78,82 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """Replay requests across environments and diff the responses."""
+    """Replay requests across environments and diff the responses.
+
+    Run ``comparo`` with no command to open the terminal UI on ``./comparo.yaml``.
+    """
+    if ctx.invoked_subcommand is None:
+        _launch_tui(DEFAULT_CONFIG)
 
 
 @app.command()
-def validate(
-    project: Annotated[
+def init(
+    directory: Annotated[
         Path,
-        typer.Argument(
-            exists=True,
-            file_okay=False,
-            dir_okay=True,
-            help="Path to the project directory to validate.",
-        ),
-    ],
+        typer.Argument(help="Where to create the project (default: the current directory)."),
+    ] = Path(),
+    *,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", "-n", help="Project name; prompted for if omitted."),
+    ] = None,
+    data: Annotated[
+        Path,
+        typer.Option("--data", help="Directory the project's objects live in."),
+    ] = Path(".comparo"),
+    config: Annotated[
+        str,
+        typer.Option("--config", "-C", help="Filename for the manifest."),
+    ] = "comparo.yaml",
+    description: Annotated[
+        str | None,
+        typer.Option("--description", help="A one-line project description."),
+    ] = None,
 ) -> None:
+    """Scaffold a new comparo project: a manifest plus a starter data directory.
+
+    Writes ``<config>`` (the manifest) and ``<data>/`` with a sample environment
+    and request, so the project validates and runs immediately. Refuses to touch
+    an existing manifest or data directory, so it never clobbers your files.
+
+    Args:
+        directory: The directory to create the project in.
+        name: The project name; if omitted, comparo prompts for it.
+        data: The directory objects live in, relative to *directory*.
+        config: The manifest filename.
+        description: An optional one-line description.
+    """
+    _scaffold(directory, name, data, config, description)
+
+
+@app.command()
+def validate(config: ConfigOption = DEFAULT_CONFIG) -> None:
     """Validate a project's envelope, ids, and references.
 
     Exits non-zero and prints every problem if the project does not load.
 
     Args:
-        project: The project directory to load and validate.
+        config: The manifest (or project directory) to validate.
     """
-    try:
-        loaded = load_project(project)
-    except LoadError as error:
-        _print_load_error(error)
-        raise typer.Exit(1) from error
+    loaded = _open_project(config)
     typer.secho(f"✓ {len(loaded.objects)} object(s) valid", fg=typer.colors.GREEN)
 
 
 @app.command()
 def render(
-    project: Annotated[
-        Path,
-        typer.Argument(exists=True, file_okay=False, dir_okay=True, help="Project directory."),
-    ],
     request_id: Annotated[str, typer.Argument(help="metadata.id of the request to render.")],
+    *,
+    config: ConfigOption = DEFAULT_CONFIG,
     env: Annotated[str | None, typer.Option("--env", "-e", help="Environment name or id.")] = None,
 ) -> None:
     """Show a request fully resolved for an environment, with secrets masked.
 
     Args:
-        project: The project directory to load.
         request_id: The ``metadata.id`` of the request to resolve.
+        config: The manifest (or project directory) to load.
         env: The environment to resolve for; defaults to the project default.
     """
-    try:
-        loaded = load_project(project)
-    except LoadError as error:
-        _print_load_error(error)
-        raise typer.Exit(1) from error
+    loaded = _open_project(config)
     obj = loaded.objects.get(request_id)
     if not isinstance(obj, Request):
         typer.secho(f"no Request with id '{request_id}'", fg=typer.colors.RED, err=True)
@@ -130,27 +168,21 @@ def render(
 
 @app.command(name="run")
 def run_requests(
-    project: Annotated[
-        Path,
-        typer.Argument(exists=True, file_okay=False, dir_okay=True, help="Project directory."),
-    ],
     request_id: Annotated[
         str | None, typer.Argument(help="A single request id; omit to run all.")
     ] = None,
+    *,
+    config: ConfigOption = DEFAULT_CONFIG,
     env: Annotated[str | None, typer.Option("--env", "-e", help="Environment name or id.")] = None,
 ) -> None:
     """Execute requests against an environment and report status and latency.
 
     Args:
-        project: The project directory to load.
         request_id: A single request id to run, or ``None`` to run every request.
+        config: The manifest (or project directory) to load.
         env: The environment to run against; defaults to the project default.
     """
-    try:
-        loaded = load_project(project)
-    except LoadError as error:
-        _print_load_error(error)
-        raise typer.Exit(1) from error
+    loaded = _open_project(config)
     try:
         environment = select_environment(loaded, env)
     except EnvironmentSelectionError as error:
@@ -168,13 +200,11 @@ def run_requests(
 
 @app.command()
 def diff(
-    project: Annotated[
-        Path,
-        typer.Argument(exists=True, file_okay=False, dir_okay=True, help="Project directory."),
-    ],
     request_id: Annotated[
         str | None, typer.Argument(help="A single request id; omit to diff all.")
     ] = None,
+    *,
+    config: ConfigOption = DEFAULT_CONFIG,
     pair: Annotated[str | None, typer.Option("--pair", "-p", help="Named diff pair.")] = None,
     baseline: Annotated[
         str | None, typer.Option("--baseline", "-b", help="Baseline environment.")
@@ -193,19 +223,15 @@ def diff(
     """Diff every request-cell across two environments and report drift.
 
     Args:
-        project: The project directory to load.
         request_id: A single request id to diff, or ``None`` for all.
+        config: The manifest (or project directory) to load.
         pair: A named diff pair from the manifest.
         baseline: An explicit baseline environment (overrides the pair).
         candidate: An explicit candidate environment (overrides the pair).
         report: Report format(s) to write.
         output: The directory report files are written to.
     """
-    try:
-        loaded = load_project(project)
-    except LoadError as error:
-        _print_load_error(error)
-        raise typer.Exit(1) from error
+    loaded = _open_project(config)
     try:
         base_env, candidate_env = resolve_pair(loaded, pair, baseline, candidate)
     except EnvironmentSelectionError as error:
@@ -225,25 +251,163 @@ def diff(
 
 
 @app.command()
-def tui(
-    project: Annotated[
-        Path,
-        typer.Argument(exists=True, file_okay=False, dir_okay=True, help="Project directory."),
-    ],
-) -> None:
+def tui(config: ConfigOption = DEFAULT_CONFIG) -> None:
     """Launch the terminal UI to explore a project.
 
     Args:
-        project: The project directory to open.
+        config: The manifest (or project directory) to open.
+    """
+    _launch_tui(config)
+
+
+@app.command(name="help")
+def show_help(ctx: typer.Context) -> None:
+    """Show the full command reference."""
+    typer.echo(ctx.find_root().get_help())
+
+
+def _missing_config(config: Path) -> str:
+    return (
+        f"no project at '{config}' — run `comparo init` to create one, "
+        "or point --config at a manifest"
+    )
+
+
+def _open_project(config: Path) -> LoadedProject:
+    """Load a project from *config*, exiting with a friendly message on failure.
+
+    Args:
+        config: The manifest file or project directory to load.
+
+    Returns:
+        The validated project.
+    """
+    if not config.exists():
+        typer.secho(_missing_config(config), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    try:
+        return load_project(config)
+    except LoadError as error:
+        _print_load_error(error)
+        raise typer.Exit(1) from error
+
+
+def _launch_tui(config: Path) -> None:
+    """Open the TUI on *config*, or the error screen if the project will not load.
+
+    Args:
+        config: The manifest file or project directory to open.
     """
     from comparo.tui.app import ComparoApp
 
+    if not config.exists():
+        typer.secho(_missing_config(config), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
     try:
-        loaded = load_project(project)
+        loaded = load_project(config)
     except LoadError as error:
         ComparoApp.from_error(error).run()
         raise typer.Exit(1) from error
     ComparoApp(loaded).run()
+
+
+def _scaffold(
+    directory: Path, name: str | None, data: Path, config: str, description: str | None
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = directory / config
+    data_dir = directory / data
+    if manifest.exists():
+        _abort(f"{manifest} already exists — refusing to overwrite")
+    if data_dir.exists():
+        _abort(f"{data_dir} already exists — refusing to touch your data")
+    if name is None:
+        name = typer.prompt("Project name").strip()
+    if not name:
+        _abort("a project name is required")
+    data_rel = os.path.relpath(data_dir, directory).replace(os.sep, "/")
+    manifest.write_text(
+        _manifest_yaml(name, f"project.{_slug(name)}", description, data_rel), encoding="utf-8"
+    )
+    (data_dir / "environments").mkdir(parents=True)
+    (data_dir / "requests").mkdir(parents=True)
+    (data_dir / "environments" / "local.yaml").write_text(_STARTER_ENV, encoding="utf-8")
+    (data_dir / "requests" / "example.yaml").write_text(_STARTER_REQUEST, encoding="utf-8")
+    typer.secho(f"✓ created {manifest}", fg=typer.colors.GREEN)
+    typer.secho(
+        f"✓ created {data_dir}/ with a sample environment and request", fg=typer.colors.GREEN
+    )
+    default_here = config == "comparo.yaml" and directory == Path()
+    flag = "" if default_here else f" --config {manifest}"
+    typer.echo("\nNext:")
+    typer.echo(f"  comparo validate{flag}    # check it loads")
+    typer.echo(f"  comparo{flag}             # open the TUI")
+
+
+def _abort(message: str) -> NoReturn:
+    typer.secho(message, fg=typer.colors.RED, err=True)
+    raise typer.Exit(1)
+
+
+def _slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "app"
+
+
+def _manifest_yaml(name: str, project_id: str, description: str | None, data: str) -> str:
+    summary = description or "An HTTP regression & diff project."
+    return (
+        "apiVersion: comparo/v1\n"
+        "kind: Project\n"
+        "metadata:\n"
+        f"  name: {name}\n"
+        f"  id: {project_id}\n"
+        f"  description: {summary}\n"
+        "spec:\n"
+        "  # Where comparo's objects live, relative to this file.\n"
+        f"  data: {data}\n"
+        "\n"
+        "  environments:\n"
+        "    default: local\n"
+        "\n"
+        "  run:\n"
+        "    concurrency: 4\n"
+    )
+
+
+_STARTER_ENV = """apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Local
+  id: environment.local
+  description: A starter environment — point baseUrl at your API.
+spec:
+  baseUrl: https://postman-echo.com
+  timeout:
+    connect: 5s
+    read: 30s
+  health:
+    - method: GET
+      endpoint: /get
+"""
+
+_STARTER_REQUEST = """apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Example
+  id: request.example
+  description: A starter request — edit or replace it.
+  tags:
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      hello: world
+  response:
+    status: 200
+"""
 
 
 def _write_reports(report: RunReport, formats: list[str], output: Path) -> None:
