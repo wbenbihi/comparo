@@ -19,6 +19,7 @@ from comparo.tui.app import RunView
 from comparo.tui.app import SettingsView
 from comparo.tui.app import _edges
 from comparo.tui.app import _help_body
+from comparo.tui.app import _parse_sse
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
 
@@ -94,6 +95,16 @@ def test_selecting_an_environment_makes_it_the_default() -> None:
             assert app.environment is other
 
     asyncio.run(go())
+
+
+def test_parse_sse_splits_events_and_joins_multiline_data() -> None:
+    stream = 'event: message\ndata: {"n": 1}\n\nid: 2\ndata: hello\ndata: world\n\n'
+    events = _parse_sse(stream)
+    assert len(events) == 2
+    assert events[0]["event"] == "message"
+    assert events[0]["data"] == '{"n": 1}'
+    assert events[1]["id"] == "2"
+    assert events[1]["data"] == "hello\nworld"
 
 
 def test_help_body_lists_screen_and_global_keys() -> None:

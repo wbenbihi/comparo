@@ -2571,6 +2571,9 @@ def _content_type(headers: list[tuple[str, str]]) -> str:
 
 def _body_into(node: TreeNode[object], body: bytes, content_type: str) -> None:
     text = body.decode("utf-8", "replace")
+    if "event-stream" in content_type or text.startswith(("data:", "event:", "id:", "retry:")):
+        _sse_into(node, text)
+        return
     if "json" in content_type or text[:1] in "{[":
         try:
             _value_into(node, json.loads(body))
@@ -2582,6 +2585,51 @@ def _body_into(node: TreeNode[object], body: bytes, content_type: str) -> None:
         return
     for line in text[:4000].splitlines()[:200]:
         node.add_leaf(Text(line, style=_TEXT))
+
+
+def _sse_into(node: TreeNode[object], text: str) -> None:
+    events = _parse_sse(text)
+    if not events:
+        node.add_leaf(Text("(no events)", style=_DIM))
+        return
+    for index, event in enumerate(events):
+        label = Text.assemble((f"event {index}", _AXIS))
+        if event.get("event"):
+            label.append(f"  {event['event']}", style=_ACCENT)
+        entry = node.add(label, expand=len(events) <= 8)
+        if event.get("id"):
+            entry.add_leaf(Text.assemble(("id: ", _DIM), (event["id"], _TEXT)))
+        data = event.get("data", "")
+        try:
+            _value_into(entry.add(Text("data", style=_DIM), expand=True), json.loads(data))
+        except (ValueError, TypeError):
+            entry.add_leaf(Text.assemble(("data: ", _DIM), (data[:200], _TEXT)))
+
+
+def _parse_sse(text: str) -> list[dict[str, str]]:
+    """Parse a Server-Sent-Events stream into a list of ``field: value`` events."""
+    events: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    data: list[str] = []
+    for line in text.splitlines():
+        if not line:
+            if data or current:
+                current["data"] = "\n".join(data)
+                events.append(current)
+                current, data = {}, []
+            continue
+        if line.startswith(":"):
+            continue
+        field, _, value = line.partition(":")
+        value = value[1:] if value.startswith(" ") else value
+        if field == "data":
+            data.append(value)
+        elif field in ("event", "id", "retry"):
+            current[field] = value
+    if data or current:
+        current["data"] = "\n".join(data)
+        events.append(current)
+    return events
 
 
 class _HtmlOutline(HTMLParser):
