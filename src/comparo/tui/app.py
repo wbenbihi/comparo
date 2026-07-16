@@ -199,7 +199,7 @@ _REPORT_KEYS = (
     ("q", "quit"),
 )
 _SETTINGS_KEYS = (
-    ("↑↓", "scroll"),
+    ("↑↓", "sections"),
     ("?", "help"),
     ("q", "quit"),
 )
@@ -296,7 +296,10 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("o", "export JSON"),
         ("enter", "write every report format"),
     ),
-    "settings": (("(read-only)", "the effective project configuration"),),
+    "settings": (
+        ("↑ ↓", "move between config sections"),
+        ("(read-only)", "the effective project configuration"),
+    ),
     "error": (("r", "re-check the project after editing the files"),),
 }
 _HELP_GLOBAL = (
@@ -1699,8 +1702,20 @@ class ReportView(Vertical):
             self.query_one(f"#pill-{name}", Static).update(pill)
 
 
-class SettingsView(Vertical):
-    """A read-only overview of the effective project configuration."""
+class SettingsView(Horizontal):
+    """A navigable, read-only overview of the effective project configuration."""
+
+    SECTIONS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("project", "Project"),
+        ("environments", "Environments"),
+        ("run", "Run defaults"),
+        ("diff", "Diff"),
+        ("report", "Report"),
+        ("redaction", "Redaction"),
+        ("appearance", "Appearance"),
+        ("plugins", "Plugins"),
+        ("engine", "Engine"),
+    )
 
     def __init__(self, project: LoadedProject) -> None:
         """Build the settings view.
@@ -1712,22 +1727,35 @@ class SettingsView(Vertical):
         self.project = project
 
     def compose(self) -> ComposeResult:
-        """Yield the settings panel."""
-        with VerticalScroll(id="settings-panel", classes="panel hero"):
+        """Yield the category list and the detail panel."""
+        with Vertical(id="settings-nav", classes="panel"):
+            yield OptionList(*(label for _, label in self.SECTIONS), id="settings-list")
+        with VerticalScroll(id="settings-detail", classes="panel hero"):
             yield Static(id="settings-content")
 
     def on_mount(self) -> None:
-        """Render the configuration."""
+        """Title the panels and show the first section."""
+        self.query_one("#settings-nav").border_title = "SETTINGS"
         self.refresh_screen()
 
     def refresh_screen(self) -> None:
-        """Re-render the configuration for the current environment."""
-        panel = self.query_one("#settings-panel")
-        panel.border_title = "SETTINGS"
-        panel.border_subtitle = "read-only"
-        environment = _app_env(self)
+        """Focus the category list and render the current section."""
+        options = self.query_one("#settings-list", OptionList)
+        options.focus()
+        index = options.highlighted or 0
+        self._show(index)
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Render the highlighted section."""
+        self._show(event.option_index)
+
+    def _show(self, index: int) -> None:
+        key, label = self.SECTIONS[index]
+        detail = self.query_one("#settings-detail")
+        detail.border_title = label.upper()
+        detail.border_subtitle = "read-only"
         self.query_one("#settings-content", Static).update(
-            _settings_render(self.project, environment)
+            _settings_section(self.project, _app_env(self), key)
         )
 
 
@@ -3090,37 +3118,64 @@ def _report_export(output: Path) -> Text:
     return text
 
 
-def _settings_render(project: LoadedProject, environment: Environment | None) -> Text:
+def _settings_section(
+    project: LoadedProject, environment: Environment | None, key: str
+) -> RenderableType:
     manifest = project.project
-    environments = [obj for obj in project.objects.values() if isinstance(obj, Environment)]
+    spec = manifest.spec if manifest else None
+    if key == "project":
+        text = Text()
+        text.append("name       ", style=_LABEL)
+        text.append(f"{manifest.metadata.name if manifest else '—'}\n", style=_TEXT_HI)
+        if manifest and manifest.metadata.description:
+            text.append("           ", style=_LABEL)
+            text.append(f"{manifest.metadata.description}\n", style=_DIM)
+        text.append("root       ", style=_LABEL)
+        text.append(f"{project.root}\n", style=_TEXT)
+        text.append("objects    ", style=_LABEL)
+        text.append(f"{len(project.objects)}\n", style=_TEXT)
+        text.append("default    ", style=_LABEL)
+        text.append(f"{environment.metadata.name if environment else '—'}", style=_ACCENT)
+        return text
+    if key == "environments":
+        envs = [obj for obj in project.objects.values() if isinstance(obj, Environment)]
+        text = Text()
+        for env in envs:
+            remote = _is_remote(env)
+            default = environment is not None and env.metadata.id == environment.metadata.id
+            text.append("● ", style=_ACCENT if default else _SAME)
+            text.append(f"{env.metadata.name:<14}", style=_TEXT_HI if default else _TEXT)
+            text.append(f"{env.spec.base_url}", style=_DIM)
+            text.append("  live" if remote else "  local", style=_DANGER if remote else _DIM)
+            text.append("  default" if default else "", style=_ACCENT)
+            text.append("\n")
+        text.append("\nswitch the default in the Explorer (enter on an environment).", style=_DIM)
+        return text
+    if key in ("run", "diff", "report", "redaction"):
+        value = getattr(spec, key, None) if spec else None
+        if not value:
+            return Text(f"no {key} config in the project manifest", style=_DIM)
+        return _json(value)
+    if key == "appearance":
+        text = Text()
+        text.append("theme      ", style=_LABEL)
+        text.append("● comparo-ink", style=_SAME)
+        text.append("   the built-in dark ink palette\n", style=_DIM)
+        text.append("palette    ", style=_LABEL)
+        text.append("~12 meaning-named tokens (theme.py)\n", style=_TEXT)
+        text.append("\nColours come from a registered Textual Theme, so every\n", style=_DIM)
+        text.append("widget derives from the same tokens.", style=_DIM)
+        return text
+    if key == "plugins":
+        plugins = spec.plugins if spec else None
+        if not plugins:
+            return Text("no plugins — comparo is domain-agnostic by default.", style=_DIM)
+        return _json(plugins)
     text = Text()
-    text.append("PROJECT\n", style=_LABEL)
-    text.append("  name        ", style=_DIM)
-    text.append(f"{manifest.metadata.name if manifest else '—'}\n", style=_TEXT_HI)
-    text.append("  root        ", style=_DIM)
-    text.append(f"{project.root}\n", style=_TEXT)
-    text.append("  objects     ", style=_DIM)
-    text.append(f"{len(project.objects)}\n", style=_TEXT)
-
-    text.append("\nACTIVE ENVIRONMENT\n", style=_LABEL)
-    text.append("  default     ", style=_DIM)
-    text.append(f"{environment.metadata.name if environment else '—'}\n", style=_ACCENT)
-    if environment is not None:
-        text.append("  baseUrl     ", style=_DIM)
-        text.append(f"{environment.spec.base_url}\n", style=_TEXT)
-
-    text.append(f"\nENVIRONMENTS  {len(environments)}\n", style=_LABEL)
-    for env in environments:
-        remote = _is_remote(env)
-        text.append(f"  ● {env.metadata.name:<12}", style=_HEALTH_COLOR[Health.UNKNOWN])
-        text.append(f"{env.spec.base_url}", style=_DIM)
-        text.append("  live\n" if remote else "  local\n", style=_DANGER if remote else _DIM)
-
-    run_config = manifest.spec.run if manifest else None
-    if run_config:
-        text.append("\nRUN\n", style=_LABEL)
-        text.append(f"  {json.dumps(run_config, ensure_ascii=False)}\n", style=_TEXT)
-
-    text.append("\nENGINE\n", style=_LABEL)
-    text.append("  core stays free of httpx and the interfaces — enforced in CI.\n", style=_DIM)
+    text.append("comparo.core", style=_ACCENT)
+    text.append(" is the whole engine; the TUI, CLI, and GitHub Action are\n", style=_TEXT)
+    text.append("thin front-ends over it and never the reverse.\n\n", style=_TEXT)
+    text.append("• core imports no HTTP library (httpx lives only in an adapter)\n", style=_DIM)
+    text.append("• the layering is enforced by import-linter in CI\n", style=_DIM)
+    text.append("• secrets resolve lazily and are masked in every display\n", style=_DIM)
     return text
