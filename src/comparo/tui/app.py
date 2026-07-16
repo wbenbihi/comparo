@@ -10,6 +10,7 @@ this module.
 import asyncio
 import json
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import ClassVar
 from typing import Literal
@@ -618,6 +619,7 @@ class RunView(Vertical):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "back", "back"),
         Binding("backspace", "back", "back"),
+        Binding("z", "zoom", "maximize"),
         Binding("a", "abort", "abort"),
         Binding("s", "save", "save"),
     ]
@@ -638,6 +640,7 @@ class RunView(Vertical):
         self._prep_branches: dict[str, TreeNode[object]] = {}
         self._view = "requests"
         self._run_id: str | None = None
+        self._max = False
         self._focus: Request | None = None
         self._focus_cell: MatrixCell | None = None
         self._worker: Worker[None] | None = None
@@ -657,8 +660,8 @@ class RunView(Vertical):
                         yield DataTable(id="req-table", cursor_type="row")
                     with Vertical(id="col-variants", classes="panel"):
                         yield DataTable(id="var-table", cursor_type="row")
-                    with VerticalScroll(id="col-details", classes="panel"):
-                        yield Static(id="run-details")
+                    with Vertical(id="col-details", classes="panel"):
+                        yield Tree("detail", id="detail-tree")
 
     def on_mount(self) -> None:
         """Select everything and build the prepare checklist."""
@@ -900,6 +903,7 @@ class RunView(Vertical):
         if self.query_one("#run-mode", ContentSwitcher).current != "running":
             return
         if self._view == "details":
+            self._max = False
             self._view = "variants" if self._has_variants() else "requests"
             self._layout()
         elif self._view == "variants":
@@ -914,16 +918,29 @@ class RunView(Vertical):
         return self._focus is not None and len(self._plan_cells(self._focus)) > 1
 
     def _layout(self) -> None:
-        if self._view == "requests":
+        if self._view == "details" and self._max:
+            cls, focus = "max", "#detail-tree"
+        elif self._view == "requests":
             cls, focus = "only-r", "#req-table"
         elif self._view == "variants":
             cls, focus = "r-v", "#var-table"
-        elif self._has_variants():
-            cls, focus = "r-v-d", "#var-table"
+        elif self._view == "details":
+            cls, focus = (
+                ("r-v-d", "#detail-tree") if self._has_variants() else ("r-d", "#detail-tree")
+            )
         else:
-            cls, focus = "r-d", "#req-table"
+            cls, focus = "only-r", "#req-table"
         self.query_one("#run-columns").set_classes(cls)
         self.query_one(focus).focus()
+
+    def action_zoom(self) -> None:
+        """Maximize (or restore) the detail panel."""
+        if self.query_one("#run-mode", ContentSwitcher).current != "running":
+            return
+        if self._view != "details":
+            return
+        self._max = not self._max
+        self._layout()
 
     def _open_request(self, request: Request) -> None:
         cells = self._plan_cells(request)
@@ -978,17 +995,20 @@ class RunView(Vertical):
         wrap = self.query_one("#col-details")
         crumb = cell.key or request.metadata.name
         wrap.border_title = Text.from_markup(f"DETAIL [{_DIM}]·[/] {crumb}")
+        wrap.border_subtitle = "↑↓ navigate · z maximize"
         key = _run_key(request, cell)
-        self.query_one("#run-details", Static).update(
-            _report_full(
-                self.project,
-                _app_env(self),
-                request,
-                cell,
-                self._exec.get(key),
-                self._state.get(key, "pending"),
-                self._checks.get(key, []),
-            )
+        tree: Tree[object] = self.query_one("#detail-tree", Tree)
+        tree.show_root = False
+        tree.guide_depth = 2
+        _build_report_tree(
+            tree,
+            self.project,
+            _app_env(self),
+            request,
+            cell,
+            self._exec.get(key),
+            self._state.get(key, "pending"),
+            self._checks.get(key, []),
         )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -2331,17 +2351,8 @@ def _save_run(
     return destination
 
 
-def _checks_cell(checks: list[Check]) -> Text:
-    if not checks:
-        return Text("—", style=_DIM)
-    ok = sum(1 for check in checks if check.ok)
-    text = Text(f"{ok}/{len(checks)} ", style=_SAME if ok == len(checks) else _DRIFT)
-    for check in checks:
-        text.append("✓" if check.ok else "✗", style=_SAME if check.ok else _DRIFT)
-    return text
-
-
-def _report_full(
+def _build_report_tree(
+    tree: Tree[object],
     project: LoadedProject,
     environment: Environment | None,
     request: Request,
@@ -2349,75 +2360,150 @@ def _report_full(
     execution: Execution | None,
     state: str,
     checks: list[Check],
-) -> Group:
+) -> None:
+    tree.clear()
+    root = tree.root
     resolved = (
         Resolver(project, environment).resolve_request(request, cell)
         if environment is not None
         else None
     )
     method = resolved.method if resolved else request.spec.request.method
-    parts: list[RenderableType] = []
     head = Text()
     head.append(f" {method} ", style=f"bold {_INK} on {_METHOD.get(method, _ACCENT)}")
     head.append("  ")
     head.append(resolved.url if resolved else request.spec.request.endpoint, style=_TEXT_HI)
-    parts.append(head)
-    if request.metadata.description:
-        parts.append(Text(f"\n{request.metadata.description}", style=_DIM))
-    meta = Text()
+    root.add_leaf(head)
     if cell.key:
-        meta.append("\ncase       ", style=_LABEL)
-        meta.append(cell.key, style=_AXIS)
+        root.add_leaf(Text.assemble(("case    ", _LABEL), (cell.key, _AXIS)))
     glyph, colour = _RUN_GLYPH[state]
-    meta.append("\nstatus     ", style=_LABEL)
-    meta.append(f"{glyph} {state}", style=colour)
+    status = Text.assemble(("status  ", _LABEL), (f"{glyph} {state}", colour))
     if execution is not None and execution.response is not None:
         response = execution.response
-        meta.append(f"   {response.status} · {response.elapsed_ms:.0f}ms", style=_TEXT)
-    parts.append(meta)
+        status.append(f"   {response.status} · {response.elapsed_ms:.0f}ms", style=_TEXT)
+    root.add_leaf(status)
 
     if checks:
-        section = Text("\n\nCHECKS", style=_LABEL)
+        node = root.add(Text("CHECKS", style=f"bold {_LABEL}"), expand=True)
         for check in checks:
             mark, tint = ("✓", _SAME) if check.ok else ("✗", _DRIFT)
-            section.append(f"\n  {mark} {check.name:<10}", style=tint)
-            section.append(check.detail, style=_DIM)
-        parts.append(section)
-
-    if resolved is not None:
-        request_section = Text("\n\nREQUEST", style=_LABEL)
-        for key, value in resolved.headers:
-            masked = "••••" in str(value)
-            request_section.append(f"\n  {key:<20}", style=_DIM)
-            request_section.append(str(value), style=_DRIFT if masked else _TEXT)
-        parts.append(request_section)
-        if resolved.body is not None:
-            parts.append(Text("\n\nREQUEST BODY", style=_LABEL))
-            parts.append(_json(resolved.body))
+            node.add_leaf(Text.assemble((f"{mark} {check.name}  ", tint), (check.detail, _DIM)))
 
     if execution is not None and execution.response is not None:
-        parts.append(Text("\n\nRESPONSE HEADERS", style=_LABEL))
-        headers = Text()
-        for key, value in execution.response.headers[:12]:
-            headers.append(f"\n  {key:<22}", style=_DIM)
-            headers.append(str(value), style=_TEXT)
-        parts.append(headers)
-        parts.append(Text("\n\nRESPONSE BODY", style=_LABEL))
-        parts.append(_body_render(execution.response.body))
+        response = execution.response
+        node = root.add(Text("METRICS", style=f"bold {_LABEL}"), expand=True)
+        node.add_leaf(Text.assemble(("duration  ", _DIM), (f"{response.elapsed_ms:.0f} ms", _TEXT)))
+        node.add_leaf(Text.assemble(("size      ", _DIM), (f"{len(response.body)} bytes", _TEXT)))
+
+    if resolved is not None:
+        node = root.add(Text("REQUEST", style=f"bold {_LABEL}"), expand=False)
+        headers = node.add(Text("headers", style=_DIM), expand=False)
+        for key, value in resolved.headers:
+            masked = "••••" in str(value)
+            headers.add_leaf(
+                Text.assemble((f"{key}: ", _DIM), (str(value), _DRIFT if masked else _TEXT))
+            )
+        if resolved.body is not None:
+            _value_into(node.add(Text("body", style=_DIM), expand=False), resolved.body)
+
+    if execution is not None and execution.response is not None:
+        response = execution.response
+        node = root.add(Text("RESPONSE", style=f"bold {_LABEL}"), expand=True)
+        headers = node.add(Text("headers", style=_DIM), expand=False)
+        for key, value in response.headers[:24]:
+            headers.add_leaf(Text.assemble((f"{key}: ", _DIM), (str(value), _TEXT)))
+        body = node.add(Text("body", style=_DIM), expand=len(response.body) < 800)
+        _body_into(body, response.body, _content_type(response.headers))
     elif execution is not None and execution.error is not None:
-        error = Text("\n\n")
-        error.append(execution.error, style=_DRIFT)
-        parts.append(error)
+        root.add_leaf(Text(execution.error, style=_DRIFT))
     elif state == "pending":
-        parts.append(Text("\n\nnot run — press x to execute", style=_DIM))
-    return Group(*parts)
+        root.add_leaf(Text("not run — press x to execute", style=_DIM))
 
 
-def _body_render(body: bytes) -> RenderableType:
-    try:
-        return _json(json.loads(body))
-    except (ValueError, TypeError):
-        return Text(body.decode("utf-8", "replace")[:4000], style=_TEXT)
+def _value_into(node: TreeNode[object], value: object) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _value_child(node, str(key), item)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _value_child(node, f"[{index}]", item)
+    else:
+        node.add_leaf(Text.assemble(_scalar(value)))
+
+
+def _value_child(node: TreeNode[object], key: str, value: object) -> None:
+    if isinstance(value, dict):
+        label = Text.assemble((key, _AXIS), (f"  {{{len(value)}}}", _DIM))
+        _value_into(node.add(label, expand=False), value)
+    elif isinstance(value, list):
+        label = Text.assemble((key, _AXIS), (f"  [{len(value)}]", _DIM))
+        _value_into(node.add(label, expand=False), value)
+    else:
+        node.add_leaf(Text.assemble((key, _AXIS), (": ", _DIM), _scalar(value)))
+
+
+def _scalar(value: object) -> tuple[str, str]:
+    if value is None:
+        return "null", _AXIS
+    if isinstance(value, bool):
+        return str(value).lower(), _WARN
+    if isinstance(value, int | float):
+        return str(value), _WARN
+    return f'"{value}"', _SAME
+
+
+def _content_type(headers: list[tuple[str, str]]) -> str:
+    for key, value in headers:
+        if key.lower() == "content-type":
+            return value.lower()
+    return ""
+
+
+def _body_into(node: TreeNode[object], body: bytes, content_type: str) -> None:
+    text = body.decode("utf-8", "replace")
+    if "json" in content_type or text[:1] in "{[":
+        try:
+            _value_into(node, json.loads(body))
+            return
+        except (ValueError, TypeError):
+            pass
+    if "html" in content_type or text.lstrip()[:1] == "<":
+        _HtmlOutline(node).feed(text[:20000])
+        return
+    for line in text[:4000].splitlines()[:200]:
+        node.add_leaf(Text(line, style=_TEXT))
+
+
+class _HtmlOutline(HTMLParser):
+    """Streams parsed HTML into a collapsible tag tree under a node."""
+
+    def __init__(self, root: TreeNode[object]) -> None:
+        """Start the outline under *root*."""
+        super().__init__(convert_charrefs=True)
+        self._stack = [root]
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Open a collapsible node for the tag."""
+        label = Text.assemble((f"<{tag}>", _ACCENT))
+        rendered = " ".join(f"{key}={value}" for key, value in attrs if value)
+        if rendered:
+            label.append(f"  {rendered}", style=_DIM)
+        self._stack.append(self._stack[-1].add(label, expand=False))
+
+    def handle_endtag(self, tag: str) -> None:
+        """Close the current tag."""
+        if len(self._stack) > 1:
+            self._stack.pop()
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Add a self-closing tag as a leaf."""
+        self._stack[-1].add_leaf(Text(f"<{tag}/>", style=_ACCENT))
+
+    def handle_data(self, data: str) -> None:
+        """Add non-empty text content as a leaf."""
+        text = data.strip()
+        if text:
+            self._stack[-1].add_leaf(Text(text[:200], style=_TEXT))
 
 
 def _diff_cells(cells: list[CellDiff]) -> Text:

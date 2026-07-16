@@ -221,6 +221,36 @@ Screen {
     color: $text;
 }
 
+#detail-tree {
+    background: transparent;
+    padding: 1 1;
+    overflow-x: hidden;
+    scrollbar-size-vertical: 1;
+}
+
+#detail-tree > .tree--cursor {
+    background: #1e2b45;
+    color: $text;
+    text-style: bold;
+}
+
+#detail-tree > .tree--guides,
+#detail-tree > .tree--guides-hover,
+#detail-tree > .tree--guides-selected {
+    color: #1c2532;
+}
+
+/* Maximize the detail panel over the whole run area. */
+#run-columns.max #col-requests,
+#run-columns.max #col-variants {
+    display: none;
+}
+
+#run-columns.max #col-details {
+    display: block;
+    width: 1fr;
+}
+
 /* ── Diff ────────────────────────────────────────────────────────────────── */
 #drift-panel {
     width: 34;
