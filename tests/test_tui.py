@@ -102,6 +102,25 @@ def test_help_body_lists_screen_and_global_keys() -> None:
     assert "quit comparo" in body  # global
 
 
+def test_run_screen_selection_toggles_cells() -> None:
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("2")  # Run screen
+            await pilot.pause()
+            run = app.query_one(RunView)
+            full = len(run._plan())
+            assert full > 1  # every cell selected by default
+            tree = app.query_one("#run-tree", Tree)
+            run._toggle(tree.root.children[0])  # a request branch (its matrix cells)
+            assert len(run._plan()) < full  # toggling a request removes its cells
+
+    asyncio.run(go())
+
+
 def test_number_keys_switch_between_every_screen() -> None:
     loaded = load_project(SAMPLE)
 

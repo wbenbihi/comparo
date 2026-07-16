@@ -7,6 +7,7 @@ Diff screen carries the signature tri-state gutter. The core never depends on
 this module.
 """
 
+import asyncio
 import json
 from typing import ClassVar
 from typing import Literal
@@ -31,6 +32,7 @@ from textual.widgets import ContentSwitcher
 from textual.widgets import Input
 from textual.widgets import Label
 from textual.widgets import OptionList
+from textual.widgets import SelectionList
 from textual.widgets import Static
 from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
@@ -41,7 +43,7 @@ from comparo.core.curl import to_curl
 from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
 from comparo.core.execute import Execution
-from comparo.core.execute import execute_all
+from comparo.core.execute import execute_request
 from comparo.core.health import Health
 from comparo.core.health import HealthReport
 from comparo.core.health import check_health
@@ -125,9 +127,11 @@ _DIFF_KEYS = (
     ("q", "quit"),
 )
 _RUN_KEYS = (
+    ("↑↓", "move"),
+    ("enter", "toggle"),
+    ("m", "cases"),
     ("x", "run"),
     ("1-5", "tabs"),
-    ("?", "help"),
     ("q", "quit"),
 )
 _REPORT_KEYS = (
@@ -144,6 +148,12 @@ _ERROR_KEYS = (
     ("r", "re-check"),
     ("q", "quit"),
 )
+_RUN_GLYPH: dict[str, tuple[str, str]] = {
+    "pending": ("○", _DIM),
+    "running": ("◐", _WARN),
+    "ok": ("✓", _SAME),
+    "failed": ("✗", _DRIFT),
+}
 
 _KIND_COLOR: dict[type, str] = {
     Environment: _SAME,
@@ -210,8 +220,10 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
         ("g", "open the reference graph — what links to what"),
     ),
     "run": (
-        ("x", "execute every request against the current environment"),
-        ("↑ ↓", "scroll the results"),
+        ("↑ ↓", "move through the request cells"),
+        ("enter", "toggle a request or cell in / out of the run"),
+        ("m", "on a matrix request: pick which cases run"),
+        ("x", "execute the selected cells against the current environment"),
     ),
     "diff": (
         ("x", "replay every request against both environments and diff"),
@@ -572,8 +584,14 @@ class ExplorerView(Horizontal):
         self.query_one("#context-content", Static).update(content)
 
 
-class RunView(Vertical):
-    """Execute every request cell against the current environment."""
+class RunView(Horizontal):
+    """Pick request cells, run them live, and deep-dive each response.
+
+    The left tree lists every request (matrix requests expand to their cells);
+    ``enter`` toggles a node in or out of the run, ``m`` opens a case picker, and
+    ``x`` executes the selection. The right panel deep-dives the highlighted
+    cell — the outbound request before a run, the response after it.
+    """
 
     def __init__(self, project: LoadedProject) -> None:
         """Build the run view.
@@ -583,51 +601,237 @@ class RunView(Vertical):
         """
         super().__init__(id="run-view", classes="view")
         self.project = project
-        self._results: list[Execution] = []
+        self._selected: set[tuple[str, str]] = set()
+        self._state: dict[tuple[str, str], str] = {}
+        self._exec: dict[tuple[str, str], Execution] = {}
+        self._cell_nodes: dict[tuple[str, str], TreeNode[object]] = {}
+        self._req_nodes: dict[str, TreeNode[object]] = {}
+        self._running = False
 
     def compose(self) -> ComposeResult:
-        """Yield the results panel."""
-        with VerticalScroll(id="run-panel", classes="panel hero"):
-            yield Static(id="run-content")
+        """Yield the request tree and the deep-dive panel."""
+        with Vertical(id="run-list-panel", classes="panel"):
+            yield Tree("run", id="run-tree")
+        with VerticalScroll(id="run-detail-panel", classes="panel hero"):
+            yield Static(id="run-detail")
 
     def on_mount(self) -> None:
-        """Render the initial (pending) table."""
-        self.refresh_screen()
+        """Select everything by default and build the tree."""
+        for request in _requests(self.project):
+            for cell in expand(self.project, request):
+                self._selected.add(_run_key(request, cell))
+        tree: Tree[object] = self.query_one("#run-tree", Tree)
+        tree.show_root = False
+        tree.guide_depth = 2
+        self._build_tree()
+        self.query_one("#run-list-panel").border_title = "REQUESTS"
 
     def refresh_screen(self) -> None:
-        """Re-render for the current environment."""
+        """Re-title for the current environment and refresh the detail."""
         environment = _app_env(self)
-        panel = self.query_one("#run-panel")
+        panel = self.query_one("#run-detail-panel")
         panel.border_title = "RUN"
-        panel.border_subtitle = environment.metadata.name if environment else "no environment"
-        self.query_one("#run-content", Static).update(_run_render(self.project, self._results))
+        selected = len(self._selected)
+        panel.border_subtitle = (
+            f"{environment.metadata.name} · {selected} selected"
+            if environment
+            else "no environment"
+        )
+        tree = self.query_one("#run-tree", Tree)
+        tree.focus()
+        self._show_detail(tree.cursor_node)
 
     def execute(self) -> None:
-        """Run every request against the current environment."""
+        """Run the selected request cells against the current environment."""
         environment = _app_env(self)
         if environment is None:
             self.app.notify("Pick an environment in the Explorer first", severity="warning")
             return
-        self.query_one("#run-panel").border_subtitle = f"running · {environment.metadata.name}…"
-        self.run_worker(self._run(environment), exclusive=True, group="run")
+        plan = self._plan()
+        if not plan:
+            self.app.notify("Nothing selected to run", severity="warning")
+            return
+        self.run_worker(self._run(environment, plan), exclusive=True, group="run")
 
-    async def _run(self, environment: Environment) -> None:
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[object]) -> None:
+        """Deep-dive the highlighted node."""
+        self._show_detail(event.node)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected[object]) -> None:
+        """Toggle the node in or out of the run on Enter."""
+        if self._running:
+            return
+        self._toggle(event.node)
+
+    def open_case_picker(self) -> None:
+        """Open the matrix-case multi-select for the highlighted request."""
+        node = self.query_one("#run-tree", Tree).cursor_node
+        request = _node_request(node)
+        if request is None:
+            return
+        cells = expand(self.project, request)
+        if len(cells) <= 1:
+            self.app.notify("This request has no matrix cases", severity="information")
+            return
+        request_id = request.metadata.id or request.metadata.name
+        chosen = {key for (rid, key) in self._selected if rid == request_id}
+        self.app.push_screen(
+            MatrixSelectModal(request, cells, chosen),
+            lambda keys: self._apply_cases(request, cells, keys),
+        )
+
+    def _apply_cases(
+        self, request: Request, cells: list[MatrixCell], keys: set[str] | None
+    ) -> None:
+        if keys is None:
+            return
+        request_id = request.metadata.id or request.metadata.name
+        for cell in cells:
+            key = (request_id, cell.key)
+            if cell.key in keys:
+                self._selected.add(key)
+            else:
+                self._selected.discard(key)
+        self._relabel(request)
+        self.refresh_screen()
+
+    async def _run(self, environment: Environment, plan: list[tuple[Request, MatrixCell]]) -> None:
         from comparo.adapters.httpx_client import HttpxClient
 
+        self._running = True
+        for request, cell in plan:
+            self._state[_run_key(request, cell)] = "running"
+            self._relabel(request)
         client = HttpxClient()
+        limit = asyncio.Semaphore(4)
+
+        async def one(request: Request, cell: MatrixCell) -> None:
+            async with limit:
+                execution = await execute_request(self.project, environment, request, client, cell)
+            key = _run_key(request, cell)
+            self._exec[key] = execution
+            self._state[key] = "ok" if execution.ok else "failed"
+            self._relabel(request)
+            if _node_key(self.query_one("#run-tree", Tree).cursor_node) == key:
+                self._show_detail(self.query_one("#run-tree", Tree).cursor_node)
+
         try:
-            self._results = await execute_all(
-                self.project, environment, _requests(self.project), client
-            )
+            await asyncio.gather(*(one(request, cell) for request, cell in plan))
         finally:
             await client.aclose()
-        self.refresh_screen()
-        ok = sum(1 for execution in self._results if execution.ok)
-        total = len(self._results)
+            self._running = False
+        ok = sum(1 for request, cell in plan if self._state.get(_run_key(request, cell)) == "ok")
         self.app.notify(
-            f"{ok}/{total} requests returned a response",
+            f"{ok}/{len(plan)} cells returned a response",
             title="Run complete",
-            severity="information" if ok == total else "warning",
+            severity="information" if ok == len(plan) else "warning",
+        )
+
+    def _plan(self) -> list[tuple[Request, MatrixCell]]:
+        plan: list[tuple[Request, MatrixCell]] = []
+        for request in _requests(self.project):
+            for cell in expand(self.project, request):
+                if _run_key(request, cell) in self._selected:
+                    plan.append((request, cell))
+        return plan
+
+    def _build_tree(self) -> None:
+        tree: Tree[object] = self.query_one("#run-tree", Tree)
+        tree.clear()
+        self._cell_nodes = {}
+        self._req_nodes = {}
+        for request in _requests(self.project):
+            cells = expand(self.project, request)
+            if len(cells) == 1:
+                node = tree.root.add_leaf(
+                    self._cell_label(request, cells[0]), data=(request, cells[0])
+                )
+                self._cell_nodes[_run_key(request, cells[0])] = node
+            else:
+                branch = tree.root.add(
+                    self._request_label(request, cells), data=(request, None), expand=False
+                )
+                self._req_nodes[request.metadata.id or request.metadata.name] = branch
+                for cell in cells:
+                    leaf = branch.add_leaf(self._cell_label(request, cell), data=(request, cell))
+                    self._cell_nodes[_run_key(request, cell)] = leaf
+
+    def _toggle(self, node: TreeNode[object]) -> None:
+        request = _node_request(node)
+        if request is None:
+            return
+        cells = expand(self.project, request)
+        request_id = request.metadata.id or request.metadata.name
+        if node.allow_expand:  # a request branch — toggle all its cells together
+            keys = {_run_key(request, cell) for cell in cells}
+            if keys <= self._selected:
+                self._selected -= keys
+            else:
+                self._selected |= keys
+        else:  # a single cell
+            cell = _node_cell(node)
+            key = (request_id, cell.key if cell else "")
+            self._selected ^= {key}
+        self._relabel(request)
+        self.refresh_screen()
+
+    def _relabel(self, request: Request) -> None:
+        cells = expand(self.project, request)
+        request_id = request.metadata.id or request.metadata.name
+        for cell in cells:
+            node = self._cell_nodes.get(_run_key(request, cell))
+            if node is not None:
+                node.set_label(self._cell_label(request, cell))
+        branch = self._req_nodes.get(request_id)
+        if branch is not None:
+            branch.set_label(self._request_label(request, cells))
+
+    def _cell_label(self, request: Request, cell: MatrixCell) -> Text:
+        key = _run_key(request, cell)
+        row = Text()
+        row.append(
+            "[✓] " if key in self._selected else "[ ] ",
+            style=_ACCENT if key in self._selected else _DIM,
+        )
+        row.append(cell.key or request.metadata.name, style=_TEXT)
+        glyph, colour = _RUN_GLYPH[self._state.get(key, "pending")]
+        row.append(f"  {glyph}", style=colour)
+        execution = self._exec.get(key)
+        if execution is not None and execution.response is not None:
+            row.append(
+                f" {execution.response.status} · {execution.response.elapsed_ms:.0f}ms", style=_DIM
+            )
+        return row
+
+    def _request_label(self, request: Request, cells: list[MatrixCell]) -> Text:
+        keys = {_run_key(request, cell) for cell in cells}
+        chosen = len(keys & self._selected)
+        box = "[✓]" if chosen == len(keys) else "[~]" if chosen else "[ ]"
+        row = Text()
+        row.append(f"{box} ", style=_ACCENT if chosen else _DIM)
+        row.append(request.metadata.name, style=f"bold {_TEXT_HI}")
+        row.append(f"  ×{len(cells)}", style=_AXIS)
+        return row
+
+    def _show_detail(self, node: TreeNode[object] | None) -> None:
+        detail = self.query_one("#run-detail", Static)
+        request = _node_request(node)
+        if request is None:
+            detail.update(Text("select a request", style=_DIM))
+            return
+        cells = expand(self.project, request)
+        cell = _node_cell(node) or cells[0]
+        environment = _app_env(self)
+        key = _run_key(request, cell)
+        detail.update(
+            _run_detail(
+                self.project,
+                environment,
+                request,
+                cell,
+                self._exec.get(key),
+                self._state.get(key, "pending"),
+            )
         )
 
 
@@ -979,6 +1183,58 @@ class CurlModal(ModalScreen[None]):
         return to_curl(resolver.resolve_request(self._request, self._cell))
 
 
+class MatrixSelectModal(ModalScreen["set[str] | None"]):
+    """A multi-select overlay for choosing which matrix cases run."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "apply", "apply"),
+        Binding("a", "all", "all"),
+        Binding("n", "none", "none"),
+    ]
+
+    def __init__(self, request: Request, cells: list[MatrixCell], selected: set[str]) -> None:
+        """Build the case picker.
+
+        Args:
+            request: The request whose cases are picked.
+            cells: Every matrix cell of the request.
+            selected: The currently-selected cell keys.
+        """
+        super().__init__()
+        self._request = request
+        self._cells = cells
+        self._selected = selected
+
+    def compose(self) -> ComposeResult:
+        """Yield the selection list of cases."""
+        with Vertical(id="mselect-dialog", classes="modal"):
+            yield SelectionList[str](
+                *(
+                    (cell.key or "base", cell.key, cell.key in self._selected)
+                    for cell in self._cells
+                )
+            )
+
+    def on_mount(self) -> None:
+        """Title the dialog and focus the list."""
+        dialog = self.query_one("#mselect-dialog")
+        dialog.border_title = f"CASES · {self._request.metadata.name}"
+        dialog.border_subtitle = "space toggle · a all · n none · esc apply"
+        self.query_one(SelectionList).focus()
+
+    def action_apply(self) -> None:
+        """Apply the current selection and close."""
+        self.dismiss(set(self.query_one(SelectionList).selected))
+
+    def action_all(self) -> None:
+        """Select every case."""
+        self.query_one(SelectionList).select_all()
+
+    def action_none(self) -> None:
+        """Deselect every case."""
+        self.query_one(SelectionList).deselect_all()
+
+
 class ErrorView(VerticalScroll):
     """The replacement screen shown when a project will not load.
 
@@ -1039,6 +1295,7 @@ class ComparoApp(App[None]):
         Binding("slash", "filter", "Filter"),
         Binding("g", "graph", "Graph"),
         Binding("h", "health", "Health"),
+        Binding("m", "matrix", "Cases"),
         Binding("p", "curl", "curl"),
         Binding("r", "raw_or_reload", "Raw / reload"),
         Binding("x", "execute", "Run"),
@@ -1118,6 +1375,12 @@ class ComparoApp(App[None]):
             self.query_one(RunView).execute()
         elif active == "diff":
             self.query_one(DiffView).execute()
+
+    def action_matrix(self) -> None:
+        """Open the matrix-case picker on the Run screen."""
+        if self.error is not None or self.query_one(NavBar).active != "run":
+            return
+        self.query_one(RunView).open_case_picker()
 
     def action_filter(self) -> None:
         """Open the filter overlay on the Explorer."""
@@ -1697,47 +1960,84 @@ def _table() -> Table:
     return Table(box=None, expand=True, pad_edge=False, show_edge=False)
 
 
-def _run_render(project: LoadedProject, results: list[Execution]) -> Group:
-    table = _table()
-    table.add_column("", width=2)
-    table.add_column("REQUEST", style=_TEXT_HI, no_wrap=True)
-    table.add_column("CASE", style=_AXIS)
-    table.add_column("STATUS", justify="right")
-    table.add_column("LATENCY", justify="right")
-    if not results:
-        for request in _requests(project):
-            for cell in expand(project, request):
-                table.add_row(
-                    Text("○", style=_DIM),
-                    Text(request.metadata.name, style=_DIM),
-                    Text(cell.key or "—", style=_DIM),
-                    Text("—", style=_DIM),
-                    Text("not run", style=_DIM),
-                )
-        return Group(table, Text("\npress x to run every request", style=_DIM))
-    for execution in results:
-        response = execution.response
-        if response is not None:
-            glyph, colour = Text("✓", style=_SAME), _SAME if response.status < 400 else _WARN
-            status = Text(str(response.status), style=colour)
-            trailing = Text(f"{response.elapsed_ms:.0f}ms", style=_TEXT)
-        else:
-            glyph = Text("✗", style=_DRIFT)
-            status = Text("—", style=_DRIFT)
-            trailing = Text(str(execution.error or "error"), style=_DRIFT)
-        table.add_row(
-            glyph,
-            Text(execution.request.metadata.name, style=_TEXT_HI),
-            Text(execution.cell_key or "—", style=_AXIS),
-            status,
-            trailing,
-        )
-    ok = sum(1 for execution in results if execution.ok)
-    summary = Text(
-        f"\n{ok} ok · {len(results) - ok} failed",
-        style=f"bold {_SAME if ok == len(results) else _WARN}",
+def _run_key(request: Request, cell: MatrixCell) -> tuple[str, str]:
+    return (request.metadata.id or request.metadata.name, cell.key)
+
+
+def _node_request(node: TreeNode[object] | None) -> Request | None:
+    data = getattr(node, "data", None)
+    if isinstance(data, tuple) and data and isinstance(data[0], Request):
+        return data[0]
+    return None
+
+
+def _node_cell(node: TreeNode[object] | None) -> MatrixCell | None:
+    data = getattr(node, "data", None)
+    if isinstance(data, tuple) and len(data) == 2 and isinstance(data[1], MatrixCell):
+        return data[1]
+    return None
+
+
+def _node_key(node: TreeNode[object] | None) -> tuple[str, str] | None:
+    request, cell = _node_request(node), _node_cell(node)
+    return _run_key(request, cell) if request is not None and cell is not None else None
+
+
+def _run_detail(
+    project: LoadedProject,
+    environment: Environment | None,
+    request: Request,
+    cell: MatrixCell,
+    execution: Execution | None,
+    state: str,
+) -> Group:
+    resolved = (
+        Resolver(project, environment).resolve_request(request, cell)
+        if environment is not None
+        else None
     )
-    return Group(table, summary)
+    method = resolved.method if resolved else request.spec.request.method
+    parts: list[RenderableType] = []
+    head = Text()
+    head.append(f" {method} ", style=f"bold {_INK} on {_METHOD.get(method, _ACCENT)}")
+    head.append("  ")
+    head.append(resolved.url if resolved else request.spec.request.endpoint, style=_TEXT_HI)
+    parts.append(head)
+    if cell.key:
+        case = Text("\ncase       ", style=_LABEL)
+        case.append(cell.key, style=_AXIS)
+        parts.append(case)
+    glyph, colour = _RUN_GLYPH[state]
+    status = Text("\nstatus     ", style=_LABEL)
+    status.append(f"{glyph} {state}", style=colour)
+    if execution is not None and execution.response is not None:
+        response = execution.response
+        status.append(f"   {response.status} · {response.elapsed_ms:.0f}ms", style=_TEXT)
+    parts.append(status)
+    if execution is not None and execution.response is not None:
+        parts.append(Text("\n\nRESPONSE HEADERS", style=_LABEL))
+        headers = Text()
+        for key, value in execution.response.headers[:10]:
+            headers.append(f"\n  {key:<22}", style=_DIM)
+            headers.append(str(value), style=_TEXT)
+        parts.append(headers)
+        parts.append(Text("\n\nRESPONSE BODY", style=_LABEL))
+        parts.append(_body_render(execution.response.body))
+    elif execution is not None and execution.error is not None:
+        error = Text("\n\n")
+        error.append(execution.error, style=_DRIFT)
+        parts.append(error)
+    elif resolved is not None and resolved.body is not None:
+        parts.append(Text("\n\nWILL SEND", style=_LABEL))
+        parts.append(_json(resolved.body))
+    return Group(*parts)
+
+
+def _body_render(body: bytes) -> RenderableType:
+    try:
+        return _json(json.loads(body))
+    except (ValueError, TypeError):
+        return Text(body.decode("utf-8", "replace")[:4000], style=_TEXT)
 
 
 def _diff_cells(cells: list[CellDiff]) -> Text:
