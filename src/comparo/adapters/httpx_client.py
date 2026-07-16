@@ -5,7 +5,10 @@ resolved request onto an httpx call and a materialized response back, translatin
 httpx transport errors into the core's :class:`HttpError`.
 """
 
+import json
 import time
+from collections.abc import Mapping
+from typing import cast
 
 import httpx
 
@@ -42,6 +45,10 @@ class HttpxClient:
         headers = [(key, str(value)) for key, value in request.headers]
         params = {key: str(value) for key, value in request.query.items()}
         httpx_timeout = httpx.Timeout(timeout.read, connect=timeout.connect)
+        json_body, data_body, content_body = _encode_body(request)
+        auth, auth_header = _auth(request.auth)
+        if auth_header is not None:
+            headers.append(auth_header)
         start = time.perf_counter()
         try:
             response = await self._client.request(
@@ -49,7 +56,10 @@ class HttpxClient:
                 request.url,
                 headers=headers,
                 params=params,
-                json=request.body,
+                json=json_body,
+                data=data_body,
+                content=content_body,
+                auth=auth,
                 timeout=httpx_timeout,
             )
         except httpx.HTTPError as error:
@@ -66,3 +76,31 @@ class HttpxClient:
     async def aclose(self) -> None:
         """Close the underlying httpx client."""
         await self._client.aclose()
+
+
+def _encode_body(
+    request: ResolvedRequest,
+) -> tuple[object, Mapping[str, object] | None, str | bytes | None]:
+    """Split a resolved body into httpx's ``json`` / ``data`` / ``content`` slots."""
+    body = request.body
+    if body is None:
+        return None, None, None
+    if request.body_type == "form":
+        return None, cast("Mapping[str, object]", body), None
+    if request.body_type == "raw":
+        content = body if isinstance(body, str | bytes) else json.dumps(body)
+        return None, None, content
+    return body, None, None
+
+
+def _auth(auth: object) -> tuple[httpx.Auth | None, tuple[str, str] | None]:
+    """Turn a resolved auth block into an httpx auth or an Authorization header."""
+    if not isinstance(auth, dict):
+        return None, None
+    basic = auth.get("basic")
+    if isinstance(basic, dict):
+        return httpx.BasicAuth(str(basic.get("username", "")), str(basic.get("password", ""))), None
+    bearer = auth.get("bearer")
+    if bearer is not None:
+        return None, ("Authorization", f"Bearer {bearer}")
+    return None, None

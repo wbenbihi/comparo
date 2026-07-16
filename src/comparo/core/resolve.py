@@ -125,6 +125,8 @@ class ResolvedRequest:
     query: dict[str, object]
     body: object
     trail: list[Trail]
+    body_type: str = "json"
+    auth: object = None
 
 
 class Resolver:
@@ -196,7 +198,18 @@ class Resolver:
             for key, value in (outbound.query or {}).items()
         }
         body = None if outbound.body is None else self._value(outbound.body, "body", trail)
-        resolved = ResolvedRequest(outbound.method, url, headers, query, body, trail)
+        auth_spec = outbound.auth if outbound.auth is not None else self.environment.spec.auth
+        auth = None if auth_spec is None else self._value(auth_spec, "auth", trail)
+        resolved = ResolvedRequest(
+            outbound.method,
+            url,
+            headers,
+            query,
+            body,
+            trail,
+            body_type=outbound.body_type or "json",
+            auth=auth,
+        )
         if cell is not None:
             for injection in cell.injections:
                 self._inject(resolved, injection, trail)

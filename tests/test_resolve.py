@@ -6,9 +6,48 @@ from comparo.core.loader import load_project
 from comparo.core.models import Request
 from comparo.core.provenance import Origin
 from comparo.core.resolve import Resolver
+from comparo.core.resolve import Sink
 from comparo.core.resolve import select_environment
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
+
+
+def test_resolve_carries_body_type_and_masks_auth(tmp_path: Path) -> None:
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata:\n  name: E\n  id: environment.e\n"
+        "spec:\n  baseUrl: https://api.test\n"
+        "  secrets:\n    API_PASS:\n      $literal: s3cret\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata:\n  name: Login\n  id: request.login\n"
+        "spec:\n  request:\n    method: POST\n    endpoint: /login\n"
+        "    bodyType: form\n    body:\n      user: bob\n"
+        "    auth:\n      basic:\n        username: bob\n"
+        "        password:\n          $secret: API_PASS\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path)
+    env = select_environment(loaded, "environment.e")
+    request = loaded.objects["request.login"]
+    assert isinstance(request, Request)
+
+    display = Resolver(loaded, env).resolve_request(request)
+    assert display.body_type == "form"
+    display_auth = display.auth
+    assert isinstance(display_auth, dict)
+    basic = display_auth["basic"]
+    assert isinstance(basic, dict)
+    assert basic["password"] == "••••••"  # masked in the display sink
+
+    execute = Resolver(loaded, env, Sink.EXECUTE).resolve_request(request)
+    execute_auth = execute.auth
+    assert isinstance(execute_auth, dict)
+    execute_basic = execute_auth["basic"]
+    assert isinstance(execute_basic, dict)
+    assert execute_basic["password"] == "s3cret"  # real value for execution
 
 
 def test_resolve_masks_secret_header() -> None:

@@ -63,6 +63,8 @@ class EnvironmentSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True
     variables: dict[str, str] | None = None
     headers: list[Header] | None = None
     health: list[HealthCheck] | None = None
+    #: A default Basic/Bearer auth applied to every request unless it sets its own.
+    auth: Any = None
 
 
 class HttpRequest(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
@@ -73,6 +75,10 @@ class HttpRequest(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     query: dict[str, Any] | None = None
     headers: Any = None
     body: Any = None
+    #: How the body is encoded: ``json`` (default), ``form``, or ``raw``.
+    body_type: str | None = None
+    #: Basic/Bearer auth for this request; overrides the environment default.
+    auth: Any = None
 
 
 class Response(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
