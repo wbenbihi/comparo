@@ -138,6 +138,62 @@ class ProjectSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     plugins: Any = None
 
 
+class AssertionRule(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """One response assertion: a target, an operator, and an expected value."""
+
+    target: str
+    op: str
+    value: Any = None
+    severity: Literal["error", "warn"] = "error"
+
+
+class AssertionProfileSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """The body of an ``AssertionProfile`` — composable response assertions."""
+
+    rules: list[AssertionRule] | None = None
+    include: list[Any] | None = None
+
+
+class MatrixScope(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """Per-execution matrix customization: which cases to run, add, or drop."""
+
+    include: list[dict[str, Any]] | None = None
+    exclude: list[dict[str, Any]] | None = None
+    override: list[dict[str, Any]] | None = None
+
+
+class ExecutionSelect(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """Which requests an execution runs — by tag and/or explicit id."""
+
+    tags: list[str] | None = None
+    requests: list[str] | None = None
+
+
+class ExecutionEnvironments(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """The environments to run against; a ``candidate`` enables the diff."""
+
+    baseline: str | None = None
+    candidate: str | None = None
+
+
+class ExecutionCheck(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """Which checks an execution computes."""
+
+    assertions: bool = True
+    diff: bool = True
+
+
+class ExecutionProfileSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """The body of an ``ExecutionProfile`` — what to run, where, and which checks."""
+
+    select: ExecutionSelect | None = None
+    matrix: dict[str, MatrixScope] | None = None
+    environments: ExecutionEnvironments | None = None
+    check: ExecutionCheck | None = None
+    profiles: Any = None
+    report: Any = None
+
+
 class Environment(
     msgspec.Struct, tag_field="kind", tag="Environment", rename="camel", forbid_unknown_fields=True
 ):
@@ -198,6 +254,34 @@ class DiffProfile(
     spec: DiffProfileSpec
 
 
+class AssertionProfile(
+    msgspec.Struct,
+    tag_field="kind",
+    tag="AssertionProfile",
+    rename="camel",
+    forbid_unknown_fields=True,
+):
+    """A composable set of response assertions, attached to a request or execution."""
+
+    api_version: Literal["comparo/v1"]
+    metadata: Meta
+    spec: AssertionProfileSpec
+
+
+class ExecutionProfile(
+    msgspec.Struct,
+    tag_field="kind",
+    tag="ExecutionProfile",
+    rename="camel",
+    forbid_unknown_fields=True,
+):
+    """A named run plan: what to run, which environments, and which checks."""
+
+    api_version: Literal["comparo/v1"]
+    metadata: Meta
+    spec: ExecutionProfileSpec
+
+
 class Project(
     msgspec.Struct, tag_field="kind", tag="Project", rename="camel", forbid_unknown_fields=True
 ):
@@ -209,7 +293,26 @@ class Project(
 
 
 #: The tagged union of every object kind, dispatched on the ``kind`` field.
-Object = Environment | Request | Schema | Instance | Matrix | DiffProfile | Project
+Object = (
+    Environment
+    | Request
+    | Schema
+    | Instance
+    | Matrix
+    | DiffProfile
+    | AssertionProfile
+    | ExecutionProfile
+    | Project
+)
 
 #: Kinds that must declare ``metadata.id`` (every kind except the root manifest).
-REFERENCEABLE_KINDS = ("Environment", "Request", "Schema", "Instance", "Matrix", "DiffProfile")
+REFERENCEABLE_KINDS = (
+    "Environment",
+    "Request",
+    "Schema",
+    "Instance",
+    "Matrix",
+    "DiffProfile",
+    "AssertionProfile",
+    "ExecutionProfile",
+)

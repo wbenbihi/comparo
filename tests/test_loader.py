@@ -6,6 +6,7 @@ import pytest
 
 from comparo.core.diagnostics import LoadError
 from comparo.core.loader import load_project
+from comparo.core.models import DiffProfile
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
 
@@ -23,6 +24,34 @@ def test_sample_project_loads() -> None:
     assert "request.echo-anything" in loaded.objects
 
 
+def test_assertion_and_execution_profiles_load(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "contract.yaml",
+        "apiVersion: comparo/v1\nkind: AssertionProfile\n"
+        "metadata:\n  name: Contract\n  id: assert.contract\n"
+        "spec:\n  rules:\n"
+        "    - target: status\n      op: equals\n      value: 200\n"
+        "    - target: latency\n      op: lte\n      value: 800ms\n      severity: warn\n",
+    )
+    _write(
+        tmp_path,
+        "gate.yaml",
+        "apiVersion: comparo/v1\nkind: ExecutionProfile\n"
+        "metadata:\n  name: Gate\n  id: exec.gate\n"
+        "spec:\n"
+        "  environments:\n    baseline: environment.stable\n    candidate: environment.canary\n"
+        "  check:\n    assertions: true\n    diff: true\n",
+    )
+    loaded = load_project(tmp_path)
+    contract = loaded.objects["assert.contract"]
+    gate = loaded.objects["exec.gate"]
+    assert contract.spec.rules[0].op == "equals"  # type: ignore[union-attr, index]
+    assert contract.spec.rules[1].severity == "warn"  # type: ignore[union-attr, index]
+    assert gate.spec.environments.candidate == "environment.canary"  # type: ignore[union-attr]
+    assert gate.spec.check.assertions is True  # type: ignore[union-attr]
+
+
 def test_fractional_tolerance_loads(tmp_path: Path) -> None:
     # Regression: the round-trip parser wraps floats as ScalarFloat, which strict
     # msgspec convert rejected — so a fractional tolerance failed to load.
@@ -38,7 +67,9 @@ def test_fractional_tolerance_loads(tmp_path: Path) -> None:
         "    - path: $.price\n      mode: tolerance\n      tolerance: 0.01\n",
     )
     loaded = load_project(tmp_path)
-    rules = loaded.objects["diff.tol"].spec.rules  # type: ignore[union-attr]
+    profile = loaded.objects["diff.tol"]
+    assert isinstance(profile, DiffProfile)
+    rules = profile.spec.rules
     assert rules is not None
     assert rules[0].tolerance == 0.01
     assert type(rules[0].tolerance) is float
