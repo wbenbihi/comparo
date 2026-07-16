@@ -155,8 +155,8 @@ Screen {
     border-subtitle-align: right;
 }
 
-/* ── modals (filter, graph) ──────────────────────────────────────────────── */
-FilterModal, GraphModal {
+/* ── modals (filter, graph, help) ────────────────────────────────────────── */
+FilterModal, GraphModal, HelpModal {
     align: center middle;
     background: $background 65%;
 }
@@ -195,6 +195,13 @@ FilterModal, GraphModal {
     width: 88;
     max-width: 92%;
     height: 80%;
+}
+
+#help-dialog {
+    width: 72;
+    max-width: 94%;
+    height: auto;
+    max-height: 84%;
 }
 
 /* ── status bar ──────────────────────────────────────────────────────────── */

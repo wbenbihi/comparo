@@ -9,6 +9,7 @@ this module.
 
 import json
 from typing import ClassVar
+from typing import cast
 
 import msgspec
 from rich.console import Group
@@ -33,6 +34,9 @@ from textual.widgets.tree import TreeNode
 
 from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
+from comparo.core.health import Health
+from comparo.core.health import HealthReport
+from comparo.core.health import check_health
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
 from comparo.core.models import DiffProfile
@@ -117,6 +121,68 @@ _KIND_COLOR: dict[type, str] = {
     Instance: _SAME,
     DiffProfile: _WARN,
 }
+_HEALTH_COLOR: dict[Health, str] = {
+    Health.UNKNOWN: _DIM,
+    Health.PASS: _SAME,
+    Health.PARTIAL: _WARN,
+    Health.FAIL: _DRIFT,
+}
+_HEALTH_LABEL: dict[Health, str] = {
+    Health.UNKNOWN: "health unknown · press h",
+    Health.PASS: "healthy",
+    Health.PARTIAL: "partially healthy",
+    Health.FAIL: "unreachable",
+}
+
+_ENV_KEYS = (
+    ("↑↓", "move"),
+    ("h", "health"),
+    ("enter", "default"),
+    ("/", "filter"),
+    ("g", "graph"),
+    ("q", "quit"),
+)
+_RESOLVE_KEYS = (
+    ("↑↓", "move"),
+    ("r", "raw/resolved"),
+    ("tab", "panel"),
+    ("/", "filter"),
+    ("g", "graph"),
+    ("q", "quit"),
+)
+
+_HELP_TITLE: dict[str, str] = {
+    "explorer": "EXPLORER — understand how the project is configured",
+    "diff": "DIFF — compare responses across environments",
+    "error": "PROJECT WILL NOT LOAD",
+    "run": "RUN",
+    "report": "REPORT",
+    "settings": "SETTINGS",
+}
+_HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
+    "explorer": (
+        ("↑ ↓", "move through the project tree"),
+        ("space", "fold / unfold a section"),
+        ("tab", "switch the active panel — tree, detail, provenance"),
+        ("enter", "on an environment: make it the default for resolution"),
+        ("h", "on an environment: run its health checks live"),
+        ("r", "on a request or instance: toggle raw ⇄ resolved"),
+        ("/", "filter the tree by name, kind, or tag"),
+        ("g", "open the reference graph — what links to what"),
+    ),
+    "diff": (
+        ("n / p", "jump to the next / previous drift"),
+        ("u", "toggle the unified view"),
+        ("i / b / x", "triage a field — ignore, baseline, exclude"),
+    ),
+    "error": (("r", "re-check the project after editing the files"),),
+}
+_HELP_GLOBAL = (
+    ("1", "go to the Explorer"),
+    ("3", "go to the Diff"),
+    ("?", "show this help"),
+    ("q", "quit comparo"),
+)
 
 
 class NavBar(Horizontal):
@@ -214,6 +280,12 @@ class ExplorerView(Horizontal):
         self.project = project
         self.environment = environment
         self.filter_query = ""
+        self.raw = False
+        self.health: dict[str, Health] = {}
+        self.health_reports: dict[str, HealthReport] = {}
+        self._current: object = None
+        self._env_nodes: dict[str, TreeNode[object]] = {}
+        self._default_env_id = environment.metadata.id if environment is not None else None
 
     def compose(self) -> ComposeResult:
         """Yield the tree and the detail/context panels."""
@@ -248,9 +320,54 @@ class ExplorerView(Horizontal):
         self.filter_query = query
         return self._populate(query)
 
+    def toggle_raw(self) -> None:
+        """Flip the selected request/instance between resolved and raw source."""
+        self.raw = not self.raw
+        self._reshow()
+
+    def refresh_footer(self) -> None:
+        """Re-render the footer for the current selection."""
+        self._update_footer(self._selected())
+
+    def run_health_on_selected(self) -> None:
+        """Probe the selected environment's health checks in the background."""
+        environment = self._selected()
+        if not isinstance(environment, Environment):
+            return
+        self.query_one("#detail-panel").border_subtitle = "running health checks…"
+        self.run_worker(self._run_health(environment), exclusive=True, group="health")
+
+    def set_default(self, environment: Environment) -> None:
+        """Make *environment* the default all requests resolve against."""
+        self.environment = environment
+        self._default_env_id = environment.metadata.id
+        for env_id, node in self._env_nodes.items():
+            obj = node.data
+            if isinstance(obj, Environment):
+                node.set_label(self._env_label(obj, env_id))
+        self._reshow()
+
+    async def _run_health(self, environment: Environment) -> None:
+        from comparo.adapters.httpx_client import HttpxClient
+
+        client = HttpxClient()
+        try:
+            report = await check_health(self.project, environment, client)
+        finally:
+            await client.aclose()
+        env_id = environment.metadata.id or ""
+        self.health[env_id] = report.status
+        self.health_reports[env_id] = report
+        node = self._env_nodes.get(env_id)
+        if node is not None:
+            node.set_label(self._env_label(environment, env_id))
+        if self._selected() is environment:
+            self._show(environment)
+
     def _populate(self, query: str, *, prefer_request: bool = False) -> int:
         tree: Tree[object] = self.query_one("#tree", Tree)
         tree.clear()
+        self._env_nodes = {}
         needle = query.strip().lower()
         first_leaf: TreeNode[object] | None = None
         first_request: TreeNode[object] | None = None
@@ -265,7 +382,12 @@ class ExplorerView(Horizontal):
                 continue
             branch = tree.root.add(_branch(label, len(objects)), expand=True)
             for obj in objects:
-                node = branch.add_leaf(_leaf(obj), data=obj)
+                if isinstance(obj, Environment):
+                    env_id = obj.metadata.id or ""
+                    node = branch.add_leaf(self._env_label(obj, env_id), data=obj)
+                    self._env_nodes[env_id] = node
+                else:
+                    node = branch.add_leaf(_leaf(obj), data=obj)
                 total += 1
                 if first_leaf is None:
                     first_leaf = node
@@ -277,28 +399,89 @@ class ExplorerView(Horizontal):
             self._show(target.data)
         return total
 
+    def _env_label(self, environment: Environment, env_id: str) -> Text:
+        return _leaf(
+            environment,
+            health=self.health.get(env_id, Health.UNKNOWN),
+            default=env_id == self._default_env_id,
+        )
+
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[object]) -> None:
         """Show the highlighted object."""
         self._show(event.node.data)
 
+    def on_tree_node_selected(self, event: Tree.NodeSelected[object]) -> None:
+        """Make an environment the default when it is selected with Enter."""
+        if isinstance(event.node.data, Environment):
+            cast("ComparoApp", self.app).set_default_environment(event.node.data)
+
+    def _selected(self) -> object:
+        return self._current
+
+    def _reshow(self) -> None:
+        self._show(self._current)
+
     def _show(self, obj: object) -> None:
         if obj is None:
             return
+        self._current = obj
         detail = self.query_one("#detail-panel")
         context = self.query_one("#context-panel")
         if isinstance(obj, Request) and self.environment is not None:
             resolved = Resolver(self.project, self.environment).resolve_request(obj)
             detail.border_title = _title(obj, resolved.method)
-            detail.border_subtitle = f"resolved for {self.environment.metadata.name}"
-            self._set_detail(_request_detail(self.project, obj, resolved))
+            detail.border_subtitle = self._resolve_subtitle()
+            self._set_detail(_request_detail(self.project, obj, resolved, raw=self.raw))
             context.border_title = "PROVENANCE"
             self._set_context(_render_provenance(resolved.trail))
-            return
-        detail.border_title = _title(obj, type(obj).__name__.upper())
-        detail.border_subtitle = ""
-        self._set_detail(_object_detail(obj))
-        context.border_title = "DESCRIPTION"
-        self._set_context(_description(obj))
+        elif isinstance(obj, Environment):
+            env_id = obj.metadata.id or ""
+            detail.border_title = _title(obj, "ENVIRONMENT")
+            detail.border_subtitle = _HEALTH_LABEL[self.health.get(env_id, Health.UNKNOWN)]
+            self._set_detail(_environment_detail(obj, self.health_reports.get(env_id)))
+            context.border_title = "DESCRIPTION"
+            self._set_context(_description(obj))
+        elif isinstance(obj, Instance):
+            value, trail = self._resolve_instance(obj)
+            detail.border_title = _title(obj, "INSTANCE")
+            detail.border_subtitle = self._resolve_subtitle()
+            self._set_detail(_json(obj.spec.value if self.raw else value))
+            titled, content = (
+                ("PROVENANCE", _render_provenance(trail))
+                if trail and not self.raw
+                else ("DESCRIPTION", _description(obj))
+            )
+            context.border_title = titled
+            self._set_context(content)
+        else:
+            detail.border_title = _title(obj, type(obj).__name__.upper())
+            detail.border_subtitle = ""
+            self._set_detail(_object_detail(obj))
+            context.border_title = "DESCRIPTION"
+            self._set_context(_description(obj))
+        self._update_footer(obj)
+
+    def _resolve_subtitle(self) -> str:
+        if self.raw:
+            return "raw · as written"
+        env = self.environment.metadata.name if self.environment else "—"
+        return f"resolved for {env}"
+
+    def _resolve_instance(self, instance: Instance) -> tuple[object, list[Trail]]:
+        if self.environment is None:
+            return instance.spec.value, []
+        return Resolver(self.project, self.environment).resolve_tree(instance.spec.value)
+
+    def _update_footer(self, obj: object) -> None:
+        keys: tuple[tuple[str, str], ...]
+        if isinstance(obj, Environment):
+            keys = _ENV_KEYS
+        elif isinstance(obj, (Request, Instance)):
+            keys = _RESOLVE_KEYS
+        else:
+            keys = _EXPLORER_KEYS
+        default = self.environment.metadata.name if self.environment else "—"
+        self.app.query_one(StatusBar).show(keys, f"default env · {default}")
 
     def _set_detail(self, content: RenderableType) -> None:
         self.query_one("#detail-content", Static).update(content)
@@ -413,6 +596,40 @@ class GraphModal(ModalScreen[None]):
         self.dismiss(None)
 
 
+class HelpModal(ModalScreen[None]):
+    """An overlay listing every command available on the current screen."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "close", "close"),
+        Binding("question_mark", "close", "close"),
+        Binding("q", "close", "close"),
+    ]
+
+    def __init__(self, screen: str) -> None:
+        """Build the help overlay for a screen.
+
+        Args:
+            screen: The active screen id, whose keys are described first.
+        """
+        super().__init__()
+        self._screen = screen
+
+    def compose(self) -> ComposeResult:
+        """Yield the scrollable help body."""
+        with VerticalScroll(id="help-dialog", classes="modal"):
+            yield Static(_help_body(self._screen), id="help-content")
+
+    def on_mount(self) -> None:
+        """Title the dialog."""
+        dialog = self.query_one("#help-dialog")
+        dialog.border_title = "HELP"
+        dialog.border_subtitle = "? or esc to close"
+
+    def action_close(self) -> None:
+        """Close the overlay."""
+        self.dismiss(None)
+
+
 class ErrorView(VerticalScroll):
     """The replacement screen shown when a project will not load.
 
@@ -485,7 +702,9 @@ class ComparoApp(App[None]):
         Binding("3", "screen('diff')", "Diff"),
         Binding("slash", "filter", "Filter"),
         Binding("g", "graph", "Graph"),
-        Binding("r", "reload", "Reload"),
+        Binding("h", "health", "Health"),
+        Binding("r", "raw_or_reload", "Raw / reload"),
+        Binding("question_mark", "help", "Help"),
     ]
 
     def __init__(
@@ -558,8 +777,35 @@ class ComparoApp(App[None]):
             return
         self.push_screen(GraphModal(self.project))
 
-    def action_reload(self) -> None:
-        """Re-check a failed project in place; swap to a success note if it loads."""
+    def action_health(self) -> None:
+        """Probe the selected environment's health checks."""
+        if self.error is not None or self.query_one(NavBar).active != "explorer":
+            return
+        self.query_one(ExplorerView).run_health_on_selected()
+
+    def action_help(self) -> None:
+        """Open the help overlay for the current screen."""
+        screen = "error" if self.error is not None else self.query_one(NavBar).active
+        self.push_screen(HelpModal(screen))
+
+    def action_raw_or_reload(self) -> None:
+        """``r`` re-checks a failed project, or toggles raw/resolved on the Explorer."""
+        if self.error is not None:
+            self._reload()
+        elif self.query_one(NavBar).active == "explorer":
+            self.query_one(ExplorerView).toggle_raw()
+
+    def set_default_environment(self, environment: Environment) -> None:
+        """Adopt *environment* as the default requests resolve against.
+
+        Args:
+            environment: The environment to make default.
+        """
+        self.environment = environment
+        self.query_one(ExplorerView).set_default(environment)
+        self.query_one(NavBar).set_status(self._nav_status())
+
+    def _reload(self) -> None:
         if self.error is None:
             return
         try:
@@ -595,12 +841,11 @@ class ComparoApp(App[None]):
         if screen == "error":
             self.query_one(StatusBar).show(_ERROR_KEYS, "load failed · fix files, press r")
             return
-        keys = _DIFF_KEYS if screen == "diff" else _EXPLORER_KEYS
-        context = {
-            "explorer": "project · read-only",
-            "diff": ".runs/8c3e11 · local ⇄ prod",
-        }.get(screen, "")
-        self.query_one(StatusBar).show(keys, context)
+        if screen == "explorer":
+            self.query_one(ExplorerView).refresh_footer()
+            return
+        context = ".runs/8c3e11 · local ⇄ prod" if screen == "diff" else ""
+        self.query_one(StatusBar).show(_DIFF_KEYS if screen == "diff" else _EXPLORER_KEYS, context)
 
 
 def _default_environment(project: LoadedProject) -> Environment | None:
@@ -617,15 +862,17 @@ def _branch(label: str, count: int) -> Text:
     return Text.assemble((f"{label}  ", f"bold {_LABEL}"), (f"{count}", _DIM))
 
 
-def _leaf(obj: object) -> Text:
+def _leaf(obj: object, *, health: Health = Health.UNKNOWN, default: bool = False) -> Text:
     metadata = getattr(obj, "metadata", None)
     name = str(getattr(metadata, "name", "?"))
     row = Text()
     if isinstance(obj, Environment):
-        row.append("● ", style=_SAME)
-        row.append(name, style=_TEXT)
-        if "local" not in name.lower():
+        row.append("● ", style=_HEALTH_COLOR[health])
+        row.append(name, style=_TEXT_HI if default else _TEXT)
+        if _is_remote(obj):
             row.append("  live", style=f"bold {_DANGER}")
+        if default:
+            row.append("  default", style=f"bold {_ACCENT}")
     elif isinstance(obj, Matrix):
         row.append(name, style=_AXIS)
         row.append(f"  ×{len(obj.spec.values)}", style=_DIM)
@@ -636,6 +883,11 @@ def _leaf(obj: object) -> Text:
     else:
         row.append(name, style=_TEXT)
     return row
+
+
+def _is_remote(environment: Environment) -> bool:
+    url = environment.spec.base_url.lower()
+    return not any(host in url for host in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]"))
 
 
 def _matches(obj: object, kind: type, needle: str) -> bool:
@@ -665,15 +917,20 @@ def _description(obj: object) -> Text:
     return Text("no description", style=_DIM)
 
 
-def _request_detail(project: LoadedProject, request: Request, resolved: ResolvedRequest) -> Group:
+def _request_detail(
+    project: LoadedProject, request: Request, resolved: ResolvedRequest, *, raw: bool = False
+) -> Group:
+    outbound = request.spec.request
     parts: list[RenderableType] = []
     head = Text()
     head.append(
         f" {resolved.method} ", style=f"bold {_INK} on {_METHOD.get(resolved.method, _ACCENT)}"
     )
     head.append("  ")
-    head.append(resolved.url, style=_TEXT_HI)
+    head.append(outbound.endpoint if raw else resolved.url, style=_TEXT_HI)
     parts.append(head)
+    if request.metadata.description:
+        parts.append(Text(f"\n{request.metadata.description}", style=_DIM))
     tags = request.metadata.tags or []
     matrices = _matrix_summary(project, request.spec.matrix)
     meta = Text()
@@ -685,33 +942,72 @@ def _request_detail(project: LoadedProject, request: Request, resolved: Resolved
         meta.append(matrices, style=_AXIS)
     parts.append(meta)
     headers = Text("\n\nHEADERS", style=_LABEL)
-    for key, value in resolved.headers:
-        masked = "••••" in str(value)
+    for key, rendered in _header_rows(outbound.headers, resolved.headers, raw=raw):
         headers.append(f"\n  {key:<18}", style=_DIM)
-        headers.append(str(value), style=_DRIFT if masked else _TEXT)
+        headers.append(rendered)
     parts.append(headers)
-    if resolved.query:
+    query_source = (outbound.query or {}) if raw else resolved.query
+    if query_source:
         query = Text("\n\nQUERY", style=_LABEL)
-        for key, value in resolved.query.items():
+        for key, value in query_source.items():
             query.append(f"\n  {key:<18}", style=_DIM)
-            query.append(str(value), style=_AXIS)
+            query.append(_hole_str(value) if raw else str(value), style=_AXIS)
         parts.append(query)
-    if resolved.body is not None:
+    body_source = outbound.body if raw else resolved.body
+    if body_source is not None:
         parts.append(Text("\n\nBODY", style=_LABEL))
-        parts.append(_json(resolved.body))
+        parts.append(_json(body_source))
     response = request.spec.response
     if response is not None:
-        line = [str(response.status)] if response.status else []
-        line += [ref for ref in (_ref_id(response.schema), _ref_id(response.diff)) if ref]
-        footer = Text("\nresponse   ", style=_LABEL)
-        footer.append(" · ".join(line), style=_TEXT)
-        parts.append(footer)
+        section = Text("\n\nRESPONSE", style=_LABEL)
+        if response.status:
+            section.append("\n  status   ", style=_DIM)
+            section.append(str(response.status), style=_TEXT)
+        for name, reference in (("schema", response.schema), ("diff", response.diff)):
+            identifier = _ref_id(reference)
+            if identifier:
+                section.append(f"\n  {name:<9}", style=_DIM)
+                section.append(identifier, style=_TEXT)
+        parts.append(section)
     return Group(*parts)
+
+
+def _header_rows(
+    raw_headers: object, resolved_headers: list[tuple[str, object]], *, raw: bool
+) -> list[tuple[str, Text]]:
+    if raw:
+        pairs = _raw_header_pairs(raw_headers)
+        return [(key, Text(_hole_str(value), style=_AXIS)) for key, value in pairs]
+    rows: list[tuple[str, Text]] = []
+    for key, value in resolved_headers:
+        masked = "••••" in str(value)
+        rows.append((key, Text(str(value), style=_DRIFT if masked else _TEXT)))
+    return rows
+
+
+def _raw_header_pairs(headers: object) -> list[tuple[str, object]]:
+    if isinstance(headers, dict):
+        target = headers.get("$val")
+        if isinstance(target, str):
+            return [("(reference)", {"$val": target})]
+    pairs: list[tuple[str, object]] = []
+    if isinstance(headers, list):
+        for item in headers:
+            if isinstance(item, dict) and "key" in item:
+                pairs.append((str(item["key"]), item.get("value")))
+    return pairs
+
+
+def _hole_str(value: object) -> str:
+    if isinstance(value, dict) and len(value) == 1:
+        key, target = next(iter(value.items()))
+        return f"{key} {target}"
+    return str(value)
 
 
 def _object_detail(obj: object) -> RenderableType:
     if isinstance(obj, Environment):
-        return _environment_detail(obj)
+        return _environment_detail(obj, None)
     if isinstance(obj, Matrix):
         return Group(_matrix_head(obj), _json(obj.spec.values))
     if isinstance(obj, DiffProfile):
@@ -723,11 +1019,13 @@ def _object_detail(obj: object) -> RenderableType:
     return Text(str(obj), style=_TEXT)
 
 
-def _environment_detail(env: Environment) -> Text:
+def _environment_detail(env: Environment, report: HealthReport | None) -> Text:
     spec = env.spec
     text = Text()
+    remote = _is_remote(env)
     text.append("baseUrl    ", style=_LABEL)
-    text.append(f"{spec.base_url}\n", style=_ACCENT)
+    text.append(f"{spec.base_url}", style=_ACCENT)
+    text.append("   live\n" if remote else "   local\n", style=_DANGER if remote else _DIM)
     if spec.timeout is not None:
         text.append("timeout    ", style=_LABEL)
         text.append(f"connect {spec.timeout.connect} · read {spec.timeout.read}\n", style=_TEXT)
@@ -741,9 +1039,19 @@ def _environment_detail(env: Environment) -> Text:
                     style=_DRIFT if section == "SECRETS" else _TEXT,
                 )
     if spec.health:
-        text.append("\nHEALTH\n", style=_LABEL)
+        text.append("\nHEALTH", style=_LABEL)
+        if report is not None:
+            text.append(f"   {report.status.value}", style=_HEALTH_COLOR[report.status])
+        text.append("\n", style=_LABEL)
+        outcomes = {result.endpoint: result for result in (report.results if report else [])}
         for check in spec.health:
-            text.append(f"  {check.method} {check.endpoint}\n", style=_TEXT)
+            result = outcomes.get(check.endpoint)
+            if result is None:
+                text.append(f"  ○ {check.method} {check.endpoint}\n", style=_DIM)
+            else:
+                glyph, colour = ("✓", _SAME) if result.ok else ("✗", _DRIFT)
+                text.append(f"  {glyph} {check.method} {check.endpoint}", style=colour)
+                text.append(f"   {result.detail}\n", style=_DIM)
     return text
 
 
@@ -788,6 +1096,22 @@ def _render_provenance(trail: list[Trail]) -> Text:
             text.append("  · instance", style=_DIM)
         text.append("\n")
     return text
+
+
+def _help_body(screen: str) -> Text:
+    text = Text()
+    text.append(f"{_HELP_TITLE.get(screen, screen.upper())}\n\n", style=f"bold {_TEXT_HI}")
+    for key, description in _HELP_SCREEN.get(screen, ()):
+        _help_row(text, key, description)
+    text.append("\nEVERYWHERE\n", style=f"bold {_LABEL}")
+    for key, description in _HELP_GLOBAL:
+        _help_row(text, key, description)
+    return text
+
+
+def _help_row(text: Text, key: str, description: str) -> None:
+    text.append(f"  {key:<8}", style=f"bold {_ACCENT}")
+    text.append(f"  {description}\n", style=_TEXT)
 
 
 def _json(value: object) -> Syntax:
