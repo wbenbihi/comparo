@@ -83,6 +83,22 @@ async def diff_run(
     ]
 
 
+def compare_cell(
+    project: LoadedProject, baseline: Execution, candidate: Execution | None
+) -> CellDiff:
+    """Diff one already-executed cell (baseline vs candidate) under its profile.
+
+    Args:
+        project: The loaded project (for the request's diff profile).
+        baseline: The baseline execution.
+        candidate: The candidate execution, or ``None`` if it is missing.
+
+    Returns:
+        The cell's diff outcome.
+    """
+    return _compare(project, baseline, candidate)
+
+
 def _compare(project: LoadedProject, baseline: Execution, candidate: Execution | None) -> CellDiff:
     request, key = baseline.request, baseline.cell_key
     if candidate is None:

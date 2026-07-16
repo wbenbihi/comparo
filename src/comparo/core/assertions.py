@@ -105,6 +105,19 @@ def request_rules(request: Request) -> list[AssertionRule]:
     return rules
 
 
+def compose_rules(project: LoadedProject, profile: AssertionProfile) -> list[AssertionRule]:
+    """Return *profile*'s rules flattened with everything it includes.
+
+    Args:
+        project: The loaded project (to resolve ``include`` references).
+        profile: The assertion profile to flatten.
+
+    Returns:
+        The composed rule list, includes first.
+    """
+    return _resolve_rules(project, profile, set())
+
+
 def _resolve_rules(
     project: LoadedProject, profile: AssertionProfile, seen: set[str]
 ) -> list[AssertionRule]:

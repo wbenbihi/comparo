@@ -82,6 +82,8 @@ class Response(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     schema: Any = None
     diff: Any = None
     streaming: bool | None = None
+    #: One or more AssertionProfiles ($ref or inline) — the ``assert`` key.
+    assertions: Any = msgspec.field(default=None, name="assert")
 
 
 class RequestSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):

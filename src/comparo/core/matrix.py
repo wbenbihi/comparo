@@ -11,6 +11,7 @@ import itertools
 
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Matrix
+from comparo.core.models import MatrixScope
 from comparo.core.models import Request
 
 
@@ -44,12 +45,18 @@ def case_key(case: dict[str, object]) -> str:
     return ", ".join(f"{key}={case[key]}" for key in sorted(case))
 
 
-def expand(project: LoadedProject, request: Request) -> list[MatrixCell]:
+def expand(
+    project: LoadedProject,
+    request: Request,
+    scopes: dict[str, MatrixScope] | None = None,
+) -> list[MatrixCell]:
     """Expand *request* into one cell per matrix combination.
 
     Args:
         project: The loaded project (to resolve matrix references).
         request: The request to expand.
+        scopes: Optional per-matrix-id customization (an ExecutionProfile's
+            ``include`` / ``exclude`` / ``override``); ``None`` uses every case.
 
     Returns:
         One :class:`MatrixCell` per combination; a single empty cell when the
@@ -58,8 +65,9 @@ def expand(project: LoadedProject, request: Request) -> list[MatrixCell]:
     matrices = _matrices(project, request)
     if not matrices:
         return [MatrixCell("", ())]
+    value_lists = [_scoped_values(matrix, scopes) for matrix in matrices]
     cells: list[MatrixCell] = []
-    for combination in itertools.product(*(matrix.spec.values for matrix in matrices)):
+    for combination in itertools.product(*value_lists):
         injections = tuple(
             Injection(matrix.spec.target, case, matrix.spec.mode, matrix.spec.create_path)
             for matrix, case in zip(matrices, combination, strict=True)
@@ -67,6 +75,22 @@ def expand(project: LoadedProject, request: Request) -> list[MatrixCell]:
         key = " · ".join(case_key(case) for case in combination)
         cells.append(MatrixCell(key, injections))
     return cells
+
+
+def _scoped_values(
+    matrix: Matrix, scopes: dict[str, MatrixScope] | None
+) -> list[dict[str, object]]:
+    values = list(matrix.spec.values)
+    scope = scopes.get(matrix.metadata.id or "") if scopes else None
+    if scope is None:
+        return values
+    if scope.include is not None:
+        values = [case for case in values if case in scope.include]
+    if scope.exclude is not None:
+        values = [case for case in values if case not in scope.exclude]
+    if scope.override is not None:
+        values = values + list(scope.override)
+    return values
 
 
 def _matrices(project: LoadedProject, request: Request) -> list[Matrix]:
