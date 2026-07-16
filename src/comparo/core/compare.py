@@ -11,14 +11,16 @@ import json
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
 from comparo.core.diff import diff
-from comparo.core.diff import profile_rules
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_all
 from comparo.core.http import HttpClient
 from comparo.core.loader import LoadedProject
 from comparo.core.models import DiffProfile
+from comparo.core.models import DiffProfileSpec
+from comparo.core.models import DiffRule
 from comparo.core.models import Environment
 from comparo.core.models import Request
+from comparo.core.refs import resolve_specs
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -84,7 +86,10 @@ async def diff_run(
 
 
 def compare_cell(
-    project: LoadedProject, baseline: Execution, candidate: Execution | None
+    project: LoadedProject,
+    baseline: Execution,
+    candidate: Execution | None,
+    diff_override: object = None,
 ) -> CellDiff:
     """Diff one already-executed cell (baseline vs candidate) under its profile.
 
@@ -92,14 +97,21 @@ def compare_cell(
         project: The loaded project (for the request's diff profile).
         baseline: The baseline execution.
         candidate: The candidate execution, or ``None`` if it is missing.
+        diff_override: An execution-level diff profile ($ref/inline/list) that
+            composes on top of the request/project profile, or ``None``.
 
     Returns:
         The cell's diff outcome.
     """
-    return _compare(project, baseline, candidate)
+    return _compare(project, baseline, candidate, diff_override=diff_override)
 
 
-def _compare(project: LoadedProject, baseline: Execution, candidate: Execution | None) -> CellDiff:
+def _compare(
+    project: LoadedProject,
+    baseline: Execution,
+    candidate: Execution | None,
+    diff_override: object = None,
+) -> CellDiff:
     request, key = baseline.request, baseline.cell_key
     if candidate is None:
         return CellDiff(request, key, [], "no candidate result")
@@ -116,7 +128,7 @@ def _compare(project: LoadedProject, baseline: Execution, candidate: Execution |
     except ValueError:
         # Empty or non-JSON responses (e.g. a status-only check) diff as raw bytes.
         return _raw_compare(request, key, baseline_response.body, candidate_response.body)
-    default_mode, rules = profile_rules(_profile_for(project, request))
+    default_mode, rules = _compose_diff(project, request, diff_override)
     return CellDiff(
         request,
         key,
@@ -124,6 +136,34 @@ def _compare(project: LoadedProject, baseline: Execution, candidate: Execution |
         baseline_body=baseline_body,
         candidate_body=candidate_body,
     )
+
+
+def _compose_diff(
+    project: LoadedProject, request: Request, override: object
+) -> tuple[str, list[DiffRule]]:
+    specs: list[DiffProfileSpec] = []
+    response = request.spec.response
+    if response is not None and response.diff is not None:
+        specs.extend(resolve_specs(project, response.diff, DiffProfileSpec))
+    else:
+        specs.extend(_project_default_diff(project))
+    if override is not None:
+        specs.extend(resolve_specs(project, override, DiffProfileSpec))
+    if not specs:
+        return "exact", []
+    rules: list[DiffRule] = []
+    for spec in specs:
+        rules.extend(spec.rules or [])
+    return specs[-1].default, rules
+
+
+def _project_default_diff(project: LoadedProject) -> list[DiffProfileSpec]:
+    if project.project is None:
+        return []
+    config = project.project.spec.diff
+    if isinstance(config, dict):
+        return resolve_specs(project, config.get("default"), DiffProfileSpec)
+    return []
 
 
 def _raw_compare(request: Request, key: str, baseline: bytes, candidate: bytes) -> CellDiff:

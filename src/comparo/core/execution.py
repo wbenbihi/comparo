@@ -21,10 +21,12 @@ from comparo.core.http import HttpClient
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import expand
 from comparo.core.models import AssertionProfile
+from comparo.core.models import AssertionProfileSpec
 from comparo.core.models import AssertionRule
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
+from comparo.core.refs import resolve_specs
 from comparo.core.resolve import select_environment
 
 
@@ -99,6 +101,7 @@ async def run_execution(
     do_assert = check.assertions if check is not None else True
     do_diff = (check.diff if check is not None else True) and candidate is not None
     scopes = profile.spec.matrix or {}
+    diff_override = _execution_profiles(profile, "diff")
     outcomes: list[CellOutcome] = []
     for request in _select(project, profile):
         rules = _assert_rules(project, profile, request) if do_assert else []
@@ -119,7 +122,7 @@ async def run_execution(
                         if do_assert and cand is not None
                         else []
                     ),
-                    diff=compare_cell(project, base, cand) if do_diff else None,
+                    diff=compare_cell(project, base, cand, diff_override) if do_diff else None,
                     error=base.error or (cand.error if cand is not None else None),
                 )
             )
@@ -175,23 +178,19 @@ def _assert_rules(
 
 def _profiles_to_rules(project: LoadedProject, refs: object) -> list[AssertionRule]:
     rules: list[AssertionRule] = []
-    for reference in _as_list(refs):
-        identifier = _ref_id(reference)
-        profile = project.objects.get(identifier) if identifier is not None else None
-        if isinstance(profile, AssertionProfile):
-            rules.extend(compose_rules(project, profile))
+    for spec in resolve_specs(project, refs, AssertionProfileSpec):
+        for reference in spec.include or []:
+            identifier = _ref_id(reference)
+            included = project.objects.get(identifier) if identifier is not None else None
+            if isinstance(included, AssertionProfile):
+                rules.extend(compose_rules(project, included))
+        rules.extend(spec.rules or [])
     return rules
 
 
 def _execution_profiles(profile: ExecutionProfile, key: str) -> object:
     profiles = profile.spec.profiles
     return profiles.get(key) if isinstance(profiles, dict) else None
-
-
-def _as_list(value: object) -> list[object]:
-    if value is None:
-        return []
-    return value if isinstance(value, list) else [value]
 
 
 def _ref_id(reference: object) -> str | None:

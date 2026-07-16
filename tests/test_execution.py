@@ -108,6 +108,29 @@ def test_execution_assertion_failure_fails_the_gate(tmp_path: Path) -> None:
     assert not result.passed
 
 
+def test_execution_inline_diff_profile_composes(tmp_path: Path) -> None:
+    _project(tmp_path)
+    # An inline diff profile (a list of one) that ignores the field which differs
+    # between the two envs — so the cell no longer drifts.
+    probe = (
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata:\n  name: Probe\n  id: request.probe\n"
+        "spec:\n"
+        "  request:\n    method: GET\n    endpoint: /get\n"
+        "  response:\n    status: 200\n"
+        "    diff:\n"
+        "      - default: exact\n"
+        "        rules:\n"
+        "          - path: $.env\n            mode: ignore\n"
+    )
+    _write(tmp_path, "probe.yaml", probe)
+    result = _run(tmp_path)
+    outcome = result.outcomes[0]
+    assert outcome.diff is not None
+    assert not outcome.diff.drifted  # $.env ignored by the inline profile
+    assert result.passed
+
+
 def test_execution_matrix_scope_limits_cells(tmp_path: Path) -> None:
     _project(tmp_path, matrix=True)
     # scope the tiers matrix down to just `free`
