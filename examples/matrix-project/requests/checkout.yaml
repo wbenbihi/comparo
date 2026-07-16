@@ -1,0 +1,25 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Checkout
+  id: request.checkout
+  description: >-
+    POST /anything expanded across a single matrix — one cell per tier.
+    Shares matrix.tiers with request.search, so toggling a tier in the
+    global matrix picker affects both requests at once.
+  tags:
+    - matrix
+    - checkout
+spec:
+  matrix:
+    - $ref: matrix.tiers
+  request:
+    method: POST
+    endpoint: /anything
+    headers:
+      Content-Type: application/json
+    body:
+      item: widget
+      quantity: 3
+  response:
+    status: 200

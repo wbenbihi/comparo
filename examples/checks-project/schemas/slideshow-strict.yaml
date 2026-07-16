@@ -1,0 +1,30 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Slideshow (strict)
+  id: schema.slideshow-strict
+  description: >-
+    A deliberately over-strict schema. It requires a `subtitle` field that
+    httpbin's /json response does not have, so validation fails — this drives
+    the failing schema check in the Run screen's ASSERT column.
+spec:
+  type: object
+  required:
+    - slideshow
+  properties:
+    slideshow:
+      type: object
+      required:
+        - author
+        - title
+        - subtitle
+        - slides
+      properties:
+        author:
+          type: string
+        title:
+          type: string
+        subtitle:
+          type: string
+        slides:
+          type: array

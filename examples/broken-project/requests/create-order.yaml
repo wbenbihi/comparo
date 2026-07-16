@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Create order
+  id: request.create-order
+  description: Has a misspelled field, so the envelope fails strict validation.
+spec:
+  request:
+    # ERROR: `methdo` is not a known field. The models forbid unknown fields, so
+    # msgspec rejects the whole object — the fix is to spell it `method`.
+    methdo: POST
+    endpoint: /anything
+  response:
+    status: 200

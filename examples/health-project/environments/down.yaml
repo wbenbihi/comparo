@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Down
+  id: environment.down
+  description: >-
+    The base URL points at a host that does not resolve, so every probe raises a
+    transport error. No check passes — the dot is red. Running requests against
+    this environment fails the same way, which is the point: it is offline.
+spec:
+  baseUrl: https://health-showcase.invalid
+  timeout:
+    connect: 2s
+    read: 5s
+  health:
+    - method: GET
+      endpoint: /status/200

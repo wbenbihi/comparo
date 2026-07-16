@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Get order
+  id: request.get-order
+  description: References a mistyped schema id.
+spec:
+  request:
+    method: GET
+    endpoint: /json
+  response:
+    status: 200
+    # ERROR: typo — the schema id is `schema.order`, not `schema.ordr`. The
+    # loader flags the dangling $ref and suggests the near-miss.
+    schema:
+      $ref: schema.ordr

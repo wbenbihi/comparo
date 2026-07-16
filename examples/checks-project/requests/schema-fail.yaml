@@ -1,0 +1,20 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Schema broken
+  id: request.schema-fail
+  description: >-
+    GET /json validated against an over-strict schema that requires a `subtitle`
+    field httpbin never returns. The status is 200 (pass) but the schema check
+    fails — a request that is reachable yet fails its assertions.
+  tags:
+    - schema
+    - failing
+spec:
+  request:
+    method: GET
+    endpoint: /json
+  response:
+    status: 200
+    schema:
+      $ref: schema.slideshow-strict

@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Ping
+  id: request.ping
+  description: A single status check, so each environment has something to run.
+  tags:
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /status/200
+  response:
+    status: 200

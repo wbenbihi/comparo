@@ -1,0 +1,9 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: checks-showcase
+  description: Requests with status and JSON-schema assertions — some pass, some fail on purpose.
+spec:
+  data: .
+  environments:
+    default: prod

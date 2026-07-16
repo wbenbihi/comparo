@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status mismatch
+  id: request.status-fail
+  description: >-
+    GET /status/200 but the request expects 201. The server answers 200, so the
+    status check fails (200 ≠ 201) and the request reports a failing assertion.
+  tags:
+    - status
+    - failing
+spec:
+  request:
+    method: GET
+    endpoint: /status/200
+  response:
+    status: 201

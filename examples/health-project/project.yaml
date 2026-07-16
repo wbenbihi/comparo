@@ -1,0 +1,9 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: health-showcase
+  description: Three environments whose health checks resolve green, orange, and red.
+spec:
+  data: .
+  environments:
+    default: healthy

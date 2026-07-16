@@ -1,0 +1,12 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: broken-showcase
+  description: >-
+    A deliberately invalid project. Every file below carries one distinct
+    loader error so the error screen and `comparo validate` have a full menu of
+    diagnostics to render. Fixing all of them makes the project load cleanly.
+spec:
+  data: .
+  environments:
+    default: staging

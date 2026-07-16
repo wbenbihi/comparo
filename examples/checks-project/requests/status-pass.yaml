@@ -1,0 +1,15 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status OK
+  id: request.status-pass
+  description: GET /status/200 expecting 200 — the status check passes.
+  tags:
+    - status
+    - passing
+spec:
+  request:
+    method: GET
+    endpoint: /status/200
+  response:
+    status: 200

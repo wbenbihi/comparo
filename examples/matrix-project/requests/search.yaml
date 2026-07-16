@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Search catalog
+  id: request.search
+  description: >-
+    GET /anything expanded across two matrices — locales × tiers.
+    The cartesian product yields six cells (3 locales × 2 tiers), each
+    merging its case into the query string.
+  tags:
+    - matrix
+    - catalog
+spec:
+  matrix:
+    - $ref: matrix.locales
+    - $ref: matrix.tiers
+  request:
+    method: GET
+    endpoint: /anything
+    query:
+      q: widgets
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE}
+  response:
+    status: 200

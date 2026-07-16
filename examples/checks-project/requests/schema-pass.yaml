@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Schema valid
+  id: request.schema-pass
+  description: GET /json validated against the real slideshow schema — the schema check passes.
+  tags:
+    - schema
+    - passing
+spec:
+  request:
+    method: GET
+    endpoint: /json
+  response:
+    status: 200
+    schema:
+      $ref: schema.slideshow

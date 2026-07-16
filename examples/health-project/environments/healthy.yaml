@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Healthy
+  id: environment.healthy
+  description: Every health check returns a good status — the dot is green.
+spec:
+  baseUrl: https://httpbin.org
+  timeout:
+    connect: 5s
+    read: 30s
+  health:
+    - method: GET
+      endpoint: /status/200
+    - method: GET
+      endpoint: /status/204

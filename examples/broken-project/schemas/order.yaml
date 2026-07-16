@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Order
+  id: schema.order
+  description: >-
+    A perfectly valid schema. It exists so the dangling references elsewhere in
+    this project have a near-miss to suggest — `schema.ordr` and `order.schema`
+    both resolve to this id once corrected.
+spec:
+  type: object
+  required:
+    - id
+    - total
+  properties:
+    id:
+      type: string
+    total:
+      type: number

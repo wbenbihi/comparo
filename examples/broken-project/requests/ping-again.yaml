@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Ping (again)
+  # ERROR: this id is already taken by requests/ping.yaml. Ids must be unique
+  # across the whole project — rename one of them to fix.
+  id: request.ping
+  description: A second object claiming request.ping — a duplicate id.
+spec:
+  request:
+    method: GET
+    endpoint: /status/204
+  response:
+    status: 204

@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Production
+  id: environment.prod
+  description: The public httpbin instance.
+spec:
+  baseUrl: https://httpbin.org
+  timeout:
+    connect: 5s
+    read: 30s
+  variables:
+    DEFAULT_LOCALE: en-US
+  health:
+    - method: GET
+      endpoint: /status/200

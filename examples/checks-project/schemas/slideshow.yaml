@@ -1,0 +1,28 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Slideshow
+  id: schema.slideshow
+  description: The real structure returned by httpbin's GET /json endpoint.
+spec:
+  type: object
+  required:
+    - slideshow
+  properties:
+    slideshow:
+      type: object
+      required:
+        - author
+        - title
+        - slides
+      properties:
+        author:
+          type: string
+        date:
+          type: string
+        title:
+          type: string
+        slides:
+          type: array
+          items:
+            type: object

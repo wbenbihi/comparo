@@ -1,0 +1,18 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Degraded
+  id: environment.degraded
+  description: >-
+    One health check passes and one returns 503 — partial readiness, so the dot
+    is orange. This is the mixed case the aggregate PARTIAL status exists for.
+spec:
+  baseUrl: https://httpbin.org
+  timeout:
+    connect: 5s
+    read: 30s
+  health:
+    - method: GET
+      endpoint: /status/200
+    - method: GET
+      endpoint: /status/503

@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: matrix-showcase
+  description: A request expanded across two matrices — the cartesian product of locales × tiers.
+spec:
+  # Where the object tree lives, relative to this file.
+  data: .
+
+  environments:
+    default: prod
+
+  run:
+    concurrency: 4

@@ -1,0 +1,12 @@
+apiVersion: comparo/v1
+kind: Environment
+# ERROR: metadata.id is missing. Every object except the Project manifest needs
+# one — add `id: environment.staging` to fix.
+metadata:
+  name: Staging
+  description: An environment with no id, so it can never be referenced or selected.
+spec:
+  baseUrl: https://httpbin.org
+  timeout:
+    connect: 5s
+    read: 30s

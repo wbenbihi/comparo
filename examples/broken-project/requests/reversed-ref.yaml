@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: List orders
+  id: request.list-orders
+  description: References the right segments in the wrong order.
+spec:
+  request:
+    method: GET
+    endpoint: /json
+  response:
+    status: 200
+    # ERROR: the segments are right but reversed — it should be `schema.order`,
+    # not `order.schema`. The loader detects the same-segments case and says so.
+    schema:
+      $ref: order.schema

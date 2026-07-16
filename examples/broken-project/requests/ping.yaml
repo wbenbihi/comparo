@@ -1,0 +1,12 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Ping
+  id: request.ping
+  description: The first object to claim the id request.ping.
+spec:
+  request:
+    method: GET
+    endpoint: /status/200
+  response:
+    status: 200

@@ -1,0 +1,12 @@
+apiVersion: comparo/v1
+kind: Matrix
+metadata:
+  name: Locales
+  id: matrix.locales
+  description: Its value list has a syntax error, so the file never parses.
+spec:
+  target: request.query
+  mode: merge
+  # ERROR: the flow sequence is never closed — a missing `]`. The YAML parser
+  # reports it with a line number before any envelope check runs.
+  values: [{locale: en-US}, {locale: fr-FR}
