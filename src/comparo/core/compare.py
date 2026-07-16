@@ -61,6 +61,7 @@ async def diff_run(
     candidate: Environment,
     requests: list[Request],
     client: HttpClient,
+    candidate_client: HttpClient | None = None,
 ) -> list[CellDiff]:
     """Execute *requests* against both environments and diff the paired results.
 
@@ -69,14 +70,16 @@ async def diff_run(
         baseline: The baseline environment.
         candidate: The candidate environment.
         requests: The requests to run and diff.
-        client: The transport to send through.
+        client: The transport for the baseline run.
+        candidate_client: A separate transport for the candidate run, so the two
+            do not share a cookie jar; defaults to *client* when omitted.
 
     Returns:
         One :class:`CellDiff` per baseline request cell.
     """
     baseline_runs, candidate_runs = await asyncio.gather(
         execute_all(project, baseline, requests, client),
-        execute_all(project, candidate, requests, client),
+        execute_all(project, candidate, requests, candidate_client or client),
     )
     index = {(run.request.metadata.id, run.cell_key): run for run in candidate_runs}
     return [

@@ -41,6 +41,27 @@ def test_matrix_injects_into_the_endpoint_path(tmp_path: Path) -> None:
     assert urls == ["https://api.test/status/200", "https://api.test/status/404"]
 
 
+def test_resolve_carries_cookies(tmp_path: Path) -> None:
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata:\n  name: E\n  id: environment.e\nspec:\n  baseUrl: https://api.test\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata:\n  name: C\n  id: request.c\n"
+        "spec:\n  request:\n    method: GET\n    endpoint: /x\n"
+        "    cookies:\n      session: abc\n      region: ${REGION|us}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path)
+    env = select_environment(loaded, "environment.e")
+    request = loaded.objects["request.c"]
+    assert isinstance(request, Request)
+    resolved = Resolver(loaded, env).resolve_request(request)
+    assert resolved.cookies == {"session": "abc", "region": "us"}
+
+
 def test_resolve_carries_body_type_and_masks_auth(tmp_path: Path) -> None:
     (tmp_path / "env.yaml").write_text(
         "apiVersion: comparo/v1\nkind: Environment\n"

@@ -435,10 +435,12 @@ async def _diff(
     loaded: LoadedProject, baseline: Environment, candidate: Environment, requests: list[Request]
 ) -> list[CellDiff]:
     client = HttpxClient()
+    candidate_client = HttpxClient()
     try:
-        return await diff_run(loaded, baseline, candidate, requests, client)
+        return await diff_run(loaded, baseline, candidate, requests, client, candidate_client)
     finally:
         await client.aclose()
+        await candidate_client.aclose()
 
 
 def _print_diffs(results: list[CellDiff], baseline_name: str, candidate_name: str) -> bool:

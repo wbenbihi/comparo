@@ -49,6 +49,7 @@ class HttpxClient:
         auth, auth_header = _auth(request.auth)
         if auth_header is not None:
             headers.append(auth_header)
+        cookies = {key: str(value) for key, value in (request.cookies or {}).items()} or None
         start = time.perf_counter()
         try:
             response = await self._client.request(
@@ -59,6 +60,7 @@ class HttpxClient:
                 json=json_body,
                 data=data_body,
                 content=content_body,
+                cookies=cookies,
                 auth=auth,
                 timeout=httpx_timeout,
             )

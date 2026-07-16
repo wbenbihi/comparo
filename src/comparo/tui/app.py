@@ -1593,12 +1593,14 @@ class DiffView(Vertical):
 
         baseline, candidate = pair
         client = HttpxClient()
+        candidate_client = HttpxClient()
         try:
             self._cells = await diff_run(
-                self.project, baseline, candidate, _requests(self.project), client
+                self.project, baseline, candidate, _requests(self.project), client, candidate_client
             )
         finally:
             await client.aclose()
+            await candidate_client.aclose()
         report = build_report(baseline.metadata.name, candidate.metadata.name, self._cells)
         cast("ComparoApp", self.app).last_report = report
         self._done = True
@@ -2640,13 +2642,15 @@ class ComparoApp(App[None]):
         from comparo.adapters.httpx_client import HttpxClient
 
         client = HttpxClient()
+        candidate_client = HttpxClient()
         try:
-            result = await run_execution(project, profile, client)
+            result = await run_execution(project, profile, client, candidate_client)
         except EnvironmentSelectionError as error:
             self.notify(str(error), title="Execution failed", severity="error")
             return
         finally:
             await client.aclose()
+            await candidate_client.aclose()
         self.push_screen(ExecutionScreen(result))
 
     def _reload(self) -> None:

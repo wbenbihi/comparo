@@ -81,14 +81,19 @@ class ExecutionResult:
 
 
 async def run_execution(
-    project: LoadedProject, profile: ExecutionProfile, client: HttpClient
+    project: LoadedProject,
+    profile: ExecutionProfile,
+    client: HttpClient,
+    candidate_client: HttpClient | None = None,
 ) -> ExecutionResult:
     """Resolve *profile* to a plan and run it, asserting both envs and diffing.
 
     Args:
         project: The loaded project.
         profile: The execution profile to run.
-        client: The transport the requests are sent through.
+        client: The transport for the baseline environment.
+        candidate_client: A separate transport for the candidate, so the two do
+            not share a cookie jar; defaults to *client* when omitted.
 
     Returns:
         The complete execution outcome.
@@ -97,6 +102,7 @@ async def run_execution(
         EnvironmentSelectionError: If the baseline (or a named candidate) is unknown.
     """
     baseline, candidate = _environments(project, profile)
+    cand_client = candidate_client or client
     check = profile.spec.check
     do_assert = check.assertions if check is not None else True
     do_diff = (check.diff if check is not None else True) and candidate is not None
@@ -108,7 +114,7 @@ async def run_execution(
         for cell in expand(project, request, scopes):
             base = await execute_request(project, baseline, request, client, cell)
             cand = (
-                await execute_request(project, candidate, request, client, cell)
+                await execute_request(project, candidate, request, cand_client, cell)
                 if candidate is not None
                 else None
             )

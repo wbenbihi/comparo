@@ -35,6 +35,32 @@ def _get_json(loaded: LoadedProject) -> list[Request]:
     return [request]
 
 
+class _ConstClient:
+    """Always returns the same canned body — a stand-in per environment."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    async def send(self, request: ResolvedRequest, timeout: TimeoutBudget) -> HttpResponse:
+        return HttpResponse(200, [], self.body, 1.0)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_diff_run_routes_candidate_to_its_own_client() -> None:
+    loaded = load_project(SAMPLE)
+    baseline = select_environment(loaded, "local")
+    candidate = select_environment(loaded, "prod")
+    base_client = _ConstClient(b'{"v": 1}')
+    candidate_client = _ConstClient(b'{"v": 2}')
+    results = asyncio.run(
+        diff_run(loaded, baseline, candidate, _get_json(loaded), base_client, candidate_client)
+    )
+    # The candidate body came from its own client, so $.v drifts 1 -> 2.
+    assert results[0].drifted
+
+
 def test_diff_run_reports_same_when_bodies_match() -> None:
     loaded = load_project(SAMPLE)
     baseline = select_environment(loaded, "local")

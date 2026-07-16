@@ -79,6 +79,8 @@ class HttpRequest(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     body_type: str | None = None
     #: Basic/Bearer auth for this request; overrides the environment default.
     auth: Any = None
+    #: Cookies to send with the request, as a name→value mapping.
+    cookies: dict[str, Any] | None = None
 
 
 class Response(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
