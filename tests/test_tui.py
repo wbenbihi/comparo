@@ -114,9 +114,8 @@ def test_run_screen_selection_toggles_cells() -> None:
             run = app.query_one(RunView)
             full = len(run._plan())
             assert full > 1  # every cell selected by default
-            tree = app.query_one("#run-tree", Tree)
-            run._toggle(tree.root.children[0])  # a request branch (its matrix cells)
-            assert len(run._plan()) < full  # toggling a request removes its cells
+            await pilot.press("space")  # toggle the cursor request out of the run
+            assert len(run._plan()) < full
 
     asyncio.run(go())
 

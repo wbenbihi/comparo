@@ -129,35 +129,38 @@ Screen {
 }
 
 /* ── Run ─────────────────────────────────────────────────────────────────── */
-#run-list-panel {
-    width: 40;
+#run-switch {
     height: 1fr;
-    margin-right: 1;
-    padding: 0;
 }
 
-#run-tree {
+#run-table-wrap,
+#run-report-wrap {
+    height: 1fr;
+}
+
+#run-table {
     background: transparent;
-    padding: 1 1;
-    overflow-x: hidden;
-    scrollbar-size-vertical: 1;
-}
-
-#run-tree > .tree--guides,
-#run-tree > .tree--guides-hover,
-#run-tree > .tree--guides-selected {
-    color: #1c2532;
-}
-
-#run-tree > .tree--cursor {
-    background: #1e2b45;
-    color: $text;
-    text-style: bold;
-}
-
-#run-detail-panel {
     width: 1fr;
     height: 1fr;
+}
+
+#run-table > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: none;
+}
+
+#run-table > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
+}
+
+#run-table > .datatable--even-row {
+    background: transparent;
+}
+
+#run-table > .datatable--odd-row {
+    background: #151b27;
 }
 
 /* ── Diff ────────────────────────────────────────────────────────────────── */
