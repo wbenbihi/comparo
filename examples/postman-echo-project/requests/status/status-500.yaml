@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status 500 Server Error
+  id: request.status-500
+  description: GET /status/500 expecting 500 — the server-error case, asserted as intended.
+  tags:
+    - status
+    - server-error
+spec:
+  request:
+    method: GET
+    endpoint: /status/500
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 500

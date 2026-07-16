@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Deflate
+  id: request.deflate
+  description: >-
+    GET /deflate — a deflate-compressed JSON body {deflated: true, headers, method},
+    transparently decoded by the client and compared by shape.
+  tags:
+    - encoding
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /deflate
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200

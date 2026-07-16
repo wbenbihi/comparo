@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Pricing
+  id: diff.pricing
+  description: >-
+    For the checkout POST. The JSON body echoes back under `json`: a numeric
+    sampleSize compared with a ± tolerance (a small nudge inside the budget is not
+    a regression) and a tier compared by JSON type only. The envelope is skipped,
+    as always.
+spec:
+  default: shape
+  rules:
+    # A small nudge (1000 → 1004) is within the ±5 budget — not a regression.
+    - path: $.json.sampleSize
+      mode: tolerance
+      tolerance: 5
+    # Only assert the tier keeps its JSON type; its value may vary freely.
+    - path: $.json.tier
+      mode: type
+    - path: $.headers
+      mode: ignore
+    - path: $.url
+      mode: ignore

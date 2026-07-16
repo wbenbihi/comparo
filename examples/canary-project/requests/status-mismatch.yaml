@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status mismatch
+  id: request.status-mismatch
+  description: >-
+    GET /status/200 but the request expects 201. The server answers 200, so the
+    status check fails (200 ≠ 201) in the Run screen's ASSERT column — a request
+    that is reachable yet fails its assertion. The response body is identical on
+    both environments, so it still compares SAME in the diff.
+  tags:
+    - status
+    - failing
+spec:
+  request:
+    method: GET
+    endpoint: /status/200
+  response:
+    status: 201

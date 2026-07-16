@@ -1,0 +1,23 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time leap year
+  id: request.time-leap
+  description: >-
+    GET /time/leap — is the pinned timestamp in a leap year? Returns {leap: true}
+    for 2016. Deterministic, compared exactly under the strict profile.
+  tags:
+    - time
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/leap
+    query:
+      timestamp: ${FIXED_TS}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.strict

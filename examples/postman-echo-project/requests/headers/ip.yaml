@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Egress IP
+  id: request.ip
+  description: >-
+    GET /ip — returns {ip} with the caller's egress address. The address is
+    volatile (it depends on where the run executes), so the volatile profile skips
+    the whole body; the request still asserts it is reachable with 200.
+  tags:
+    - headers
+    - volatile
+spec:
+  request:
+    method: GET
+    endpoint: /ip
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.volatile

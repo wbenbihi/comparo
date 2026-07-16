@@ -1,0 +1,28 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: GET with query args
+  id: request.get
+  description: >-
+    GET /get with a query string. Postman Echo returns {args, headers, url}; the
+    args we send round-trip exactly (diff.echo-args), while the volatile envelope
+    is skipped. ${API_LABEL} shows plain variable interpolation into a query value.
+  tags:
+    - methods
+    - get
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      foo: bar
+      label: ${API_LABEL}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-get
+    diff:
+      $ref: diff.echo-args

@@ -1,0 +1,30 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Price quote
+  id: request.quote
+  description: >-
+    Fetch a price quote per plan. taxRate is drawn from the environment, so
+    Stable sends 0.20 and Canary sends 0.25 — the one field that drifts. currency
+    and apiVersion are identical on both sides, so they compare SAME.
+  tags:
+    - pricing
+    - smoke
+spec:
+  matrix:
+    - $ref: matrix.plans
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      currency: USD
+      taxRate: ${TAX_RATE}
+      apiVersion: ${API_VERSION}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-get
+    diff:
+      $ref: diff.echo-args

@@ -1,0 +1,31 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Search catalog
+  id: request.search
+  description: >-
+    GET /get expanded across two matrices — locales × tiers. The cartesian
+    product yields six cells (3 locales × 2 tiers), each merging its case into the
+    query string. Inputs match on both sides, so all six compare SAME.
+  tags:
+    - matrix
+    - catalog
+    - smoke
+spec:
+  matrix:
+    - $ref: matrix.locales
+    - $ref: matrix.tiers
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      q: widgets
+      apiVersion: ${API_VERSION}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-get
+    diff:
+      $ref: diff.echo-args

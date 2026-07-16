@@ -1,0 +1,12 @@
+apiVersion: comparo/v1
+kind: Instance
+metadata:
+  name: Default Headers
+  id: instance.default-headers
+  description: Baseline headers shared by every request, injected with $val.
+spec:
+  value:
+    - key: accept
+      value: application/json
+    - key: user-agent
+      value: comparo-canary

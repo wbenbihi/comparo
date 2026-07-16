@@ -1,0 +1,25 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time object
+  id: request.time-object
+  description: >-
+    GET /time/object at a pinned timestamp — a fully deterministic response, so
+    it is compared byte-for-byte under the strict profile and stays SAME.
+  tags:
+    - utility
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/object
+    query:
+      timestamp: "2016-10-10"
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.time-object
+    diff:
+      $ref: diff.strict

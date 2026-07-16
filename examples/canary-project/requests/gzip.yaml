@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Gzip
+  id: request.gzip
+  description: GET /gzip — a gzip-compressed JSON body, transparently decoded and compared.
+  tags:
+    - encoding
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /gzip
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200

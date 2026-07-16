@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Delete a cookie (302)
+  id: request.cookies-delete
+  description: >-
+    GET /cookies/delete?foo — Echo clears the named cookie and answers 302,
+    redirecting to /cookies. As with cookies-set, comparo does not follow the
+    redirect, so this asserts the 302. The body is skipped as volatile.
+  tags:
+    - cookies
+    - redirect
+spec:
+  request:
+    method: GET
+    endpoint: /cookies/delete
+    query:
+      foo: ""
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 302
+    diff:
+      $ref: diff.volatile

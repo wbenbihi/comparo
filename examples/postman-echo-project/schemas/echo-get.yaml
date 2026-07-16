@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Echo (GET)
+  id: schema.echo-get
+  description: The structure Postman Echo's GET /get endpoint returns — args, headers, url.
+spec:
+  type: object
+  required:
+    - args
+    - headers
+    - url
+  properties:
+    args:
+      type: object
+    headers:
+      type: object
+    url:
+      type: string

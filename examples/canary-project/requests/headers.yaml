@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Headers echo
+  id: request.headers
+  description: >-
+    GET /headers — echoes the request headers back. The whole body is the volatile
+    envelope, so the default profile skips it: a request that is all skip, no drift.
+  tags:
+    - utility
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /headers
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200

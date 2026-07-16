@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Echoed body
+  id: diff.echo-body
+  description: >-
+    For the JSON POST. The body echoes back under `json`: orderId must match
+    exactly, while unitPrice is compared with a fractional ± tolerance (a rounding
+    nudge inside the budget is not a regression). The envelope is skipped, as always.
+spec:
+  default: shape
+  rules:
+    - path: $.json.orderId
+      mode: exact
+    # A fractional tolerance: 9.99 ± 0.01 stays SAME. (Exercises fractional-tolerance loading.)
+    - path: $.json.unitPrice
+      mode: tolerance
+      tolerance: 0.01
+    - path: $.headers
+      mode: ignore
+    - path: $.url
+      mode: ignore

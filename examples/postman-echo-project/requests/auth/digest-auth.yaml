@@ -1,0 +1,23 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Digest auth challenge (401)
+  id: request.digest-auth
+  description: >-
+    GET /digest-auth. HTTP Digest is a two-step handshake — the client must read
+    the server's nonce from a 401 challenge, then re-request with a signed digest.
+    comparo sends a single shot, so this deliberately expects the 401 challenge
+    rather than the authenticated 200. It is the auth-challenge case, asserted.
+  tags:
+    - auth
+    - challenge
+spec:
+  request:
+    method: GET
+    endpoint: /digest-auth
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 401
+    diff:
+      $ref: diff.volatile

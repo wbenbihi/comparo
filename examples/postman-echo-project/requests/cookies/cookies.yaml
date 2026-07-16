@@ -1,0 +1,23 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Read cookies
+  id: request.cookies
+  description: >-
+    GET /cookies — returns the cookie jar as {cookies: {...}}. Each request is
+    independent (no jar is carried from cookies-set), and Cloudflare rides its own
+    __cf_bm / _cfuvid cookies along, so the cookies profile checks the shape but
+    skips the jar's contents.
+  tags:
+    - cookies
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /cookies
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.cookies

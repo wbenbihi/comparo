@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: PUT a JSON body
+  id: request.put
+  description: PUT /put — the replace verb; the JSON body echoes back under `json`.
+  tags:
+    - methods
+    - put
+    - smoke
+spec:
+  request:
+    method: PUT
+    endpoint: /put
+    headers:
+      $val: instance.default-headers
+    body:
+      orderId: WIDGET-1
+      quantity: 5
+      status: shipped
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

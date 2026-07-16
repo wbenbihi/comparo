@@ -1,0 +1,11 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Volatile
+  id: diff.volatile
+  description: >-
+    For responses whose whole body is inherently unstable — /ip (the egress IP)
+    and /time/now (the current clock). Skip everything: the tool reports the field
+    as skipped rather than pretending a value that changes every call matched.
+spec:
+  default: ignore

@@ -1,0 +1,31 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: POST a JSON body
+  id: request.post-json
+  description: >-
+    POST /post with a JSON object body — comparo's native body encoding. Echo
+    parses it and populates both `json` and `data`. orderId is compared exactly
+    and unitPrice with a fractional ± tolerance. ${QUANTITY:int} casts the "3"
+    variable into a real JSON number so the body carries an int, not a string.
+  tags:
+    - methods
+    - post
+    - smoke
+spec:
+  request:
+    method: POST
+    endpoint: /post
+    headers:
+      $val: instance.default-headers
+    body:
+      orderId: WIDGET-1
+      quantity: ${QUANTITY:int}
+      unitPrice: 9.99
+      currency: USD
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write
+    diff:
+      $ref: diff.echo-body

@@ -1,0 +1,25 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time before
+  id: request.time-before
+  description: >-
+    GET /time/before — is the pinned timestamp before the target? Returns
+    {before: true} for 2016-10-10 vs 2018-10-10. Deterministic, compared exactly.
+    Both dates come from interpolated variables.
+  tags:
+    - time
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/before
+    query:
+      timestamp: ${FIXED_TS}
+      target: ${TARGET_TS}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.strict

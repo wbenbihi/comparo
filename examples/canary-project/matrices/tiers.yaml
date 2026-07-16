@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Matrix
+metadata:
+  name: Plan tiers
+  id: matrix.tiers
+  description: >-
+    Two subscription tiers, merged into the query and shared across requests, so
+    scoping a tier in the matrix picker hits every request that references it.
+spec:
+  target: request.query
+  mode: merge
+  values:
+    - tier: free
+    - tier: pro

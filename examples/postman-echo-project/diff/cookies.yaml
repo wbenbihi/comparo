@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Cookies
+  id: diff.cookies
+  description: >-
+    For GET /cookies. Check the response keeps its {cookies: object} shape, but
+    skip the cookie jar's contents: Cloudflare rides __cf_bm / _cfuvid cookies
+    along that vary per request, so their values are never compared.
+spec:
+  default: shape
+  rules:
+    - path: $.cookies
+      mode: ignore

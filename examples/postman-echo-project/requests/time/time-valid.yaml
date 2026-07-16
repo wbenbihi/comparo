@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time valid
+  id: request.time-valid
+  description: >-
+    GET /time/valid at a pinned timestamp — returns {valid: true}. Deterministic
+    given a fixed input, so compared byte-for-byte under the strict profile.
+    ${FIXED_TS} interpolates the pinned date into the query.
+  tags:
+    - time
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/valid
+    query:
+      timestamp: ${FIXED_TS}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.strict

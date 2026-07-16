@@ -1,0 +1,32 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Echo
+  id: environment.echo
+  description: The live Postman Echo service — the default target for every request.
+spec:
+  baseUrl: https://postman-echo.com
+  timeout:
+    connect: 5s
+    read: 30s
+  secrets:
+    # HTTP Basic auth for /basic-auth — the public postman/password test creds,
+    # base64 of "postman:password". Sourced from the environment when present,
+    # else a literal fallback so the example runs out of the box. Declared in both
+    # environments so the key-set matches and the header's taint never flips.
+    BASIC_AUTH:
+      from:
+        - $env: COMPARO_BASIC_AUTH
+        - $literal: cG9zdG1hbjpwYXNzd29yZA==
+  variables:
+    # A label echoed back in query args and bodies to show ${VAR} interpolation.
+    API_LABEL: comparo-echo
+    # A string that a request casts into a real JSON number with ${QUANTITY:int}.
+    QUANTITY: "3"
+    # Fixed timestamps so every /time/* response is deterministic and diffs clean.
+    FIXED_TS: "2016-10-10"
+    MID_TS: "2017-10-10"
+    TARGET_TS: "2018-10-10"
+  health:
+    - method: GET
+      endpoint: /get

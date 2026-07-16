@@ -1,0 +1,13 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Authenticated
+  id: schema.authenticated
+  description: The body Postman Echo's GET /basic-auth returns once the creds check out.
+spec:
+  type: object
+  required:
+    - authenticated
+  properties:
+    authenticated:
+      type: boolean

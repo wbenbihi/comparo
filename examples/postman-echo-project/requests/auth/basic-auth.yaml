@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Basic auth (200)
+  id: request.basic-auth
+  description: >-
+    GET /basic-auth with an HTTP Basic Authorization header built from the
+    BASIC_AUTH secret (public postman/password creds). The header is masked in
+    every display sink; only the execute sink sends the real value. Echo answers
+    200 with {authenticated: true}.
+  tags:
+    - auth
+    - secrets
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /basic-auth
+    headers:
+      $val: instance.basic-auth
+  response:
+    status: 200
+    schema:
+      $ref: schema.authenticated

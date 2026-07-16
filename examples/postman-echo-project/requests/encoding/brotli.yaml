@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Brotli (404)
+  id: request.brotli
+  description: >-
+    GET /brotli — the Brotli demo endpoint was removed from Postman Echo, so it now
+    answers 404. This asserts the 404 deliberately: the not-found case, a request
+    that is reachable but whose resource no longer exists.
+  tags:
+    - encoding
+    - not-found
+spec:
+  request:
+    method: GET
+    endpoint: /brotli
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 404
+    diff:
+      $ref: diff.volatile

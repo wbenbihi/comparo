@@ -1,0 +1,41 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: canary-showcase
+  description: >-
+    A stable ⇄ canary comparison that exercises the whole Postman Echo API and
+    every comparo feature — matrices, schemas, instances, secrets, streaming, and
+    all five diff modes — while keeping one surgical, intentional regression at
+    its centre so the Diff screen stays easy to read.
+spec:
+  # Where the object tree lives, relative to this file.
+  data: .
+
+  environments:
+    default: stable
+    # The Diff screen replays every request against both of these and compares.
+    diffPairs:
+      - name: stable-vs-canary
+        baseline: stable
+        candidate: canary
+
+  run:
+    concurrency: 4
+    retry:
+      attempts: 3
+      backoff: exponential
+
+  # Global default comparison profile; a request may override it with its own diff.
+  diff:
+    default:
+      $ref: diff.envelope
+
+  report:
+    formats:
+      - junit
+      - markdown
+    output: ./reports
+
+  redaction:
+    # Mask anything equal to a known secret value, even if it arrives untainted.
+    stringMatchBackstop: true

@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status 418 I'm a teapot
+  id: request.status-418
+  description: >-
+    GET /status/418 expecting 418 — the RFC 2324 teapot; an unusual status the
+    engine still surfaces and asserts faithfully.
+  tags:
+    - status
+    - client-error
+spec:
+  request:
+    method: GET
+    endpoint: /status/418
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 418

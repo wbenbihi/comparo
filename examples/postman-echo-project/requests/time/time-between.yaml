@@ -1,0 +1,26 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time between
+  id: request.time-between
+  description: >-
+    GET /time/between — does the pinned timestamp fall between start and end?
+    Returns {between: true} for 2017-10-10 within 2016-10-10..2018-10-10. Three
+    interpolated dates; deterministic, compared exactly.
+  tags:
+    - time
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/between
+    query:
+      timestamp: ${MID_TS}
+      start: ${FIXED_TS}
+      end: ${TARGET_TS}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.strict

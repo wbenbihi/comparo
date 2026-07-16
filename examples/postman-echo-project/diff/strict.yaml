@@ -1,0 +1,11 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Strict
+  id: diff.strict
+  description: >-
+    Require byte-for-byte equality — for endpoints whose response is fully
+    deterministic given a fixed input, such as every /time/* helper at a pinned
+    timestamp.
+spec:
+  default: exact

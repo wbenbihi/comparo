@@ -1,0 +1,31 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Time Object
+  id: schema.time-object
+  description: The decomposed timestamp postman-echo's GET /time/object returns.
+spec:
+  type: object
+  required:
+    - years
+    - months
+    - date
+    - hours
+    - minutes
+    - seconds
+    - milliseconds
+  properties:
+    years:
+      type: integer
+    months:
+      type: integer
+    date:
+      type: integer
+    hours:
+      type: integer
+    minutes:
+      type: integer
+    seconds:
+      type: integer
+    milliseconds:
+      type: integer

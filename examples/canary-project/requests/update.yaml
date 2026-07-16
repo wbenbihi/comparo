@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Update order
+  id: request.update
+  description: PUT an updated order to /put — the write shape, echoed back under json.
+  tags:
+    - write
+    - smoke
+spec:
+  request:
+    method: PUT
+    endpoint: /put
+    headers:
+      $val: instance.default-headers
+    body:
+      orderId: WIDGET-1
+      quantity: 5
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

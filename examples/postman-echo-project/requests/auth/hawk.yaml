@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Hawk auth challenge (401)
+  id: request.hawk
+  description: >-
+    GET /auth/hawk without a Hawk Authorization header. Echo answers 401 with
+    {statusCode: 401, error: Unauthorized, message: Unauthorized}. Hawk signing is
+    not something comparo produces, so this asserts the 401 — the second unsigned
+    auth-scheme case alongside oauth1.
+  tags:
+    - auth
+    - challenge
+spec:
+  request:
+    method: GET
+    endpoint: /auth/hawk
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 401

@@ -1,0 +1,23 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Schema mismatch
+  id: request.schema-mismatch
+  description: >-
+    GET /get validated against an over-strict schema that requires a `json` field
+    only the write endpoints return. The status is 200 (reachable) but the schema
+    check fails in the ASSERT column — a request that is up yet wrong. Its body is
+    identical on both environments, so it still compares SAME in the diff.
+  tags:
+    - schema
+    - failing
+spec:
+  request:
+    method: GET
+    endpoint: /get
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-strict

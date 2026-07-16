@@ -1,0 +1,20 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Delay
+  id: request.delay
+  description: >-
+    GET /delay/1 — responds after roughly one second with a deterministic body
+    ({delay: "1"}). Only the latency differs between runs, and latency is never
+    diffed, so the body compares by shape.
+  tags:
+    - stream
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /delay/1
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200

@@ -1,0 +1,25 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Echo (GET, strict)
+  id: schema.echo-strict
+  description: >-
+    A deliberately over-strict schema for GET /get. It requires a `json` field
+    that only the write endpoints return, so validating a /get response fails —
+    this drives the failing schema check in the Run screen's ASSERT column.
+spec:
+  type: object
+  required:
+    - args
+    - headers
+    - url
+    - json
+  properties:
+    args:
+      type: object
+    headers:
+      type: object
+    url:
+      type: string
+    json:
+      type: object

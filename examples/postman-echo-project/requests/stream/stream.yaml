@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Stream
+  id: request.stream
+  description: >-
+    GET /stream/1 — a single /get-style JSON object delivered as a chunked stream,
+    flagged with response.streaming so the engine reads it as it arrives. (/stream/N
+    for N > 1 concatenates N objects into a payload that is not valid JSON, so N = 1
+    keeps the response cleanly parseable.)
+  tags:
+    - stream
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /stream/1
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    streaming: true

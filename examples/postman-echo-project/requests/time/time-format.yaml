@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time format
+  id: request.time-format
+  description: >-
+    GET /time/format with a format token — returns {format: "20"} for the pinned
+    date. Deterministic, compared exactly under the strict profile.
+  tags:
+    - time
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/format
+    query:
+      timestamp: ${FIXED_TS}
+      format: mm
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.strict

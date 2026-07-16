@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status 404 Not Found
+  id: request.status-404
+  description: GET /status/404 expecting 404 — the not-found case, asserted as intended.
+  tags:
+    - status
+    - not-found
+spec:
+  request:
+    method: GET
+    endpoint: /status/404
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 404

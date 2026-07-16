@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time add
+  id: request.time-add
+  description: >-
+    GET /time/add — adds an interval to the pinned date; returns {sum: "..."}.
+    Deterministic given fixed inputs, compared exactly under the strict profile.
+  tags:
+    - time
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/add
+    query:
+      timestamp: ${FIXED_TS}
+      years: "1"
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.strict

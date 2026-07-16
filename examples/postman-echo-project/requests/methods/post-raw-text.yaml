@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: POST a raw (non-object) body
+  id: request.post-raw-text
+  description: >-
+    POST /post with a scalar string body instead of an object. comparo sends it as
+    a JSON scalar, which Echo cannot object-parse: it lands in the raw `data` field
+    with `json` null and `form` empty — the raw-body branch of Echo's parser, the
+    counterpart to the object case in post-json.
+  tags:
+    - methods
+    - post
+spec:
+  request:
+    method: POST
+    endpoint: /post
+    headers:
+      $val: instance.default-headers
+    body: "a raw string body, echoed back verbatim under data"
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

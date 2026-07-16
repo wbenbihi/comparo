@@ -1,0 +1,27 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time object
+  id: request.time-object
+  description: >-
+    GET /time/object at a pinned timestamp — decomposes the date into
+    {years, months, date, hours, ...}. Fully deterministic, so it is validated
+    against a schema and compared byte-for-byte under the strict profile.
+  tags:
+    - time
+    - schema
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/object
+    query:
+      timestamp: ${FIXED_TS}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.time-object
+    diff:
+      $ref: diff.strict

@@ -1,0 +1,15 @@
+apiVersion: comparo/v1
+kind: Instance
+metadata:
+  name: Default Headers
+  id: instance.default-headers
+  description: >-
+    Baseline headers shared by every request and injected with $val. Pinning them
+    here keeps the echoed $.headers block stable, so a diff of the request envelope
+    would be noise-free if it were ever compared.
+spec:
+  value:
+    - key: accept
+      value: application/json
+    - key: user-agent
+      value: comparo-echo

@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Envelope
+  id: diff.envelope
+  description: >-
+    The project default. Compare the payload's shape (keys + types), but skip the
+    volatile HTTP envelope — the echoed request headers and the reflected URL — so
+    the tool reports "skipped", never pretends a volatile field matched.
+spec:
+  # Unlisted paths: same shape (keys + types present), values not compared.
+  default: shape
+  rules:
+    - path: $.headers
+      mode: ignore
+    - path: $.url
+      mode: ignore

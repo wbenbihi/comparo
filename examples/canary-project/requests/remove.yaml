@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Remove order
+  id: request.remove
+  description: DELETE an order via /delete — the write shape, echoed back under json.
+  tags:
+    - write
+    - smoke
+spec:
+  request:
+    method: DELETE
+    endpoint: /delete
+    headers:
+      $val: instance.default-headers
+    body:
+      orderId: WIDGET-1
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

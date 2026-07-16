@@ -1,0 +1,29 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Echo (mirror)
+  id: environment.echo-mirror
+  description: >-
+    A second front onto the same Postman Echo service, identical to Echo in every
+    variable and secret. It exists only as the candidate of the echo-vs-mirror
+    pair: replaying the whole API against two identical targets should surface no
+    drift once the volatile HTTP envelope is skipped — a self-consistency check.
+spec:
+  baseUrl: https://postman-echo.com
+  timeout:
+    connect: 5s
+    read: 30s
+  secrets:
+    BASIC_AUTH:
+      from:
+        - $env: COMPARO_BASIC_AUTH
+        - $literal: cG9zdG1hbjpwYXNzd29yZA==
+  variables:
+    API_LABEL: comparo-echo
+    QUANTITY: "3"
+    FIXED_TS: "2016-10-10"
+    MID_TS: "2017-10-10"
+    TARGET_TS: "2018-10-10"
+  health:
+    - method: GET
+      endpoint: /get

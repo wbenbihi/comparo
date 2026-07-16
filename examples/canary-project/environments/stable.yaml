@@ -1,0 +1,29 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Stable
+  id: environment.stable
+  description: The current production release — the diff baseline.
+spec:
+  baseUrl: https://postman-echo.com
+  timeout:
+    connect: 5s
+    read: 30s
+  secrets:
+    # HTTP Basic auth for /basic-auth — the public postman/password test creds,
+    # base64 of "postman:password". Sourced from the environment when present,
+    # else a literal fallback so the example runs out of the box. Declared in both
+    # environments so the key-set matches and the header's taint never flips.
+    BASIC_AUTH:
+      from:
+        - $env: COMPARO_BASIC_AUTH
+        - $literal: cG9zdG1hbjpwYXNzd29yZA==
+  variables:
+    # The canary flips TAX_RATE and nudges SAMPLE_SIZE; everything else is identical.
+    TAX_RATE: "0.20"
+    SAMPLE_SIZE: "1000"
+    API_VERSION: "2"
+    DEFAULT_LOCALE: en-US
+  health:
+    - method: GET
+      endpoint: /get

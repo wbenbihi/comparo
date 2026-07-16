@@ -1,0 +1,31 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Echo (write)
+  id: schema.echo-write
+  description: >-
+    The structure postman-echo's write endpoints (/post, /put, /patch, /delete)
+    echo back — the parsed JSON body under `json`, plus the request envelope.
+spec:
+  type: object
+  required:
+    - args
+    - data
+    - headers
+    - json
+    - url
+  properties:
+    args:
+      type: object
+    data:
+      type:
+        - object
+        - string
+    headers:
+      type: object
+    json:
+      type:
+        - object
+        - "null"
+    url:
+      type: string

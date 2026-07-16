@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status 301 Moved
+  id: request.status-301
+  description: >-
+    GET /status/301 expecting 301 — the permanent-redirect case. comparo does not
+    follow redirects, so the 301 is observed and asserted directly.
+  tags:
+    - status
+    - redirect
+spec:
+  request:
+    method: GET
+    endpoint: /status/301
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 301
+    diff:
+      $ref: diff.volatile

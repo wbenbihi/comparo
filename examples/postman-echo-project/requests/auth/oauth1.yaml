@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: OAuth 1.0 challenge (401)
+  id: request.oauth1
+  description: >-
+    GET /oauth1 without a signed OAuth 1.0 Authorization header. Echo rejects it
+    with 401 and {status: fail, message: ...}. Signing OAuth 1.0 needs a timestamp,
+    nonce, and HMAC signature comparo does not generate, so this asserts the 401
+    rejection — the unsigned-request case.
+  tags:
+    - auth
+    - challenge
+spec:
+  request:
+    method: GET
+    endpoint: /oauth1
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 401

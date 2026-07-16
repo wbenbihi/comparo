@@ -1,0 +1,29 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: GET across a matrix
+  id: request.get-matrix
+  description: >-
+    GET /get expanded across a single matrix — three query-parameter cases, one
+    run each. One request definition covers three distinct argument sets; the
+    args echo back and are compared exactly per cell.
+  tags:
+    - methods
+    - get
+    - matrix
+spec:
+  matrix:
+    - $ref: matrix.params
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      label: ${API_LABEL}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-get
+    diff:
+      $ref: diff.echo-args

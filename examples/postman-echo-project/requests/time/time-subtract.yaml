@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Time subtract
+  id: request.time-subtract
+  description: >-
+    GET /time/subtract — subtracts an interval from the pinned date; returns
+    {difference: "..."}. Deterministic, compared exactly under the strict profile.
+  tags:
+    - time
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /time/subtract
+    query:
+      timestamp: ${FIXED_TS}
+      years: "1"
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.strict

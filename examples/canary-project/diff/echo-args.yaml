@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: DiffProfile
+metadata:
+  name: Echoed args
+  id: diff.echo-args
+  description: >-
+    For the /get echoes. Compare the query args we injected exactly — that is the
+    payload we control — keep everything else at shape, and skip the volatile
+    envelope. This is what turns "the whole response differs" into "one field
+    regressed".
+spec:
+  default: shape
+  rules:
+    # The query args we injected are the payload — they must match exactly.
+    - path: $.args
+      mode: exact
+    # Volatile envelope: never compared, and the tool says so (skip, not same).
+    - path: $.headers
+      mode: ignore
+    - path: $.url
+      mode: ignore

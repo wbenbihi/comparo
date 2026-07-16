@@ -1,0 +1,49 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: postman-echo-reference
+  description: >-
+    A 1:1 reference implementation of the entire Postman Echo API — one comparo
+    Request for every endpoint the service offers, and several per endpoint where
+    that shows a distinct HTTP or comparo case (POST body variants, a spread of
+    status codes, the full auth and cookie flows, every /time/* helper). Where the
+    canary-project is a curated diff showcase, this project is about exhaustive
+    coverage: every method, every status class, compression, streaming, auth
+    challenges, secrets, matrices, schemas, and all five diff modes, run against
+    the live host.
+spec:
+  # Self-contained: the object tree lives right beside this manifest.
+  data: .
+
+  environments:
+    default: echo
+    # Optional pair: replay every request against two identical fronts of the same
+    # echo API and confirm nothing drifts once the volatile envelope is skipped — a
+    # self-consistency / flake check across the whole API surface.
+    diffPairs:
+      - name: echo-vs-mirror
+        baseline: echo
+        candidate: echo-mirror
+
+  run:
+    # Kept modest on purpose: postman-echo rate-limits bursts with transient 503s,
+    # and retry/backoff absorbs the occasional one.
+    concurrency: 3
+    retry:
+      attempts: 3
+      backoff: exponential
+
+  # Global default comparison profile; a request may override it with its own diff.
+  diff:
+    default:
+      $ref: diff.envelope
+
+  report:
+    formats:
+      - junit
+      - markdown
+    output: ./reports
+
+  redaction:
+    # Mask anything equal to a known secret value, even if it arrives untainted.
+    stringMatchBackstop: true

@@ -1,0 +1,27 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Catalog
+  id: request.catalog
+  description: >-
+    A GET whose inputs are identical on both environments, so every compared
+    field is SAME. The clean counterpart to the drifting quote — the Diff screen
+    shows it passing while quote fails.
+  tags:
+    - catalog
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      currency: USD
+      locale: ${DEFAULT_LOCALE}
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-get
+    diff:
+      $ref: diff.echo-args

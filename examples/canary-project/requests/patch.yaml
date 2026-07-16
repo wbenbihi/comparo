@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Patch order
+  id: request.patch
+  description: PATCH a partial change to /patch — the write shape, echoed back under json.
+  tags:
+    - write
+    - smoke
+spec:
+  request:
+    method: PATCH
+    endpoint: /patch
+    headers:
+      $val: instance.default-headers
+    body:
+      quantity: 7
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Set a cookie (302)
+  id: request.cookies-set
+  description: >-
+    GET /cookies/set?foo=bar — Echo issues the Set-Cookie header and answers 302,
+    redirecting to /cookies. comparo does not follow redirects, so this asserts the
+    302 itself: the redirect-response case. The body is skipped as volatile.
+  tags:
+    - cookies
+    - redirect
+spec:
+  request:
+    method: GET
+    endpoint: /cookies/set
+    query:
+      foo: bar
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 302
+    diff:
+      $ref: diff.volatile

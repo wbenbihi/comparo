@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: DELETE with a JSON body
+  id: request.delete
+  description: DELETE /delete — the remove verb; the JSON body echoes back under `json`.
+  tags:
+    - methods
+    - delete
+    - smoke
+spec:
+  request:
+    method: DELETE
+    endpoint: /delete
+    headers:
+      $val: instance.default-headers
+    body:
+      orderId: WIDGET-1
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

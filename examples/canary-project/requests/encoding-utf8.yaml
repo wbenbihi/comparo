@@ -1,0 +1,18 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Encoding UTF-8
+  id: request.encoding-utf8
+  description: >-
+    GET /encoding/utf8 — a static, non-JSON HTML document. With no JSON to parse,
+    the differ falls back to a raw-byte comparison; the page is identical on both
+    sides, so it is SAME.
+  tags:
+    - encoding
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /encoding/utf8
+  response:
+    status: 200

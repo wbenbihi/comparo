@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Response headers
+  id: request.response-headers
+  description: >-
+    GET /response-headers?foo=bar — Echo reflects the query params both as response
+    headers and as the JSON body {foo: bar}. The body is deterministic, so it
+    compares by shape under the default profile.
+  tags:
+    - headers
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /response-headers
+    query:
+      foo: bar
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200

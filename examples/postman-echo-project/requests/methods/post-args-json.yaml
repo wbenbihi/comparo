@@ -1,0 +1,30 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: POST with query args and a JSON body
+  id: request.post-args-json
+  description: >-
+    POST /post carrying both a query string and a JSON body — Echo populates
+    `args` (from the query) and `json`/`data` (from the body) side by side, the
+    third distinct POST body-parsing case. args are compared exactly.
+  tags:
+    - methods
+    - post
+spec:
+  request:
+    method: POST
+    endpoint: /post
+    query:
+      source: ${API_LABEL}
+      trace: abc-123
+    headers:
+      $val: instance.default-headers
+    body:
+      orderId: WIDGET-2
+      quantity: ${QUANTITY:int}
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write
+    diff:
+      $ref: diff.echo-args

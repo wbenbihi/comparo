@@ -1,0 +1,18 @@
+apiVersion: comparo/v1
+kind: Instance
+metadata:
+  name: Basic Auth Headers
+  id: instance.basic-auth
+  description: >-
+    Default headers plus an HTTP Basic Authorization header built from the
+    BASIC_AUTH secret. Because ${BASIC_AUTH} is a declared secret, the whole
+    header is tainted — masked in the TUI and scrubbed from reports and snapshots.
+    Only the execute sink sends the real value.
+spec:
+  value:
+    - key: accept
+      value: application/json
+    - key: user-agent
+      value: comparo-echo
+    - key: authorization
+      value: Basic ${BASIC_AUTH}

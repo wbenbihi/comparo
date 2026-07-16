@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status 201 Created
+  id: request.status-201
+  description: GET /status/201 expecting 201 — the resource-created case.
+  tags:
+    - status
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /status/201
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 201

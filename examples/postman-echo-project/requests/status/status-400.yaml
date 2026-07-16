@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status 400 Bad Request
+  id: request.status-400
+  description: GET /status/400 expecting 400 — the client-error case, asserted as intended.
+  tags:
+    - status
+    - client-error
+spec:
+  request:
+    method: GET
+    endpoint: /status/400
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 400

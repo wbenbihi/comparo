@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Matrix
+metadata:
+  name: Regions
+  id: matrix.regions
+  description: >-
+    Two deployment regions, merged into the query. Paired with matrix.locales on
+    one request, the cartesian product yields 3 × 2 = 6 cells.
+spec:
+  target: request.query
+  mode: merge
+  values:
+    - region: us-east-1
+    - region: eu-west-1

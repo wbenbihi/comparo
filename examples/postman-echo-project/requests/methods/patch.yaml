@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: PATCH a JSON body
+  id: request.patch
+  description: PATCH /patch — the partial-update verb; the JSON body echoes back under `json`.
+  tags:
+    - methods
+    - patch
+    - smoke
+spec:
+  request:
+    method: PATCH
+    endpoint: /patch
+    headers:
+      $val: instance.default-headers
+    body:
+      quantity: 7
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

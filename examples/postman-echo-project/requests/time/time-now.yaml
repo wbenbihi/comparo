@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Current time
+  id: request.time-now
+  description: >-
+    GET /time/now — the current time as an RFC 1123 string. It changes every call,
+    so there is nothing stable to compare: the volatile profile skips the whole
+    body and the request only asserts it is reachable with 200.
+  tags:
+    - time
+    - volatile
+spec:
+  request:
+    method: GET
+    endpoint: /time/now
+    headers:
+      $val: instance.default-headers
+  response:
+    status: 200
+    diff:
+      $ref: diff.volatile
