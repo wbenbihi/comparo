@@ -28,6 +28,9 @@ from comparo.core.models import AssertionRule
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
+from comparo.core.report import CellReport
+from comparo.core.report import DriftEntry
+from comparo.core.report import RunReport
 from comparo.core.resolve import select_environment
 
 
@@ -83,6 +86,58 @@ class ExecutionResult:
     def errors(self) -> int:
         """How many cells failed to execute."""
         return sum(1 for o in self.outcomes if o.error is not None)
+
+
+def build_execution_report(
+    result: ExecutionResult, redact: Callable[[str], str] = str
+) -> RunReport:
+    """Render an execution's outcome as a :class:`RunReport` for the CI reporters.
+
+    An execution gates on more than drift — a cell can fail its assertions with no
+    drift at all — so each failed ``error``-severity assertion becomes a drift row
+    (its ``mode`` is ``assert``) alongside any genuinely drifted fields. The
+    report's pass/fail therefore matches :attr:`ExecutionResult.passed` exactly:
+    an assertion-only failure still fails the report gate.
+
+    Args:
+        result: The execution outcome to render.
+        redact: Masks secret values in labels / details before they leave the
+            process (a server can echo a secret into a drift detail).
+
+    Returns:
+        A run report whose ``drift`` bucket holds every non-error gate failure.
+    """
+    cells: list[CellReport] = []
+    for outcome in result.outcomes:
+        request_id = redact(outcome.request_id)
+        cell_key = redact(outcome.cell_key)
+        if outcome.error is not None:
+            cells.append(CellReport(request_id, cell_key, "error", [], 0, redact(outcome.error)))
+            continue
+        rows = _assertion_rows(result.baseline, outcome.baseline_assertions, redact)
+        rows += _assertion_rows(result.candidate or "", outcome.candidate_assertions, redact)
+        skipped = 0
+        if outcome.diff is not None:
+            rows += [
+                DriftEntry(redact(field.path), redact(field.detail), field.mode)
+                for field in outcome.diff.drifts
+            ]
+            skipped = outcome.diff.skipped
+        state = "drift" if rows else "same"
+        cells.append(CellReport(request_id, cell_key, state, rows, skipped, None))
+    return RunReport(redact(result.baseline), redact(result.candidate or ""), cells)
+
+
+def _assertion_rows(
+    env: str, results: list[AssertionResult], redact: Callable[[str], str]
+) -> list[DriftEntry]:
+    """Failed ``error``-severity assertions as drift rows, tagged with their env."""
+    prefix = f"assert[{env}] " if env else "assert "
+    return [
+        DriftEntry(redact(prefix + result.label), redact(result.detail), "assert")
+        for result in results
+        if result.severity == "error" and not result.ok
+    ]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

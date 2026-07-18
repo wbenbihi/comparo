@@ -464,7 +464,7 @@ gate. This is the headless equivalent of the TUI's Execution screen, and its exi
 is the exact gate that screen shows.
 
 ```
-comparo exec EXECUTION_ID [--config CONFIG]
+comparo exec EXECUTION_ID [--config CONFIG] [--report FORMAT ...] [--output DIR]
 ```
 
 **Arguments**
@@ -478,9 +478,16 @@ comparo exec EXECUTION_ID [--config CONFIG]
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
 | `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
+| `--report` | | manifest's `report.formats` | Report format(s) to write: `junit`, `sarif`, `json`, `markdown` (repeatable). |
+| `--output` | `-o` | manifest's `report.output`, else `reports/` | Directory to write report files into. |
 
 The environments, request selection, matrix scoping, and which checks run (`assertions`
 / `diff`) all come from the profile itself — `exec` takes no `--env` / `--pair` flags.
+
+Like [`comparo diff`](#comparo-diff), `--report` writes CI artifacts (and falls back to
+the manifest's `report` block when omitted). The report's pass/fail is the **execution**
+gate, so a cell that failed only its assertions — with no drift — is still a failure in
+the artifact; each such failure appears as a row tagged `assert[<env>]`.
 
 **Behavior & exit code**
 

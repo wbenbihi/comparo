@@ -4,7 +4,10 @@ import asyncio
 import json
 from pathlib import Path
 
+from comparo.core.assertions import AssertionResult
+from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionResult
+from comparo.core.execution import build_execution_report
 from comparo.core.execution import run_execution
 from comparo.core.http import HttpResponse
 from comparo.core.http import TimeoutBudget
@@ -148,6 +151,44 @@ def test_execution_assertion_failure_fails_the_gate(tmp_path: Path) -> None:
     outcome = result.outcomes[0]
     assert not all(a.ok for a in outcome.baseline_assertions)
     assert not result.passed
+
+
+def test_build_execution_report_gate_matches_the_execution_gate(tmp_path: Path) -> None:
+    # M-b: comparo exec --report must produce an artifact whose pass/fail is the
+    # execution gate, not a diff-only gate.
+    _project(tmp_path)
+    result = _run(tmp_path)
+    report = build_execution_report(result)
+    assert report.passed == result.passed
+    assert len(report.cells) == len(result.outcomes)
+
+
+def test_build_execution_report_flags_an_assertion_only_failure() -> None:
+    # A cell that failed only its assertions (no drift) is still a failure — the
+    # report must not show a green gate. The failed error-rule becomes a drift row.
+    failed = AssertionResult("status", "equals", False, "error", "200 == 201", "status == 201")
+    warn = AssertionResult("latency", "lte", False, "warn", "slow", "latency <= 1ms")
+    outcome = CellOutcome("request.probe", "", [failed, warn], [], diff=None)
+    result = ExecutionResult("exec.run", "Base", "Cand", True, True, [outcome])
+    assert not result.passed
+
+    report = build_execution_report(result)
+    assert not report.passed
+    assert report.drift == 1
+    cell = report.cells[0]
+    assert cell.state == "drift"
+    assert any("status == 201" in row.path and "200 == 201" in row.detail for row in cell.drifts)
+    assert not any("latency" in row.path for row in cell.drifts)  # warns never gate the report
+
+
+def test_build_execution_report_masks_a_secret_in_a_drift_detail() -> None:
+    # A server can echo a secret into a failed assertion's detail; the redactor
+    # passed to the builder must mask it before it reaches an artifact.
+    failed = AssertionResult("body:$.token", "equals", False, "error", "s3cr3t == x", "token == x")
+    outcome = CellOutcome("request.probe", "", [failed], [], diff=None)
+    result = ExecutionResult("exec.run", "Base", None, True, False, [outcome])
+    report = build_execution_report(result, lambda text: text.replace("s3cr3t", "••••••"))
+    assert "s3cr3t" not in report.cells[0].drifts[0].detail
 
 
 def test_execution_inline_diff_profile_composes(tmp_path: Path) -> None:

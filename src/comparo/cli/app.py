@@ -28,6 +28,7 @@ from comparo.core.diagnostics import LoadError
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_all
 from comparo.core.execution import ExecutionResult
+from comparo.core.execution import build_execution_report
 from comparo.core.execution import run_execution
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
@@ -330,16 +331,26 @@ def exec_profile(
     execution_id: Annotated[str, typer.Argument(help="The ExecutionProfile id to run.")],
     *,
     config: ConfigOption = DEFAULT_CONFIG,
+    report: Annotated[
+        list[str] | None,
+        typer.Option("--report", help="Report format(s): junit, sarif, json, markdown."),
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Directory for report files.")
+    ] = None,
 ) -> None:
     """Run an ExecutionProfile headless — assert both envs, diff, and gate.
 
     Exits 0 only when the gate passes (assertions hold on both environments and
     nothing untriaged drifted), so CI can gate on it. This is the exact gate the
-    TUI Execution screen shows.
+    TUI Execution screen shows. With ``--report`` it also writes CI artifacts,
+    where a cell that failed only its assertions (no drift) is still a failure.
 
     Args:
         execution_id: The ``metadata.id`` of the ExecutionProfile to run.
         config: The manifest (or project directory) to load.
+        report: Report format(s) to write (defaults to the manifest's).
+        output: The directory report files are written to.
     """
     loaded = _open_project(config)
     profile = loaded.objects.get(execution_id)
@@ -351,7 +362,9 @@ def exec_profile(
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from error
-    _print_execution(result, Redactor.for_project(loaded).text)
+    redact = Redactor.for_project(loaded).text
+    _print_execution(result, redact)
+    _emit_reports(loaded, report, output, lambda: build_execution_report(result, redact))
     raise typer.Exit(0 if result.passed else 1)
 
 
@@ -442,23 +455,40 @@ def diff(
         )
         raise typer.Exit(1)
     passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name, redact)
-    # Fall back to the manifest's report defaults when the flags are omitted.
+    _emit_reports(
+        loaded,
+        report,
+        output,
+        lambda: build_report(base_env.metadata.name, candidate_env.metadata.name, results, redact),
+    )
+    if not passed:
+        raise typer.Exit(1)
+
+
+def _emit_reports(
+    loaded: LoadedProject,
+    report: list[str] | None,
+    output: Path | None,
+    build: Callable[[], RunReport],
+) -> None:
+    """Write CI report artifacts, falling back to the manifest's report defaults.
+
+    *build* is deferred so the (small) report is materialized only when a format
+    is actually requested. An unknown format aborts even when nothing is written,
+    so a typo in ``--report`` never silently produces no artifact.
+    """
     report_config = loaded.project.spec.report if loaded.project is not None else None
     formats = report or (report_config.formats if report_config is not None else None)
-    out_dir = output or Path(
-        report_config.output if report_config is not None and report_config.output else "reports"
-    )
     unknown = [name for name in formats or [] if name not in REPORTERS]
     if unknown:
         known = ", ".join(sorted(REPORTERS))
         _abort(f"unknown report format(s): {', '.join(unknown)} (known: {known})")
-    if formats:
-        run_report = build_report(
-            base_env.metadata.name, candidate_env.metadata.name, results, redact
-        )
-        _write_reports(run_report, formats, out_dir)
-    if not passed:
-        raise typer.Exit(1)
+    if not formats:
+        return
+    out_dir = output or Path(
+        report_config.output if report_config is not None and report_config.output else "reports"
+    )
+    _write_reports(build(), formats, out_dir)
 
 
 @app.command()
