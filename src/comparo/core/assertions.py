@@ -18,10 +18,12 @@ import jsonschema
 from comparo.core.execute import Execution
 from comparo.core.loader import LoadedProject
 from comparo.core.models import AssertionProfile
+from comparo.core.models import AssertionProfileSpec
 from comparo.core.models import AssertionRule
 from comparo.core.models import Request
 from comparo.core.models import Schema
 from comparo.core.refs import ref_id as _ref_id
+from comparo.core.refs import resolve_specs
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -130,6 +132,41 @@ def request_rules(request: Request) -> list[AssertionRule]:
         rules.append(AssertionRule(target="status", op="equals", value=response.status))
     if response.schema is not None:
         rules.append(AssertionRule(target="body", op="schema", value=response.schema))
+    return rules
+
+
+def profiles_to_rules(project: LoadedProject, refs: object) -> list[AssertionRule]:
+    """Flatten one or more AssertionProfiles (``$ref`` or inline) into rules.
+
+    *refs* is a ``response.assert`` / execution ``profiles.assert`` slot: a single
+    reference, an inline spec, or a list of either. Each resolved profile's
+    ``include`` chain is composed before its own rules, so a referenced base's
+    rules precede the overriding ones.
+    """
+    rules: list[AssertionRule] = []
+    for spec in resolve_specs(project, refs, AssertionProfileSpec):
+        for reference in spec.include or []:
+            identifier = _ref_id(reference)
+            included = project.objects.get(identifier) if identifier is not None else None
+            if isinstance(included, AssertionProfile):
+                rules.extend(compose_rules(project, included))
+        rules.extend(spec.rules or [])
+    return rules
+
+
+def request_response_rules(project: LoadedProject, request: Request) -> list[AssertionRule]:
+    """Compile a request's whole response contract into assertion rules.
+
+    Combines the ``response.status`` / ``response.schema`` sugar with the
+    profiles attached via ``response.assert``, so every sink that gates a single
+    response — ``comparo run`` and the execution planner — evaluates the same
+    rules. Without the ``assert`` half, a ``response.assert`` block would be
+    silently ignored on the run path while the execution path honoured it.
+    """
+    rules = list(request_rules(request))
+    response = request.spec.response
+    if response is not None:
+        rules += profiles_to_rules(project, response.assertions)
     return rules
 
 

@@ -12,10 +12,10 @@ import dataclasses
 from collections.abc import Callable
 
 from comparo.core.assertions import AssertionResult
-from comparo.core.assertions import compose_rules
 from comparo.core.assertions import evaluate_rules
 from comparo.core.assertions import passed as assertions_pass
-from comparo.core.assertions import request_rules
+from comparo.core.assertions import profiles_to_rules
+from comparo.core.assertions import request_response_rules
 from comparo.core.compare import CellDiff
 from comparo.core.compare import compare_cell
 from comparo.core.execute import execute_request
@@ -24,14 +24,10 @@ from comparo.core.http import HttpClient
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import MatrixCell
 from comparo.core.matrix import expand
-from comparo.core.models import AssertionProfile
-from comparo.core.models import AssertionProfileSpec
 from comparo.core.models import AssertionRule
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
-from comparo.core.refs import ref_id as _ref_id
-from comparo.core.refs import resolve_specs
 from comparo.core.resolve import select_environment
 
 
@@ -275,10 +271,8 @@ def _select(project: LoadedProject, profile: ExecutionProfile) -> list[Request]:
 def _assert_rules(
     project: LoadedProject, profile: ExecutionProfile, request: Request
 ) -> list[AssertionRule]:
-    rules = list(request_rules(request))  # response.status / response.schema sugar
-    response = request.spec.response
-    rules += _profiles_to_rules(project, response.assertions if response is not None else None)
-    rules += _profiles_to_rules(project, _execution_profiles(profile, "assert"))
+    rules = list(request_response_rules(project, request))  # status/schema sugar + response.assert
+    rules += profiles_to_rules(project, _execution_profiles(profile, "assert"))
     return _dedupe_rules(rules)
 
 
@@ -292,18 +286,6 @@ def _dedupe_rules(rules: list[AssertionRule]) -> list[AssertionRule]:
             seen.add(signature)
             unique.append(rule)
     return unique
-
-
-def _profiles_to_rules(project: LoadedProject, refs: object) -> list[AssertionRule]:
-    rules: list[AssertionRule] = []
-    for spec in resolve_specs(project, refs, AssertionProfileSpec):
-        for reference in spec.include or []:
-            identifier = _ref_id(reference)
-            included = project.objects.get(identifier) if identifier is not None else None
-            if isinstance(included, AssertionProfile):
-                rules.extend(compose_rules(project, included))
-        rules.extend(spec.rules or [])
-    return rules
 
 
 def _execution_profiles(profile: ExecutionProfile, key: str) -> object:

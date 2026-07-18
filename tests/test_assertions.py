@@ -7,6 +7,7 @@ import msgspec
 
 from comparo.core.assertions import evaluate_rules
 from comparo.core.assertions import passed
+from comparo.core.assertions import request_response_rules
 from comparo.core.assertions import request_rules
 from comparo.core.assertions import run_assertions
 from comparo.core.execute import Execution
@@ -178,3 +179,42 @@ def test_an_invalid_regex_fails_the_rule_instead_of_raising() -> None:
     results = evaluate_rules(project, [rule], execution)
     assert results[0].ok is False
     assert "invalid regex" in results[0].detail
+
+
+def test_request_response_rules_includes_the_assert_block(tmp_path: Path) -> None:
+    # A request's ``response.assert`` profile must gate the run path, not only the
+    # execution path. ``request_rules`` (status/schema sugar) omits it; the fuller
+    # ``request_response_rules`` includes it so ``comparo run`` honours it too.
+    (tmp_path / "assert.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: AssertionProfile\n"
+        "metadata:\n  name: Body\n  id: assert.body\n"
+        "spec:\n  rules:\n    - target: body:$.ok\n      op: equals\n      value: true\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "request.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata:\n  name: Get\n  id: request.get\n"
+        "spec:\n  request:\n    method: GET\n    endpoint: /x\n"
+        "  response:\n    assert:\n      $ref: assert.body\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata:\n  name: e\n  id: environment.e\n"
+        "spec:\n  baseUrl: http://h\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path)
+    request = loaded.objects["request.get"]
+    environment = loaded.objects["environment.e"]
+    assert isinstance(request, Request)
+    assert isinstance(environment, Environment)
+
+    assert not request_rules(request)  # the sugar-only compiler misses the assert block
+    rules = request_response_rules(loaded, request)
+    assert any(r.target == "body:$.ok" for r in rules)  # the full compiler includes it
+
+    bad = Execution(request, environment, "", HttpResponse(200, [], b'{"ok": false}', 1.0))
+    good = Execution(request, environment, "", HttpResponse(200, [], b'{"ok": true}', 1.0))
+    assert not passed(evaluate_rules(loaded, rules, bad))
+    assert passed(evaluate_rules(loaded, rules, good))

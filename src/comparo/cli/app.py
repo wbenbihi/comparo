@@ -21,7 +21,7 @@ from comparo.adapters.httpx_client import HttpxClient
 from comparo.adapters.reporters import REPORTERS
 from comparo.core.assertions import evaluate_rules
 from comparo.core.assertions import passed as assertions_pass
-from comparo.core.assertions import request_rules
+from comparo.core.assertions import request_response_rules
 from comparo.core.compare import CellDiff
 from comparo.core.compare import diff_run
 from comparo.core.diagnostics import LoadError
@@ -939,7 +939,8 @@ def _print_results(loaded: LoadedProject, results: list[Execution], environment_
             error = redact(execution.error) if execution.error else "error"
             typer.secho(f"  ✗ {identifier:<44} {error}", fg=typer.colors.RED)
             continue
-        checks = evaluate_rules(loaded, request_rules(execution.request), execution)
+        rules = request_response_rules(loaded, execution.request)
+        checks = evaluate_rules(loaded, rules, execution)
         latency = f"{response.elapsed_ms:.0f}ms"
         if assertions_pass(checks):
             typer.secho(f"  ✓ {identifier:<44} {response.status}  {latency}", fg=typer.colors.GREEN)

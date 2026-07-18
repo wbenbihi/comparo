@@ -425,9 +425,10 @@ comparo run [REQUEST_ID] [--config CONFIG] [--env NAME]
 - Prints `run · <environment>` followed by one line per cell: `✓` with status and
   latency on success, `✗` with the error (or the failing check) otherwise.
 - A cell that returns a response is **not** an automatic pass: the request's
-  `response.status` / `response.schema` sugar is evaluated as assertions, so a `500`
-  against a declared `200` (or a schema mismatch) prints red and fails the gate, with
-  the offending check named on the line.
+  `response.status` / `response.schema` sugar **and any `response.assert` profiles**
+  are evaluated as assertions, so a `500` against a declared `200`, a schema mismatch,
+  or a failed `assert` rule prints red and fails the gate, with the offending check
+  named on the line.
 - Exits `1` if the project fails to load, the environment cannot be selected, no
   requests match, an execution fails, **or any `error`-severity check fails**.
   Otherwise exits `0`.
