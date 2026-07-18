@@ -7,6 +7,7 @@ pair. It only orchestrates the execute / assertion / diff sinks; it holds no
 comparison logic of its own.
 """
 
+import asyncio
 import dataclasses
 from collections.abc import Callable
 
@@ -18,6 +19,7 @@ from comparo.core.assertions import request_rules
 from comparo.core.compare import CellDiff
 from comparo.core.compare import compare_cell
 from comparo.core.execute import execute_request
+from comparo.core.execute import run_settings
 from comparo.core.http import HttpClient
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import MatrixCell
@@ -164,25 +166,30 @@ async def run_execution(
         )
         for request in empty
     ]
-    for index, (request, cell, rules) in enumerate(plan):
+    concurrency, retry = run_settings(project)
+    limit = asyncio.Semaphore(concurrency)
+
+    async def _run_cell(
+        index: int, request: Request, cell: MatrixCell, rules: list[AssertionRule]
+    ) -> tuple[int, CellOutcome]:
         request_id = request.metadata.id or request.metadata.name
         method = request.spec.request.method
         path = request.spec.request.endpoint
-        if on_progress is not None:
-            on_progress(
-                ExecutionProgress(
-                    request_id, cell.key, index, total, done=False, method=method, path=path
+        async with limit:
+            if on_progress is not None:
+                on_progress(
+                    ExecutionProgress(
+                        request_id, cell.key, index, total, done=False, method=method, path=path
+                    )
                 )
+            base = await execute_request(project, baseline, request, client, cell, retry)
+            cand = (
+                await execute_request(project, candidate, request, cand_client, cell, retry)
+                if candidate is not None
+                else None
             )
-        base = await execute_request(project, baseline, request, client, cell)
-        cand = (
-            await execute_request(project, candidate, request, cand_client, cell)
-            if candidate is not None
-            else None
-        )
-        diff = compare_cell(project, base, cand, diff_override) if do_diff else None
-        outcomes.append(
-            CellOutcome(
+            diff = compare_cell(project, base, cand, diff_override) if do_diff else None
+            outcome = CellOutcome(
                 request_id=request_id,
                 cell_key=cell.key,
                 baseline_assertions=evaluate_rules(project, rules, base) if do_assert else [],
@@ -192,29 +199,38 @@ async def run_execution(
                 diff=diff,
                 error=base.error or (cand.error if cand is not None else None),
             )
-        )
-        if on_progress is not None:
-            on_progress(
-                ExecutionProgress(
-                    request_id,
-                    cell.key,
-                    index,
-                    total,
-                    done=True,
-                    method=method,
-                    path=path,
-                    status=base.response.status if base.response is not None else None,
-                    baseline_ms=(
-                        round(base.response.elapsed_ms) if base.response is not None else None
-                    ),
-                    candidate_ms=(
-                        round(cand.response.elapsed_ms)
-                        if cand is not None and cand.response is not None
-                        else None
-                    ),
-                    drift=diff.drifts[0].path if diff is not None and diff.drifts else "",
+            if on_progress is not None:
+                on_progress(
+                    ExecutionProgress(
+                        request_id,
+                        cell.key,
+                        index,
+                        total,
+                        done=True,
+                        method=method,
+                        path=path,
+                        status=base.response.status if base.response is not None else None,
+                        baseline_ms=(
+                            round(base.response.elapsed_ms) if base.response is not None else None
+                        ),
+                        candidate_ms=(
+                            round(cand.response.elapsed_ms)
+                            if cand is not None and cand.response is not None
+                            else None
+                        ),
+                        drift=diff.drifts[0].path if diff is not None and diff.drifts else "",
+                    )
                 )
-            )
+            return index, outcome
+
+    cell_results = await asyncio.gather(
+        *(
+            _run_cell(index, request, cell, rules)
+            for index, (request, cell, rules) in enumerate(plan)
+        )
+    )
+    # Preserve plan order regardless of completion order under concurrency.
+    outcomes.extend(outcome for _, outcome in sorted(cell_results, key=lambda item: item[0]))
     return ExecutionResult(
         profile_id=profile.metadata.id or profile.metadata.name,
         baseline=baseline.metadata.name,

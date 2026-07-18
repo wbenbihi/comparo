@@ -31,7 +31,7 @@ def profile_path(project: LoadedProject, profile_id: str) -> Path | None:
         The file declaring the profile, or ``None`` if none does.
     """
     yaml = YAML(typ="rt")
-    for file in sorted(project.root.rglob("*.yaml")):
+    for file in sorted(project.objects_dir.rglob("*.yaml")):
         with file.open() as handle:
             data = yaml.load(handle)
         if not isinstance(data, dict) or data.get("kind") != "DiffProfile":

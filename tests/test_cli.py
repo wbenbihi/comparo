@@ -135,3 +135,58 @@ def test_bare_invocation_without_a_config_is_friendly(
     result = runner.invoke(app, [])
     assert result.exit_code == 1
     assert "comparo init" in result.output
+
+
+# ── Phase 5: manifest-driven selection and the redaction backstop toggle ──
+
+
+def test_manifest_selection_filters_the_default_request_set(tmp_path: Path) -> None:
+    from comparo.cli.app import _select_requests
+    from comparo.core.loader import load_project
+
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\nmetadata: {name: P, id: project.p}\n"
+        "spec:\n  data: .\n  environments:\n    default: local\n"
+        "  selection:\n    tags:\n      - smoke\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: local, id: environment.local}\n"
+        "spec: {baseUrl: 'http://127.0.0.1:1'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "a.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: a, id: request.a, tags: [smoke]}\n"
+        "spec: {request: {method: GET, endpoint: /a}}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "b.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata: {name: b, id: request.b, tags: [nightly]}\n"
+        "spec: {request: {method: GET, endpoint: /b}}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path / "comparo.yaml")
+    assert [r.metadata.id for r in _select_requests(loaded, None)] == ["request.a"]
+
+
+def test_redaction_backstop_toggle_disables_the_report_backstop(tmp_path: Path) -> None:
+    from comparo.core.loader import load_project
+    from comparo.core.redaction import Redactor
+
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\nmetadata: {name: P, id: project.p}\n"
+        "spec:\n  data: .\n  redaction:\n    stringMatchBackstop: false\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: local, id: environment.local}\n"
+        "spec:\n  baseUrl: http://127.0.0.1:1\n"
+        "  secrets:\n    T:\n      from:\n        - $literal: SUPERSECRETVALUE\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path / "comparo.yaml")
+    assert Redactor.for_project(loaded).values == ()  # backstop off → identity redactor
+    assert "SUPERSECRETVALUE" in Redactor.for_project(loaded).text("SUPERSECRETVALUE")  # unmasked

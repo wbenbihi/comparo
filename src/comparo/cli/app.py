@@ -399,8 +399,8 @@ def diff(
         typer.Option("--report", help="Report format(s): junit, sarif, json, markdown."),
     ] = None,
     output: Annotated[
-        Path, typer.Option("--output", "-o", help="Directory for report files.")
-    ] = Path("reports"),
+        Path | None, typer.Option("--output", "-o", help="Directory for report files.")
+    ] = None,
 ) -> None:
     """Diff every request-cell across two environments and report drift.
 
@@ -433,11 +433,17 @@ def diff(
         )
         raise typer.Exit(1)
     passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name, redact)
-    if report:
+    # Fall back to the manifest's report defaults when the flags are omitted.
+    report_config = loaded.project.spec.report if loaded.project is not None else None
+    formats = report or (report_config.formats if report_config is not None else None)
+    out_dir = output or Path(
+        report_config.output if report_config is not None and report_config.output else "reports"
+    )
+    if formats:
         run_report = build_report(
             base_env.metadata.name, candidate_env.metadata.name, results, redact
         )
-        _write_reports(run_report, report, output)
+        _write_reports(run_report, formats, out_dir)
     if not passed:
         raise typer.Exit(1)
 
@@ -871,10 +877,21 @@ def _select_requests(loaded: LoadedProject, request_id: str | None) -> list[Requ
     if request_id is not None:
         obj = loaded.objects.get(request_id)
         return [obj] if isinstance(obj, Request) else []
-    return sorted(
+    requests = sorted(
         (o for o in loaded.objects.values() if isinstance(o, Request)),
         key=lambda request: request.metadata.id or "",
     )
+    # With no explicit request, honour the manifest's default selection (if any).
+    selection = loaded.project.spec.selection if loaded.project is not None else None
+    if selection is not None and (selection.tags or selection.requests):
+        ids = set(selection.requests or [])
+        tags = set(selection.tags or [])
+        requests = [
+            request
+            for request in requests
+            if request.metadata.id in ids or (tags & set(request.metadata.tags or []))
+        ]
+    return requests
 
 
 async def _execute(

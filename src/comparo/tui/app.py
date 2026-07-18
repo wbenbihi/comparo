@@ -83,6 +83,7 @@ from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_request
+from comparo.core.execute import run_settings
 from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionProgress
 from comparo.core.execution import ExecutionResult
@@ -1254,14 +1255,17 @@ class RunView(Vertical):
         from comparo.adapters.httpx_client import HttpxClient
 
         client = HttpxClient()
-        limit = asyncio.Semaphore(4)
+        concurrency, retry = run_settings(self.project)
+        limit = asyncio.Semaphore(concurrency)
 
         async def one(request: Request, cell: MatrixCell) -> None:
             key = _run_key(request, cell)
             self._state[key] = "running"
             self._on_progress(request, cell)
             async with limit:
-                execution = await execute_request(self.project, environment, request, client, cell)
+                execution = await execute_request(
+                    self.project, environment, request, client, cell, retry
+                )
             self._exec[key] = execution
             self._checks[key] = run_checks(self.project, request, execution)
             self._state[key] = "ok" if execution.ok else "failed"
@@ -2250,7 +2254,8 @@ class DiffView(Vertical):
         redact = Redactor.for_project(self.project).text
         client = HttpxClient()
         candidate_client = HttpxClient()
-        limit = asyncio.Semaphore(4)
+        concurrency, retry = run_settings(self.project)
+        limit = asyncio.Semaphore(concurrency)
 
         async def one(index: int, request: Request, cell: MatrixCell) -> CellDiff:
             method_path = f"{request.spec.request.method} {redact(request.spec.request.endpoint)}"
@@ -2260,8 +2265,10 @@ class DiffView(Vertical):
             self._render_diff_running()
             async with limit:
                 base, cand = await asyncio.gather(
-                    execute_request(self.project, baseline, request, client, cell),
-                    execute_request(self.project, candidate, request, candidate_client, cell),
+                    execute_request(self.project, baseline, request, client, cell, retry),
+                    execute_request(
+                        self.project, candidate, request, candidate_client, cell, retry
+                    ),
                 )
             result = compare_cell(self.project, base, cand)
             self._run_done += 1

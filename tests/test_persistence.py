@@ -111,3 +111,30 @@ def test_redactor_for_project_orders_values_longest_first() -> None:
     # sort key fails here rather than in a leaked report.
     values = ("longest-secret-value", "short")
     assert Redactor(values).values == tuple(sorted(values, key=len, reverse=True))
+
+
+def test_manifest_load_separates_root_from_data_dir_and_archive_does_not_nest(
+    tmp_path: Path,
+) -> None:
+    # A manifest with a non-'.' data dir must give root=project dir, data_dir=<data>,
+    # and the archive must land at <data>/.reports, not <data>/<data>/.reports.
+    from comparo.core.archive import archive_dir
+    from comparo.core.loader import load_project
+
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\nmetadata: {name: P, id: project.p}\n"
+        "spec: {data: .comparo}\n",
+        encoding="utf-8",
+    )
+    data = tmp_path / ".comparo"
+    data.mkdir()
+    (data / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\nmetadata: {name: E, id: environment.e}\n"
+        "spec: {baseUrl: 'http://h'}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path / "comparo.yaml")
+    assert loaded.root == tmp_path
+    assert loaded.data_dir == data
+    resolved = archive_dir(loaded.root, loaded.project.spec.data, None)  # type: ignore[union-attr]
+    assert resolved == data / ".reports"

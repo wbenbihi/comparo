@@ -27,11 +27,22 @@ _REF_SIGILS = ("$ref", "$val")
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class LoadedProject:
-    """A validated project: its manifest and every object indexed by id."""
+    """A validated project: its manifest and every object indexed by id.
+
+    ``root`` is the project directory (a manifest's parent, or the directory
+    itself); ``data_dir`` is where the object YAML lives (``spec.data`` resolved).
+    They coincide for the common ``data: .`` shape.
+    """
 
     root: Path
     project: Project | None
     objects: dict[str, Object]
+    data_dir: Path | None = None
+
+    @property
+    def objects_dir(self) -> Path:
+        """The directory the object YAML lives in (``data_dir`` or ``root``)."""
+        return self.data_dir if self.data_dir is not None else self.root
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -67,7 +78,7 @@ def load_project(source: Path) -> LoadedProject:
     Raises:
         LoadError: If any object fails to parse, validate, or resolve a reference.
     """
-    root, files = _resolve_sources(source)
+    root, data_dir, files = _resolve_sources(source)
     yaml = YAML(typ="rt")
     diagnostics: list[Diagnostic] = []
     entries: list[_Entry] = []
@@ -92,7 +103,7 @@ def load_project(source: Path) -> LoadedProject:
 
     project, objects = _index(entries, diagnostics)
     _check_references(entries, set(objects), diagnostics)
-    loaded = LoadedProject(root=root, project=project, objects=objects)
+    loaded = LoadedProject(root=root, project=project, objects=objects, data_dir=data_dir)
     if not diagnostics:  # profile resolution needs a fully-indexed project
         _check_profiles(loaded, entries, diagnostics)
 
@@ -101,26 +112,27 @@ def load_project(source: Path) -> LoadedProject:
     return loaded
 
 
-def _resolve_sources(source: Path) -> tuple[Path, list[Path]]:
-    """Resolve *source* to a project root and the object files to load.
+def _resolve_sources(source: Path) -> tuple[Path, Path, list[Path]]:
+    """Resolve *source* to a project root, data dir, and the object files to load.
 
-    A directory loads every ``*.yaml`` beneath it. A manifest file loads its
-    ``spec.data`` directory (default: the manifest's own directory) plus the
-    manifest itself.
+    A directory is its own root and data dir. A manifest file's root is its
+    parent directory and its data dir is ``spec.data`` resolved against that
+    (default: the manifest's own directory); the manifest itself is also loaded.
 
     Args:
         source: A project directory or a manifest file.
 
     Returns:
-        The project root and the sorted list of files to parse.
+        The project root, the data directory, and the sorted files to parse.
     """
     if source.is_dir():
-        return source, sorted(source.rglob("*.yaml"))
-    data_dir = (source.parent / (_manifest_data(source) or ".")).resolve()
+        return source, source, sorted(source.rglob("*.yaml"))
+    root = source.parent
+    data_dir = (root / (_manifest_data(source) or ".")).resolve()
     files = sorted(data_dir.rglob("*.yaml")) if data_dir.is_dir() else []
     if source.resolve() not in {file.resolve() for file in files}:
         files = [source, *files]
-    return data_dir, files
+    return root, data_dir, files
 
 
 def _plain(node: object) -> object:

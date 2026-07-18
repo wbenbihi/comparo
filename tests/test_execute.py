@@ -171,3 +171,65 @@ def test_httpx_adapter_roundtrip() -> None:
     response = asyncio.run(go())
     assert response.status == 200
     assert b'"ok"' in response.body
+
+
+# ── Phase 5: retry-with-backoff and configured concurrency ──
+
+
+class _FlakyClient:
+    """Fails with an HttpError for the first *fail_times* sends, then succeeds."""
+
+    def __init__(self, response: HttpResponse, fail_times: int) -> None:
+        self.response = response
+        self.remaining = fail_times
+        self.calls = 0
+
+    async def send(self, request: ResolvedRequest, timeout: TimeoutBudget) -> HttpResponse:
+        from comparo.core.http import HttpError
+
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise HttpError("transient")
+        return self.response
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_retry_recovers_a_transient_transport_failure() -> None:
+    from comparo.core.models import RetryConfig
+
+    loaded = load_project(SAMPLE)
+    env = select_environment(loaded, "local")
+    request = loaded.objects["request.get-json"]
+    assert isinstance(request, Request)
+    flaky = _FlakyClient(HttpResponse(200, [], b"{}", 1.0), fail_times=1)
+    retry = RetryConfig(attempts=3, backoff="constant")
+    result = asyncio.run(execute_request(loaded, env, request, flaky, retry=retry))
+    assert result.ok  # the second attempt succeeded
+    assert flaky.calls == 2
+
+
+def test_retry_gives_up_after_attempts_and_captures_the_error() -> None:
+    from comparo.core.models import RetryConfig
+
+    loaded = load_project(SAMPLE)
+    env = select_environment(loaded, "local")
+    request = loaded.objects["request.get-json"]
+    assert isinstance(request, Request)
+    flaky = _FlakyClient(HttpResponse(200, [], b"{}", 1.0), fail_times=5)
+    retry = RetryConfig(attempts=2, backoff="constant")
+    result = asyncio.run(execute_request(loaded, env, request, flaky, retry=retry))
+    assert not result.ok  # exhausted the two attempts
+    assert flaky.calls == 2
+    assert result.error is not None
+
+
+def test_execute_all_honors_configured_concurrency() -> None:
+    from comparo.core.execute import run_settings
+
+    loaded = load_project(SAMPLE)
+    # sample-project declares run.concurrency: 4
+    concurrency, _ = run_settings(loaded)
+    assert concurrency == 4

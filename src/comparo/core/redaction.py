@@ -103,7 +103,17 @@ class Redactor:
 
     @classmethod
     def for_project(cls, project: LoadedProject) -> "Redactor":
-        """Build a redactor over every resolved secret value in *project*."""
+        """Build a redactor over every resolved secret value in *project*.
+
+        Honours ``spec.redaction.stringMatchBackstop``: setting it to ``false``
+        disables this display/report backstop (a server-echoed secret is then no
+        longer masked in the TUI and CLI report output). The on-disk ``runs``
+        export always masks regardless — a saved artifact never leaks.
+        """
+        manifest = project.project
+        redaction = manifest.spec.redaction if manifest is not None else None
+        if redaction is not None and redaction.string_match_backstop is False:
+            return cls(())
         return cls.from_values(secret_values(project))
 
     def text(self, text: str) -> str:
