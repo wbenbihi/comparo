@@ -603,6 +603,8 @@ def _write_openapi_project(directory: Path, result: openapi.ImportResult) -> Non
     )
     typer.secho(f"✓ created {manifest}", fg=typer.colors.GREEN)
     typer.secho(f"✓ created {data_dir}/ — {counts}, and AGENTS.md", fg=typer.colors.GREEN)
+    for warning in result.warnings:
+        typer.secho(f"⚠ {warning}", fg=typer.colors.YELLOW, err=True)
     if result.secret_env_vars:
         typer.echo("\nSecrets are declared as $env refs — provide real values before running:")
         for var in result.secret_env_vars:
