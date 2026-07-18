@@ -38,6 +38,11 @@ class CellDiff:
     error: str | None = None
     baseline_body: object = None
     candidate_body: object = None
+    #: Baseline response metadata, for a saved-run replay's detail tree. Not diffed.
+    status: int | None = None
+    latency_ms: int | None = None
+    size_bytes: int | None = None
+    response_headers: tuple[tuple[str, str], ...] = ()
 
     @property
     def drifted(self) -> bool:
@@ -126,6 +131,10 @@ def _compare(
     if baseline_response is None or candidate_response is None:
         return CellDiff(request, key, [], "missing response")
     default_mode, rules = _compose_diff(project, request, diff_override)
+    status = baseline_response.status
+    latency = round(baseline_response.elapsed_ms)
+    size = len(baseline_response.body)
+    headers = tuple(baseline_response.headers)
     if baseline_response.events is not None and candidate_response.events is not None:
         # Streamed responses diff as their ordered event sequence, not raw bytes.
         events_a, events_b = baseline_response.events, candidate_response.events
@@ -135,6 +144,10 @@ def _compare(
             diff(events_a, events_b, default_mode, rules),
             baseline_body=events_a,
             candidate_body=events_b,
+            status=status,
+            latency_ms=latency,
+            size_bytes=size,
+            response_headers=headers,
         )
     try:
         baseline_body = json.loads(baseline_response.body)
@@ -148,6 +161,10 @@ def _compare(
         diff(baseline_body, candidate_body, default_mode, rules),
         baseline_body=baseline_body,
         candidate_body=candidate_body,
+        status=status,
+        latency_ms=latency,
+        size_bytes=size,
+        response_headers=headers,
     )
 
 

@@ -32,6 +32,33 @@ class AssertionResult:
     ok: bool
     severity: str
     detail: str
+    #: A human label for the rule, e.g. ``status == 200`` or ``latency <= 800ms``.
+    label: str = ""
+
+
+_OP_SYMBOL = {"equals": "==", "lt": "<", "lte": "<=", "gt": ">", "gte": ">=", "matches": "~"}
+
+
+def rule_label(rule: AssertionRule) -> str:
+    """A compact human label for a rule — ``status == 200``, ``latency <= 800ms``."""
+    target = rule.target
+    if target.startswith(("body:", "header:")):
+        target = target.split(":", 1)[1]
+    op, value = rule.op, rule.value
+    if op == "exists":
+        return f"{target} exists"
+    if op == "schema":
+        reference = _ref_id(value)
+        return f"schema {reference.split('.', 1)[-1]}" if reference else f"{target} schema"
+    if op == "oneOf":
+        options = value if isinstance(value, list) else [value]
+        return f"{target} in [{', '.join(str(option) for option in options)}]"
+    if op == "between" and isinstance(value, list) and len(value) == 2:
+        return f"{target} in {value[0]}..{value[1]}"
+    if op == "contains":
+        return f"{target} contains {value}"
+    symbol = _OP_SYMBOL.get(op, op)
+    return f"{target} {symbol} {value}" if value is not None else f"{target} {op}"
 
 
 #: A bound constructor for the current rule's result: ``(ok, detail) -> result``.
@@ -140,7 +167,7 @@ def _evaluate(project: LoadedProject, rule: AssertionRule, execution: Execution)
     response = execution.response
     if response is None:
         detail = execution.error or "no response"
-        return AssertionResult(rule.target, rule.op, False, rule.severity, detail)
+        return AssertionResult(rule.target, rule.op, False, rule.severity, detail, rule_label(rule))
     actual, present = _target(rule.target, response, execution)
     return _apply(project, rule, actual, present)
 
@@ -174,8 +201,10 @@ def _apply(
 ) -> AssertionResult:
     op, expected = rule.op, rule.value
 
+    label = rule_label(rule)
+
     def result(ok: bool, detail: str) -> AssertionResult:
-        return AssertionResult(rule.target, op, ok, rule.severity, detail)
+        return AssertionResult(rule.target, op, ok, rule.severity, detail, label)
 
     if op == "exists":
         return result(present and actual is not None, "present" if present else "missing")
@@ -306,12 +335,12 @@ def _number(value: object, target: str) -> float | None:
 
 
 def _duration_ms(text: str) -> float | None:
-    match = re.fullmatch(r"\s*([0-9]*\.?[0-9]+)\s*(ms|s|m)?\s*", text)
+    match = re.fullmatch(r"\s*([0-9]*\.?[0-9]+)\s*(ms|s|m|h)?\s*", text)
     if match is None:
         return None
     amount = float(match.group(1))
     unit = match.group(2) or "ms"
-    return {"ms": amount, "s": amount * 1000, "m": amount * 60000}[unit]
+    return {"ms": amount, "s": amount * 1000, "m": amount * 60000, "h": amount * 3600000}[unit]
 
 
 def _contains(actual: object, expected: object) -> bool:
@@ -331,5 +360,7 @@ def _ref_id(reference: object) -> str | None:
 
 
 def _short(value: object) -> str:
-    rendered = json.dumps(value, ensure_ascii=False, default=str)
-    return rendered if len(rendered) <= 40 else f"{rendered[:37]}..."
+    # Full rendering: an assertion detail must not be truncated before a sink can
+    # redact it, else a long secret's prefix would survive masking. Sinks truncate
+    # after redaction for brevity.
+    return json.dumps(value, ensure_ascii=False, default=str)

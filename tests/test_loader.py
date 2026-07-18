@@ -20,7 +20,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 def test_sample_project_loads() -> None:
     loaded = load_project(SAMPLE)
     assert loaded.project is not None
-    assert len(loaded.objects) == 13
+    assert len(loaded.objects) == 14
     assert "request.echo-anything" in loaded.objects
 
 
@@ -50,6 +50,60 @@ def test_assertion_and_execution_profiles_load(tmp_path: Path) -> None:
     assert contract.spec.rules[1].severity == "warn"  # type: ignore[union-attr, index]
     assert gate.spec.environments.candidate == "environment.canary"  # type: ignore[union-attr]
     assert gate.spec.check.assertions is True  # type: ignore[union-attr]
+
+
+def test_mistyped_execution_profiles_key_is_rejected(tmp_path: Path) -> None:
+    # A typo in the profiles block (asert) must be a hard load error, not a
+    # silently-disabled profile — the profiles struct forbids unknown fields.
+    _write(
+        tmp_path,
+        "gate.yaml",
+        "apiVersion: comparo/v1\nkind: ExecutionProfile\n"
+        "metadata:\n  name: Gate\n  id: exec.gate\n"
+        "spec:\n"
+        "  environments:\n    baseline: environment.stable\n"
+        "  profiles:\n    asert:\n      $ref: assert.contract\n",  # typo: asert
+    )
+    with pytest.raises(LoadError):
+        load_project(tmp_path)
+
+
+def test_wrong_kind_assertion_include_is_rejected(tmp_path: Path) -> None:
+    # An include that points at a non-AssertionProfile would be silently dropped
+    # at runtime (composing zero rules → false green); it must fail loud instead.
+    _write(
+        tmp_path,
+        "req.yaml",
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata:\n  name: Probe\n  id: request.probe\n"
+        "spec:\n  request:\n    method: GET\n    endpoint: /get\n",
+    )
+    _write(
+        tmp_path,
+        "profile.yaml",
+        "apiVersion: comparo/v1\nkind: AssertionProfile\n"
+        "metadata:\n  name: Composed\n  id: assert.composed\n"
+        "spec:\n  include:\n    - $ref: request.probe\n",  # a Request, not an AssertionProfile
+    )
+    with pytest.raises(LoadError) as caught:
+        load_project(tmp_path)
+    assert any("not an AssertionProfile" in d.message for d in caught.value.diagnostics)
+
+
+def test_inline_assertion_include_wrong_kind_is_rejected(tmp_path: Path) -> None:
+    # An INLINE response.assert include (no standalone profile object) must be
+    # validated too — else a wrong-kind include loads clean and drops the rules.
+    _write(
+        tmp_path,
+        "req.yaml",
+        "apiVersion: comparo/v1\nkind: Request\n"
+        "metadata:\n  name: Probe\n  id: request.probe\n"
+        "spec:\n  request:\n    method: GET\n    endpoint: /get\n"
+        "  response:\n    assert:\n      include:\n        - request.probe\n",  # bare string
+    )
+    with pytest.raises(LoadError) as caught:
+        load_project(tmp_path)
+    assert any("include is not" in d.message for d in caught.value.diagnostics)
 
 
 def test_fractional_tolerance_loads(tmp_path: Path) -> None:

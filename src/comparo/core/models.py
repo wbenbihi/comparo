@@ -118,20 +118,25 @@ class MatrixSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     create_path: bool = False
 
 
+#: The comparison modes a DiffProfile understands. Constrained so a typo like
+#: ``excat`` is rejected at load instead of silently degrading a path to SAME.
+DiffMode = Literal["exact", "ignore", "shape", "type", "tolerance"]
+
+
 class DiffRule(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     """One path-scoped comparison rule inside a ``DiffProfile``."""
 
     path: str
-    mode: str
+    mode: DiffMode
     schema: Any = None
-    array_length: str | None = None
+    array_length: Literal["exact", "tolerant"] | None = None
     tolerance: float | None = None
 
 
 class DiffProfileSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     """The body of a ``DiffProfile`` object."""
 
-    default: str
+    default: DiffMode
     rules: list[DiffRule] | None = None
 
 
@@ -193,6 +198,17 @@ class ExecutionCheck(msgspec.Struct, rename="camel", forbid_unknown_fields=True)
     diff: bool = True
 
 
+class ExecutionProfiles(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """The ``profiles`` block of an ExecutionProfile — its diff / assert overrides.
+
+    Typed (not ``Any``) so a mistyped key like ``asert`` is a hard load error
+    rather than a silently-ignored profile.
+    """
+
+    diff: Any = None
+    assert_: Any = msgspec.field(name="assert", default=None)
+
+
 class ExecutionProfileSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     """The body of an ``ExecutionProfile`` — what to run, where, and which checks."""
 
@@ -200,7 +216,7 @@ class ExecutionProfileSpec(msgspec.Struct, rename="camel", forbid_unknown_fields
     matrix: dict[str, MatrixScope] | None = None
     environments: ExecutionEnvironments | None = None
     check: ExecutionCheck | None = None
-    profiles: Any = None
+    profiles: ExecutionProfiles | None = None
     report: Any = None
 
 
@@ -313,16 +329,4 @@ Object = (
     | AssertionProfile
     | ExecutionProfile
     | Project
-)
-
-#: Kinds that must declare ``metadata.id`` (every kind except the root manifest).
-REFERENCEABLE_KINDS = (
-    "Environment",
-    "Request",
-    "Schema",
-    "Instance",
-    "Matrix",
-    "DiffProfile",
-    "AssertionProfile",
-    "ExecutionProfile",
 )

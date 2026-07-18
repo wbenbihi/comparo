@@ -141,7 +141,7 @@ layers = [
 name = "Core must not import an HTTP library directly"
 type = "forbidden"
 source_modules = ["comparo.core"]
-forbidden_modules = ["httpx"]
+forbidden_modules = ["httpx", "requests", "aiohttp", "urllib3", "httpcore"]
 
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]

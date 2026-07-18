@@ -91,10 +91,13 @@ def load_project(source: Path) -> LoadedProject:
 
     project, objects = _index(entries, diagnostics)
     _check_references(entries, set(objects), diagnostics)
+    loaded = LoadedProject(root=root, project=project, objects=objects)
+    if not diagnostics:  # profile resolution needs a fully-indexed project
+        _check_profiles(loaded, entries, diagnostics)
 
     if diagnostics:
         raise LoadError(diagnostics, root)
-    return LoadedProject(root=root, project=project, objects=objects)
+    return loaded
 
 
 def _resolve_sources(source: Path) -> tuple[Path, list[Path]]:
@@ -198,6 +201,10 @@ def _check_references(
 ) -> None:
     for entry in entries:
         for reference in _find_references(entry.raw):
+            # A JSON Schema / OpenAPI ``$ref`` (``#/$defs/…``, ``other.json#/…``)
+            # is the user's own payload, not a comparo object id — leave it be.
+            if reference.target.startswith("#") or "/" in reference.target:
+                continue
             if reference.target not in known:
                 diagnostics.append(
                     Diagnostic(
@@ -207,6 +214,93 @@ def _check_references(
                         _near_miss(reference.target, known),
                     )
                 )
+
+
+def _check_profiles(
+    loaded: LoadedProject, entries: list[_Entry], diagnostics: list[Diagnostic]
+) -> None:
+    """Validate every profile attachment slot at load time.
+
+    A slot that cannot resolve is a load error, never a silent empty rule set —
+    an empty rule set passes every gate, so swallowing it would be a false green.
+    """
+    from comparo.core.models import AssertionProfile
+    from comparo.core.models import AssertionProfileSpec
+    from comparo.core.models import DiffProfileSpec
+    from comparo.core.models import ExecutionProfile
+    from comparo.core.models import Request
+    from comparo.core.refs import SpecResolutionError
+    from comparo.core.refs import resolve_specs
+
+    file_by_id = {
+        entry.obj.metadata.id: entry.file
+        for entry in entries
+        if getattr(entry.obj, "metadata", None) is not None and entry.obj.metadata.id is not None
+    }
+
+    def check(file: Path, value: object, spec_type: type) -> None:
+        if value is None:
+            return
+        try:
+            resolve_specs(loaded, value, spec_type)
+        except SpecResolutionError as error:
+            diagnostics.append(Diagnostic(file, str(error)))
+
+    def check_includes(file: Path, includes: object) -> None:
+        # Each include must be a {$ref: id} pointing at an AssertionProfile; a bare
+        # string or wrong-kind ref would be silently dropped at runtime (false green).
+        for entry in includes if isinstance(includes, list) else []:
+            ref = entry.get("$ref") if isinstance(entry, dict) else None
+            target = loaded.objects.get(ref) if isinstance(ref, str) else None
+            if not isinstance(ref, str):
+                diagnostics.append(
+                    Diagnostic(file, f"assertion include is not a {{$ref: id}}: {entry!r}")
+                )
+            elif not isinstance(target, AssertionProfile):
+                what = f"a {type(target).__name__}" if target is not None else "an unknown id"
+                diagnostics.append(
+                    Diagnostic(
+                        file,
+                        f"assertion include $ref '{ref}' resolves to {what}, not an "
+                        "AssertionProfile",
+                    )
+                )
+
+    def check_inline_assertions(file: Path, value: object) -> None:
+        # Standalone profiles are validated in the object loop; an INLINE assert
+        # spec (attached to a request/execution) has no object, so validate its
+        # include here too — else its wrong-kind includes load clean and vanish.
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, dict) and "$ref" not in item:
+                check_includes(file, item.get("include"))
+
+    for obj in loaded.objects.values():
+        obj_id = getattr(obj.metadata, "id", None)
+        file = file_by_id.get(obj_id, loaded.root) if obj_id is not None else loaded.root
+        if isinstance(obj, Request):
+            response = obj.spec.response
+            if response is not None:
+                check(file, response.diff, DiffProfileSpec)
+                check(file, response.assertions, AssertionProfileSpec)
+                check_inline_assertions(file, response.assertions)
+        elif isinstance(obj, ExecutionProfile):
+            profiles = obj.spec.profiles
+            if profiles is not None:
+                check(file, profiles.diff, DiffProfileSpec)
+                check(file, profiles.assert_, AssertionProfileSpec)
+                check_inline_assertions(file, profiles.assert_)
+        elif isinstance(obj, AssertionProfile):
+            check_includes(file, obj.spec.include)
+    if loaded.project is not None:
+        config = loaded.project.spec.diff
+        if isinstance(config, dict):
+            check(loaded.root, config.get("default"), DiffProfileSpec)
+        if loaded.project.spec.plugins:
+            # The plugin system does not exist yet; accepting config for it would
+            # silently no-op, so a configured plugins block is a hard error.
+            diagnostics.append(
+                Diagnostic(loaded.root, "spec.plugins is not supported yet — remove it")
+            )
 
 
 def _find_references(node: object) -> Iterator[_Reference]:

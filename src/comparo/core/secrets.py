@@ -55,10 +55,14 @@ def _resolve(name: str, source: object, root: Path) -> str:
         if "$literal" in source:
             return str(source["$literal"])
         if "$file" in source:
-            path = root / str(source["$file"])
+            base = root.resolve()
+            path = (base / str(source["$file"])).resolve()
+            if not path.is_relative_to(base):
+                message = f"secret '{name}': $file path escapes the project root: {source['$file']}"
+                raise SecretError(message)
             try:
-                return path.read_text().strip()
-            except OSError as error:
+                return path.read_text(encoding="utf-8").strip()
+            except (OSError, ValueError, LookupError) as error:
                 message = f"secret '{name}': cannot read {path}"
                 raise SecretError(message) from error
         candidates = source.get("from")

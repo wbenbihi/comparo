@@ -6,6 +6,7 @@ reporter, only the :class:`Reporter` protocol.
 """
 
 import dataclasses
+from collections.abc import Callable
 from typing import Protocol
 
 from comparo.core.compare import CellDiff
@@ -62,8 +63,24 @@ class RunReport:
 
     @property
     def passed(self) -> bool:
-        """Whether the run passes the gate (no drift, no errors)."""
-        return self.drift == 0 and self.errors == 0
+        """Whether the run passes the gate (fail-closed on an empty run)."""
+        return diff_passed(len(self.cells), self.drift, self.errors)
+
+
+def diff_passed(calls: int, drift: int, errors: int) -> bool:
+    """Whether a diff run passes its gate.
+
+    A run that compared nothing (``calls == 0``) verified nothing, so it can never
+    be a pass — it fails closed, mirroring :attr:`ExecutionResult.passed`.
+    """
+    return calls > 0 and drift == 0 and errors == 0
+
+
+def diff_gate(calls: int, drift: int, errors: int) -> str:
+    """The tri-state gate verdict (``PASS`` / ``FAIL`` / ``ERROR``) for a diff run."""
+    if errors:
+        return "ERROR"
+    return "PASS" if diff_passed(calls, drift, errors) else "FAIL"
 
 
 class Reporter(Protocol):
@@ -76,13 +93,21 @@ class Reporter(Protocol):
         ...
 
 
-def build_report(baseline: str, candidate: str, cells: list[CellDiff]) -> RunReport:
+def build_report(
+    baseline: str,
+    candidate: str,
+    cells: list[CellDiff],
+    redact: Callable[[str], str] = str,
+) -> RunReport:
     """Build a :class:`RunReport` from diff results.
 
     Args:
         baseline: The baseline environment name.
         candidate: The candidate environment name.
         cells: The per-cell diff results.
+        redact: Masks known secret values in drift details / error text before
+            they leave the process (a server can echo a secret into a drifted
+            field). Defaults to ``str`` (identity) when there is nothing to mask.
 
     Returns:
         The structured run report.
@@ -95,15 +120,24 @@ def build_report(baseline: str, candidate: str, cells: list[CellDiff]) -> RunRep
             state = "drift"
         else:
             state = "same"
-        drifts = [DriftEntry(field.path, field.detail, field.mode) for field in cell.drifts]
+        # Redact the path too: a server can echo a secret as a JSON key, which
+        # becomes a field path — masking only the value would still leak it.
+        drifts = [
+            DriftEntry(redact(field.path), redact(field.detail), field.mode)
+            for field in cell.drifts
+        ]
         entries.append(
             CellReport(
-                request_id=cell.request.metadata.id or cell.request.metadata.name,
-                cell_key=cell.cell_key,
+                request_id=redact(cell.request.metadata.id or cell.request.metadata.name),
+                # A matrix case value can equal a declared secret; the case key
+                # (``token=<value>``) then carries it, so mask it like the paths.
+                cell_key=redact(cell.cell_key),
                 state=state,
                 drifts=drifts,
                 skipped=cell.skipped,
-                error=cell.error,
+                error=redact(cell.error) if cell.error is not None else None,
             )
         )
-    return RunReport(baseline, candidate, entries)
+    # Redact env names too: JSON/Markdown reporters echo them, and on the vanishing
+    # chance a name equals a declared secret the whole-value backstop masks it.
+    return RunReport(redact(baseline), redact(candidate), entries)

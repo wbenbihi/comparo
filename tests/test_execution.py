@@ -83,6 +83,48 @@ def _run(root: Path) -> ExecutionResult:
     return asyncio.run(run_execution(loaded, profile, _EnvEchoClient()))
 
 
+def test_empty_execution_fails_closed() -> None:
+    # An execution that verified nothing must never report a green gate.
+    result = ExecutionResult("exec.x", "Base", "Cand", True, True, outcomes=[])
+    assert not result.passed
+    assert result.drift == 0
+    assert result.errors == 0
+
+
+def test_a_request_whose_matrix_expands_to_zero_cells_fails_closed(tmp_path: Path) -> None:
+    # A selected request with an empty matrix verified nothing → error → gate FAIL.
+    _project(tmp_path, matrix=True)
+    tiers = tmp_path / "tiers.yaml"
+    tiers.write_text(
+        "apiVersion: comparo/v1\nkind: Matrix\n"
+        "metadata:\n  name: Tiers\n  id: matrix.tiers\n"
+        "spec:\n  target: request.query\n  values: []\n",  # empty matrix
+        encoding="utf-8",
+    )
+    result = _run(tmp_path)
+    assert result.outcomes  # the request is recorded, not silently dropped
+    assert result.errors >= 1
+    assert not result.passed
+
+
+def test_execution_reports_live_progress(tmp_path: Path) -> None:
+    # EXE-04: run_execution emits a start (done=False) then a done (done=True)
+    # tick per cell, with the total known from the first tick, so a UI can show
+    # a live transition.
+    from comparo.core.execution import ExecutionProgress
+
+    _project(tmp_path, matrix=True)  # 2 matrix cells (tier free / pro)
+    loaded = load_project(tmp_path)
+    profile = loaded.objects["exec.run"]
+    assert isinstance(profile, ExecutionProfile)
+    events: list[ExecutionProgress] = []
+    asyncio.run(run_execution(loaded, profile, _EnvEchoClient(), on_progress=events.append))
+    assert [e.total for e in events] == [2, 2, 2, 2]  # total known from the first tick
+    assert [e.done for e in events] == [False, True, False, True]  # start/done per cell
+    assert [e.index for e in events] == [0, 0, 1, 1]
+    assert {e.request_id for e in events} == {"request.probe"}
+
+
 def test_execution_asserts_both_envs_and_diffs(tmp_path: Path) -> None:
     _project(tmp_path)
     result = _run(tmp_path)

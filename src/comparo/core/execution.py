@@ -8,6 +8,7 @@ comparison logic of its own.
 """
 
 import dataclasses
+from collections.abc import Callable
 
 from comparo.core.assertions import AssertionResult
 from comparo.core.assertions import compose_rules
@@ -19,6 +20,7 @@ from comparo.core.compare import compare_cell
 from comparo.core.execute import execute_request
 from comparo.core.http import HttpClient
 from comparo.core.loader import LoadedProject
+from comparo.core.matrix import MatrixCell
 from comparo.core.matrix import expand
 from comparo.core.models import AssertionProfile
 from comparo.core.models import AssertionProfileSpec
@@ -66,8 +68,12 @@ class ExecutionResult:
 
     @property
     def passed(self) -> bool:
-        """Whether every cell passed — the execution gate."""
-        return all(outcome.ok for outcome in self.outcomes)
+        """Whether every cell passed — the execution gate.
+
+        Fails closed on an empty run: a profile whose selection or matrix scope
+        matched nothing verified nothing, so it must not report a green gate.
+        """
+        return bool(self.outcomes) and all(outcome.ok for outcome in self.outcomes)
 
     @property
     def drift(self) -> int:
@@ -80,11 +86,34 @@ class ExecutionResult:
         return sum(1 for o in self.outcomes if o.error is not None)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class ExecutionProgress:
+    """A live progress tick emitted as an execution works through its plan.
+
+    ``done`` is ``False`` when a cell starts executing and ``True`` when it
+    finishes, so a UI can show which request is in flight and how far along.
+    """
+
+    request_id: str
+    cell_key: str
+    index: int  # 0-based position of this cell in the plan
+    total: int  # total cells in the plan (known before the run starts)
+    done: bool
+    method: str = ""  # the cell's HTTP method (e.g. GET), for the live row
+    path: str = ""  # the cell's endpoint path, for the live row
+    status: int | None = None  # baseline response status, once finished
+    baseline_ms: int | None = None  # baseline latency, once finished
+    candidate_ms: int | None = None  # candidate latency, once finished
+    drift: str = ""  # the first drifted field path, once finished (else "")
+
+
 async def run_execution(
     project: LoadedProject,
     profile: ExecutionProfile,
     client: HttpClient,
     candidate_client: HttpClient | None = None,
+    *,
+    on_progress: Callable[[ExecutionProgress], None] | None = None,
 ) -> ExecutionResult:
     """Resolve *profile* to a plan and run it, asserting both envs and diffing.
 
@@ -94,6 +123,8 @@ async def run_execution(
         client: The transport for the baseline environment.
         candidate_client: A separate transport for the candidate, so the two do
             not share a cookie jar; defaults to *client* when omitted.
+        on_progress: An optional callback fired before (``done=False``) and after
+            (``done=True``) each cell executes, so a UI can show a live transition.
 
     Returns:
         The complete execution outcome.
@@ -108,28 +139,80 @@ async def run_execution(
     do_diff = (check.diff if check is not None else True) and candidate is not None
     scopes = profile.spec.matrix or {}
     diff_override = _execution_profiles(profile, "diff")
-    outcomes: list[CellOutcome] = []
+    # Expand the whole plan first so the total is known before the first request.
+    plan: list[tuple[Request, MatrixCell, list[AssertionRule]]] = []
+    empty: list[Request] = []
     for request in _select(project, profile):
         rules = _assert_rules(project, profile, request) if do_assert else []
-        for cell in expand(project, request, scopes):
-            base = await execute_request(project, baseline, request, client, cell)
-            cand = (
-                await execute_request(project, candidate, request, cand_client, cell)
-                if candidate is not None
-                else None
+        cells = expand(project, request, scopes)
+        if not cells:
+            # A selected request whose matrix expands to nothing verified nothing;
+            # record it as an error so the gate fails closed instead of silently.
+            empty.append(request)
+            continue
+        for cell in cells:
+            plan.append((request, cell, rules))
+    total = len(plan)
+    outcomes: list[CellOutcome] = [
+        CellOutcome(
+            request_id=request.metadata.id or request.metadata.name,
+            cell_key="",
+            baseline_assertions=[],
+            candidate_assertions=[],
+            diff=None,
+            error="request selected but its matrix expanded to zero cells",
+        )
+        for request in empty
+    ]
+    for index, (request, cell, rules) in enumerate(plan):
+        request_id = request.metadata.id or request.metadata.name
+        method = request.spec.request.method
+        path = request.spec.request.endpoint
+        if on_progress is not None:
+            on_progress(
+                ExecutionProgress(
+                    request_id, cell.key, index, total, done=False, method=method, path=path
+                )
             )
-            outcomes.append(
-                CellOutcome(
-                    request_id=request.metadata.id or request.metadata.name,
-                    cell_key=cell.key,
-                    baseline_assertions=evaluate_rules(project, rules, base) if do_assert else [],
-                    candidate_assertions=(
-                        evaluate_rules(project, rules, cand)
-                        if do_assert and cand is not None
-                        else []
+        base = await execute_request(project, baseline, request, client, cell)
+        cand = (
+            await execute_request(project, candidate, request, cand_client, cell)
+            if candidate is not None
+            else None
+        )
+        diff = compare_cell(project, base, cand, diff_override) if do_diff else None
+        outcomes.append(
+            CellOutcome(
+                request_id=request_id,
+                cell_key=cell.key,
+                baseline_assertions=evaluate_rules(project, rules, base) if do_assert else [],
+                candidate_assertions=(
+                    evaluate_rules(project, rules, cand) if do_assert and cand is not None else []
+                ),
+                diff=diff,
+                error=base.error or (cand.error if cand is not None else None),
+            )
+        )
+        if on_progress is not None:
+            on_progress(
+                ExecutionProgress(
+                    request_id,
+                    cell.key,
+                    index,
+                    total,
+                    done=True,
+                    method=method,
+                    path=path,
+                    status=base.response.status if base.response is not None else None,
+                    baseline_ms=(
+                        round(base.response.elapsed_ms) if base.response is not None else None
                     ),
-                    diff=compare_cell(project, base, cand, diff_override) if do_diff else None,
-                    error=base.error or (cand.error if cand is not None else None),
+                    candidate_ms=(
+                        round(cand.response.elapsed_ms)
+                        if cand is not None and cand.response is not None
+                        else None
+                    ),
+                    drift=diff.drifts[0].path if diff is not None and diff.drifts else "",
                 )
             )
     return ExecutionResult(
@@ -179,7 +262,19 @@ def _assert_rules(
     response = request.spec.response
     rules += _profiles_to_rules(project, response.assertions if response is not None else None)
     rules += _profiles_to_rules(project, _execution_profiles(profile, "assert"))
-    return rules
+    return _dedupe_rules(rules)
+
+
+def _dedupe_rules(rules: list[AssertionRule]) -> list[AssertionRule]:
+    """Drop identical rules a layered profile can produce twice, keeping order."""
+    seen: set[tuple[str, str, str, str]] = set()
+    unique: list[AssertionRule] = []
+    for rule in rules:
+        signature = (rule.target, rule.op, repr(rule.value), rule.severity)
+        if signature not in seen:
+            seen.add(signature)
+            unique.append(rule)
+    return unique
 
 
 def _profiles_to_rules(project: LoadedProject, refs: object) -> list[AssertionRule]:
@@ -196,7 +291,9 @@ def _profiles_to_rules(project: LoadedProject, refs: object) -> list[AssertionRu
 
 def _execution_profiles(profile: ExecutionProfile, key: str) -> object:
     profiles = profile.spec.profiles
-    return profiles.get(key) if isinstance(profiles, dict) else None
+    if profiles is None:
+        return None
+    return profiles.assert_ if key == "assert" else profiles.diff
 
 
 def _ref_id(reference: object) -> str | None:

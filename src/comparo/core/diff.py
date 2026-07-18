@@ -118,7 +118,16 @@ def _structural(
         for key in sorted(set(baseline) | set(candidate)):
             child = (*path, str(key))
             if key not in baseline or key not in candidate:
-                results.append(FieldDiff(_render(child), State.DRIFT, mode, "missing on one side"))
+                # Honor the child path's rule: a key the profile ignores must not
+                # count as drift just because it is present on only one side.
+                child_rule = _match(child, rules)
+                child_mode = child_rule.mode if child_rule is not None else mode
+                if child_mode == "ignore":
+                    results.append(FieldDiff(_render(child), State.SKIP, "ignore"))
+                else:
+                    results.append(
+                        FieldDiff(_render(child), State.DRIFT, child_mode, "missing on one side")
+                    )
             else:
                 results.extend(_walk(baseline[key], candidate[key], child, rules, default_mode))
         return results
@@ -209,5 +218,7 @@ def _type(value: object) -> str:
 
 
 def _short(value: object) -> str:
-    rendered = json.dumps(value, ensure_ascii=False)
-    return rendered if len(rendered) <= 40 else f"{rendered[:37]}..."
+    # The FULL rendering — a detail string must never be truncated before a sink
+    # gets to redact it, or a long secret's prefix would survive masking. Sinks
+    # truncate for brevity only after redaction (see report/archive/display).
+    return json.dumps(value, ensure_ascii=False)

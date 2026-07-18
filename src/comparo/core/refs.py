@@ -12,12 +12,22 @@ import msgspec
 from comparo.core.loader import LoadedProject
 
 
+class SpecResolutionError(Exception):
+    """Raised when a ``$ref`` / inline attachment slot cannot be resolved.
+
+    Failing loud here is a trust requirement: a swallowed profile resolves to
+    *no rules*, and an empty rule set passes every gate — a silent false green.
+    """
+
+
 def resolve_specs[Spec](project: LoadedProject, value: object, spec_type: type[Spec]) -> list[Spec]:
     """Resolve *value* into a list of ``spec_type`` specs, in order.
 
-    A ``$ref`` yields the referenced object's ``.spec`` (when it is a
-    ``spec_type``); an inline mapping is converted directly; a list resolves each
-    element and concatenates. Anything that does not fit is skipped.
+    A ``$ref`` yields the referenced object's ``.spec`` (which must be a
+    ``spec_type``); an inline mapping is converted with the strict envelope; a
+    list resolves each element and concatenates. Anything that does not fit is a
+    hard error — never silently dropped — so a typo cannot quietly disable a
+    profile and turn a real check into a green gate.
 
     Args:
         project: The loaded project, used to resolve ``$ref`` ids.
@@ -26,21 +36,31 @@ def resolve_specs[Spec](project: LoadedProject, value: object, spec_type: type[S
 
     Returns:
         The resolved specs, in the order they appear.
+
+    Raises:
+        SpecResolutionError: If any element is not a valid ``$ref`` or inline spec.
     """
+    kind = spec_type.__name__
     specs: list[Spec] = []
     for item in _items(value):
         if not isinstance(item, dict):
-            continue
+            message = f"expected a {{$ref: id}} pointer or an inline {kind}, got {item!r}"
+            raise SpecResolutionError(message)
         reference = item.get("$ref")
         if isinstance(reference, str):
-            spec = getattr(project.objects.get(reference), "spec", None)
-            if isinstance(spec, spec_type):
-                specs.append(spec)
+            obj = project.objects.get(reference)
+            if obj is None:
+                raise SpecResolutionError(f"$ref '{reference}' resolves to no object")
+            spec = getattr(obj, "spec", None)
+            if not isinstance(spec, spec_type):
+                found = type(obj).__name__
+                raise SpecResolutionError(f"$ref '{reference}' is a {found}, not a {kind}")
+            specs.append(spec)
         else:
             try:
                 specs.append(msgspec.convert(item, type=spec_type, strict=True))
-            except msgspec.ValidationError:
-                continue
+            except msgspec.ValidationError as error:
+                raise SpecResolutionError(f"inline {kind} is invalid: {error}") from error
     return specs
 
 

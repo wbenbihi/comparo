@@ -19,6 +19,21 @@ def test_exact_value_change_is_drift() -> None:
     assert any(field.state is State.DRIFT for field in diff({"a": 1}, {"a": 2}, "exact", []))
 
 
+def test_ignored_key_present_on_one_side_is_skip_not_drift() -> None:
+    # A key the profile ignores must not count as drift just because it appears on
+    # only one side — the missing-key branch must honor the ignore rule.
+    rules = [DiffRule(path="$.trace", mode="ignore")]
+    fields = diff({"trace": "abc"}, {}, "exact", rules)
+    trace = next(field for field in fields if field.path == "$.trace")
+    assert trace.state is State.SKIP
+
+
+def test_unignored_key_present_on_one_side_is_still_drift() -> None:
+    fields = diff({"id": "abc"}, {}, "exact", [])
+    ident = next(field for field in fields if field.path == "$.id")
+    assert ident.state is State.DRIFT
+
+
 def test_shape_ignores_scalar_values() -> None:
     fields = diff({"x": 1, "y": "a"}, {"x": 999, "y": "z"}, "shape", [])
     assert State.DRIFT not in _states(fields)

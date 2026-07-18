@@ -59,37 +59,47 @@ def _entry(
     resolved = resolver.resolve_request(entry.request, entry.cell)
     response = entry.execution.response
     return {
-        "request": entry.request.metadata.id or entry.request.metadata.name,
-        "case": entry.cell.key or None,
+        # A matrix case value can equal a declared secret, so the case key
+        # (``token=<value>``) — and, defensively, the request id — are masked too.
+        "request": _redact(entry.request.metadata.id or entry.request.metadata.name, secrets),
+        "case": _redact(entry.cell.key, secrets) if entry.cell.key else None,
         "method": resolved.method,
         "url": _redact(resolved.url, secrets),
-        "requestHeaders": {key: _redact(str(value), secrets) for key, value in resolved.headers},
+        "requestHeaders": {
+            _redact(key, secrets): _redact(str(value), secrets) for key, value in resolved.headers
+        },
         "requestBody": _redact_value(resolved.body, secrets),
         "status": response.status if response else None,
         "durationMs": round(response.elapsed_ms, 1) if response else None,
-        "error": entry.execution.error,
+        "error": _redact(entry.execution.error, secrets) if entry.execution.error else None,
         "checks": [
             {"name": check.name, "ok": check.ok, "detail": _redact(check.detail, secrets)}
             for check in entry.checks
         ],
         "responseHeaders": (
-            {key: _redact(value, secrets) for key, value in response.headers} if response else None
+            {_redact(key, secrets): _redact(value, secrets) for key, value in response.headers}
+            if response
+            else None
         ),
         "responseBody": _redact_body(response.body, secrets) if response else None,
     }
 
 
 def _secret_values(project: LoadedProject, environment: Environment) -> set[str]:
-    sources = environment.spec.secrets or {}
-    execute = ExecuteSecrets(dict(sources), project.root)
+    # Union every environment's declared secrets (project-wide), matching the core
+    # Redactor — so a secret declared in another environment is masked here too.
     values: set[str] = set()
-    for name in sources:
-        try:
-            value = execute[name]
-        except SecretError:
-            continue
-        if value:
-            values.add(value)
+    environments = [obj for obj in project.objects.values() if isinstance(obj, Environment)]
+    for env in environments or [environment]:
+        sources = env.spec.secrets or {}
+        execute = ExecuteSecrets(dict(sources), project.root)
+        for name in sources:
+            try:
+                value = execute[name]
+            except SecretError:
+                continue
+            if value:
+                values.add(value)
     return values
 
 
@@ -111,7 +121,11 @@ def _redact_value(value: object, secrets: set[str]) -> object:
     if isinstance(value, str):
         return _redact(value, secrets)
     if isinstance(value, dict):
-        return {key: _redact_value(item, secrets) for key, item in value.items()}
+        # Redact the KEY too: a server can echo a secret as an object key, so
+        # masking only the value would still write the secret to disk.
+        return {
+            _redact(str(key), secrets): _redact_value(item, secrets) for key, item in value.items()
+        }
     if isinstance(value, list):
         return [_redact_value(item, secrets) for item in value]
     return value

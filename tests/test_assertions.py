@@ -56,6 +56,15 @@ def test_targets_and_ops_that_hold() -> None:
     assert passed(results)
 
 
+def test_latency_accepts_an_hour_unit() -> None:
+    # A latency bound written in hours must parse, not silently fail as non-numeric.
+    loaded = load_project(SAMPLE)
+    execution = _execution(loaded, status=200, body=b"{}", ms=200.0)
+    rules = [AssertionRule(target="latency", op="lte", value="1h")]
+    results = evaluate_rules(loaded, rules, execution)
+    assert all(result.ok for result in results)  # 200ms is under 1h
+
+
 def test_failing_and_severity() -> None:
     loaded = load_project(SAMPLE)
     execution = _execution(loaded, status=500, body=json.dumps({"total": 5000}).encode(), ms=2000.0)
