@@ -305,11 +305,13 @@ _EXEC_LAUNCH_KEYS = (
     ("t", "tags"),
     ("m", "mode"),
     ("?", "help"),
-    ("esc/⌫/q", "close"),
+    ("esc/⌫", "close"),
+    ("q", "quit"),
 )
 _EXEC_RUNNING_KEYS = (
     ("?", "help"),
-    ("esc/⌫/q", "cancel run"),
+    ("esc/⌫", "cancel run"),
+    ("q", "quit"),
 )
 _EXEC_RESULTS_KEYS = (
     ("↑↓", "section"),
@@ -319,20 +321,23 @@ _EXEC_RESULTS_KEYS = (
     ("s", "save"),
     ("r", "re-run"),
     ("?", "help"),
-    ("esc/⌫/q", "close"),
+    ("esc/⌫", "close"),
+    ("q", "quit"),
 )
 _EXEC_CELL_KEYS = (
     ("v", "unified/side"),
     ("i", "ignore field"),
     ("⏎", "open diff"),
     ("?", "help"),
-    ("esc/⌫/q", "back"),
+    ("esc/⌫", "back"),
+    ("q", "quit"),
 )
 _EXEC_DIFF_KEYS = (
     ("v", "unified/side-by-side"),
     ("↑↓", "scroll"),
     ("?", "help"),
-    ("esc/⌫/q", "back"),
+    ("esc/⌫", "back"),
+    ("q", "quit"),
 )
 # Report tab — the saved-report list, and the read-only in-tab replays.
 _REPORT_LIST_KEYS = (
@@ -342,14 +347,16 @@ _REPORT_LIST_KEYS = (
     ("r", "reload"),
     ("d", "delete"),
     ("?", "help"),
-    ("esc/⌫/q", "close"),
+    ("esc/⌫", "close"),
+    ("q", "quit"),
 )
 _REPORT_DIFF_KEYS = (
     ("v", "unified/side"),
     ("↑↓", "field"),
     ("o", "export"),
     ("?", "help"),
-    ("esc/⌫/q", "back"),
+    ("esc/⌫", "back"),
+    ("q", "quit"),
 )
 _REPORT_RUN_KEYS = (
     ("↑↓", "requests"),
@@ -357,7 +364,8 @@ _REPORT_RUN_KEYS = (
     ("z", "maximize"),
     ("o", "export"),
     ("?", "help"),
-    ("esc/⌫/q", "back"),
+    ("esc/⌫", "back"),
+    ("q", "quit"),
 )
 _RUN_GLYPH: dict[str, tuple[str, str]] = {
     "pending": ("○", _DIM),
@@ -471,7 +479,8 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
     "report-detail": (
         ("↑ ↓", "scroll the run's full detail"),
         ("o", "export this run as a Markdown summary"),
-        ("esc / bksp / q", "close and return to the saved-run list"),
+        ("esc / bksp", "return to the saved-run list"),
+        ("q", "quit comparo"),
     ),
     "execution": (
         ("enter", "on a profile: launch it in place · on a drifted cell: drill in"),
@@ -516,7 +525,8 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "graph": (
         ("↑ ↓", "scroll the reference graph"),
-        ("g / esc / q", "close the overlay"),
+        ("g / esc", "close the overlay"),
+        ("q", "quit comparo"),
     ),
     "picker": (
         ("↑ ↓", "move through the choices"),
@@ -525,7 +535,8 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
     "curl": (
         ("↑ ↓", "scroll the curl"),
         ("c", "copy the real (secret-bearing) curl to the clipboard"),
-        ("esc / q", "close — the shown curl is masked"),
+        ("esc", "close — the shown curl is masked"),
+        ("q", "quit comparo"),
     ),
     "matrix": (
         ("↑ ↓", "move through the matrix values"),
@@ -7170,7 +7181,8 @@ def _exec_foot(result: ExecutionResult) -> Table:
         ("e", "report"),
         ("r", "re-run"),
         ("?", "help"),
-        ("esc/⌫/q", "close"),
+        ("esc/⌫", "close"),
+        ("q", "quit"),
     )
     keys = Text()
     for key, label in hints:

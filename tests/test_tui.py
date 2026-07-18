@@ -1434,3 +1434,27 @@ def test_nav_tabs_are_reachable_without_shift_on_azerty() -> None:
     # every tab must offer at least one no-shift (non-digit) alternative
     for action, keys in nav_keys.items():
         assert any(not key.isdigit() for key in keys), f"{action} needs a no-shift key"
+
+
+def test_no_footer_hint_labels_q_as_anything_but_quit() -> None:
+    # The hard rule: q ALWAYS quits the app — a footer must never bundle q into a
+    # back/close/cancel hint (a user trusting it would lose an unsaved run).
+    from comparo.tui import app as app_module
+
+    offenders: list[tuple[str, str, str]] = []
+    for name in dir(app_module):
+        if not name.endswith("_KEYS"):
+            continue
+        value = getattr(app_module, name)
+        if not isinstance(value, tuple):
+            continue
+        for entry in value:
+            if not (isinstance(entry, tuple) and len(entry) == 2):
+                continue
+            key, label = entry
+            if not (isinstance(key, str) and isinstance(label, str)):
+                continue
+            tokens = key.replace("/", " ").split()
+            if "q" in tokens and "quit" not in label.lower():
+                offenders.append((name, key, label))
+    assert not offenders, f"q mislabeled as non-quit in footers: {offenders}"
