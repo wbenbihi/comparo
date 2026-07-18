@@ -20,6 +20,7 @@ from comparo.core.models import DiffProfileSpec
 from comparo.core.models import DiffRule
 from comparo.core.models import Environment
 from comparo.core.models import Request
+from comparo.core.refs import ref_id as _ref_id
 from comparo.core.refs import resolve_specs
 
 
@@ -281,12 +282,4 @@ def _profile_for(project: LoadedProject, request: Request) -> DiffProfile | None
             profile = project.objects.get(identifier) if identifier is not None else None
             if isinstance(profile, DiffProfile):
                 return profile
-    return None
-
-
-def _ref_id(reference: object) -> str | None:
-    if isinstance(reference, dict):
-        target = reference.get("$ref")
-        if isinstance(target, str):
-            return target
     return None

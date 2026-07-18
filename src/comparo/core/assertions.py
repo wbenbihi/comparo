@@ -21,6 +21,7 @@ from comparo.core.models import AssertionProfile
 from comparo.core.models import AssertionRule
 from comparo.core.models import Request
 from comparo.core.models import Schema
+from comparo.core.refs import ref_id as _ref_id
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -361,14 +362,6 @@ def _contains(actual: object, expected: object) -> bool:
     if isinstance(actual, list | dict):
         return expected in actual
     return False
-
-
-def _ref_id(reference: object) -> str | None:
-    if isinstance(reference, dict):
-        target = reference.get("$ref")
-        if isinstance(target, str):
-            return target
-    return None
 
 
 def _short(value: object) -> str:

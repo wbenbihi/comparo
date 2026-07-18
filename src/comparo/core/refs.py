@@ -20,6 +20,22 @@ class SpecResolutionError(Exception):
     """
 
 
+def ref_id(reference: object) -> str | None:
+    """Return the id of a ``{$ref: id}`` mapping, or ``None`` if it is not one.
+
+    Args:
+        reference: A value that may be a ``{"$ref": "<id>"}`` mapping.
+
+    Returns:
+        The referenced id string, or ``None``.
+    """
+    if isinstance(reference, dict):
+        target = reference.get("$ref")
+        if isinstance(target, str):
+            return target
+    return None
+
+
 def resolve_specs[Spec](project: LoadedProject, value: object, spec_type: type[Spec]) -> list[Spec]:
     """Resolve *value* into a list of ``spec_type`` specs, in order.
 

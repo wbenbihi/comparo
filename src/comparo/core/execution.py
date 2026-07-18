@@ -30,6 +30,7 @@ from comparo.core.models import AssertionRule
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
+from comparo.core.refs import ref_id as _ref_id
 from comparo.core.refs import resolve_specs
 from comparo.core.resolve import select_environment
 
@@ -310,11 +311,3 @@ def _execution_profiles(profile: ExecutionProfile, key: str) -> object:
     if profiles is None:
         return None
     return profiles.assert_ if key == "assert" else profiles.diff
-
-
-def _ref_id(reference: object) -> str | None:
-    if isinstance(reference, dict):
-        target = reference.get("$ref")
-        if isinstance(target, str):
-            return target
-    return None

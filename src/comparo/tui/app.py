@@ -111,6 +111,7 @@ from comparo.core.models import Schema
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
 from comparo.core.redaction import Redactor
+from comparo.core.refs import ref_id as _ref_id
 from comparo.core.report import RunReport
 from comparo.core.report import build_report
 from comparo.core.report import diff_passed
@@ -5554,14 +5555,6 @@ def _matrix_summary(project: LoadedProject, matrix: list[object] | None) -> str:
         if isinstance(obj, Matrix):
             parts.append(f"{(identifier or '').split('.')[-1]} ×{len(obj.spec.values)}")
     return " · ".join(parts)
-
-
-def _ref_id(reference: object) -> str | None:
-    if isinstance(reference, dict):
-        target = reference.get("$ref")
-        if isinstance(target, str):
-            return target
-    return None
 
 
 def _sigil_refs(spec: object, sigil: str) -> set[str]:

@@ -13,6 +13,7 @@ from comparo.core.execute import Execution
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Request
 from comparo.core.models import Schema
+from comparo.core.refs import ref_id as _ref_id
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -79,11 +80,3 @@ def _schema_check(body: bytes, schema: Schema) -> Check:
     except jsonschema.SchemaError as error:
         return Check("schema", ok=False, detail=f"invalid schema: {error.message}")
     return Check("schema", ok=True, detail="valid")
-
-
-def _ref_id(reference: object) -> str | None:
-    if isinstance(reference, dict):
-        target = reference.get("$ref")
-        if isinstance(target, str):
-            return target
-    return None

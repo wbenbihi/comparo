@@ -13,6 +13,7 @@ from comparo.core.loader import LoadedProject
 from comparo.core.models import Matrix
 from comparo.core.models import MatrixScope
 from comparo.core.models import Request
+from comparo.core.refs import ref_id as _ref_id
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -101,11 +102,3 @@ def _matrices(project: LoadedProject, request: Request) -> list[Matrix]:
         if isinstance(matrix, Matrix):
             matrices.append(matrix)
     return matrices
-
-
-def _ref_id(reference: object) -> str | None:
-    if isinstance(reference, dict):
-        target = reference.get("$ref")
-        if isinstance(target, str):
-            return target
-    return None
