@@ -18,8 +18,10 @@ The CLI, the TUI, and the GitHub Action are all thin front-ends over one engine
 - [Commands](#commands)
   - [`comparo init`](#comparo-init)
   - [`comparo validate`](#comparo-validate)
+  - [`comparo doctor`](#comparo-doctor)
   - [`comparo render`](#comparo-render)
   - [`comparo run`](#comparo-run)
+  - [`comparo exec`](#comparo-exec)
   - [`comparo diff`](#comparo-diff)
   - [`comparo tui`](#comparo-tui)
   - [`comparo help`](#comparo-help)
@@ -122,8 +124,10 @@ project directory); it defaults to `comparo.yaml` in the current directory.
 ```
 comparo init     [DIRECTORY] [--name NAME] [--data DIR] [--config FILE] [--description TEXT]
 comparo validate [--config CONFIG]
+comparo doctor
 comparo render   REQUEST_ID [--config CONFIG] [--env NAME]
 comparo run      [REQUEST_ID] [--config CONFIG] [--env NAME]
+comparo exec     EXECUTION_ID [--config CONFIG]
 comparo diff     [REQUEST_ID] [--config CONFIG] [--pair NAME | --baseline NAME --candidate NAME] [--report FMT]... [--output DIR]
 comparo tui      [--config CONFIG]
 comparo help
@@ -140,8 +144,8 @@ comparo help
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success — the command completed and (for `run`/`diff`) the gate passed. |
-| `1` | Failure — the config was missing, the project failed to load, an argument could not be resolved, an execution failed, or the diff gate failed. |
+| `0` | Success — the command completed and (for `run`/`exec`/`diff`) the gate passed. |
+| `1` | Failure — the config was missing, the project failed to load, an argument could not be resolved, an execution failed, or a gate (`run` check, `exec`, or `diff`) failed. |
 
 Every command that loads a project exits `1` when the config is missing (`no project at
 '…'`) or the project cannot be loaded, printing each diagnostic to standard error
@@ -234,14 +238,41 @@ From a project directory, the `comparo.yaml` is picked up automatically:
 
 ```console
 $ comparo validate
-✓ 13 object(s) valid
+✓ 14 object(s) valid
 ```
 
 Or point `--config` at a manifest anywhere:
 
 ```console
 $ comparo validate --config examples/sample-project/comparo.yaml
-✓ 13 object(s) valid
+✓ 14 object(s) valid
+```
+
+### `comparo doctor`
+
+Run the **never-leak self-check**: a canary secret is pushed through every output
+path and each is verified to have masked it. Takes no project — it builds its own
+canary scenario. The TUI runs the same check in **Settings → Security & Redaction**
+(press `t`).
+
+```
+comparo doctor
+```
+
+**Behavior & exit code**
+
+- Prints one line per sink (`✓`/`✗`) — TUI display, saved runs, saved reports,
+  the JUnit/SARIF/JSON/Markdown reporters, the copied curl, and the crash report —
+  then `N/N sinks masked the canary`.
+- Exits `0` if every sink masked the canary; `1` if any leaked (use it as a CI
+  guard on the redaction invariant).
+
+```console
+$ comparo doctor
+✓ TUI display        masked on render
+✓ saved runs         .runs/*.json
+… 
+9/9 sinks masked the canary
 ```
 
 ### `comparo render`
@@ -314,9 +345,14 @@ comparo run [REQUEST_ID] [--config CONFIG] [--env NAME]
 **Behavior & exit code**
 
 - Prints `run · <environment>` followed by one line per cell: `✓` with status and
-  latency on success, `✗` with the error on failure.
+  latency on success, `✗` with the error (or the failing check) otherwise.
+- A cell that returns a response is **not** an automatic pass: the request's
+  `response.status` / `response.schema` sugar is evaluated as assertions, so a `500`
+  against a declared `200` (or a schema mismatch) prints red and fails the gate, with
+  the offending check named on the line.
 - Exits `1` if the project fails to load, the environment cannot be selected, no
-  requests match, **or any execution fails**. Otherwise exits `0`.
+  requests match, an execution fails, **or any `error`-severity check fails**.
+  Otherwise exits `0`.
 
 **Example**
 
@@ -338,6 +374,60 @@ Run a single request that has everything it needs, and it passes:
 $ comparo run --config examples/sample-project/comparo.yaml request.get-json --env prod
 run · Production
   ✓ request.get-json                             200  443ms
+```
+
+### `comparo exec`
+
+Run an [`ExecutionProfile`](configuration.md#executionprofile) headless: replay its
+selected requests against the profile's own `baseline` (and `candidate`, when set),
+assert the request's checks on **both** environments, diff the pair, and exit on the
+gate. This is the headless equivalent of the TUI's Execution screen, and its exit code
+is the exact gate that screen shows.
+
+```
+comparo exec EXECUTION_ID [--config CONFIG]
+```
+
+**Arguments**
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `EXECUTION_ID` | yes | The `metadata.id` of the `ExecutionProfile` to run (e.g. `execution.release-gate`). |
+
+**Options**
+
+| Option | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
+
+The environments, request selection, matrix scoping, and which checks run (`assertions`
+/ `diff`) all come from the profile itself — `exec` takes no `--env` / `--pair` flags.
+
+**Behavior & exit code**
+
+- Prints `exec · <id>  <baseline> ⇄ <candidate>` (just `<baseline>` when the profile
+  sets no candidate), one line per cell (`✓`, or `✗` with the error, the first failing
+  assertion, or `drift`), and a final `✓ gate PASS` / `✗ gate FAIL` with the cell,
+  drift, and error counts.
+- The gate **passes** only when every cell passes — no execution error, every
+  `error`-severity assertion holds on both environments, and nothing drifted — and it
+  **fails closed** on an empty run (a selection or matrix scope that matched nothing).
+- Exits `0` when the gate passes, `1` otherwise — including when the project fails to
+  load, there is no `ExecutionProfile` with the given id, or an environment cannot be
+  resolved.
+
+**Example**
+
+```console
+$ comparo exec execution.methods --config examples/postman-echo-project/comparo.yaml
+exec · execution.methods  Echo ⇄ Echo (mirror)
+  ✓ request.delete
+  ✓ request.get
+  ✓ request.get-matrix [page=1, q=widgets]
+  …
+  ✓ request.put
+
+✓ gate PASS  16 cells · 0 drift · 0 error
 ```
 
 ### `comparo diff`

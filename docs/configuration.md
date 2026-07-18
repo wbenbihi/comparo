@@ -30,6 +30,8 @@ Every example below is drawn from or is consistent with the runnable
   - [Instance](#instance)
   - [Matrix](#matrix)
   - [DiffProfile](#diffprofile)
+  - [AssertionProfile](#assertionprofile)
+  - [ExecutionProfile](#executionprofile)
 - [Interpolation: `${...}`](#interpolation-)
   - [Grammar](#grammar)
   - [Casts](#casts)
@@ -48,6 +50,7 @@ Every example below is drawn from or is consistent with the runnable
   - [Modes](#modes)
   - [Rule fields](#rule-fields)
   - [Path matching and precedence](#path-matching-and-precedence)
+- [Saved reports: the archive](#saved-reports-the-archive)
 
 ---
 
@@ -112,15 +115,17 @@ Always the string `comparo/v1`. Any other value is rejected.
 
 Selects the object type and therefore the shape of `spec`. One of:
 
-| `kind`        | Purpose                                                                        |
-| ------------- | ------------------------------------------------------------------------------ |
-| `Project`     | the root manifest — run-wide defaults (environments, concurrency, reporting)   |
-| `Environment` | a target: base URL, timeout, secrets, variables, headers, health checks        |
-| `Request`     | an HTTP request, optionally matrix-expanded, with a response schema and diff   |
-| `Schema`      | a JSON Schema used for structural response validation                          |
-| `Instance`    | a reusable value injected by reference to avoid duplication                    |
-| `Matrix`      | a set of parameter cases a request is run against                              |
-| `DiffProfile` | how two responses are compared, per JSON path                                  |
+| `kind`             | Purpose                                                                        |
+| ------------------ | ------------------------------------------------------------------------------ |
+| `Project`          | the root manifest — run-wide defaults (environments, concurrency, reporting)   |
+| `Environment`      | a target: base URL, timeout, secrets, variables, headers, health checks, auth  |
+| `Request`          | an HTTP request, optionally matrix-expanded, with a response schema and diff   |
+| `Schema`           | a JSON Schema used for structural response validation                          |
+| `Instance`         | a reusable value injected by reference to avoid duplication                    |
+| `Matrix`           | a set of parameter cases a request is run against                              |
+| `DiffProfile`      | how two responses are compared, per JSON path                                  |
+| `AssertionProfile` | a composable set of response assertions checked on both environments           |
+| `ExecutionProfile` | a named run plan — what to run, which environments, and which checks           |
 
 ### `metadata`
 
@@ -151,8 +156,15 @@ The kind-specific body. Each kind is documented under [Object kinds](#object-kin
   **duplicate `id`**, or a **second `Project` manifest** is an error.
 - Every `$ref` and `$val` target is checked against the index. A dangling reference is a hard
   error and the loader offers a **near-miss suggestion** — either the closest known id
-  (`did you mean 'diff.lenient'?`) or an id with the *same segments in a different order*.
-- All three passes are diagnostics-collecting: one run surfaces every problem at once, each
+  (`did you mean 'diff.lenient'?`) or an id with the *same segments in a different order*. A
+  `$ref` that is clearly a JSON-Schema pointer (it starts with `#` or contains `/`, e.g.
+  `#/$defs/Money`) is your own payload, not a comparo id, and is left untouched.
+- Once the tree resolves cleanly, a final pass validates every **profile attachment slot** — a
+  request's `diff` / `assert`, an ExecutionProfile's `profiles`, the project default `diff`, and
+  each AssertionProfile `include`. A slot that names a missing id, points at the wrong kind, or
+  holds an invalid inline spec is a hard error — never a silently-empty rule set (which would
+  pass every gate). A non-empty `spec.plugins` block is rejected here too.
+- These passes are diagnostics-collecting: one run surfaces every problem at once, each
   reported with its file and, where available, line number.
 
 ---
@@ -169,13 +181,16 @@ of `ms`, `s`, `m`, or `h`.
 | ----------- | ------------- | ------------- | ---------------------------------------- |
 | connect     | `connect`     | duration      | Connection-establishment budget.         |
 | read        | `read`        | duration      | Response-read budget.                    |
-| stream_idle | `streamIdle`  | duration      | Idle budget between streamed chunks.     |
+| stream_idle | `streamIdle`  | duration      | Idle budget between streamed chunks (accepted, not yet enforced). |
 
 ```yaml
 timeout:
   connect: 5s
   read: 30s
 ```
+
+> Only `connect` and `read` currently reach the transport (as httpx connect/read
+> timeouts). `streamIdle` is a valid key but not yet applied.
 
 Used by `Environment.spec.timeout` and `Request.spec.timeout`.
 
@@ -212,17 +227,26 @@ sub-fields below as the conventional structure the sample project uses.
 | data         | `data`         | Path to the object tree, relative to this file (e.g. `.comparo` or `.`).           |
 | environments | `environments` | Default environment and named diff pairs — see below.                             |
 | run          | `run`          | Execution defaults such as `concurrency` and `retry`.                             |
-| diff         | `diff`         | Global default comparison profile (a `$ref` to a `DiffProfile`).                  |
+| diff         | `diff`         | Global default comparison profile (a `$ref` / inline / list under `default`).     |
 | selection    | `selection`    | Default headless selection, e.g. `tags`.                                          |
-| report       | `report`       | Report `formats` and `output` directory.                                          |
+| report       | `report`       | Saved-report `dir` and Markdown-export `output` directory — see below.            |
 | redaction    | `redaction`    | Redaction options, e.g. `stringMatchBackstop`.                                    |
-| plugins      | `plugins`      | Plugin configuration.                                                             |
+| plugins      | `plugins`      | Reserved. The plugin system does not exist yet, so a non-empty `plugins` block is a **hard load error** (`spec.plugins is not supported yet`). |
 
 **`environments`** drives environment selection:
 
 - `default` — the environment used when none is named on the command line.
 - `diffPairs` — a list of `{name, baseline, candidate}` entries. `comparo diff --pair <name>`
   replays every request against `baseline` and `candidate` and diffs the results.
+
+**`report`** configures where saved output lands. It is a free-form block; two keys are read:
+
+- `dir` — the directory the TUI writes saved run reports (the [archive](#saved-reports-the-archive))
+  to, resolved under `spec.data`. Defaults to `.reports`.
+- `output` — the directory the TUI's Markdown export writes to. Defaults to `reports`.
+
+The reporter *formats* a `comparo diff` writes are chosen with the CLI `--report` flag (see the
+[CLI reference](cli.md#report-formats)), not from the manifest — a `report.formats` key is not consumed.
 
 ```yaml
 apiVersion: comparo/v1
@@ -259,10 +283,10 @@ spec:
       - smoke
 
   report:
-    formats:
-      - junit
-      - markdown
-    output: ./reports
+    # Where the TUI saves run reports (the browsable archive), under spec.data.
+    dir: .reports
+    # Where the TUI's Markdown export writes.
+    output: reports
 
   redaction:
     # Mask anything equal to a known secret value, even if it arrives untainted.
@@ -281,6 +305,7 @@ A target the requests run against.
 | variables | `variables`  | map of string → string        | no       | Values available to `${...}` interpolation.                            |
 | headers   | `headers`    | list of [Header](#header)     | no       | Headers merged into every request (request headers override by name).  |
 | health    | `health`     | list of health checks         | no       | Readiness probes (`method`, `endpoint`, optional `headers`).           |
+| auth      | `auth`       | [Auth](#auth)                 | no       | Default Basic/Bearer auth applied to every request unless it sets its own. |
 
 ```yaml
 apiVersion: comparo/v1
@@ -323,24 +348,83 @@ An HTTP request, optionally expanded across one or more matrices.
 
 `spec.request`:
 
-| Field    | YAML key   | Type                    | Required | Description                                                         |
-| -------- | ---------- | ----------------------- | -------- | ------------------------------------------------------------------ |
-| method   | `method`   | string                  | yes      | HTTP method (`GET`, `POST`, …).                                     |
-| endpoint | `endpoint` | string                  | yes      | Path joined onto the environment `baseUrl`.                        |
-| query    | `query`    | map of string → any     | no       | Query parameters; values may be holes and are matrix-injectable.   |
-| headers  | `headers`  | any                     | no       | Headers — typically a `$val` to a header `Instance`.               |
-| body     | `body`     | any                     | no       | Request body; may contain `${...}`, `$val`, and matrix injections. |
+| Field     | YAML key    | Type                    | Required | Description                                                         |
+| --------- | ----------- | ----------------------- | -------- | ------------------------------------------------------------------ |
+| method    | `method`    | string                  | yes      | HTTP method (`GET`, `POST`, …).                                     |
+| endpoint  | `endpoint`  | string                  | yes      | Path joined onto the environment `baseUrl`; matrix-injectable.     |
+| query     | `query`     | map of string → any     | no       | Query parameters; values may be holes and are matrix-injectable.   |
+| headers   | `headers`   | any                     | no       | Headers — typically a `$val` to a header `Instance`.               |
+| body      | `body`      | any                     | no       | Request body; may contain `${...}`, `$val`, and matrix injections. |
+| body_type | `bodyType`  | string                  | no       | Body encoding: `json` (default), `form` (URL-encoded form), or `raw` (sent verbatim). |
+| auth      | `auth`      | [Auth](#auth)           | no       | Basic/Bearer auth for this request; overrides the environment default. |
+| cookies   | `cookies`   | map of string → any     | no       | Cookies to send, as name → value (values may be holes/secrets).    |
+
+#### Auth
+
+`auth` (on a request, or as an environment-wide default) is one of:
+
+```yaml
+auth:
+  basic:
+    username: ${API_USER}
+    password: ${API_PASSWORD}   # a secret hole — masked in every display
+# — or —
+auth:
+  bearer: ${API_TOKEN}          # sent as "Authorization: Bearer <token>"
+```
+
+A request's `auth` overrides the environment's default `auth`. Secret values are masked in
+displays and injected only at execution, like every other hole.
+
+#### Body encodings
+
+`bodyType` selects how `body` is put on the wire:
+
+| `bodyType`      | Encoding                                                                          |
+| --------------- | --------------------------------------------------------------------------------- |
+| `json` (default) | Serialized as a JSON body with a JSON content type.                              |
+| `form`          | Sent as a URL-encoded form (`application/x-www-form-urlencoded`); `body` must be a map. |
+| `raw`           | Sent verbatim — a string/bytes body is passed through untouched; anything else is JSON-encoded first. |
+
+```yaml
+request:
+  method: POST
+  endpoint: /login
+  bodyType: form
+  body:
+    user: bob
+    remember: "1"
+```
+
+#### Cookies
+
+`cookies` is a `name → value` map sent with the request; values may be `${...}` holes or
+secrets, resolved like anywhere else. Cookies are per request — nothing is carried over from a
+previous request. When a diff runs, the baseline and candidate use **separate cookie jars**, so
+a `Set-Cookie` from one environment can never leak into a request sent to the other.
+
+#### Streaming
+
+Setting `response.streaming: true` tells the engine the response is delivered as a *sequence* —
+Server-Sent Events (a `text/event-stream` content type) or a chunked run of JSON objects — rather
+than one payload. The adapter reads the stream to completion and parses it back into its ordered
+records: SSE events become field maps (`{event, data, id, …}`); a JSON stream becomes the list of
+its objects; anything else stays a single text record. The diff then compares that **event
+sequence** element-by-element under the request's `DiffProfile` (each event indexed as `$[0]`,
+`$[1]`, …), instead of flattening the stream to bytes. A non-streamed response is compared as its
+parsed JSON body (or raw bytes when it is not JSON).
 
 #### The expected response
 
 `spec.response`:
 
-| Field     | YAML key    | Type    | Required | Description                                                          |
-| --------- | ----------- | ------- | -------- | ------------------------------------------------------------------- |
-| status    | `status`    | integer | no       | Expected HTTP status; checked when present.                         |
-| schema    | `schema`    | any     | no       | A `$ref` to a `Schema` object; the body is JSON-Schema-validated.   |
-| diff      | `diff`      | any     | no       | A `$ref` to a `DiffProfile`; overrides the project default.         |
-| streaming | `streaming` | boolean | no       | Whether the response is streamed.                                   |
+| Field      | YAML key    | Type    | Required | Description                                                          |
+| ---------- | ----------- | ------- | -------- | ------------------------------------------------------------------- |
+| status     | `status`    | integer | no       | Expected HTTP status; checked when present.                         |
+| schema     | `schema`    | any     | no       | A `$ref` to a `Schema` object; the body is JSON-Schema-validated.   |
+| diff       | `diff`      | any     | no       | A `DiffProfile` as a `$ref`, inline spec, or a list (composed); overrides the project default. |
+| streaming  | `streaming` | boolean | no       | Whether the response is streamed (SSE / JSON stream), diffed as its ordered event sequence. |
+| assertions | `assert`    | any     | no       | One or more `AssertionProfile`s (`$ref`, inline, or a list) to check. |
 
 ```yaml
 apiVersion: comparo/v1
@@ -454,7 +538,7 @@ combine into cells.
 
 | Field       | YAML key     | Type                       | Required | Description                                                          |
 | ----------- | ------------ | -------------------------- | -------- | ------------------------------------------------------------------- |
-| target      | `target`     | string                     | yes      | Dotted injection path, e.g. `request.query` or `request.body`.      |
+| target      | `target`     | string                     | yes      | Dotted injection path — `request.query`, `request.body`, or `request.path`. |
 | values      | `values`     | list of maps               | yes      | The cases; each is a `key: value` map merged (or substituted) in.   |
 | mode        | `mode`       | `merge` \| `replace`       | no       | How a case is applied at `target`; defaults to `merge`.             |
 | create_path | `createPath` | boolean                    | no       | Create missing intermediate objects along `target`; defaults `false`. |
@@ -477,6 +561,23 @@ spec:
       currency: EUR
     - locale: ja-JP
       currency: JPY
+```
+
+A **path matrix** fills `${...}` placeholders in the request's `endpoint` instead of merging
+into a container:
+
+```yaml
+apiVersion: comparo/v1
+kind: Matrix
+metadata:
+  name: Status codes
+  id: matrix.status-codes
+spec:
+  target: request.path        # substitute each case into the endpoint template
+  values:
+    - code: "200"
+    - code: "404"
+# A request with endpoint: /status/${code} then runs against /status/200 and /status/404.
 ```
 
 ### DiffProfile
@@ -525,6 +626,145 @@ metadata:
 spec:
   default: exact
 ```
+
+#### Attaching a profile: `$ref`, inline, or a composing list
+
+Every profile slot — a request's `response.diff` / `response.assert`, the project default
+`diff.default`, and an ExecutionProfile's `profiles.diff` / `profiles.assert` — accepts the
+**same three shapes**:
+
+```yaml
+# 1. a $ref to a standalone object
+diff:
+  $ref: diff.lenient
+
+# 2. an inline spec, written in place (no separate object needed)
+diff:
+  default: shape
+  rules:
+    - path: $.uuid
+      mode: ignore
+
+# 3. a list that composes — later entries add to earlier ones
+assert:
+  - $ref: assert.http-ok      # the shared contract
+  - rules:                    # plus a couple of inline rules
+      - target: body:$.args.currency
+        op: equals
+        value: USD
+```
+
+A list of diff profiles concatenates their `rules`, and the **last** entry's `default` wins.
+Assertion profiles concatenate their rules (and everything they `include`). A slot that fails to
+resolve — a missing `$ref`, a wrong-kind target, or an invalid inline spec — is a **hard load
+error**, never a silently-empty profile: an empty rule set passes every gate, so swallowing it
+would be a false green.
+
+### AssertionProfile
+
+A composable set of **response assertions** — environment-agnostic checks that must hold on
+*both* environments (they never reference an environment). Attach one to a request's
+`response.assert`, or to an ExecutionProfile. Assertions with `severity: warn` are non-blocking.
+
+| Field   | YAML key  | Type                        | Required | Description                                  |
+| ------- | --------- | --------------------------- | -------- | -------------------------------------------- |
+| rules   | `rules`   | list of assertion rules     | no       | The checks (see below).                      |
+| include | `include` | list of `$ref`              | no       | Other AssertionProfiles to compose in first. |
+
+Each rule is `{target, op, value, severity}`:
+
+- **target** — what to read from the response:
+  - `status` — the HTTP status code.
+  - `latency` — the elapsed time in **milliseconds** (a numeric `value` is milliseconds; a
+    string like `800ms` / `1s` is also accepted).
+  - `contentType` — the `Content-Type` header.
+  - `header:<Name>` — a named response header (case-insensitive).
+  - `bodyRaw` — the response body as text.
+  - `body` — the parsed JSON body; `body:$.<jsonpath>` addresses a node inside it (dotted keys
+    and `[index]` elements, e.g. `body:$.items[0].id`).
+- **op** — `equals`, `matches` (a regex searched in the value), `lt` / `lte` / `gt` / `gte`,
+  `between` (`value: [min, max]`), `oneOf` (`value` is a list), `exists`, `contains`, and
+  `schema` (validate the target against a `Schema` `$ref` or an inline JSON Schema).
+- **severity** — `error` (default, blocks the gate) or `warn` (advisory; counted but never
+  fails the gate).
+
+Every assertion is evaluated against **both** the baseline and the candidate response, so an
+AssertionProfile expresses a contract that must hold on each environment independently.
+
+```yaml
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: HTTP OK
+  id: assert.http-ok
+spec:
+  rules:
+    - target: status
+      op: equals
+      value: 200
+    - target: contentType
+      op: matches
+      value: application/json
+    - target: latency
+      op: lt
+      value: 5000
+      severity: warn
+---
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: Pricing contract
+  id: assert.pricing
+spec:
+  include:
+    - $ref: assert.http-ok        # compose the baseline contract
+  rules:
+    - target: body:$.args.currency
+      op: equals
+      value: USD
+```
+
+`response.status` and `response.schema` on a request are sugar that compile into `status`/`schema`
+assertion rules automatically.
+
+### ExecutionProfile
+
+A named run plan: **what** to run, **which** environments, and **which** checks. Unlike an
+Assertion/Diff profile, the ExecutionProfile is the object that *owns* the environments — via
+explicit `baseline` / `candidate` keys. Launch it from the Explorer (`enter`) or run it headless
+with [`comparo exec <id>`](cli.md#comparo-exec).
+
+| Field        | YAML key       | Type                                     | Description                                             |
+| ------------ | -------------- | ---------------------------------------- | ------------------------------------------------------ |
+| select       | `select`       | `{tags: [...], requests: [...]}`         | Which requests to run (by tag and/or id). Empty = all. |
+| matrix       | `matrix`       | `{<matrix.id>: {include/exclude/override}}` | Per-matrix case scoping for this run.               |
+| environments | `environments` | `{baseline, candidate}`                  | The env(s); a `candidate` enables the diff.            |
+| check        | `check`        | `{assertions: bool, diff: bool}`         | Which checks to compute (both default true).           |
+| profiles     | `profiles`     | `{assert: <ref/inline>, diff: <ref/inline>}` | Execution-scoped assertion / diff profiles.        |
+| report       | `report`       | any                                      | Report options for this run.                           |
+
+```yaml
+apiVersion: comparo/v1
+kind: ExecutionProfile
+metadata:
+  name: Release gate
+  id: execution.release-gate
+spec:
+  select:
+    tags: [pricing]
+  environments:
+    baseline: stable          # this profile owns the env pair — no "X-vs-Y"
+    candidate: canary
+  check:
+    assertions: true
+    diff: true
+```
+
+The diff only runs when a `candidate` is set (with just a `baseline`, an ExecutionProfile is an
+assertions-only run). The gate passes when **every** cell passes — no execution error, every
+`error`-severity assertion holds on both environments, and nothing drifted — and it **fails
+closed** on an empty run (a `select` / matrix scope that matched nothing verified nothing). That
+verdict is exactly the exit code of headless [`comparo exec <id>`](cli.md#comparo-exec).
 
 ---
 
@@ -680,7 +920,7 @@ from:
 | ----------------- | ---------------------------------------------------------------------------------- |
 | `$env: VAR`       | The OS environment variable `VAR`. Errors if it is unset.                          |
 | `$literal: value` | A constant string. Useful for dummy/demo values.                                   |
-| `$file: path`     | The contents of a file (relative to the project root), whitespace-stripped.        |
+| `$file: path`     | The contents of a file (relative to the project root), whitespace-stripped. The path is **confined to the project root** — one that escapes it (`../…`) is an error. |
 | `from: [ ... ]`   | A list of source definitions tried in order; the first that resolves wins.         |
 
 ```yaml
@@ -725,6 +965,10 @@ A `Matrix` turns one request into many. A request references zero or more matric
 - **Injection.** Each case is applied at the matrix's `target`:
   - `target: request.query` merges (or replaces) the case into the request's query map.
   - `target: request.body` merges (or replaces) the case into the body.
+  - `target: request.path` substitutes each case key into a `${key}` placeholder in the
+    request's `endpoint` — so `endpoint: /status/${code}` matrixed over `code: 200` and
+    `code: 404` runs against `/status/200` and `/status/404`. Path matrices fill the template
+    rather than merging into a container, so `mode` / `createPath` do not apply to them.
   - The leading `request.` prefix is optional.
 - **`mode`.** `merge` (default) updates the container at `target` with the case's keys;
   `replace` substitutes the case for whatever was there.
@@ -771,7 +1015,7 @@ Each entry in `rules` scopes a mode to a JSON path.
 | ------------ | ------------- | ------- | -------- | ------------------------------------------------------------------------------ |
 | path         | `path`        | string  | yes      | JSON path this rule applies to (see below).                                    |
 | mode         | `mode`        | string  | yes      | One of the [modes](#modes).                                                     |
-| array_length | `arrayLength` | string  | no       | Set to `exact` to force strict length checking even under a `shape` rule.      |
+| array_length | `arrayLength` | string  | no       | `exact` forces strict length checking even under a `shape` rule; `tolerant` is the default (lengths may differ). |
 | tolerance    | `tolerance`   | number  | no       | The `± limit` for `tolerance` mode (defaults to `0`).                           |
 | schema       | `schema`      | any     | no       | Reserved for schema-scoped comparison; accepted by the model but not yet consumed by the differ. |
 
@@ -787,3 +1031,27 @@ Each entry in `rules` scopes a mode to a JSON path.
 
 When no profile applies at all, comparison falls back to `exact` with no rules — the strictest
 possible comparison.
+
+---
+
+## Saved reports: the archive
+
+The TUI can **save a run** so you can browse and replay it later without re-executing. Saved
+runs live in the archive directory — `<data>/.reports/` by default, overridable with
+[`spec.report.dir`](#project) — one JSON file per run, named by a short id (`b5210e.json`).
+
+A saved run is a `ReportRecord`: the gate verdict (`PASS` / `FAIL` / `ERROR`), the counts
+(`calls` / `same` / `drift` / `error` / `skipped`), a per-environment assertion roll-up, a
+per-request drift breakdown, and — for a faithful replay — a `cells` list. Each cell persists
+enough to redraw the run offline: the request name, matrix variant, method and path, the drifted
+and skipped field paths, the **before/after response bodies**, the response headers, and the
+status / latency / byte size.
+
+Every string a record persists — request names, paths, cell keys, headers, and the body trees
+(keys *and* values) — is passed through the [redactor](#lazy-resolution-and-the-two-sinks) first,
+so a declared secret the server echoed back is masked before anything is written to disk. A
+saved report can therefore be committed alongside the project. Three shapes are recorded:
+
+- a **diff** run — baseline vs candidate, with the body diff per cell (no assertions);
+- an **execution** — an ExecutionProfile's assertions on both environments plus the diff;
+- a single-environment **run** — the assertions roll-up for one environment, no diff.

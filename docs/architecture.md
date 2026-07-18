@@ -24,9 +24,9 @@ project configuration.
 comparo is built as a **hexagonal (ports-and-adapters)** application. A single
 engine — the `comparo.core` package — contains all the logic: loading and
 validating a project, resolving references and secrets, expanding matrices,
-sending requests, diffing responses, and building reports. The engine knows
-nothing about *which* HTTP library moves bytes on the wire, and nothing about
-*how* a human drives it.
+sending requests, asserting and diffing responses, running execution profiles, and
+building and archiving reports. The engine knows nothing about *which* HTTP library
+moves bytes on the wire, and nothing about *how* a human drives it.
 
 Around that engine sit three front-ends — the **TUI**, the **CLI**, and the
 **GitHub Action** — and a thin **adapters** layer that plugs a concrete HTTP
@@ -136,7 +136,7 @@ than by trust.
 
 ### Stage 1 — the loader keeps holes
 
-`core/loader.py` loads every `*.yaml` object under a project root in three
+`core/loader.py` loads every `*.yaml` object under a project root in
 diagnostics-collecting passes, so one run surfaces every problem at once:
 
 1. **Parse + envelope validation** — each document is parsed with `ruamel.yaml`
@@ -145,7 +145,16 @@ diagnostics-collecting passes, so one run surfaces every problem at once:
    second `Project` manifest is a diagnostic.
 3. **Reference checking** — every `$ref`/`$val` target in the raw tree is checked
    against the known ids. A dangling reference is a *hard error* with a near-miss
-   suggestion (`did you mean '…'?`), never a silent degradation.
+   suggestion (`did you mean '…'?`), never a silent degradation. (A JSON-Schema
+   `$ref` — one that starts with `#` or contains `/` — is the user's own payload
+   and is left alone.)
+4. **Profile-slot validation** — once the tree resolves cleanly, every profile
+   attachment slot (a request's `diff`/`assert`, an `ExecutionProfile.profiles`,
+   the project default `diff`, an `AssertionProfile.include`) is resolved through
+   `refs.resolve_specs`. A slot that names a missing id, points at the wrong kind,
+   or holds an invalid inline spec is a *hard error* — never a silently-empty rule
+   set, which would pass every gate. A non-empty `spec.plugins` block is rejected
+   here too, since the plugin system does not exist yet.
 
 Crucially, the loader **does not fill** `$ref`, `$val`, or `${...}`. It leaves
 them as holes in the tree. It only proves they *could* be filled. The result is a
@@ -197,11 +206,17 @@ persisted." Two consequences follow:
 - **Interpolation is secret-first.** In `interpolation.py`, a `${NAME}` whose
   name is a secret in the environment resolves as a secret *even when written as a
   plain variable* — so a secret can never be surfaced by aliasing it.
-- **Reports scrub echoes too.** `core/export.py` renders request values through
-  the DISPLAY sink (so declared secrets arrive already masked) and *additionally*
-  redacts response bodies by string-match against the real secret values — so a
-  secret the server echoes back is masked as well. No real secret value survives
-  into a saved report.
+- **A string-match backstop scrubs echoes too.** Drift and assertion *details*
+  are built from real EXECUTE-sink responses, and a server can echo a secret
+  straight back into a body it drifts on. So `core/redaction.py` defines a
+  `Redactor` — built over every environment's resolved secret values — that masks
+  any known secret value (and, since a server can echo a secret as a JSON *key*, any
+  key or field path) anywhere it appears in a string. It is applied at **every sink
+  that leaves the process**: the `diff`/`run`/`exec` console output, the built-in
+  reporters (`build_report`), `core/export.py`'s JSON run export (`runs/*.json`), and
+  the saved `.reports/` archive. `core/export.py` additionally renders request values
+  through the DISPLAY sink, so declared secrets arrive already masked. No real secret
+  value survives into a report, a saved run, or the screen.
 
 ## The HTTP port
 
@@ -222,54 +237,84 @@ adapters raise and the engine catches).
 The **adapter** that implements the port is `adapters/httpx_client.py`. Its
 `HttpxClient` is the single module in the codebase that imports `httpx`: it maps a
 `ResolvedRequest` onto an `httpx.AsyncClient` call, materializes the response
-back, and translates `httpx.HTTPError` into the core's `HttpError`. Every engine
-component that touches the network — `execute.py`, `compare.py`, `health.py` —
-accepts an `HttpClient`, so all of them are exercised in tests with a hand-built
-fake client and never open a socket.
+back, and translates `httpx.HTTPError` into the core's `HttpError`. It also owns
+the wire-format concerns the core stays out of: it splits the body into httpx's
+`json` / `data` (form) / `content` (raw) slots by `bodyType`, turns a resolved
+`auth` block into `httpx.BasicAuth` or an `Authorization: Bearer` header, and sends
+per-request `cookies`. For a `streaming: true` response it reads the stream to
+completion and hands the bytes to `core/streams.py`, which parses them into the
+ordered `events` list carried on `HttpResponse`; `compare.py` then diffs that event
+sequence rather than the raw bytes.
+
+Every engine component that touches the network — `execute.py`, `compare.py`,
+`execution.py`, `health.py` — accepts an `HttpClient`, so all of them are exercised
+in tests with a hand-built fake client and never open a socket. A diff (and an
+execution with a candidate) is given **two** clients, one per environment, so the
+baseline and candidate never share a cookie jar — a `Set-Cookie` from one side can
+never leak into a request sent to the other.
 
 `core/report.py` mirrors the same pattern for output: it defines a `Reporter`
 protocol, and `adapters/reporters.py` supplies the concrete JUnit, SARIF, JSON,
-and Markdown reporters. The core stays format-agnostic.
+and Markdown reporters. The core stays format-agnostic. Separately, `core/archive.py`
+persists a run as a redacted `ReportRecord` under `<data>/.reports/`, so a past diff
+or execution can be browsed and replayed later without hitting the network — the
+Report screen reads these back. Both the reporters and the archive receive already-
+redacted input.
 
 ## The `comparo.core` module map
 
 | Module | Role |
 | --- | --- |
-| `models.py` | Typed `msgspec` structs for every object kind, sharing a Kubernetes-style envelope (`apiVersion` / `kind` / `metadata` / `spec`). Framework fields forbid unknown keys; payload positions are `Any` and validated later. Exposes the tagged union `Object`. |
-| `loader.py` | Loads a directory of YAML into a `LoadedProject` in three diagnostics-collecting passes; keeps `$ref`/`$val`/`${...}` as holes; dangling references are hard errors with near-miss hints. |
+| `models.py` | Typed `msgspec` structs for every object kind, sharing a Kubernetes-style envelope (`apiVersion` / `kind` / `metadata` / `spec`). Framework fields forbid unknown keys; payload positions are `Any` and validated later. Exposes the tagged union `Object` — now including `AssertionProfile` and `ExecutionProfile`. |
+| `loader.py` | Loads a directory of YAML into a `LoadedProject` in diagnostics-collecting passes (parse + envelope, id indexing, reference checking, then profile-slot validation); keeps `$ref`/`$val`/`${...}` as holes; dangling references and unresolvable profile slots are hard errors with near-miss hints. |
 | `diagnostics.py` | `Diagnostic` (file, message, line, hint) and `LoadError`, which carries every problem found in one load. |
+| `refs.py` | `resolve_specs`: the one resolver for a profile attachment slot — a `$ref`, an inline spec, or a list that composes — shared by the diff and assertion slots. An unresolvable slot is a hard error, never a silent empty rule set. |
 | `interpolation.py` | The `${...}` grammar — required / optional / default / typed-cast — resolved *secret-first* against an environment `Context`. |
-| `secrets.py` | `ExecuteSecrets`: lazily resolves declared secrets from `$env` / `$literal` / `$file` / `from` sources and caches them, for the EXECUTE sink. |
-| `resolve.py` | Environment selection and pairing, plus the `Resolver` that fills holes into a `ResolvedRequest` under the DISPLAY or EXECUTE `Sink`. |
+| `secrets.py` | `ExecuteSecrets`: lazily resolves declared secrets from `$env` / `$literal` / `$file` / `from` sources and caches them, for the EXECUTE sink; `$file` paths are confined to the project root. |
+| `resolve.py` | Environment selection and pairing, plus the `Resolver` that fills holes into a `ResolvedRequest` (method, URL, headers, query, body, `bodyType`, `auth`, `cookies`, `streaming`) under the DISPLAY or EXECUTE `Sink`. A matrix whose target is `request.path` fills `${...}` placeholders in the endpoint here. |
 | `provenance.py` | `Origin` (with the `tainted` property) and `Trail` — the single fact that drives masking, scrubbing, and diff explanations. |
-| `matrix.py` | Expands a request across its referenced matrices into one `MatrixCell` per combination (cartesian product), each with a stable `key`. |
-| `http.py` | The `HttpClient` port, the `HttpResponse` / `TimeoutBudget` / `HttpError` value types. Core's only view of the network. |
+| `matrix.py` | Expands a request across its referenced matrices into one `MatrixCell` per combination (cartesian product), each with a stable `key`; applies an ExecutionProfile's per-matrix `include` / `exclude` / `override` scope. |
+| `streams.py` | Parses a streamed response body back into its ordered records — SSE events as field maps, or the JSON objects of a chunked stream — so a stream is diffed as a sequence, not flattened to bytes. |
+| `http.py` | The `HttpClient` port, the `HttpResponse` (with an optional `events` list for streams) / `TimeoutBudget` / `HttpError` value types. Core's only view of the network. |
 | `execute.py` | Resolves a request in the EXECUTE sink, computes its timeout budget, and sends it through an `HttpClient`; failures are captured on the `Execution`, not raised, and runs are bounded by a concurrency semaphore. |
 | `diff.py` | The tri-state comparator: every path is `SAME`, `DRIFT`, or `SKIP`, under modes `ignore` / `exact` / `shape` / `type` / `tolerance`, with the most-specific path rule winning. |
-| `compare.py` | Runs a diff pair: executes every request-cell against both environments concurrently, pairs results by `(request id, cell)`, and diffs each under its profile. |
-| `report.py` | The structured `RunReport` and the `Reporter` port; `build_report` folds diff results into cells with a pass/fail gate. |
-| `checks.py` | Pure validations over a materialized response — `reachable`, expected `status`, and JSON `schema` (via `jsonschema`). |
+| `assertions.py` | Evaluates an `AssertionProfile` (or a request's `status`/`schema` sugar) against one materialized response — targets (`status`, `latency`, headers, JSON-path) and ops (`equals`, `matches`, comparisons, `between`, `oneOf`, `exists`, `contains`, `schema`); `error` rules gate, `warn` rules advise. |
+| `compare.py` | Runs a diff pair: executes every request-cell against both environments concurrently (each through its own `HttpClient`, so cookie jars stay separate), pairs results by `(request id, cell)`, composes the request/project/override diff profiles, and diffs each — as an event sequence for streamed cells. |
+| `execution.py` | Runs an `ExecutionProfile`: resolves it to a plan (which requests, cells, environments), executes each cell against baseline and candidate, asserts both, diffs the pair, and reports a fail-closed gate. Orchestration only — no comparison logic of its own. |
+| `report.py` | The structured `RunReport` and the `Reporter` port; `build_report` folds diff results into cells with a pass/fail gate (`diff_passed` / `diff_gate`), redacting drift details as it goes. |
+| `archive.py` | The saved-report store under `<data>/.reports/`: `ReportRecord` (gate, counts, assertion roll-ups, per-request breakdown) and `CellRecord` (redacted before/after bodies, response headers, status/latency/bytes for a faithful replay); `record_from_diff` / `record_from_execution` / `record_from_run`, `save_record`, `list_records`. |
+| `redaction.py` | The `Redactor` string-match backstop: masks any declared secret *value* (or key/path) found in any string a sink emits, even when it arrived untainted (e.g. echoed back by the server). |
+| `checks.py` | Pure validations over a materialized response — `reachable`, expected `status`, and JSON `schema` (via `jsonschema`), used by `export.py`. |
+| `triage.py` | Silences a drift by appending an `ignore` rule to the owning `DiffProfile`'s YAML file (round-tripped through ruamel so comments survive) — a reviewable, committed act, never an in-memory hide. |
 | `curl.py` | Renders a `ResolvedRequest` as a runnable multi-line `curl`; masked or real depending on the sink it was resolved with. |
-| `export.py` | Serializes a run to JSON with every secret masked — DISPLAY-sink values plus string-match redaction of response bodies. |
+| `export.py` | Serializes a run to JSON with every secret masked — DISPLAY-sink values plus string-match redaction of response bodies (keys and values). |
 | `health.py` | Probes an environment's declared health checks through the `HttpClient` port and aggregates PASS / PARTIAL / FAIL / UNKNOWN. |
 
 ## The front-ends
 
 **CLI** (`cli/app.py`) — a [Typer](https://typer.tiangolo.com/) app whose module
 docstring is explicit: *"Only wiring lives here … No engine logic belongs in this
-module."* `init` scaffolds a new project; `validate`, `render`, `run`, `diff`, and
-`tui` load one, call engine functions, construct an `HttpxClient` adapter, and print
-or write the results; `help` prints the command reference. Running `comparo` with no
-command opens the TUI on `./comparo.yaml`. The `diff` command drives the report gate
-and writes any requested reporter outputs (appending the Markdown reporter to
-`$GITHUB_STEP_SUMMARY` when run inside Actions).
+module."* `init` scaffolds a new project; `validate`, `render`, `run`, `exec`,
+`diff`, and `tui` load one, call engine functions, construct an `HttpxClient`
+adapter, and print or write the results; `help` prints the command reference.
+Running `comparo` with no command opens the TUI on `./comparo.yaml`. `run` gates on
+each request's `status`/`schema` sugar; `exec` runs an `ExecutionProfile` through
+`run_execution` and exits on its gate; `diff` drives the report gate and writes any
+requested reporter outputs (appending the Markdown reporter to
+`$GITHUB_STEP_SUMMARY` when run inside Actions). Each of these builds a `Redactor`
+for the project and threads it through every line it prints.
 
 **TUI** (`tui/app.py`) — a [Textual](https://textual.textualize.io/) application
-with Explorer, Run, Diff, Report, and Settings screens. Despite its size it is
-still a front-end: it imports the same engine functions (`load_project`,
-`Resolver`, `expand`, `execute_request`, `diff_run`, `check_health`,
-`run_checks`, `export_run`, `to_curl`) and the `HttpxClient` adapter, and holds
-no comparison or resolution logic of its own. The core never depends on it.
+with Explorer, Run, Diff, Execution, Report, and Settings screens. Despite its size
+it is still a front-end: it imports the same engine functions (`load_project`,
+`Resolver`, `expand`, `execute_request`, `compare_cell`, `run_execution`,
+`check_health`, `run_checks`, `export_run`, `to_curl`) and the `HttpxClient`
+adapter, and holds no comparison or resolution logic of its own. The **Execution**
+screen launches an `ExecutionProfile` (from the Explorer) and shows the same gate
+`comparo exec` computes; the **Report** screen browses the saved-run archive under
+`<data>/.reports/` — it saves runs with `archive.save_record` and reads them back
+with `list_records`, so a past diff or execution can be replayed from its persisted,
+redacted `CellRecord`s without re-executing. The core never depends on any of it.
 
 **GitHub Action** (`action.yml`) — installs comparo and invokes `comparo diff`
 with the chosen environments and the `markdown` / `junit` / `sarif` reporters, so
@@ -281,8 +326,9 @@ when the gate does.
 comparo targets **Python 3.13+** and uses [uv](https://docs.astral.sh/uv/) for
 environment and dependency management. Runtime dependencies are deliberately few:
 `msgspec` (typed decode), `ruamel.yaml` (round-trip YAML with line numbers),
-`httpx` + `httpx-sse` (the transport, behind the adapter), `typer` (CLI),
-`textual` (TUI), and `jsonschema` (schema checks).
+`httpx` (the transport, behind the adapter — `httpx-sse` is also declared, though a
+streamed response is currently read chunk-by-chunk and parsed by `core/streams.py`),
+`typer` (CLI), `textual` (TUI), and `jsonschema` (schema checks).
 
 Every change must pass the same gates CI runs. From
 [CONTRIBUTING.md](../CONTRIBUTING.md):

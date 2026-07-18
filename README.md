@@ -24,15 +24,15 @@ Pre-1.0, under active development — a first beta. A runnable, self-contained e
 
 > [!WARNING] Warning: AI Disclaimer
 >
-> `comparo` was created as a personal intiative to learn and play with terminal user interface frameworks
-> and coding agents for real life use cases. This tools has been really handy for both my personal and corporate projects.
-> Due to its **AI co-Authoring** and despite the fact I tried to require good development practice from an LLM agent,
-> I cannot advise you to rely on this tool for production purpose in its current state. This warning will stay here until I have fully
+> `comparo` was created as a personal initiative to learn and play with terminal user interface frameworks
+> and coding agents for real-life use cases. This tool has been really handy for both my personal and corporate projects.
+> Due to its **AI co-authoring**, and despite the fact I tried to require good development practices from an LLM agent,
+> I cannot advise you to rely on this tool for production purposes in its current state. This warning will stay here until I have fully
 > audited the code and can confidently release a prod-ready version.
 >
 > To be clear:
 >
-> **AI CODED THIS PROJECT BECAUSE I DIDN'T HAD TIME TO SPEND ON THIS. DO NOT TRUST BLINDLY THIS PROJECT NOR ANY VIBE CODED PROJECT YOU**
+> **AI CODED THIS PROJECT BECAUSE I DIDN'T HAVE TIME TO SPEND ON IT. DO NOT BLINDLY TRUST THIS PROJECT, NOR ANY VIBE-CODED PROJECT YOU**
 > **HAVE NOT FULLY UNDERSTOOD OR AUDITED.**
 
 ## Install
@@ -73,6 +73,8 @@ documents every command and the GitHub Action.
 
 - **Structural diff, not just bytes.** A `DiffProfile` decides, per JSON path, whether a field
   must be exact, match a shape, keep its type, stay within a tolerance, or be ignored.
+- **Assert *and* diff, in one run.** An `ExecutionProfile` evaluates assertions on both
+  environments **and** diffs the pair, behind a single gate — the Execution tab replays it live.
 - **Grouped drift.** A field that drifts across three matrix cells reads as one bug, not three.
 - **Reviewable triage.** Silencing a drift writes an ignore rule into a committed profile — it
   shows up in `git diff`, not just in memory.
@@ -86,15 +88,17 @@ documents every command and the GitHub Action.
 Projects are described by version-controlled YAML objects, each with a Kubernetes-style envelope
 (`apiVersion` / `kind` / `metadata` / `spec`):
 
-| `kind`        | Purpose |
-| ------------- | ------- |
-| `Environment` | a target: base URL, timeout, credentials, variables, health checks |
-| `Request`     | an HTTP request, optionally matrix-expanded, with a response schema and diff profile |
-| `Schema`      | a JSON Schema used for structural validation |
-| `Instance`    | a reusable value injected by reference to avoid duplication |
-| `Matrix`      | a set of parameter cases a request is run against |
-| `DiffProfile` | how two responses are compared, per JSON path |
-| `Project`     | run-wide defaults: environments, concurrency, reporting, plugins |
+| `kind`             | Purpose |
+| ------------------ | ------- |
+| `Environment`      | a target: base URL, timeout, credentials, variables, auth, cookies, health checks |
+| `Request`          | an HTTP request (matrix-expanded, streaming, auth, cookies, body encodings) with a response schema and diff/assertion profiles |
+| `Schema`           | a JSON Schema used for structural validation |
+| `Instance`         | a reusable value injected by reference to avoid duplication |
+| `Matrix`           | a set of parameter cases a request is run against (values can inject into the path) |
+| `DiffProfile`      | how two responses are compared, per JSON path |
+| `AssertionProfile` | composable assertions run against a single response (status, body, latency, schema, …) |
+| `ExecutionProfile` | one declarative run that asserts **both** environments and diffs the pair, with a gate |
+| `Project`          | run-wide defaults: environments, concurrency, reporting, plugins |
 
 The full format — every field, the `${...}` interpolation grammar, the `$ref`/`$val`/`$secret`
 sigils, matrices, and diff modes — is in the [configuration reference](docs/configuration.md).
