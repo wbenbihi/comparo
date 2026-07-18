@@ -101,6 +101,7 @@ from comparo.core.models import AssertionProfile
 from comparo.core.models import DiffProfile
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
+from comparo.core.models import Header
 from comparo.core.models import Instance
 from comparo.core.models import Matrix
 from comparo.core.models import Project
@@ -5259,10 +5260,14 @@ def _raw_header_pairs(headers: object) -> list[tuple[str, object]]:
         target = headers.get("$val")
         if isinstance(target, str):
             return [("(reference)", {"$val": target})]
+        # Mapping form: ``{Header-Name: value}`` (skip any ``$``-sigil hole).
+        return [(str(key), value) for key, value in headers.items() if not str(key).startswith("$")]
     pairs: list[tuple[str, object]] = []
     if isinstance(headers, list):
         for item in headers:
-            if isinstance(item, dict) and "key" in item:
+            if isinstance(item, Header):
+                pairs.append((item.key, item.value))
+            elif isinstance(item, dict) and "key" in item:
                 pairs.append((str(item["key"]), item.get("value")))
     return pairs
 

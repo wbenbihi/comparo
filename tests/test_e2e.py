@@ -395,12 +395,6 @@ def test_render_masks_a_declared_secret(tmp_path: Path, monkeypatch: pytest.Monk
     assert secret not in result.output  # masked, never printed
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the diff engine never compares HTTP status codes: a 200→500 regression "
-    "with identical bodies passes the gate — see CODE_HEALTH_REPORT.md; when the "
-    "engine gains a status field diff, promote this to a plain test",
-)
 def test_a_status_regression_with_identical_bodies_must_fail_the_diff_gate(
     serve: Callable[[Routes], str], tmp_path: Path
 ) -> None:
@@ -412,6 +406,41 @@ def test_a_status_regression_with_identical_bodies_must_fail_the_diff_gate(
     result = runner.invoke(app, _diff_args(config, tmp_path / "reports"))
 
     assert result.exit_code == 1, "a 500 against a 200 baseline must never pass the diff gate"
+    assert "$status" in result.output
+    assert "200 → 500" in result.output
+
+
+def test_a_status_change_is_ignorable_via_a_status_rule(
+    serve: Callable[[Routes], str], tmp_path: Path
+) -> None:
+    # An endpoint whose status legitimately varies can opt out with a $status rule.
+    payload = {"ok": True}
+    baseline = serve({"/users": _json_route(payload)})
+    candidate = serve({"/users": (500, "application/json", lambda: json.dumps(payload).encode())})
+    config = _project(tmp_path, baseline, candidate)
+    (tmp_path / "request.yaml").write_text(
+        textwrap.dedent(
+            """\
+            apiVersion: comparo/v1
+            kind: Request
+            metadata: {name: users, id: request.users}
+            spec:
+              request:
+                method: GET
+                endpoint: /users
+              response:
+                diff:
+                  default: exact
+                  rules:
+                    - {path: $status, mode: ignore}
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, _diff_args(config, tmp_path / "reports"))
+    assert result.exit_code == 0, result.output
+    assert "gate: PASS" in result.output
 
 
 def test_streamed_responses_diff_by_event_sequence(

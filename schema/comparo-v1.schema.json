@@ -440,6 +440,20 @@
           "default": null
         },
         "headers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Header"
+              }
+            },
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null
         },
         "body": {

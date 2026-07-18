@@ -10,12 +10,14 @@ import dataclasses
 import enum
 
 from comparo.core.interpolation import Context
+from comparo.core.interpolation import InterpolationError
 from comparo.core.interpolation import interpolate
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import Injection
 from comparo.core.matrix import MatrixCell
 from comparo.core.matrix import case_key
 from comparo.core.models import Environment
+from comparo.core.models import Header
 from comparo.core.models import Instance
 from comparo.core.models import Request
 from comparo.core.provenance import Origin
@@ -83,9 +85,21 @@ def resolve_pair(
     """
     if baseline is not None and candidate is not None:
         return select_environment(project, baseline), select_environment(project, candidate)
+    if baseline is not None or candidate is not None:
+        # A lone flag must never be silently discarded in favour of a manifest pair.
+        message = "provide both --baseline and --candidate, or neither"
+        raise EnvironmentSelectionError(message)
     found = _find_pair(project, pair)
     if found is not None:
-        return select_environment(project, found[0]), select_environment(project, found[1])
+        found_baseline, found_candidate = found
+        if found_baseline is None or found_candidate is None:
+            name = f"'{pair}'" if pair is not None else "the first diff pair"
+            message = f"diff pair {name} is missing a baseline or candidate"
+            raise EnvironmentSelectionError(message)
+        return (
+            select_environment(project, found_baseline),
+            select_environment(project, found_candidate),
+        )
     message = "specify --pair, or both --baseline and --candidate"
     raise EnvironmentSelectionError(message)
 
@@ -148,6 +162,8 @@ class Resolver:
         self.project = project
         self.environment = environment
         self.sink = sink
+        #: Instance ids currently being expanded, to detect a ``$val`` cycle.
+        self._resolving: set[str] = set()
         secret_sources = environment.spec.secrets or {}
         secret_names = frozenset(secret_sources)
         if sink is Sink.EXECUTE:
@@ -192,9 +208,13 @@ class Resolver:
         """
         outbound = request.spec.request
         base = self.environment.spec.base_url.rstrip("/")
-        endpoint = _inject_path(outbound.endpoint, cell)
-        url = f"{base}/{endpoint.lstrip('/')}"
         trail: list[Trail] = []
+        # Fill path-matrix ``${key}`` holes first, then interpolate ``${VAR}``
+        # references against the environment's variables/secrets.
+        injected = _inject_path(outbound.endpoint, cell)
+        resolved_endpoint = self._value(injected, "endpoint", trail)
+        endpoint = str(resolved_endpoint) if resolved_endpoint is not None else ""
+        url = f"{base}/{endpoint.lstrip('/')}"
         headers = self._headers(outbound.headers, trail)
         query = {
             key: self._value(value, f"query.{key}", trail)
@@ -260,8 +280,14 @@ class Resolver:
         pairs: list[tuple[str, object]] = []
         if isinstance(node, list):
             for item in node:
-                if isinstance(item, dict) and "key" in item:
+                if isinstance(item, Header):  # list form: [{key, value}, ...]
+                    pairs.append((item.key, item.value))
+                elif isinstance(item, dict) and "key" in item:
                     pairs.append((str(item["key"]), item.get("value")))
+        elif isinstance(node, dict) and _hole(node) is None:
+            # Mapping form: ``{Header-Name: value}`` (values still flow through
+            # ``_value`` in ``_headers``, so ``${...}``/``$secret`` resolve/mask).
+            pairs.extend((str(key), value) for key, value in node.items())
         return pairs
 
     def _value(self, node: object, path: str, trail: list[Trail]) -> object:
@@ -281,8 +307,16 @@ class Resolver:
 
     def _reference(self, sigil: str, target: object, path: str, trail: list[Trail]) -> object:
         if sigil == "$val" and isinstance(target, str):
+            if target in self._resolving:
+                chain = " → ".join([*self._resolving, target])
+                message = f"$val cycle: {chain}"
+                raise InterpolationError(message)
             trail.append(Trail(path, Origin.INSTANCE, target))
-            return self._value(self._instance_value(target), path, trail)
+            self._resolving.add(target)
+            try:
+                return self._value(self._instance_value(target), path, trail)
+            finally:
+                self._resolving.discard(target)
         if sigil == "$literal":
             return target
         if sigil == "$secret" and isinstance(target, str):

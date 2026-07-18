@@ -74,7 +74,9 @@ class HttpRequest(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     method: str
     endpoint: str
     query: dict[str, Any] | None = None
-    headers: Any = None
+    #: Either a list of ``Header`` objects or a ``{Name: value}`` mapping (a
+    #: ``{$val: id}`` hole decodes as the mapping form and is unwrapped later).
+    headers: list[Header] | dict[str, Any] | None = None
     body: Any = None
     #: How the body is encoded: ``json`` (default), ``form``, or ``raw``.
     body_type: str | None = None

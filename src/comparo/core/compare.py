@@ -131,17 +131,23 @@ def _compare(
     if baseline_response is None or candidate_response is None:
         return CellDiff(request, key, [], "missing response")
     default_mode, rules = _compose_diff(project, request, diff_override)
+    # A ``$status`` rule (matched by its literal path, never through the JSON-path
+    # compiler, so it can't collide with a body field ``$.status``) governs the
+    # synthetic status comparison; the rest apply to the body.
+    status_rules = [rule for rule in rules if rule.path == "$status"]
+    rules = [rule for rule in rules if rule.path != "$status"]
     status = baseline_response.status
     latency = round(baseline_response.elapsed_ms)
     size = len(baseline_response.body)
     headers = tuple(baseline_response.headers)
+    status_field = _status_field(baseline_response.status, candidate_response.status, status_rules)
     if baseline_response.events is not None and candidate_response.events is not None:
         # Streamed responses diff as their ordered event sequence, not raw bytes.
         events_a, events_b = baseline_response.events, candidate_response.events
         return CellDiff(
             request,
             key,
-            diff(events_a, events_b, default_mode, rules),
+            [status_field, *diff(events_a, events_b, default_mode, rules)],
             baseline_body=events_a,
             candidate_body=events_b,
             status=status,
@@ -154,11 +160,21 @@ def _compare(
         candidate_body = json.loads(candidate_response.body)
     except ValueError:
         # Empty or non-JSON responses (e.g. a status-only check) diff as raw bytes.
-        return _raw_compare(request, key, baseline_response.body, candidate_response.body)
+        return _raw_compare(
+            request,
+            key,
+            baseline_response.body,
+            candidate_response.body,
+            status_field,
+            status=status,
+            latency=latency,
+            size=size,
+            headers=headers,
+        )
     return CellDiff(
         request,
         key,
-        diff(baseline_body, candidate_body, default_mode, rules),
+        [status_field, *diff(baseline_body, candidate_body, default_mode, rules)],
         baseline_body=baseline_body,
         candidate_body=candidate_body,
         status=status,
@@ -166,6 +182,21 @@ def _compare(
         size_bytes=size,
         response_headers=headers,
     )
+
+
+def _status_field(baseline: int, candidate: int, rules: list[DiffRule]) -> FieldDiff:
+    """Compare HTTP status as a synthetic ``$status`` field, honouring an override.
+
+    A 200→500 with identical bodies is a real regression the body diff can't see,
+    so status is always compared; a ``{path: $status, mode: ignore}`` rule (e.g.
+    for an endpoint whose status legitimately varies) skips it.
+    """
+    override = next((rule for rule in rules), None)
+    if override is not None and override.mode == "ignore":
+        return FieldDiff("$status", State.SKIP, "ignore")
+    if baseline == candidate:
+        return FieldDiff("$status", State.SAME, "exact")
+    return FieldDiff("$status", State.DRIFT, "exact", f"{baseline} → {candidate}")
 
 
 def _compose_diff(
@@ -196,10 +227,31 @@ def _project_default_diff(project: LoadedProject) -> list[DiffProfileSpec]:
     return []
 
 
-def _raw_compare(request: Request, key: str, baseline: bytes, candidate: bytes) -> CellDiff:
+def _raw_compare(
+    request: Request,
+    key: str,
+    baseline: bytes,
+    candidate: bytes,
+    status_field: FieldDiff,
+    *,
+    status: int,
+    latency: int,
+    size: int,
+    headers: tuple[tuple[str, str], ...],
+) -> CellDiff:
     if baseline == candidate:
-        return CellDiff(request, key, [FieldDiff("$", State.SAME, "exact")])
-    return CellDiff(request, key, [FieldDiff("$", State.DRIFT, "exact", "response bodies differ")])
+        body_field = FieldDiff("$", State.SAME, "exact")
+    else:
+        body_field = FieldDiff("$", State.DRIFT, "exact", "response bodies differ")
+    return CellDiff(
+        request,
+        key,
+        [status_field, body_field],
+        status=status,
+        latency_ms=latency,
+        size_bytes=size,
+        response_headers=headers,
+    )
 
 
 def profile_for(project: LoadedProject, request: Request) -> DiffProfile | None:
