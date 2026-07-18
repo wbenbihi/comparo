@@ -1,0 +1,1173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/wbenbihi/comparo/main/schema/comparo-v1.schema.json",
+  "title": "comparo/v1",
+  "description": "A comparo/v1 object - one of Environment, Request, Schema, Instance, Matrix, DiffProfile, AssertionProfile, ExecutionProfile, or Project.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Environment"
+    },
+    {
+      "$ref": "#/$defs/Request"
+    },
+    {
+      "$ref": "#/$defs/Schema"
+    },
+    {
+      "$ref": "#/$defs/Instance"
+    },
+    {
+      "$ref": "#/$defs/Matrix"
+    },
+    {
+      "$ref": "#/$defs/DiffProfile"
+    },
+    {
+      "$ref": "#/$defs/AssertionProfile"
+    },
+    {
+      "$ref": "#/$defs/ExecutionProfile"
+    },
+    {
+      "$ref": "#/$defs/Project"
+    }
+  ],
+  "discriminator": {
+    "propertyName": "kind",
+    "mapping": {
+      "Environment": "#/$defs/Environment",
+      "Request": "#/$defs/Request",
+      "Schema": "#/$defs/Schema",
+      "Instance": "#/$defs/Instance",
+      "Matrix": "#/$defs/Matrix",
+      "DiffProfile": "#/$defs/DiffProfile",
+      "AssertionProfile": "#/$defs/AssertionProfile",
+      "ExecutionProfile": "#/$defs/ExecutionProfile",
+      "Project": "#/$defs/Project"
+    }
+  },
+  "$defs": {
+    "Environment": {
+      "title": "Environment",
+      "description": "A target environment.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "Environment"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/EnvironmentSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "Meta": {
+      "title": "Meta",
+      "description": "Object metadata. Every kind except ``Project`` declares an ``id``.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "EnvironmentSpec": {
+      "title": "EnvironmentSpec",
+      "description": "The body of an ``Environment`` object.",
+      "type": "object",
+      "properties": {
+        "baseUrl": {
+          "type": "string"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Duration"
+            }
+          ],
+          "default": null
+        },
+        "secrets": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "variables": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "headers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Header"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "health": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HealthCheck"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "auth": {
+          "default": null
+        }
+      },
+      "required": [
+        "baseUrl"
+      ],
+      "additionalProperties": false
+    },
+    "Duration": {
+      "title": "Duration",
+      "description": "A split timeout budget; an omitted field falls back to a built-in default.",
+      "type": "object",
+      "properties": {
+        "connect": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]+(ms|s|m|h)$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "read": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]+(ms|s|m|h)$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "streamIdle": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]+(ms|s|m|h)$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "Header": {
+      "title": "Header",
+      "description": "A single HTTP header. ``value`` may be a literal or a reference hole.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "default": null
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "HealthCheck": {
+      "title": "HealthCheck",
+      "description": "A request used to probe an environment's readiness.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "headers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Header"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "method",
+        "endpoint"
+      ],
+      "additionalProperties": false
+    },
+    "Request": {
+      "title": "Request",
+      "description": "An HTTP request, optionally matrix-expanded.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "Request"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/RequestSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "RequestSpec": {
+      "title": "RequestSpec",
+      "description": "The body of a ``Request`` object.",
+      "type": "object",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/HttpRequest"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Response"
+            }
+          ],
+          "default": null
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Duration"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "request"
+      ],
+      "additionalProperties": false
+    },
+    "HttpRequest": {
+      "title": "HttpRequest",
+      "description": "The outbound HTTP request a ``Request`` object describes.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "headers": {
+          "default": null
+        },
+        "body": {
+          "default": null
+        },
+        "bodyType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "auth": {
+          "default": null
+        },
+        "cookies": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "method",
+        "endpoint"
+      ],
+      "additionalProperties": false
+    },
+    "Response": {
+      "title": "Response",
+      "description": "The expected response of a ``Request`` object.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema": {
+          "default": null
+        },
+        "diff": {
+          "default": null
+        },
+        "streaming": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "assert": {
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "Schema": {
+      "title": "Schema",
+      "description": "A JSON Schema used for structural validation.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "Schema"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "Instance": {
+      "title": "Instance",
+      "description": "A reusable value injected by reference.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "Instance"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/InstanceSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "InstanceSpec": {
+      "title": "InstanceSpec",
+      "description": "The body of an ``Instance`` object \u2014 a single reusable value.",
+      "type": "object",
+      "properties": {
+        "value": {
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "Matrix": {
+      "title": "Matrix",
+      "description": "A set of parameter cases a request runs against.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "Matrix"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/MatrixSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "MatrixSpec": {
+      "title": "MatrixSpec",
+      "description": "The body of a ``Matrix`` object \u2014 a list of atomic cases.",
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "mode": {
+          "enum": [
+            "merge",
+            "replace"
+          ],
+          "default": "merge"
+        },
+        "createPath": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "target",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "DiffProfile": {
+      "title": "DiffProfile",
+      "description": "How two responses are compared, per JSON path.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "DiffProfile"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/DiffProfileSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "DiffProfileSpec": {
+      "title": "DiffProfileSpec",
+      "description": "The body of a ``DiffProfile`` object.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "enum": [
+            "exact",
+            "ignore",
+            "shape",
+            "tolerance",
+            "type"
+          ]
+        },
+        "rules": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DiffRule"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "default"
+      ],
+      "additionalProperties": false
+    },
+    "DiffRule": {
+      "title": "DiffRule",
+      "description": "One path-scoped comparison rule inside a ``DiffProfile``.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "exact",
+            "ignore",
+            "shape",
+            "tolerance",
+            "type"
+          ]
+        },
+        "schema": {
+          "default": null
+        },
+        "arrayLength": {
+          "anyOf": [
+            {
+              "enum": [
+                "exact",
+                "tolerant"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "AssertionProfile": {
+      "title": "AssertionProfile",
+      "description": "A composable set of response assertions, attached to a request or execution.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "AssertionProfile"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/AssertionProfileSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "AssertionProfileSpec": {
+      "title": "AssertionProfileSpec",
+      "description": "The body of an ``AssertionProfile`` \u2014 composable response assertions.",
+      "type": "object",
+      "properties": {
+        "rules": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AssertionRule"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "include": {
+          "anyOf": [
+            {
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "AssertionRule": {
+      "title": "AssertionRule",
+      "description": "One response assertion: a target, an operator, and an expected value.",
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "op": {
+          "type": "string"
+        },
+        "value": {
+          "default": null
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warn"
+          ],
+          "default": "error"
+        }
+      },
+      "required": [
+        "target",
+        "op"
+      ],
+      "additionalProperties": false
+    },
+    "ExecutionProfile": {
+      "title": "ExecutionProfile",
+      "description": "A named run plan: what to run, which environments, and which checks.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "ExecutionProfile"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/ExecutionProfileSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "ExecutionProfileSpec": {
+      "title": "ExecutionProfileSpec",
+      "description": "The body of an ``ExecutionProfile`` \u2014 what to run, where, and which checks.",
+      "type": "object",
+      "properties": {
+        "select": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ExecutionSelect"
+            }
+          ],
+          "default": null
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/MatrixScope"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "environments": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ExecutionEnvironments"
+            }
+          ],
+          "default": null
+        },
+        "check": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ExecutionCheck"
+            }
+          ],
+          "default": null
+        },
+        "profiles": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ExecutionProfiles"
+            }
+          ],
+          "default": null
+        },
+        "report": {
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ExecutionSelect": {
+      "title": "ExecutionSelect",
+      "description": "Which requests an execution runs \u2014 by tag and/or explicit id.",
+      "type": "object",
+      "properties": {
+        "tags": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "MatrixScope": {
+      "title": "MatrixScope",
+      "description": "Per-execution matrix customization: which cases to run, add, or drop.",
+      "type": "object",
+      "properties": {
+        "include": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "override": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ExecutionEnvironments": {
+      "title": "ExecutionEnvironments",
+      "description": "The environments to run against; a ``candidate`` enables the diff.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ExecutionCheck": {
+      "title": "ExecutionCheck",
+      "description": "Which checks an execution computes.",
+      "type": "object",
+      "properties": {
+        "assertions": {
+          "type": "boolean",
+          "default": true
+        },
+        "diff": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ExecutionProfiles": {
+      "title": "ExecutionProfiles",
+      "description": "The ``profiles`` block of an ExecutionProfile \u2014 its diff / assert overrides.\n\nTyped (not ``Any``) so a mistyped key like ``asert`` is a hard load error\nrather than a silently-ignored profile.",
+      "type": "object",
+      "properties": {
+        "diff": {
+          "default": null
+        },
+        "assert": {
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "Project": {
+      "title": "Project",
+      "description": "The root manifest \u2014 run-wide defaults.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "Project"
+          ]
+        },
+        "apiVersion": {
+          "enum": [
+            "comparo/v1"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/Meta"
+        },
+        "spec": {
+          "$ref": "#/$defs/ProjectSpec"
+        }
+      },
+      "required": [
+        "kind",
+        "apiVersion",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "ProjectSpec": {
+      "title": "ProjectSpec",
+      "description": "The body of the root ``Project`` manifest.",
+      "type": "object",
+      "properties": {
+        "data": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "environments": {
+          "default": null
+        },
+        "run": {
+          "default": null
+        },
+        "diff": {
+          "default": null
+        },
+        "selection": {
+          "default": null
+        },
+        "report": {
+          "default": null
+        },
+        "redaction": {
+          "default": null
+        },
+        "plugins": {
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+}

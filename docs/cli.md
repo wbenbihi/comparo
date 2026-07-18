@@ -19,6 +19,7 @@ The CLI, the TUI, and the GitHub Action are all thin front-ends over one engine
   - [`comparo init`](#comparo-init)
   - [`comparo validate`](#comparo-validate)
   - [`comparo doctor`](#comparo-doctor)
+  - [`comparo schema`](#comparo-schema)
   - [`comparo render`](#comparo-render)
   - [`comparo run`](#comparo-run)
   - [`comparo exec`](#comparo-exec)
@@ -125,6 +126,7 @@ project directory); it defaults to `comparo.yaml` in the current directory.
 comparo init     [DIRECTORY] [--name NAME] [--data DIR] [--config FILE] [--description TEXT]
 comparo validate [--config CONFIG]
 comparo doctor
+comparo schema   [--output FILE]
 comparo render   REQUEST_ID [--config CONFIG] [--env NAME]
 comparo run      [REQUEST_ID] [--config CONFIG] [--env NAME]
 comparo exec     EXECUTION_ID [--config CONFIG]
@@ -271,9 +273,38 @@ comparo doctor
 $ comparo doctor
 ✓ TUI display        masked on render
 ✓ saved runs         .runs/*.json
-… 
+…
 9/9 sinks masked the canary
 ```
+
+### `comparo schema`
+
+Emit the **`comparo/v1` JSON Schema**. It's generated from the same object models
+the loader validates against, so it can never drift from the real config surface.
+
+```
+comparo schema [--output FILE]
+```
+
+**Options**
+
+| Option | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--output` | `-o` | *(stdout)* | Write the schema to a file instead of printing it. |
+
+Point your editor's YAML language server at it for autocomplete and inline
+validation. A copy is shipped at [`schema/comparo-v1.schema.json`](../schema/comparo-v1.schema.json);
+add a modeline to any project file:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/wbenbihi/comparo/main/schema/comparo-v1.schema.json
+apiVersion: comparo/v1
+kind: Request
+# …
+```
+
+It's also the ground truth an LLM agent can author against, then check its work
+with `comparo validate`.
 
 ### `comparo render`
 

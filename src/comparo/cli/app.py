@@ -175,6 +175,31 @@ def doctor() -> None:
 
 
 @app.command()
+def schema(
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Write to a file instead of stdout.")
+    ] = None,
+) -> None:
+    """Emit the comparo/v1 JSON Schema.
+
+    The schema is generated from the object models, so it never drifts from the
+    real config. Point an editor's YAML language server at it for autocomplete
+    and inline validation, or hand it to an agent authoring config.
+
+    Args:
+        output: A file to write the schema to; prints to stdout when omitted.
+    """
+    from comparo.core.schema import json_schema
+
+    document = json.dumps(json_schema(), indent=2) + "\n"
+    if output is not None:
+        output.write_text(document, encoding="utf-8")
+        typer.secho(f"✓ wrote {output}", fg=typer.colors.GREEN)
+    else:
+        typer.echo(document, nl=False)
+
+
+@app.command()
 def render(
     request_id: Annotated[str, typer.Argument(help="metadata.id of the request to render.")],
     *,
