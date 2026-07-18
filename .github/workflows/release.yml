@@ -4,7 +4,7 @@ name: Release
 # Requires PyPI Trusted Publishing (OIDC) configured for this repo — no token stored.
 on:
   push:
-    branches: [main]
+    branches: [main, alpha, beta, rc]
 
 concurrency:
   group: release
