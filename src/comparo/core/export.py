@@ -20,6 +20,7 @@ from comparo.core.models import Request
 from comparo.core.redaction import Redactor
 from comparo.core.redaction import environment_secret_values
 from comparo.core.redaction import mask_credential_header
+from comparo.core.redaction import redact_tree
 from comparo.core.redaction import secret_values
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
@@ -75,7 +76,7 @@ def _entry(
         "method": resolved.method,
         "url": redact(resolved.url),
         "requestHeaders": {redact(key): redact(str(value)) for key, value in resolved.headers},
-        "requestBody": _redact_value(resolved.body, redact),
+        "requestBody": redact_tree(resolved.body, redact),
         "status": response.status if response else None,
         "durationMs": round(response.elapsed_ms, 1) if response else None,
         "error": redact(entry.execution.error) if entry.execution.error else None,
@@ -100,16 +101,4 @@ def _redact_body(body: bytes, redact: Callable[[str], str]) -> object:
         payload = json.loads(body)
     except (ValueError, TypeError):
         return redact(body.decode("utf-8", "replace"))
-    return _redact_value(payload, redact)
-
-
-def _redact_value(value: object, redact: Callable[[str], str]) -> object:
-    if isinstance(value, str):
-        return redact(value)
-    if isinstance(value, dict):
-        # Redact the KEY too: a server can echo a secret as an object key, so
-        # masking only the value would still write the secret to disk.
-        return {redact(str(key)): _redact_value(item, redact) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_value(item, redact) for item in value]
-    return value
+    return redact_tree(payload, redact)
