@@ -4478,7 +4478,14 @@ class ExecutionView(Vertical):
             legend.append("    + ", style=f"bold {_SAME}")
             legend.append("candidate ", style=_DIM)
             legend.append(names[1], style=_TEXT)
-            insight = Text("\noutbound identical → the drift is the service's", style=_SAME)
+            # Don't assert the drift is the service's — the outbound can differ
+            # across environments (per-env variables/secrets), which would explain
+            # some drift. Point at the Diff tab's outbound view to confirm.
+            insight = Text(
+                "\nsame request replayed against both — open the Diff tab (o) to confirm "
+                "the outbound matches before blaming the service",
+                style=_DIM,
+            )
             content.update(Group(well, legend, insight))
         else:
             content.update(Text("no diff computed for this cell", style=_DIM))
