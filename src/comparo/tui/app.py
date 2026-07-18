@@ -6914,15 +6914,18 @@ def _running_body(
     parts.append(head)
     width = 24
     filled = round(width * done / total) if total else 0
+    # Real tallies from the per-cell glyphs the caller maintains (✓ pass, ✗ fail),
+    # never a hardcoded count.
+    passed = sum(1 for glyph in glyphs if glyph == "✓")
+    failed = sum(1 for glyph in glyphs if glyph == "✗")
     bar = Text("\n")
     bar.append("█" * filled, style=_ACCENT)
     bar.append("░" * (width - filled), style=_DIM)
     bar.append(f"   {done}/{total or '…'} cells", style=_TEXT)
     bar.append("   ", style=_DIM)
-    bar.append(f"{done} ✓", style=_SAME)
+    bar.append(f"{passed} ✓", style=_SAME)
     bar.append("  ", style=_DIM)
-    bar.append("0 ✗", style=_DIM)
-    bar.append("  ~410ms/cell", style=_DIM)
+    bar.append(f"{failed} ✗", style=_DRIFT if failed else _DIM)
     parts.append(bar)
     cur = Text("\n▸ ", style=_ACCENT)
     if (done < total or not total) and current is not None:
@@ -6930,7 +6933,7 @@ def _running_body(
         cur.append_text(_running_cell_name(current))
         if current.method_path:
             cur.append(f"     {current.method_path}", style=_DIM)
-        cur.append("     stable ", style=_DIM)
+        cur.append("     baseline ", style=_DIM)
         cur.append("◐", style=_WARN)
         cur.append("  candidate ", style=_DIM)
         cur.append("◐", style=_WARN)
@@ -6945,7 +6948,11 @@ def _running_body(
         for index, row in enumerate(recent[-6:]):
             if index:
                 log.append("\n")
-            log.append("✓ ", style=_SAME)
+            # A finished row that drifted is a failure — don't paint it green.
+            if row.drift:
+                log.append("✗ ", style=_DRIFT)
+            else:
+                log.append("✓ ", style=_SAME)
             log.append_text(_running_cell_name(row, hi=False))
             if row.method_path:
                 log.append(f"    {row.method_path}", style=_DIM)

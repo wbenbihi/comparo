@@ -1458,3 +1458,22 @@ def test_no_footer_hint_labels_q_as_anything_but_quit() -> None:
             if "q" in tokens and "quit" not in label.lower():
                 offenders.append((name, key, label))
     assert not offenders, f"q mislabeled as non-quit in footers: {offenders}"
+
+
+def test_running_body_shows_real_pass_fail_counts_not_fabricated_metrics() -> None:
+    # H13: the live view must reflect real ✓/✗ from the per-cell glyphs and never
+    # the old hardcoded "0 ✗" / "~410ms/cell".
+    from rich.console import Console
+
+    from comparo.tui.app import _running_body
+
+    glyphs = ["✓", "✓", "✗", "◐"]  # 2 passed, 1 failed, 1 still running
+    group = _running_body("release-gate", done=3, total=4, current=None, recent=[], glyphs=glyphs)
+    console = Console(width=120)
+    with console.capture() as capture:
+        console.print(group)
+    out = capture.get()
+    assert "2 ✓" in out
+    assert "1 ✗" in out
+    assert "410ms" not in out  # the fabricated throughput is gone
+    assert "0 ✗" not in out
