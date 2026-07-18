@@ -1412,3 +1412,25 @@ def test_outbound_diff_flags_url_drift_and_never_leaks_a_secret() -> None:
     same = render(_outbound_diff_view(a, a, env_a, env_b))
     assert "identical on both sides" in same
     assert "differs across environments" not in same
+
+
+def test_nav_tabs_are_reachable_without_shift_on_azerty() -> None:
+    # French AZERTY (the user's layout) needs shift for digits, so every nav tab
+    # also binds its unshifted character. Tab 6 (Settings) is `-` on a PC keyboard
+    # but `§` (section_sign) on an Apple keyboard — bind both so it works on a Mac.
+    from textual.binding import Binding
+
+    from comparo.tui.app import ComparoApp
+
+    nav_keys: dict[str, list[str]] = {}
+    for entry in ComparoApp.BINDINGS:
+        if isinstance(entry, Binding) and entry.action.startswith("screen("):
+            nav_keys[entry.action] = entry.key.split(",")
+
+    assert nav_keys, "no nav-screen bindings found"
+    settings = nav_keys["screen('settings')"]
+    assert "6" in settings  # the shifted digit
+    assert "section_sign" in settings  # § — reachable without shift on a MacBook
+    # every tab must offer at least one no-shift (non-digit) alternative
+    for action, keys in nav_keys.items():
+        assert any(not key.isdigit() for key in keys), f"{action} needs a no-shift key"

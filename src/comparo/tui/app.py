@@ -4605,7 +4605,9 @@ class ComparoApp(App[None]):
         Binding("3,quotation_mark", "screen('diff')", "Diff"),
         Binding("4,apostrophe", "screen('execution')", "Execution"),
         Binding("5,left_parenthesis", "screen('report')", "Report"),
-        Binding("6,minus", "screen('settings')", "Settings"),
+        # 6 needs shift on French AZERTY; bind the unshifted char too — `minus` on a
+        # PC keyboard, `section_sign` (§) on an Apple keyboard — so it works on a MacBook.
+        Binding("6,minus,section_sign", "screen('settings')", "Settings"),
         Binding("slash", "filter", "Filter"),
         Binding("g", "graph", "Graph"),
         Binding("h", "health", "Health"),
