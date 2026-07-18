@@ -753,9 +753,9 @@ Each file is one object with a Kubernetes-style envelope:
 
 Field names are **camelCase** (`baseUrl`, not `base_url`). The kinds:
 
-- **Environment** — a target: `baseUrl`, `timeout`, `variables`, `auth`, `cookies`, `health`.
-- **Request** — an HTTP request (`method`, `endpoint`, `headers`, `query`, `body`) with an
-  optional response `schema` and `diff`/`assert` profiles. Matrix-expanded.
+- **Environment** — a target: `baseUrl`, `timeout`, `variables`, `secrets`, `auth`, `health`.
+- **Request** — an HTTP request (`method`, `endpoint`, `headers`, `query`, `body`, `cookies`,
+  `auth`) with an optional response `schema` and `diff`/`assert` profiles. Matrix-expanded.
 - **Schema** — a JSON Schema used for structural validation.
 - **Instance** — reusable values injected by reference, to avoid duplication.
 - **Matrix** — the parameter cases a request runs against (values can inject into the path).
@@ -767,7 +767,7 @@ Field names are **camelCase** (`baseUrl`, not `base_url`). The kinds:
 ## References and secrets
 
 - `$ref: <id>` — link to another object by its `metadata.id`.
-- `$val: <instance-id>.path` — pull a value out of an Instance.
+- `$val: <instance-id>` — inject the value of an Instance by reference.
 - `$secret: NAME` — a secret declared in the environment. **Never write a real secret
   value in these files.** Declare it once under an Environment's `secrets` (sourced from
   `$env` or `$file`) and reference it by name. comparo masks declared secrets everywhere.
