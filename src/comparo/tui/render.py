@@ -2090,6 +2090,9 @@ class _RunningRow(NamedTuple):
     baseline_ms: int | None = None
     candidate_ms: int | None = None
     drift: str = ""
+    #: The cell's overall verdict — an error or a failed assertion fails it too,
+    #: not only a drift (so an errored-but-undrifted cell is not painted green).
+    failed: bool = False
 
 
 def _running_cell_name(row: _RunningRow, hi: bool = True) -> Text:
@@ -2118,6 +2121,7 @@ def _running_row_from_progress(
         baseline_ms=event.baseline_ms,
         candidate_ms=event.candidate_ms,
         drift=drift_leaf,
+        failed=not event.ok,
     )
 
 
@@ -2175,8 +2179,9 @@ def _running_body(
         for index, row in enumerate(recent[-6:]):
             if index:
                 log.append("\n")
-            # A finished row that drifted is a failure — don't paint it green.
-            if row.drift:
+            # A finished row that failed — a drift, a failed assertion, or an
+            # error — is red; only a clean pass is painted green.
+            if row.failed:
                 log.append("✗ ", style=_DRIFT)
             else:
                 log.append("✓ ", style=_SAME)
@@ -2194,7 +2199,14 @@ def _running_body(
         parts.append(log)
     plan = Text("\nlive plan   ", style=f"bold {_DIM}")
     for glyph in glyphs:
-        colour = _SAME if glyph == "●" else _WARN if glyph == "◐" else _DIM
+        if glyph == "✓":
+            colour = _SAME
+        elif glyph == "✗":
+            colour = _DRIFT
+        elif glyph == "◐":
+            colour = _WARN
+        else:
+            colour = _DIM
         plan.append(glyph, style=colour)
     plan.append("   each glyph = one cell, updating as the engine ticks", style=_DIM)
     parts.append(plan)

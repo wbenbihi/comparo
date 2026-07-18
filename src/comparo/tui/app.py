@@ -1946,7 +1946,8 @@ class DiffView(Vertical):
                 )
             result = compare_cell(self.project, base, cand)
             self._run_done += 1
-            self._run_glyphs[index] = "●"
+            failed = result.drifted or result.error is not None
+            self._run_glyphs[index] = "✗" if failed else "✓"
             drift = redact(result.drifts[0].path).rsplit(".", 1)[-1] if result.drifts else ""
             self._run_recent.append(
                 _RunningRow(
@@ -1961,6 +1962,7 @@ class DiffView(Vertical):
                         round(cand.response.elapsed_ms) if cand.response is not None else None
                     ),
                     drift=drift,
+                    failed=failed,
                 )
             )
             self._render_diff_running()
@@ -3851,7 +3853,7 @@ class ExecutionView(Vertical):
         if event.done:
             self._done += 1
             if event.index < len(self._plan_glyphs):
-                self._plan_glyphs[event.index] = "●"
+                self._plan_glyphs[event.index] = "✓" if event.ok else "✗"
             self._recent.append(row)
         else:
             if event.index < len(self._plan_glyphs):
