@@ -318,6 +318,10 @@ _SINKS: tuple[tuple[str, str, Callable[[_Scenario], str]], ...] = (
     ("crash report", "traceback scrub", _crash),
 )
 
+#: The ``(name, detail)`` of every sink, in order — the display projection of
+#: :data:`_SINKS`, so the TUI's Security panel never re-lists them by hand.
+SINK_LABELS: tuple[tuple[str, str], ...] = tuple((name, detail) for name, detail, _ in _SINKS)
+
 
 def _run_sink(
     name: str, detail: str, produce: Callable[[_Scenario], str], scenario: _Scenario

@@ -7839,18 +7839,6 @@ _SETTINGS_SUBTITLE: dict[str, str] = {
 }
 _REPO_URL = "github.com/wbenbihi/comparo"
 _DOCS_URL = "github.com/wbenbihi/comparo/tree/main/docs"
-#: The redaction sinks the self-check reports on, in display order (name, where).
-_SELFCHECK_SINKS: tuple[tuple[str, str], ...] = (
-    ("TUI display", "masked on render"),
-    ("saved runs", ".runs/*.json"),
-    ("saved reports", ".reports/*.json"),
-    ("JUnit reporter", "reports/junit.xml"),
-    ("SARIF reporter", "reports/comparo.sarif"),
-    ("JSON reporter", "reports/comparo.json"),
-    ("Markdown reporter", "GitHub step summary"),
-    ("curl copy", "yanked command"),
-    ("crash report", "traceback scrub"),
-)
 
 
 def _settings_body(
@@ -7957,7 +7945,9 @@ def _settings_security(selfcheck: list[tuple[str, str, bool]] | None, checking: 
         text.append("press ", style=_DIM)
         text.append("t", style=f"bold {_ACCENT}")
         text.append(" to run a canary secret through every sink\n", style=_DIM)
-        rows: tuple[tuple[str, str, bool], ...] = tuple((n, d, True) for n, d in _SELFCHECK_SINKS)
+        from comparo.adapters.doctor import SINK_LABELS
+
+        rows: tuple[tuple[str, str, bool], ...] = tuple((n, d, True) for n, d in SINK_LABELS)
         _selfcheck_rows(text, rows, muted=True)
     else:
         passed = sum(1 for _, _, ok in selfcheck if ok)
