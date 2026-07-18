@@ -1,0 +1,7 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Stable
+  id: environment.stable
+spec:
+  baseUrl: http://127.0.0.1:8420

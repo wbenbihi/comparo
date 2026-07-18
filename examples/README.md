@@ -11,6 +11,7 @@ different feature. Every valid project passes
 | [`matrix-project`](matrix-project) | **two matrices on one request** → cartesian expansion, plus **endpoint-path injection** (`/status/${code}`) |
 | [`canary-project`](canary-project) | a stable ⇄ canary **diff showcase** with one surgical regression, an AssertionProfile, and a release-gate ExecutionProfile |
 | [`postman-echo-project`](postman-echo-project) | an **exhaustive 1:1 reference** for the whole Postman Echo API — every method, status class, compression, streaming, cookies, `bodyType`, and all five diff modes |
+| [`sse-project`](sse-project) | **Server-Sent Events** — a bundled local SSE server whose two feeds differ by one event, so the diff catches it event-by-event (run `serve.py` first) |
 | [`auth-project`](auth-project) | **first-class Basic & Bearer auth** from masked secrets — environment-level default, per-request override, and an assert-only ExecutionProfile |
 | [`checks-project`](checks-project) | **status & schema assertions** that pass and fail — the Run screen's ASSERT column |
 | [`health-project`](health-project) | environments whose health resolves **green, orange, and red** |

@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: SSE example
+  id: project.sse
+  description: Diff two Server-Sent Events streams event-by-event (run serve.py first).
+spec:
+  data: .
+  environments:
+    default: stable
+    diffPairs:
+      - name: stable-vs-canary
+        baseline: stable
+        candidate: canary
+  run:
+    concurrency: 4

@@ -4,17 +4,18 @@ metadata:
   name: Stream
   id: request.stream
   description: >-
-    GET /stream/1 — a single /get-style JSON object delivered as a chunked stream,
-    flagged with response.streaming so the engine reads it as it arrives. (/stream/N
-    for N > 1 concatenates N objects into a payload that is not valid JSON, so N = 1
-    keeps the response cleanly parseable.)
+    GET /stream/3 — three /get-style JSON objects delivered back-to-back as a
+    chunked stream, flagged with response.streaming so the engine reads it as it
+    arrives. The objects are concatenated (}{ with no delimiter), which the
+    streaming parser splits into an ordered list of records via raw_decode — so
+    the diff compares the sequence event-by-event, not as one opaque blob.
   tags:
     - stream
     - smoke
 spec:
   request:
     method: GET
-    endpoint: /stream/1
+    endpoint: /stream/3
     headers:
       $val: instance.default-headers
   response:

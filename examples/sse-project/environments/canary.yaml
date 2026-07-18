@@ -1,0 +1,7 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Canary
+  id: environment.canary
+spec:
+  baseUrl: http://127.0.0.1:8421

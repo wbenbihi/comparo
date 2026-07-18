@@ -1,0 +1,13 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Live (sse.dev)
+  id: environment.live
+  description: A real, public SSE endpoint — needs no local server.
+spec:
+  baseUrl: https://sse.dev
+  timeout:
+    connect: 5s
+    # sse.dev/test never closes and emits on a timer, so it never goes idle.
+    # streamMax is the total cap: read events for 3s, then stop and use them.
+    streamMax: 3s

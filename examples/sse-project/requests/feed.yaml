@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Event feed
+  id: request.feed
+  description: >-
+    A Server-Sent Events stream (text/event-stream). response.streaming makes the
+    engine read it as it arrives and parse it into an ordered list of events, so
+    the diff compares the sequence event-by-event rather than as one opaque body.
+  tags:
+    - sse
+    - stream
+spec:
+  request:
+    method: GET
+    endpoint: /test
+  response:
+    status: 200
+    streaming: true
