@@ -1,0 +1,25 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Bearer (per-request override)
+  id: request.bearer-admin
+  description: >-
+    GET /get that declares its own `auth.bearer: ${ADMIN_TOKEN}`, overriding the
+    environment default with a different masked token — the per-request override
+    case. The echoed Authorization header still satisfies the bearer-present
+    contract, so the same profile checks both the default and the override.
+  tags:
+    - auth
+    - bearer
+spec:
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      probe: bearer-admin
+    auth:
+      bearer: ${ADMIN_TOKEN}
+  response:
+    status: 200
+    assert:
+      $ref: assert.bearer-present

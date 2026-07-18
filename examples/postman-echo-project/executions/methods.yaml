@@ -1,0 +1,32 @@
+apiVersion: comparo/v1
+kind: ExecutionProfile
+metadata:
+  name: HTTP methods
+  id: execution.methods
+  description: >-
+    Replay every core HTTP method (GET/POST/PUT/PATCH/DELETE) against the two
+    mirror environments and confirm they agree. Both point at the same live
+    server, so the expected outcome is an all-green gate — a good baseline to
+    read the Execution screen against before you introduce a real regression.
+    Assertions are declared inline here to show a profile need not be a $ref.
+spec:
+  select:
+    tags:
+      - methods
+  environments:
+    baseline: echo
+    candidate: echo-mirror
+  check:
+    assertions: true
+    diff: true
+  profiles:
+    assert:
+      rules:
+        - target: status
+          op: equals
+          value: 200
+        - target: contentType
+          op: matches
+          value: application/json
+        - target: body:$.url
+          op: exists

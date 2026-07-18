@@ -1,0 +1,27 @@
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: Pricing contract
+  id: assert.pricing
+  description: >-
+    What a price quote must always be true of, on either environment. The tax
+    rate legitimately differs between Stable and Canary, so here we only assert
+    that it is present and well-formed — the value comparison is the Diff's job,
+    not the assertion's. currency and apiVersion, by contrast, must not move.
+spec:
+  include:
+    - $ref: assert.http-ok
+  rules:
+    - target: body:$.args.currency
+      op: equals
+      value: USD
+    - target: body:$.args.apiVersion
+      op: oneOf
+      value:
+        - "2"
+        - "3"
+    - target: body:$.args.taxRate
+      op: exists
+    - target: body:$.args.taxRate
+      op: matches
+      value: '^\d+\.\d+$'

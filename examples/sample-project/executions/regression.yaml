@@ -1,0 +1,27 @@
+apiVersion: comparo/v1
+kind: ExecutionProfile
+metadata:
+  name: Smoke regression
+  id: execution.smoke
+  description: >-
+    Replay the smoke surface against local (baseline) and prod (candidate) and
+    diff the pair, asserting a healthy response on both. When the upstream is
+    unreachable this doubles as the Execution screen's error state — each cell
+    reports the transport error with its request and environment, rather than a
+    misleading pass.
+spec:
+  select:
+    tags:
+      - smoke
+  environments:
+    baseline: local
+    candidate: prod
+  check:
+    assertions: true
+    diff: true
+  profiles:
+    assert:
+      rules:
+        - target: status
+          op: equals
+          value: 200

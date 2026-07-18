@@ -1,0 +1,31 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: POST a form-encoded body
+  id: request.post-form
+  description: >-
+    POST /post with bodyType: form — comparo url-encodes the object as
+    application/x-www-form-urlencoded instead of JSON. Echo parses it into the
+    `form` map (with `json` null), the counterpart to the JSON case in post-json.
+    Shows request.bodyType selecting a non-JSON body encoding.
+  tags:
+    - methods
+    - post
+    - encoding
+spec:
+  request:
+    method: POST
+    endpoint: /post
+    headers:
+      $val: instance.default-headers
+    # bodyType: form sends the object as application/x-www-form-urlencoded, so the
+    # values land under Echo's `form` map rather than its parsed `json` object.
+    bodyType: form
+    body:
+      orderId: WIDGET-3
+      quantity: "3"
+      currency: USD
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

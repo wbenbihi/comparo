@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status by path
+  id: request.status-matrix
+  description: >-
+    GET /status/${code} expanded across a path matrix — one cell per status code.
+    The ${code} placeholder in the endpoint is filled from matrix.status-codes,
+    so a single definition hits /status/200, /status/404, and /status/500 in turn.
+    This is endpoint-PATH injection: the matrix rewrites the URL path, not a query
+    parameter or a body field. No response.status is declared, so each cell simply
+    reports the code it was routed to.
+  tags:
+    - matrix
+    - status
+    - path
+spec:
+  matrix:
+    - $ref: matrix.status-codes
+  request:
+    method: GET
+    endpoint: /status/${code}

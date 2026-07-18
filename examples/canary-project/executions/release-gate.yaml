@@ -1,0 +1,27 @@
+apiVersion: comparo/v1
+kind: ExecutionProfile
+metadata:
+  name: Release gate
+  id: execution.release-gate
+  description: >-
+    The pre-release gate. Replay the pricing surface against Stable (baseline)
+    and Canary (candidate), assert the pricing contract on both, and diff the
+    pair. The accidental TAX_RATE bump surfaces as the one drift that fails the
+    gate, while the contract assertions confirm nothing else moved. Launch it
+    from the Explorer with Enter.
+spec:
+  # Only the pricing requests — a small, fast, deterministic surface.
+  select:
+    tags:
+      - pricing
+  # Explicit baseline/candidate — no "X-vs-Y"; each environment owns a key.
+  environments:
+    baseline: stable
+    candidate: canary
+  # Assertions and the diff both run, on both environments. Each request carries
+  # the assertions appropriate to it (the quote its pricing contract, the
+  # checkout the universal HTTP contract), so the gate needs no profiles of its
+  # own — it fails purely on the taxRate drift the diff catches.
+  check:
+    assertions: true
+    diff: true

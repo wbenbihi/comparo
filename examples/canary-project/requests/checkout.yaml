@@ -29,3 +29,6 @@ spec:
       $ref: schema.echo-write
     diff:
       $ref: diff.pricing
+    # A POST has no query args, so it carries only the universal HTTP contract.
+    assert:
+      $ref: assert.http-ok

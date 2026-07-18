@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Matrix
+metadata:
+  name: Status codes
+  id: matrix.status-codes
+  description: >-
+    Three HTTP status codes substituted into the endpoint PATH — not the query.
+    Because the target is request.path, each case fills the ${code} placeholder in
+    the endpoint template instead of merging into request.query.
+spec:
+  # target: request.path makes this a path matrix — its case fills ${...} holes
+  # in the request's endpoint (e.g. /status/${code}) rather than the query string.
+  target: request.path
+  values:
+    - code: "200"
+    - code: "404"
+    - code: "500"

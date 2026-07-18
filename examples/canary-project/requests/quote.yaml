@@ -28,3 +28,6 @@ spec:
       $ref: schema.echo-get
     diff:
       $ref: diff.echo-args
+    # The pricing contract (which composes in HTTP OK) — evaluated on both envs.
+    assert:
+      $ref: assert.pricing

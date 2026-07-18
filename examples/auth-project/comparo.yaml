@@ -1,0 +1,28 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: auth-showcase
+  id: project.auth-showcase
+  description: >-
+    First-class HTTP authentication against the live Postman Echo service. Shows
+    the `auth` block in all three positions — an environment-level default applied
+    to every request, a per-request Bearer override, and a per-request Basic login
+    — with every credential sourced from a masked secret, never a literal in the
+    request. Runs headless as an assert-only ExecutionProfile so CI can gate on it.
+spec:
+  # Self-contained: the object tree lives right beside this manifest.
+  data: .
+
+  environments:
+    default: echo
+
+  run:
+    # postman-echo rate-limits bursts with transient 503s; keep it modest.
+    concurrency: 2
+    retry:
+      attempts: 3
+      backoff: exponential
+
+  redaction:
+    # Mask anything equal to a known secret value, even if it arrives untainted.
+    stringMatchBackstop: true

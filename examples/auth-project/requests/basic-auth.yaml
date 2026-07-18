@@ -1,0 +1,30 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Basic auth login
+  id: request.basic-auth
+  description: >-
+    GET /basic-auth with first-class HTTP Basic auth. The `auth.basic` block names
+    a username and a masked password secret; comparo builds the Authorization
+    header itself (the engine base64-encodes username:password), so the credential
+    never appears literally in the request. This request sets its own `auth`, so it
+    overrides the environment's default Bearer. Its checks compose two profiles via
+    a LIST of $refs — the shared HTTP contract plus the authenticated-body signal.
+  tags:
+    - auth
+    - basic
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /basic-auth
+    auth:
+      basic:
+        username: postman
+        password: ${BASIC_PASSWORD}
+  response:
+    status: 200
+    # A composing list: both profiles' rules apply, http-ok first.
+    assert:
+      - $ref: assert.http-ok
+      - $ref: assert.authenticated

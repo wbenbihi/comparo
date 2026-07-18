@@ -1,0 +1,37 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Send a cookie jar
+  id: request.cookies-jar
+  description: >-
+    GET /cookies carrying a per-request cookie jar via request.cookies. comparo
+    sends orderSession and cartId in the Cookie header, and Echo reflects them under
+    $.cookies. The baseline and candidate use separate cookie jars, so a Set-Cookie
+    from one environment never leaks into the other. The assertion proves our own
+    cookie round-tripped, while the diff skips the jar (Cloudflare adds volatile
+    __cf_bm / _cfuvid entries of its own).
+  tags:
+    - cookies
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /cookies
+    headers:
+      $val: instance.default-headers
+    # Per-request cookies — sent in the Cookie header for this request only.
+    cookies:
+      orderSession: abc123
+      cartId: cart-42
+  response:
+    status: 200
+    assert:
+      rules:
+        - target: body:$.cookies.orderSession
+          op: equals
+          value: abc123
+        - target: body:$.cookies.cartId
+          op: equals
+          value: cart-42
+    diff:
+      $ref: diff.cookies

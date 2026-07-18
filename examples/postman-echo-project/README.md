@@ -22,6 +22,8 @@ Cloudflare cookie jar).
 | --- | --- | --- |
 | **Every method** | `methods/` | `GET` · `POST` · `PUT` · `PATCH` · `DELETE` |
 | **POST body cases** | `post-json` · `post-raw-text` · `post-args-json` | an object body (→ `json`+`data`), a scalar body (→ raw `data`, `json: null`), and query args + body together (→ `args`+`json`) |
+| **Body encodings** | `post-form` (`bodyType: form`) · `post-raw` (`bodyType: raw`) | `request.bodyType` selecting form-urlencoded (→ `form`) and verbatim text/plain (→ `data`) instead of JSON |
+| **Per-request cookies** | `cookies-jar` | a `request.cookies` jar sent in the Cookie header, reflected under `$.cookies` (baseline/candidate use separate jars) |
 | **Single matrix** | `matrices/params.yaml` → `get-matrix` | one GET /get run once per param case (3 cells) |
 | **Multi-matrix** | `matrices/{locales,regions}.yaml` → `get-multi-matrix` | cartesian `3 × 2 = 6` cells |
 | **Schemas** | `schemas/*` → `get`, `post-json`, `time-object`, `basic-auth` | JSON-Schema validation of `/get`, the write shape, `/time/object`, and `{authenticated: true}` |
@@ -47,7 +49,7 @@ Every endpoint in the Postman Echo surface, and the request(s) that cover it.
 | Endpoint | Request id(s) | What it shows |
 | --- | --- | --- |
 | `GET /get` | `get`, `get-matrix`, `get-multi-matrix` | query echo; single + multi matrix; `$.args` exact |
-| `POST /post` | `post-json`, `post-raw-text`, `post-args-json` | object body, raw scalar body, args + body |
+| `POST /post` | `post-json`, `post-raw-text`, `post-args-json`, `post-form`, `post-raw` | object body, raw scalar body, args + body, `bodyType: form`, `bodyType: raw` |
 | `PUT /put` | `put` | replace verb, body echoed under `json` |
 | `PATCH /patch` | `patch` | partial-update verb |
 | `DELETE /delete` | `delete` | remove verb with a body |
@@ -59,7 +61,7 @@ Every endpoint in the Postman Echo surface, and the request(s) that cover it.
 | `GET /oauth1` | `oauth1` | **401** — unsigned OAuth 1.0 rejected |
 | `GET /auth/hawk` | `hawk` | **401** — unsigned Hawk rejected |
 | `GET /cookies/set` | `cookies-set` | **302** — Set-Cookie + redirect (not followed) |
-| `GET /cookies` | `cookies` | cookie jar; CF cookies skipped |
+| `GET /cookies` | `cookies`, `cookies-jar` | cookie jar; CF cookies skipped; `cookies-jar` sends a per-request jar via `request.cookies` |
 | `GET /cookies/delete` | `cookies-delete` | **302** — clear cookie + redirect |
 | `GET /time/now` | `time-now` | volatile clock — asserts 200 only |
 | `GET /time/valid` | `time-valid` | `{valid: true}` |
@@ -88,10 +90,6 @@ response is deterministic and compares byte-for-byte under `diff.strict`.
 
 - **`/transform/collection`** — a Postman-collection converter, not a general HTTP case; it
   belongs to Postman tooling rather than the request/response surface this project maps.
-- **A true `application/x-www-form-urlencoded` POST** — comparo's request model sends bodies
-  as JSON (the engine encodes `body` with `json=`), so a clean form-encoded body is not
-  representable. The three `post-*` requests cover the object, raw-scalar, and args-plus-body
-  cases that *are* expressible; Echo's `form` map stays empty by design.
 - **`digest-auth` as a 200** — HTTP Digest is a two-step handshake (read the nonce from the
   401, then re-request signed). comparo sends one shot, so `digest-auth` asserts the **401
   challenge** instead of the authenticated 200.
@@ -116,7 +114,7 @@ comparo diff --config examples/postman-echo-project/comparo.yaml --pair echo-vs-
 comparo tui examples/postman-echo-project
 ```
 
-`validate` reports every object valid; `run` reaches all 51 cells and the intended 401s, 404,
+`validate` reports every object valid; `run` reaches every cell and the intended 401s, 404,
 and 302s pass as declared; `diff` replays the whole API against the mirror and the gate PASSes
 with the volatile envelope skipped. The public `postman`/`password` Basic-auth creds are baked
 in as a `$literal` fallback, so `basic-auth` works out of the box — set `COMPARO_BASIC_AUTH`

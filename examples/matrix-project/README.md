@@ -10,9 +10,28 @@ variant strips in the Run screen.
 | --- | --- |
 | `requests/search.yaml` | **two matrices** (`locales` × `tiers`) → 6 cells per run |
 | `requests/checkout.yaml` | a **shared matrix** (`tiers`) — toggling a tier globally hits both requests |
+| `requests/status-matrix.yaml` | **endpoint-path injection** — `/status/${code}` filled from a `request.path` matrix |
 | `requests/ping.yaml` | a **single-cell** request (no matrix) for contrast |
 | `matrices/locales.yaml` | 3 cases, merged into the query |
 | `matrices/tiers.yaml` | 2 cases, merged into the query and shared across requests |
+| `matrices/status-codes.yaml` | 3 cases with `target: request.path` — each fills the URL path, not the query |
+
+## Path injection
+
+Most matrices merge their case into `request.query`. A matrix whose `target` is **`request.path`**
+is different: its case fills `${...}` placeholders in the request's **endpoint template** instead.
+`request.status-matrix` uses `endpoint: /status/${code}`, so `matrix.status-codes` rewrites the
+URL path per cell:
+
+```
+/status/${code}   ×   { 200, 404, 500 }
+
+  code=200  →  GET /status/200
+  code=404  →  GET /status/404
+  code=500  →  GET /status/500
+```
+
+One request definition, three distinct URLs — the matrix drives the route, not a parameter.
 
 ## The expansion
 

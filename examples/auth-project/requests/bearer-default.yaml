@@ -1,0 +1,25 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Bearer (environment default)
+  id: request.bearer-default
+  description: >-
+    GET /get with NO auth of its own, so it inherits the environment-level default
+    `auth.bearer: ${API_TOKEN}`. postman-echo echoes the request headers back, so
+    the assertion confirms an `Authorization: Bearer …` header actually arrived —
+    proving the environment default was applied — without revealing the token.
+  tags:
+    - auth
+    - bearer
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /get
+    query:
+      probe: bearer-default
+  response:
+    status: 200
+    # A single $ref (contrast with the composing list on request.basic-auth).
+    assert:
+      $ref: assert.bearer-present

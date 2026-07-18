@@ -1,0 +1,23 @@
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: HTTP OK
+  id: assert.http-ok
+  description: >-
+    The baseline contract every echoed response must honour, independent of
+    environment: a 200 status, a JSON content type, and a sane latency. It is
+    composed into the richer profiles with `include`, and — like every
+    assertion — is evaluated against BOTH the baseline and the candidate.
+spec:
+  rules:
+    - target: status
+      op: equals
+      value: 200
+    - target: contentType
+      op: matches
+      value: application/json
+    # Latency is environment-sensitive, so a slow response only warns.
+    - target: latency
+      op: lt
+      value: 5000
+      severity: warn

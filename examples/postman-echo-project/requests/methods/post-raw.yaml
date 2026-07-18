@@ -1,0 +1,31 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: POST a raw text body (bodyType raw)
+  id: request.post-raw
+  description: >-
+    POST /post with bodyType: raw and an explicit text/plain content type — comparo
+    sends the string verbatim as the request content, not as JSON. Echo cannot
+    object-parse it, so it lands under `data` with `json` null. Unlike post-raw-text
+    (a JSON scalar), this sets request.bodyType explicitly to bypass JSON encoding.
+  tags:
+    - methods
+    - post
+    - encoding
+spec:
+  request:
+    method: POST
+    endpoint: /post
+    headers:
+      - key: accept
+        value: application/json
+      - key: user-agent
+        value: comparo-echo
+      - key: content-type
+        value: text/plain
+    bodyType: raw
+    body: "a raw text/plain body, sent verbatim and echoed back under data"
+  response:
+    status: 200
+    schema:
+      $ref: schema.echo-write

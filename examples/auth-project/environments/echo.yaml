@@ -1,0 +1,42 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Echo
+  id: environment.echo
+  description: >-
+    The live Postman Echo service. It carries three secrets and an environment-level
+    default Bearer auth: every request inherits `Authorization: Bearer ${API_TOKEN}`
+    unless it declares its own `auth`. Each credential is sourced from the process
+    environment when present, with a public demo literal as a fallback so the project
+    runs out of the box; because the values are declared secrets, they are masked in
+    every display sink and only the execute sink puts the real bytes on the wire.
+spec:
+  baseUrl: https://postman-echo.com
+  timeout:
+    connect: 5s
+    read: 30s
+  secrets:
+    # The password half of the /basic-auth login. postman-echo's public creds are
+    # postman / password, so the literal fallback lets the example run immediately.
+    BASIC_PASSWORD:
+      from:
+        - $env: COMPARO_BASIC_PASSWORD
+        - $literal: password
+    # The default service Bearer token, applied environment-wide (see spec.auth).
+    API_TOKEN:
+      from:
+        - $env: COMPARO_API_TOKEN
+        - $literal: demo-service-token
+    # A second Bearer token a single request swaps in, to show a per-request override.
+    ADMIN_TOKEN:
+      from:
+        - $env: COMPARO_ADMIN_TOKEN
+        - $literal: demo-admin-token
+  # Environment-level default auth: first-class Bearer applied to every request that
+  # does not set its own `auth`. The token is a masked secret, so it never appears in
+  # a rendered request, a report, or a snapshot.
+  auth:
+    bearer: ${API_TOKEN}
+  health:
+    - method: GET
+      endpoint: /get

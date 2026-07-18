@@ -1,0 +1,20 @@
+apiVersion: comparo/v1
+kind: ExecutionProfile
+metadata:
+  name: Auth smoke
+  id: execution.auth-smoke
+  description: >-
+    An ASSERT-ONLY gate over the whole auth surface. It names a baseline but no
+    candidate, and turns the diff off (check.diff: false), so it runs each request
+    once against Echo and evaluates that request's assertions — the Basic login
+    returns {authenticated: true} and both Bearer requests echo an Authorization
+    header. With no candidate there is nothing to diff; this is the "assert one
+    environment" mode of an ExecutionProfile. Run it headless in CI:
+    `comparo exec --config examples/auth-project/comparo.yaml execution.auth-smoke`.
+spec:
+  # No `select` → every request in the project runs.
+  environments:
+    baseline: echo
+  check:
+    assertions: true
+    diff: false

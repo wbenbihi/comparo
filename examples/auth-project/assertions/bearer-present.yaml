@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: Bearer present
+  id: assert.bearer-present
+  description: >-
+    For requests against GET /get, which echoes the request headers back under
+    $.headers. Confirms an Authorization header arrived and is a Bearer token —
+    without asserting the token's value, which is a masked secret. Both the
+    environment default and a per-request override satisfy this.
+spec:
+  rules:
+    - target: body:$.headers.authorization
+      op: exists
+    - target: body:$.headers.authorization
+      op: matches
+      value: '^Bearer '

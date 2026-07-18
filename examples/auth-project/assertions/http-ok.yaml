@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: HTTP OK
+  id: assert.http-ok
+  description: >-
+    The baseline contract every response must honour: a 200 status and a JSON
+    content type, plus an advisory latency ceiling. Composed into a request's
+    checks alongside a second, endpoint-specific profile via a list of $refs.
+spec:
+  rules:
+    - target: status
+      op: equals
+      value: 200
+    - target: contentType
+      op: matches
+      value: application/json
+    # Latency is environment-sensitive, so a slow response only warns.
+    - target: latency
+      op: lt
+      value: 5000
+      severity: warn
