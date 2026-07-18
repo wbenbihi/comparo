@@ -16,6 +16,7 @@ from typing import NoReturn
 import typer
 
 from comparo import __version__
+from comparo.adapters import openapi
 from comparo.adapters.httpx_client import HttpxClient
 from comparo.adapters.reporters import REPORTERS
 from comparo.core.assertions import evaluate_rules
@@ -60,6 +61,14 @@ ConfigOption = Annotated[
         help="The comparo.yaml manifest to load (or a project directory).",
     ),
 ]
+
+import_app = typer.Typer(
+    name="import",
+    help="Scaffold a comparo project from an existing API description.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+app.add_typer(import_app)
 
 
 def _version_callback(*, value: bool) -> None:
@@ -134,6 +143,50 @@ def init(
         description: An optional one-line description.
     """
     _scaffold(directory, name, data, config, description)
+
+
+@import_app.command("openapi")
+def import_openapi(
+    spec: Annotated[Path, typer.Argument(help="The OpenAPI 3.x document (JSON or YAML).")],
+    *,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Directory to create the project in (default: a slug of the project name).",
+        ),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", "-n", help="Project name; taken from info.title when omitted."),
+    ] = None,
+) -> None:
+    """Scaffold a comparo project from an OpenAPI 3.x specification.
+
+    Turns the mechanical parts of a spec into ``comparo/v1`` YAML: ``servers``
+    become Environments, operations become Requests, ``components.schemas`` become
+    Schema objects, and ``securitySchemes`` become ``$secret``-backed auth stubs.
+    It is a *scaffold* — no DiffProfile is generated (which fields are volatile is
+    your call) and no real credential is ever written. Refuses to overwrite an
+    existing manifest or data directory, like ``comparo init``.
+
+    Args:
+        spec: The OpenAPI 3.0/3.1 document to import (JSON or YAML).
+        output: Where to create the project; defaults to a slug of the project name.
+        name: The project name; taken from ``info.title`` when omitted.
+    """
+    if not spec.exists():
+        _abort(f"no spec at '{spec}' — pass the path to an OpenAPI 3.x document")
+    try:
+        document = openapi.load_spec(spec.read_text(encoding="utf-8"))
+        result = openapi.import_openapi(document, name=name)
+    except openapi.OpenApiImportError as error:
+        _abort(str(error))
+    except OSError as error:
+        _abort(f"could not read '{spec}': {error}")
+    directory = output if output is not None else Path(_slug(result.project_name))
+    _write_openapi_project(directory, result)
 
 
 @app.command()
@@ -487,6 +540,82 @@ def _scaffold(
     typer.echo(f"  comparo{flag}             # open the TUI")
 
 
+def _write_openapi_project(directory: Path, result: openapi.ImportResult) -> None:
+    """Write a scaffolded project from an OpenAPI import, refusing to clobber files.
+
+    Mirrors :func:`_scaffold`: a ``comparo.yaml`` manifest plus a ``.comparo/``
+    data directory holding the environments, requests, and schemas — each file
+    carrying the editor schema modeline — and the agent-authoring ``AGENTS.md``.
+
+    Args:
+        directory: The directory to create the project in.
+        result: The objects the OpenAPI import produced.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = directory / "comparo.yaml"
+    data_dir = directory / ".comparo"
+    if manifest.exists():
+        _abort(f"{manifest} already exists — refusing to overwrite")
+    if data_dir.exists():
+        _abort(f"{data_dir} already exists — refusing to touch your data")
+
+    manifest.write_text(
+        _manifest_yaml(
+            result.project_name,
+            f"project.{_slug(result.project_name)}",
+            "Imported from an OpenAPI document; refine it before relying on it.",
+            ".comparo",
+            default_env=result.default_environment,
+            diff_pairs=_openapi_diff_pairs(result),
+        ),
+        encoding="utf-8",
+    )
+    _write_objects(data_dir / "environments", result.environments)
+    _write_objects(data_dir / "requests", result.requests)
+    if result.schemas:
+        _write_objects(data_dir / "schemas", result.schemas)
+    (data_dir / "AGENTS.md").write_text(
+        _AGENTS_MD.replace("__SCHEMA_URL__", SCHEMA_ID), encoding="utf-8"
+    )
+
+    counts = (
+        f"{len(result.environments)} environment(s), {len(result.requests)} request(s), "
+        f"{len(result.schemas)} schema(s)"
+    )
+    typer.secho(f"✓ created {manifest}", fg=typer.colors.GREEN)
+    typer.secho(f"✓ created {data_dir}/ — {counts}, and AGENTS.md", fg=typer.colors.GREEN)
+    if result.secret_env_vars:
+        typer.echo("\nSecrets are declared as $env refs — provide real values before running:")
+        for var in result.secret_env_vars:
+            typer.echo(f"  export {var}=…")
+    typer.echo(
+        "\nThis is a scaffold: no diff profiles were generated — deciding which fields are\n"
+        "volatile is your call. Add DiffProfiles (and real secret values), then validate."
+    )
+    typer.echo("\nNext:")
+    typer.echo(f"  comparo validate --config {manifest}    # check it loads")
+    typer.echo(f"  comparo --config {manifest}             # open the TUI")
+
+
+def _write_objects(directory: Path, objects: list[openapi.ImportedObject]) -> None:
+    """Write each imported object to ``<directory>/<id-suffix>.yaml`` with the modeline."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for obj in objects:
+        filename = obj.id.split(".", 1)[-1] + ".yaml"
+        (directory / filename).write_text(
+            _SCHEMA_MODELINE + openapi.to_yaml(obj.document), encoding="utf-8"
+        )
+
+
+def _openapi_diff_pairs(result: openapi.ImportResult) -> list[tuple[str, str, str]] | None:
+    """Pair the first two environments into a diff pair when a spec has 2+ servers."""
+    if len(result.environments) < 2:
+        return None
+    baseline = result.environments[0].id.split(".", 1)[-1]
+    candidate = result.environments[1].id.split(".", 1)[-1]
+    return [(f"{baseline}-vs-{candidate}", baseline, candidate)]
+
+
 def _abort(message: str) -> NoReturn:
     typer.secho(message, fg=typer.colors.RED, err=True)
     raise typer.Exit(1)
@@ -497,22 +626,45 @@ def _slug(name: str) -> str:
     return slug or "app"
 
 
-def _manifest_yaml(name: str, project_id: str, description: str | None, data: str) -> str:
+def _yaml_scalar(value: str) -> str:
+    """Return *value* quoted only when a plain YAML scalar would be misread."""
+    unsafe = re.search(r"""[:#\[\]{}&*!|>'"%@`,]""", value) or value != value.strip()
+    if value and not unsafe and "\n" not in value:
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
+def _manifest_yaml(
+    name: str,
+    project_id: str,
+    description: str | None,
+    data: str,
+    *,
+    default_env: str = "local",
+    diff_pairs: list[tuple[str, str, str]] | None = None,
+) -> str:
     summary = description or "An HTTP regression & diff project."
+    environments = f"  environments:\n    default: {default_env}\n"
+    if diff_pairs:
+        environments += "    diffPairs:\n"
+        for pair_name, baseline, candidate in diff_pairs:
+            environments += (
+                f"      - name: {pair_name}\n"
+                f"        baseline: {baseline}\n"
+                f"        candidate: {candidate}\n"
+            )
     return (
         "apiVersion: comparo/v1\n"
         "kind: Project\n"
         "metadata:\n"
-        f"  name: {name}\n"
+        f"  name: {_yaml_scalar(name)}\n"
         f"  id: {project_id}\n"
-        f"  description: {summary}\n"
+        f"  description: {_yaml_scalar(summary)}\n"
         "spec:\n"
         "  # Where comparo's objects live, relative to this file.\n"
         f"  data: {data}\n"
-        "\n"
-        "  environments:\n"
-        "    default: local\n"
-        "\n"
+        "\n" + environments + "\n"
         "  run:\n"
         "    concurrency: 4\n"
     )

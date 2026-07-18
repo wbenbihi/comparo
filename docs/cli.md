@@ -17,6 +17,7 @@ The CLI, the TUI, and the GitHub Action are all thin front-ends over one engine
 - [Exit codes](#exit-codes)
 - [Commands](#commands)
   - [`comparo init`](#comparo-init)
+  - [`comparo import openapi`](#comparo-import-openapi)
   - [`comparo validate`](#comparo-validate)
   - [`comparo doctor`](#comparo-doctor)
   - [`comparo schema`](#comparo-schema)
@@ -124,6 +125,7 @@ project directory); it defaults to `comparo.yaml` in the current directory.
 
 ```
 comparo init     [DIRECTORY] [--name NAME] [--data DIR] [--config FILE] [--description TEXT]
+comparo import openapi SPEC [--output DIR] [--name NAME]
 comparo validate [--config CONFIG]
 comparo doctor
 comparo schema   [--output FILE]
@@ -216,6 +218,46 @@ $ comparo init services/checkout --name checkout
 Next:
   comparo validate --config services/checkout/comparo.yaml    # check it loads
   comparo --config services/checkout/comparo.yaml             # open the TUI
+```
+
+### `comparo import openapi`
+
+Scaffold a project from an existing **OpenAPI 3.x** document (JSON or YAML). It turns
+the mechanical parts of the spec into comparo objects so you don't hand-write them.
+
+```
+comparo import openapi SPEC [--output DIR] [--name NAME]
+```
+
+**Arguments & options**
+
+| Option | Short | Default | Description |
+| --- | --- | --- | --- |
+| `SPEC` | | *(required)* | Path to the OpenAPI 3.0/3.1 document. |
+| `--output` | `-o` | derived from the title | Directory to create the project in. |
+| `--name` | `-n` | the spec's `info.title` | The project name. |
+
+**What it maps**
+
+| OpenAPI | → comparo |
+| --- | --- |
+| `servers` | an **Environment** each (two or more become a `diffPairs` entry) |
+| `paths` + operations | a **Request** each (method, path, query, body stub, 2xx status + schema `$ref`) |
+| `components.schemas` | a **Schema** each |
+| `securitySchemes` | an **auth** stub — bearer / basic / apiKey as a `$secret` reference |
+
+**Scaffold, not a finished project.** It never writes a **DiffProfile** — which fields
+are volatile is your judgment — and never writes a real credential: every secret is a
+`$secret` reference sourced from an environment variable placeholder. Refuses to
+overwrite an existing project. Swagger 2.0 is rejected. After import, add DiffProfiles
+and real secret values, then `comparo validate`.
+
+```console
+$ comparo import openapi petstore.yaml --output petstore
+✓ created petstore/ — 2 environments, 5 requests, 3 schemas
+
+This is a scaffold: no diff profiles were generated — add DiffProfiles (and real
+secret values), then validate.
 ```
 
 ### `comparo validate`
