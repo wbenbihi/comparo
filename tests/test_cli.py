@@ -190,3 +190,23 @@ def test_redaction_backstop_toggle_disables_the_report_backstop(tmp_path: Path) 
     loaded = load_project(tmp_path / "comparo.yaml")
     assert Redactor.for_project(loaded).values == ()  # backstop off → identity redactor
     assert "SUPERSECRETVALUE" in Redactor.for_project(loaded).text("SUPERSECRETVALUE")  # unmasked
+
+
+def test_validate_fails_on_a_manifest_with_no_objects(tmp_path: Path) -> None:
+    # A manifest whose data dir has no objects must not report a green '0 valid'.
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\nmetadata: {name: P, id: project.p}\n"
+        "spec: {data: nonexistent}\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["validate", "--config", str(tmp_path / "comparo.yaml")])
+    assert result.exit_code == 1
+    assert "no objects found" in result.output
+
+
+def test_diff_rejects_an_unknown_report_format() -> None:
+    result = runner.invoke(
+        app, ["diff", "--config", str(SAMPLE), "--pair", "local-vs-prod", "--report", "junitxml"]
+    )
+    assert result.exit_code == 1
+    assert "unknown report format" in result.output

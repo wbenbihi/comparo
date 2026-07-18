@@ -201,6 +201,13 @@ def validate(config: ConfigOption = DEFAULT_CONFIG) -> None:
         config: The manifest (or project directory) to validate.
     """
     loaded = _open_project(config)
+    if not loaded.objects:
+        typer.secho(
+            "no objects found — check that spec.data points at your object files",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
     typer.secho(f"✓ {len(loaded.objects)} object(s) valid", fg=typer.colors.GREEN)
 
 
@@ -441,6 +448,10 @@ def diff(
     out_dir = output or Path(
         report_config.output if report_config is not None and report_config.output else "reports"
     )
+    unknown = [name for name in formats or [] if name not in REPORTERS]
+    if unknown:
+        known = ", ".join(sorted(REPORTERS))
+        _abort(f"unknown report format(s): {', '.join(unknown)} (known: {known})")
     if formats:
         run_report = build_report(
             base_env.metadata.name, candidate_env.metadata.name, results, redact
