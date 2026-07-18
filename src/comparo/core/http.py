@@ -12,6 +12,12 @@ from comparo.core.resolve import ResolvedRequest
 
 _UNITS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
 
+#: Fallbacks when a project declares no ``timeout`` block, so an unresponsive
+#: server fails a run instead of hanging it (and CI) forever. An explicit
+#: ``timeout`` still wins per field.
+_DEFAULT_CONNECT = 5.0
+_DEFAULT_READ = 30.0
+
 
 class HttpError(Exception):
     """A transport-level failure, raised by adapters and caught by the engine."""
@@ -55,11 +61,15 @@ class TimeoutBudget:
             environment: The environment's default timeout, if any.
 
         Returns:
-            The effective, parsed timeout budget.
+            The effective, parsed timeout budget; ``connect`` and ``read`` fall
+            back to built-in defaults when neither request nor environment sets
+            them, so a request always has a finite deadline.
         """
+        connect = _seconds(_first(request, environment, "connect"))
+        read = _seconds(_first(request, environment, "read"))
         return cls(
-            connect=_seconds(_first(request, environment, "connect")),
-            read=_seconds(_first(request, environment, "read")),
+            connect=connect if connect is not None else _DEFAULT_CONNECT,
+            read=read if read is not None else _DEFAULT_READ,
             stream_idle=_seconds(_first(request, environment, "stream_idle")),
             stream_max=_seconds(_first(request, environment, "stream_max")),
         )

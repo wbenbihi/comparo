@@ -39,6 +39,11 @@ class FieldDiff:
     detail: str = ""
 
 
+#: A recursion cap so a pathologically deep body compares as a leaf instead of
+#: overflowing the stack; far beyond any realistic API payload nesting.
+_MAX_DEPTH = 200
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class _Rule:
     segments: tuple[str, ...]
@@ -87,6 +92,7 @@ def _walk(
     path: tuple[str, ...],
     rules: list[_Rule],
     default_mode: str,
+    depth: int = 0,
 ) -> list[FieldDiff]:
     rule = _match(path, rules)
     mode = rule.mode if rule is not None else default_mode
@@ -97,7 +103,10 @@ def _walk(
         return [_leaf(rendered, _type(baseline) == _type(candidate), mode, baseline, candidate)]
     if mode == "tolerance":
         return [_tolerance(rendered, baseline, candidate, rule)]
-    return _structural(baseline, candidate, path, rules, default_mode, mode, rule)
+    if depth >= _MAX_DEPTH:
+        # Too deep to recurse safely — compare the remaining subtree as one leaf.
+        return [_leaf(rendered, baseline == candidate, mode, baseline, candidate)]
+    return _structural(baseline, candidate, path, rules, default_mode, mode, rule, depth)
 
 
 def _structural(
@@ -108,6 +117,7 @@ def _structural(
     default_mode: str,
     mode: str,
     rule: _Rule | None,
+    depth: int,
 ) -> list[FieldDiff]:
     rendered = _render(path)
     baseline_type, candidate_type = _type(baseline), _type(candidate)
@@ -129,7 +139,9 @@ def _structural(
                         FieldDiff(_render(child), State.DRIFT, child_mode, "missing on one side")
                     )
             else:
-                results.extend(_walk(baseline[key], candidate[key], child, rules, default_mode))
+                results.extend(
+                    _walk(baseline[key], candidate[key], child, rules, default_mode, depth + 1)
+                )
         return results
     if isinstance(baseline, list) and isinstance(candidate, list):
         results = []
@@ -140,7 +152,9 @@ def _structural(
             )
         for index in range(min(len(baseline), len(candidate))):
             child = (*path, f"[{index}]")
-            results.extend(_walk(baseline[index], candidate[index], child, rules, default_mode))
+            results.extend(
+                _walk(baseline[index], candidate[index], child, rules, default_mode, depth + 1)
+            )
         return results
     if mode == "exact":
         return [_leaf(rendered, baseline == candidate, "exact", baseline, candidate)]
@@ -221,4 +235,5 @@ def _short(value: object) -> str:
     # The FULL rendering — a detail string must never be truncated before a sink
     # gets to redact it, or a long secret's prefix would survive masking. Sinks
     # truncate for brevity only after redaction (see report/archive/display).
-    return json.dumps(value, ensure_ascii=False)
+    # ``default=str`` keeps a non-JSON value (e.g. a stray date) from crashing.
+    return json.dumps(value, ensure_ascii=False, default=str)

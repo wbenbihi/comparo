@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import msgspec
+
 from comparo.core.assertions import evaluate_rules
 from comparo.core.assertions import passed
 from comparo.core.assertions import request_rules
@@ -132,3 +134,47 @@ def test_include_composes_rules(tmp_path: Path) -> None:
     # the included "exists" rule and the own "equals 200" rule both ran and held
     assert [r.op for r in results] == ["exists", "equals"]
     assert passed(results)
+
+
+# ── Phase 3: a bad rule fails the assertion, it never crashes the run ──
+
+
+def _exec_with_body(body: bytes) -> Execution:
+    request = msgspec.convert(
+        {
+            "apiVersion": "comparo/v1",
+            "kind": "Request",
+            "metadata": {"name": "R", "id": "request.r"},
+            "spec": {"request": {"method": "GET", "endpoint": "/x"}},
+        },
+        type=Request,
+    )
+    environment = msgspec.convert(
+        {
+            "apiVersion": "comparo/v1",
+            "kind": "Environment",
+            "metadata": {"name": "E", "id": "environment.e"},
+            "spec": {"baseUrl": "http://h"},
+        },
+        type=Environment,
+    )
+    assert isinstance(request, Request)
+    assert isinstance(environment, Environment)
+    return Execution(request, environment, "", HttpResponse(200, [], body, 1.0))
+
+
+def test_a_wildcard_or_quoted_body_path_is_a_clean_miss_not_a_crash() -> None:
+    project = LoadedProject(root=Path(), project=None, objects={})
+    execution = _exec_with_body(b'{"items": [{"name": "a"}]}')
+    rule = AssertionRule(target="body:items[*].name", op="exists")
+    results = evaluate_rules(project, [rule], execution)
+    assert results[0].ok is False  # the path doesn't resolve — a clean miss
+
+
+def test_an_invalid_regex_fails_the_rule_instead_of_raising() -> None:
+    project = LoadedProject(root=Path(), project=None, objects={})
+    execution = _exec_with_body(b'{"v": "abc"}')
+    rule = AssertionRule(target="body:v", op="matches", value="([")
+    results = evaluate_rules(project, [rule], execution)
+    assert results[0].ok is False
+    assert "invalid regex" in results[0].detail

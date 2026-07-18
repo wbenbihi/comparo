@@ -213,7 +213,10 @@ def _apply(
     if op == "equals":
         return result(actual == expected, f"{_short(actual)} == {_short(expected)}")
     if op == "matches":
-        ok = re.search(str(expected), str(actual)) is not None
+        try:
+            ok = re.search(str(expected), str(actual)) is not None
+        except re.error as error:
+            return result(False, f"invalid regex /{expected}/: {error}")
         return result(ok, f"{_short(actual)} ~ /{expected}/")
     if op in ("lt", "lte", "gt", "gte"):
         return _numeric(op, actual, expected, rule.target, result)
@@ -261,6 +264,10 @@ def _schema(
         return result(False, error.message)
     except jsonschema.SchemaError as error:
         return result(False, f"invalid schema: {error.message}")
+    except Exception as error:
+        # An unresolvable $ref (or any schema-machinery error) fails the rule,
+        # never the whole run.
+        return result(False, f"schema check failed: {error}")
     return result(True, "schema valid")
 
 
@@ -301,7 +308,12 @@ def _at_path(body: object, path: str) -> tuple[object, bool]:
     current = body
     for segment in _segments(path):
         if segment.startswith("[") and segment.endswith("]"):
-            index = int(segment[1:-1])
+            try:
+                index = int(segment[1:-1])
+            except ValueError:
+                # A wildcard or quoted index (``[*]``, ``["key"]``) is not a real
+                # subscript — the path simply doesn't resolve, it isn't a crash.
+                return None, False
             if isinstance(current, list) and -len(current) <= index < len(current):
                 current = current[index]
             else:

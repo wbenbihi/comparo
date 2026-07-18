@@ -12,12 +12,14 @@ from comparo.core.http import HttpClient
 from comparo.core.http import HttpError
 from comparo.core.http import TimeoutBudget
 from comparo.core.interpolation import Context
+from comparo.core.interpolation import InterpolationError
 from comparo.core.interpolation import interpolate
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
 from comparo.core.models import HealthCheck
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.secrets import ExecuteSecrets
+from comparo.core.secrets import SecretError
 
 
 class Health(enum.Enum):
@@ -74,11 +76,13 @@ async def check_health(
     results: list[CheckResult] = []
     for check in checks:
         url = f"{base}/{check.endpoint.lstrip('/')}"
-        headers = _headers(environment, check, context)
-        request = ResolvedRequest(check.method, url, headers, {}, None, [])
         try:
+            # Header interpolation can raise if a $secret is unresolvable; a failed
+            # probe must degrade this check, not crash the whole health run.
+            headers = _headers(environment, check, context)
+            request = ResolvedRequest(check.method, url, headers, {}, None, [])
             response = await client.send(request, budget)
-        except HttpError as error:
+        except (HttpError, SecretError, InterpolationError) as error:
             results.append(CheckResult(check.method, check.endpoint, ok=False, detail=str(error)))
             continue
         ok = 200 <= response.status < 400

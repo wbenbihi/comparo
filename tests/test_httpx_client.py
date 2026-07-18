@@ -28,3 +28,25 @@ def test_auth_maps_basic_and_bearer() -> None:
     assert header == ("Authorization", "Bearer tok")
 
     assert _auth(None) == (None, None)
+
+
+# ── Phase 3: no project timeout still yields a finite budget (H7) ──
+
+
+def test_timeout_budget_defaults_when_nothing_is_declared() -> None:
+    from comparo.core.http import TimeoutBudget
+
+    # A project that declares no timeout block must still get a finite ceiling,
+    # so an unresponsive server fails a run instead of hanging it forever.
+    budget = TimeoutBudget.resolve(None, None)
+    assert budget.connect == 5.0
+    assert budget.read == 30.0
+
+
+def test_an_explicit_timeout_still_wins_over_the_default() -> None:
+    from comparo.core.http import TimeoutBudget
+    from comparo.core.models import Duration
+
+    budget = TimeoutBudget.resolve(Duration(read="250ms"), None)
+    assert budget.read == 0.25
+    assert budget.connect == 5.0  # unset field still falls back

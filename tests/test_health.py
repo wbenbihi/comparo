@@ -77,3 +77,34 @@ def test_no_declared_checks_is_unknown() -> None:
     report = _run({})
     assert report.status is Health.UNKNOWN
     assert report.results == []
+
+
+def test_a_health_check_with_an_unresolvable_secret_fails_that_check(tmp_path: Path) -> None:
+    import asyncio
+
+    from comparo.core.health import Health
+    from comparo.core.health import check_health
+    from comparo.core.loader import load_project
+    from comparo.core.resolve import select_environment
+
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\nmetadata: {name: E, id: environment.e}\n"
+        "spec:\n  baseUrl: http://127.0.0.1:1\n"
+        "  secrets:\n    TOKEN:\n      from:\n        - $env: DEFINITELY_UNSET_HEALTH_VAR\n"
+        "  health:\n    - method: GET\n      endpoint: /up\n"
+        "      headers:\n        - {key: authorization, value: '${TOKEN}'}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path)
+    env = select_environment(loaded, "environment.e")
+
+    class _NeverClient:
+        async def send(self, request: object, timeout: object) -> object:  # pragma: no cover
+            raise AssertionError("should not reach the network")
+
+        async def aclose(self) -> None:  # pragma: no cover
+            return None
+
+    report = asyncio.run(check_health(loaded, env, _NeverClient()))  # type: ignore[arg-type]
+    assert report.status is Health.FAIL
+    assert report.results[0].ok is False

@@ -75,3 +75,17 @@ def test_missing_key_is_drift() -> None:
     assert any(
         field.state is State.DRIFT for field in diff({"a": 1}, {"a": 1, "b": 2}, "shape", [])
     )
+
+
+def test_a_deeply_nested_body_does_not_raise_recursionerror() -> None:
+    from comparo.core.diff import diff
+
+    def nest(n: int) -> dict[str, object]:
+        node: dict[str, object] = {"v": 1}
+        for _ in range(n):
+            node = {"k": node}
+        return node
+
+    # Well beyond the old ~330 crash threshold — must compare, not overflow.
+    result = diff(nest(600), nest(600), "exact", [])
+    assert result  # produced field diffs instead of crashing

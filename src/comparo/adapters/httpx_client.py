@@ -70,10 +70,18 @@ class HttpxClient:
             cookies=cookies,
             timeout=httpx_timeout,
         )
+        # A total deadline for the whole non-streaming read: httpx's read timeout is
+        # per-socket-read, so a server trickling bytes never trips it. Sum the
+        # phase budgets into one wall-clock cap.
+        total = (timeout.connect or 0.0) + (timeout.read or 0.0)
         start = time.perf_counter()
         try:
             status, resp_headers, body = await self._roundtrip(
-                build, auth, streaming=request.streaming, stream_max=timeout.stream_max
+                build,
+                auth,
+                streaming=request.streaming,
+                stream_max=timeout.stream_max,
+                total=total or None,
             )
         except httpx.HTTPError as error:
             message = f"{type(error).__name__}: {error}"
@@ -91,6 +99,7 @@ class HttpxClient:
         *,
         streaming: bool,
         stream_max: float | None = None,
+        total: float | None = None,
     ) -> tuple[int, list[tuple[str, str]], bytes]:
         if streaming:
             response = await self._client.send(request, auth=auth, stream=True)
@@ -109,7 +118,14 @@ class HttpxClient:
             finally:
                 await response.aclose()
             return response.status_code, list(response.headers.items()), b"".join(chunks)
-        response = await self._client.send(request, auth=auth)
+        try:
+            # A trickling server resets httpx's per-read timeout on every byte; the
+            # total cap ends the read regardless. asyncio.timeout(None) is a no-op.
+            async with asyncio.timeout(total):
+                response = await self._client.send(request, auth=auth)
+        except TimeoutError as error:
+            message = f"read exceeded the {total:g}s total deadline"
+            raise HttpError(message) from error
         return response.status_code, list(response.headers.items()), response.content
 
     async def aclose(self) -> None:

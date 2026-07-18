@@ -7,6 +7,7 @@ suggestion — the loader never silently degrades.
 """
 
 import dataclasses
+import datetime
 import difflib
 from collections.abc import Iterable
 from collections.abc import Iterator
@@ -143,6 +144,10 @@ def _plain(node: object) -> object:
         return [_plain(item) for item in node]
     if isinstance(node, float) and not isinstance(node, bool):
         return float(node)
+    if isinstance(node, datetime.date | datetime.time):
+        # A YAML-native date/time (``2026-07-18``) has no JSON equivalent; render
+        # it as an ISO string so it survives strict decode and json serialization.
+        return node.isoformat()
     return node
 
 

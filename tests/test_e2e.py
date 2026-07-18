@@ -474,3 +474,47 @@ def test_streamed_responses_diff_by_event_sequence(
     assert result.exit_code == 1
     assert "gate: FAIL" in result.output
     assert "[1]" in result.output  # the second *event* drifted, named by index
+
+
+def test_a_trickling_server_hits_the_total_read_deadline(
+    serve: Callable[[Routes], str], tmp_path: Path
+) -> None:
+    # httpx's read timeout is per-read; a server dribbling bytes never trips it.
+    # The total deadline must end the read as a bounded error, not a hang.
+    import socketserver
+    import threading
+    import time
+
+    class _Trickle(socketserver.BaseRequestHandler):
+        def handle(self) -> None:
+            self.request.recv(4096)
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+            for _ in range(100):
+                try:
+                    self.request.sendall(b"x")
+                    time.sleep(0.2)
+                except OSError:
+                    return
+
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Trickle)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    trickle = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        baseline = serve({"/users": _json_route({"ok": True})})
+        config = _project(tmp_path, baseline, trickle)
+        for env in ("baseline", "candidate"):
+            path = tmp_path / f"env-{env}.yaml"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace("read: 5s", "read: 300ms"),
+                encoding="utf-8",
+            )
+        start = time.monotonic()
+        result = runner.invoke(app, _diff_args(config, tmp_path / "reports"))
+        elapsed = time.monotonic() - start
+        assert result.exit_code == 1
+        assert "gate: FAIL" in result.output
+        assert elapsed < 10  # bounded by the total deadline, not the 20s trickle
+    finally:
+        server.shutdown()
+        server.server_close()

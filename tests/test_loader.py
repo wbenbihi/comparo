@@ -7,6 +7,7 @@ import pytest
 from comparo.core.diagnostics import LoadError
 from comparo.core.loader import load_project
 from comparo.core.models import DiffProfile
+from comparo.core.models import Request
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
 
@@ -185,3 +186,15 @@ def test_wrong_api_version_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(LoadError):
         load_project(tmp_path)
+
+
+def test_a_yaml_native_date_in_a_body_loads_as_an_iso_string(tmp_path: Path) -> None:
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
+        "spec:\n  request:\n    method: POST\n    endpoint: /x\n    body: {when: 2026-07-18}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path)
+    request = loaded.objects["request.r"]
+    assert isinstance(request, Request)
+    assert request.spec.request.body == {"when": "2026-07-18"}

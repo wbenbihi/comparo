@@ -7246,9 +7246,12 @@ def _relative_age(created: str) -> str:
     """A compact age like ``12m`` / ``2h`` / ``1d`` from an ISO timestamp."""
     try:
         when = datetime.fromisoformat(created)
-    except ValueError:
+    except (ValueError, TypeError):
         return ""
-    seconds = int((datetime.now() - when).total_seconds())
+    # A record written by CI (or hand-edited) may carry a tz-aware timestamp;
+    # compare in the same awareness to avoid a naive-vs-aware TypeError.
+    now = datetime.now(when.tzinfo) if when.tzinfo is not None else datetime.now()
+    seconds = int((now - when).total_seconds())
     if seconds < 60:
         return "now" if seconds < 5 else f"{max(seconds, 0)}s"
     minutes = seconds // 60
