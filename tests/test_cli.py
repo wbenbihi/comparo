@@ -44,6 +44,52 @@ def test_validate_missing_config_points_at_init(tmp_path: Path) -> None:
     assert "comparo init" in result.output
 
 
+CANARY = Path(__file__).parent.parent / "examples" / "canary-project"
+
+
+def test_exec_exit_code_matches_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The CI contract: `comparo exec` exits 0 iff the gate passes, 1 otherwise.
+    import comparo.cli.app as cli
+    from comparo.core.execution import CellOutcome
+    from comparo.core.execution import ExecutionResult
+
+    async def fake(passed: bool) -> ExecutionResult:
+        outcome = CellOutcome("request.x", "", [], [], None, None if passed else "boom")
+        return ExecutionResult("exec.release-gate", "Stable", "Canary", True, True, [outcome])
+
+    for passes, expected in ((True, 0), (False, 1)):
+        monkeypatch.setattr(cli, "_run_execution", lambda _l, _p, ok=passes: fake(ok))
+        invoked = runner.invoke(app, ["exec", "execution.release-gate", "--config", str(CANARY)])
+        assert invoked.exit_code == expected
+
+
+def test_exec_unknown_profile_exits_one() -> None:
+    invoked = runner.invoke(app, ["exec", "execution.nope", "--config", str(CANARY)])
+    assert invoked.exit_code == 1
+    assert "no ExecutionProfile" in invoked.output
+
+
+def test_diff_exit_code_matches_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    import comparo.cli.app as cli
+    from comparo.core.compare import CellDiff
+    from comparo.core.diff import FieldDiff
+    from comparo.core.diff import State
+    from comparo.core.loader import load_project
+    from comparo.core.models import Request
+
+    loaded = load_project(CANARY)
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+
+    async def fake(drift: bool) -> list[CellDiff]:
+        fields = [FieldDiff("$.x", State.DRIFT if drift else State.SAME, "exact")]
+        return [CellDiff(request, "", fields)]
+
+    for drifts, expected in ((False, 0), (True, 1)):
+        monkeypatch.setattr(cli, "_diff", lambda *_a, d=drifts, **_k: fake(d))
+        invoked = runner.invoke(app, ["diff", "--config", str(CANARY)])
+        assert invoked.exit_code == expected
+
+
 def test_init_scaffolds_a_loadable_project(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     result = runner.invoke(app, ["init", str(project), "--name", "Demo API"])

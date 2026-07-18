@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 from typing import NoReturn
@@ -17,17 +18,25 @@ import typer
 from comparo import __version__
 from comparo.adapters.httpx_client import HttpxClient
 from comparo.adapters.reporters import REPORTERS
+from comparo.core.assertions import evaluate_rules
+from comparo.core.assertions import passed as assertions_pass
+from comparo.core.assertions import request_rules
 from comparo.core.compare import CellDiff
 from comparo.core.compare import diff_run
 from comparo.core.diagnostics import LoadError
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_all
+from comparo.core.execution import ExecutionResult
+from comparo.core.execution import run_execution
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
+from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
+from comparo.core.redaction import Redactor
 from comparo.core.report import RunReport
 from comparo.core.report import build_report
+from comparo.core.report import diff_passed
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
@@ -140,6 +149,32 @@ def validate(config: ConfigOption = DEFAULT_CONFIG) -> None:
 
 
 @app.command()
+def doctor() -> None:
+    """Run the never-leak self-check: a canary secret through every sink.
+
+    Sends a known canary secret through every output path — the TUI display,
+    saved runs and reports, the JUnit/SARIF/JSON/Markdown reporters, the copied
+    curl, and the crash report — and verifies each one masked it. Exits non-zero
+    if any sink leaked. The TUI runs the same check in Settings → Security (``t``).
+    """
+    from comparo.adapters import doctor as doctor_adapter
+
+    checks = doctor_adapter.run_selfcheck()
+    for check in checks:
+        mark, colour = ("✓", typer.colors.GREEN) if check.ok else ("✗", typer.colors.RED)
+        typer.secho(f"{mark} {check.name:<18} {check.detail}", fg=colour)
+    passed = sum(1 for check in checks if check.ok)
+    total = len(checks)
+    typer.secho(
+        f"\n{passed}/{total} sinks masked the canary",
+        fg=typer.colors.GREEN if passed == total else typer.colors.RED,
+        bold=True,
+    )
+    if passed != total:
+        raise typer.Exit(1)
+
+
+@app.command()
 def render(
     request_id: Annotated[str, typer.Argument(help="metadata.id of the request to render.")],
     *,
@@ -163,7 +198,11 @@ def render(
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from error
-    _print_resolved(Resolver(loaded, environment).resolve_request(obj), environment.metadata.name)
+    _print_resolved(
+        Resolver(loaded, environment).resolve_request(obj),
+        environment.metadata.name,
+        Redactor.for_project(loaded).text,
+    )
 
 
 @app.command(name="run")
@@ -193,9 +232,73 @@ def run_requests(
         typer.secho("no requests to run", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     results = asyncio.run(_execute(loaded, environment, requests))
-    _print_results(results, environment.metadata.name)
-    if any(not execution.ok for execution in results):
+    ok = _print_results(loaded, results, environment.metadata.name)
+    if not ok:
         raise typer.Exit(1)
+
+
+@app.command(name="exec")
+def exec_profile(
+    execution_id: Annotated[str, typer.Argument(help="The ExecutionProfile id to run.")],
+    *,
+    config: ConfigOption = DEFAULT_CONFIG,
+) -> None:
+    """Run an ExecutionProfile headless — assert both envs, diff, and gate.
+
+    Exits 0 only when the gate passes (assertions hold on both environments and
+    nothing untriaged drifted), so CI can gate on it. This is the exact gate the
+    TUI Execution screen shows.
+
+    Args:
+        execution_id: The ``metadata.id`` of the ExecutionProfile to run.
+        config: The manifest (or project directory) to load.
+    """
+    loaded = _open_project(config)
+    profile = loaded.objects.get(execution_id)
+    if not isinstance(profile, ExecutionProfile):
+        typer.secho(f"no ExecutionProfile with id '{execution_id}'", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    try:
+        result = asyncio.run(_run_execution(loaded, profile))
+    except EnvironmentSelectionError as error:
+        typer.secho(str(error), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from error
+    _print_execution(result, Redactor.for_project(loaded).text)
+    raise typer.Exit(0 if result.passed else 1)
+
+
+async def _run_execution(loaded: LoadedProject, profile: ExecutionProfile) -> ExecutionResult:
+    client, candidate_client = HttpxClient(), HttpxClient()
+    try:
+        return await run_execution(loaded, profile, client, candidate_client)
+    finally:
+        await client.aclose()
+        await candidate_client.aclose()
+
+
+def _print_execution(result: ExecutionResult, redact: Callable[[str], str] = str) -> None:
+    pair = f"{result.baseline} ⇄ {result.candidate}" if result.candidate else result.baseline
+    typer.secho(f"exec · {result.profile_id}  {pair}", bold=True)
+    for outcome in result.outcomes:
+        failed = [r for r in outcome.baseline_assertions + outcome.candidate_assertions if not r.ok]
+        cell = f"{outcome.request_id}" + (
+            f" [{redact(outcome.cell_key)}]" if outcome.cell_key else ""
+        )
+        if outcome.ok:
+            typer.secho(f"  ✓ {cell}", fg=typer.colors.GREEN)
+        else:
+            if outcome.error is not None:
+                reason = redact(outcome.error)
+            elif failed:
+                reason = redact(failed[0].label)
+            else:
+                reason = "drift"
+            typer.secho(f"  ✗ {cell:<40} {reason}", fg=typer.colors.RED)
+    counts = f"{len(result.outcomes)} cells · {result.drift} drift · {result.errors} error"
+    if result.passed:
+        typer.secho(f"\n✓ gate PASS  {counts}", fg=typer.colors.GREEN, bold=True)
+    else:
+        typer.secho(f"\n✗ gate FAIL  {counts}", fg=typer.colors.RED, bold=True)
 
 
 @app.command()
@@ -242,9 +345,19 @@ def diff(
         typer.secho("no requests to diff", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     results = asyncio.run(_diff(loaded, base_env, candidate_env, requests))
-    passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name)
+    redact = Redactor.for_project(loaded).text
+    if not results:
+        typer.secho(
+            "nothing to diff — every selected request expanded to zero cells",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name, redact)
     if report:
-        run_report = build_report(base_env.metadata.name, candidate_env.metadata.name, results)
+        run_report = build_report(
+            base_env.metadata.name, candidate_env.metadata.name, results, redact
+        )
         _write_reports(run_report, report, output)
     if not passed:
         raise typer.Exit(1)
@@ -443,22 +556,27 @@ async def _diff(
         await candidate_client.aclose()
 
 
-def _print_diffs(results: list[CellDiff], baseline_name: str, candidate_name: str) -> bool:
+def _print_diffs(
+    results: list[CellDiff],
+    baseline_name: str,
+    candidate_name: str,
+    redact: Callable[[str], str] = str,
+) -> bool:
     typer.secho(f"diff · {baseline_name} ⇄ {candidate_name}", bold=True)
     same = drift = errors = skipped = 0
     for cell in results:
         identifier = cell.request.metadata.id or cell.request.metadata.name
         if cell.cell_key:
-            identifier = f"{identifier} [{cell.cell_key}]"
+            identifier = f"{identifier} [{redact(cell.cell_key)}]"
         skipped += cell.skipped
         if cell.error is not None:
             errors += 1
-            typer.secho(f"  ! {identifier:<44} {cell.error}", fg=typer.colors.YELLOW)
+            typer.secho(f"  ! {identifier:<44} {redact(cell.error)}", fg=typer.colors.YELLOW)
         elif cell.drifted:
             drift += 1
             typer.secho(f"  ✗ {identifier:<44} drift", fg=typer.colors.RED)
             for field in cell.drifts:
-                typer.echo(f"      {field.path}  {field.detail}")
+                typer.echo(f"      {redact(field.path)}  {redact(field.detail)}")
         else:
             note = f"  ({cell.skipped} skipped)" if cell.skipped else ""
             typer.secho(f"  ✓ {identifier:<44} same{note}", fg=typer.colors.GREEN)
@@ -466,7 +584,7 @@ def _print_diffs(results: list[CellDiff], baseline_name: str, candidate_name: st
     summary = f"{same} same · {drift} drift · {errors} error · {skipped} fields skipped"
     typer.echo()
     typer.secho(f"summary: {summary}", bold=True)
-    passed = drift == 0 and errors == 0
+    passed = diff_passed(len(results), drift, errors)
     color = typer.colors.GREEN if passed else typer.colors.RED
     typer.secho("gate: PASS" if passed else "gate: FAIL", fg=color)
     return passed
@@ -492,18 +610,38 @@ async def _execute(
         await client.aclose()
 
 
-def _print_results(results: list[Execution], environment_name: str) -> None:
+def _print_results(loaded: LoadedProject, results: list[Execution], environment_name: str) -> bool:
+    """Print each result against its declared response, returning the gate verdict.
+
+    A request that returns a response is *not* automatically a pass — its
+    ``response.status`` / ``response.schema`` sugar is evaluated, so a 500 against
+    a declared 200 is red and fails the gate.
+    """
     typer.secho(f"run · {environment_name}", bold=True)
+    redact = Redactor.for_project(loaded).text
+    ok_all = True
     for execution in results:
         identifier = execution.request.metadata.id or execution.request.metadata.name
         if execution.cell_key:
-            identifier = f"{identifier} [{execution.cell_key}]"
+            identifier = f"{identifier} [{redact(execution.cell_key)}]"
         response = execution.response
-        if response is not None:
-            latency = f"{response.elapsed_ms:.0f}ms"
+        if response is None:
+            ok_all = False
+            error = redact(execution.error) if execution.error else "error"
+            typer.secho(f"  ✗ {identifier:<44} {error}", fg=typer.colors.RED)
+            continue
+        checks = evaluate_rules(loaded, request_rules(execution.request), execution)
+        latency = f"{response.elapsed_ms:.0f}ms"
+        if assertions_pass(checks):
             typer.secho(f"  ✓ {identifier:<44} {response.status}  {latency}", fg=typer.colors.GREEN)
         else:
-            typer.secho(f"  ✗ {identifier:<44} {execution.error}", fg=typer.colors.RED)
+            ok_all = False
+            failed = next((c for c in checks if not c.ok and c.severity == "error"), None)
+            reason = redact(failed.label) if failed is not None else "check failed"
+            typer.secho(
+                f"  ✗ {identifier:<44} {response.status}  {latency}  {reason}", fg=typer.colors.RED
+            )
+    return ok_all
 
 
 def _print_load_error(error: LoadError) -> None:
@@ -512,26 +650,28 @@ def _print_load_error(error: LoadError) -> None:
     typer.secho(f"\n✗ {len(error.diagnostics)} problem(s)", fg=typer.colors.RED, err=True)
 
 
-def _print_resolved(resolved: ResolvedRequest, environment_name: str) -> None:
-    typer.secho(f"{resolved.method} {resolved.url}", bold=True)
+def _print_resolved(
+    resolved: ResolvedRequest, environment_name: str, redact: Callable[[str], str] = str
+) -> None:
+    typer.secho(f"{redact(resolved.method)} {redact(resolved.url)}", bold=True)
     typer.secho(f"  env: {environment_name}", dim=True)
     if resolved.headers:
         typer.echo("\nheaders:")
         for key, value in resolved.headers:
-            typer.echo(f"  {key}: {value}")
+            typer.echo(f"  {redact(key)}: {redact(str(value))}")
     if resolved.query:
         typer.echo("\nquery:")
         for key, value in resolved.query.items():
-            typer.echo(f"  {key}: {value}")
+            typer.echo(f"  {redact(key)}: {redact(str(value))}")
     if resolved.body is not None:
         typer.echo("\nbody:")
-        body = json.dumps(resolved.body, indent=2, ensure_ascii=False)
+        body = redact(json.dumps(resolved.body, indent=2, ensure_ascii=False))
         typer.echo("\n".join(f"  {line}" for line in body.splitlines()))
     if resolved.trail:
         typer.echo("\nprovenance:")
         for entry in resolved.trail:
             tag = "secret" if entry.tainted else entry.origin.value
-            typer.echo(f"  {entry.path:<26} {tag:<9} ← {entry.detail}")
+            typer.echo(f"  {redact(entry.path):<26} {tag:<9} ← {redact(entry.detail)}")
 
 
 def run() -> None:
