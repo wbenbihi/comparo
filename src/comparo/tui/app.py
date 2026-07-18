@@ -4920,7 +4920,7 @@ class ComparoApp(App[None]):
             return
         manifest = self.project.project
         config = manifest.spec.report if manifest else None
-        output_name = config.get("output") if isinstance(config, dict) else None
+        output_name = config.output if config is not None else None
         output = self.project.root / (output_name if isinstance(output_name, str) else "reports")
         try:
             output.mkdir(parents=True, exist_ok=True)
@@ -5113,21 +5113,18 @@ def _project_detail(manifest: Project, redact: Callable[[str], str] = str) -> Gr
     if spec.data:
         head.append("data       ", style=_LABEL)
         head.append(f"{redact(str(spec.data))}\n", style=_TEXT)
-    environments = spec.environments if isinstance(spec.environments, dict) else {}
-    default = environments.get("default")
+    environments = spec.environments
+    default = environments.default if environments is not None else None
     if isinstance(default, str):
         head.append("default    ", style=_LABEL)
         head.append(f"{redact(default)}\n", style=_ACCENT)
     parts.append(head)
-    pairs = environments.get("diffPairs")
-    if isinstance(pairs, list) and pairs:
+    pairs = environments.diff_pairs if environments is not None else None
+    if pairs:
         block = Text("\nDIFF PAIRS", style=_LABEL)
         for pair in pairs:
-            if isinstance(pair, dict):
-                block.append(f"\n  {redact(str(pair.get('name', ''))):<16}", style=_TEXT)
-                base = redact(str(pair.get("baseline", "")))
-                cand = redact(str(pair.get("candidate", "")))
-                block.append(f"{base} ⇄ {cand}", style=_AXIS)
+            block.append(f"\n  {redact(pair.name):<16}", style=_TEXT)
+            block.append(f"{redact(pair.baseline)} ⇄ {redact(pair.candidate)}", style=_AXIS)
         parts.append(block)
     sections: tuple[tuple[str, object], ...] = (
         ("run", spec.run),
@@ -5140,7 +5137,9 @@ def _project_detail(manifest: Project, redact: Callable[[str], str] = str) -> Gr
     for label, value in sections:
         if value:
             parts.append(Text(f"\n\n{label.upper()}", style=_LABEL))
-            parts.append(_json(value, redact))
+            # Config interiors are now structs; render them as their plain form.
+            plain = msgspec.to_builtins(value) if isinstance(value, msgspec.Struct) else value
+            parts.append(_json(plain, redact))
     return Group(*parts)
 
 
@@ -7923,10 +7922,8 @@ def _settings_project(project: LoadedProject) -> Text:
         text.append(f"{number} ", style=f"bold {_TEXT_HI}")
         text.append(f"{noun}   ", style=_DIM)
     text.append("\n\n")
-    report = getattr(spec, "report", None)
-    report_dir = getattr(report, "output", None)
-    if report_dir is None and isinstance(report, dict):
-        report_dir = report.get("output")
+    report_dir = spec.report.output if spec is not None and spec.report is not None else None
+    concurrency = spec.run.concurrency if spec is not None and spec.run is not None else None
     project_line = manifest.metadata.name if manifest else "—"
     if manifest and manifest.metadata.description:
         project_line = f"{manifest.metadata.name} · {manifest.metadata.description}"
@@ -7934,7 +7931,7 @@ def _settings_project(project: LoadedProject) -> Text:
         ("manifest", redact(f"{project.root.name}/comparo.yaml"), _TEXT_HI),
         ("project", redact(project_line), _TEXT_HI),
         ("default env", redact(default.metadata.name) if default else "—", _ACCENT),
-        ("concurrency", str(getattr(spec, "concurrency", "—") or "—"), _TEXT),
+        ("concurrency", str(concurrency or "—"), _TEXT),
         ("reporting dir", redact(str(report_dir or ".reports/")), _TEXT),
     ]
     for label, value, style in rows:

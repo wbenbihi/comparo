@@ -475,7 +475,7 @@ def test_explorer_config_views_mask_an_untainted_secret() -> None:
             "apiVersion": "comparo/v1",
             "kind": "Project",
             "metadata": {"name": "P"},
-            "spec": {"selection": {"defaultToken": SECRET}},
+            "spec": {"selection": {"tags": [SECRET]}},
         },
         type=Project,
     )

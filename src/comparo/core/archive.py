@@ -411,10 +411,9 @@ def archive_dir(root: Path, data: str | None, report_config: object) -> Path:
     """Resolve ``<data>/.reports`` — ``spec.report.dir`` overrides ``.reports``."""
     base = root / (data or ".")
     name = ".reports"
-    if isinstance(report_config, dict):
-        configured = report_config.get("dir")
-        if isinstance(configured, str) and configured:
-            name = configured
+    configured = getattr(report_config, "dir", None)
+    if isinstance(configured, str) and configured:
+        name = configured
     return base / name
 
 

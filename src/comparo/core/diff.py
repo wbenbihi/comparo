@@ -66,9 +66,16 @@ def diff(
     Returns:
         One :class:`FieldDiff` per compared or skipped leaf, in tree order.
     """
-    compiled = sorted(
-        (_compile(rule) for rule in rules), key=lambda rule: len(rule.segments), reverse=True
-    )
+    # Most specific (longest path) first; among equal-length paths the later-loaded
+    # rule wins, so an execution-level override can re-check what a request ignored.
+    compiled = [
+        rule
+        for _, rule in sorted(
+            ((index, _compile(rule)) for index, rule in enumerate(rules)),
+            key=lambda pair: (len(pair[1].segments), pair[0]),
+            reverse=True,
+        )
+    ]
     return _walk(baseline, candidate, (), compiled, default_mode)
 
 

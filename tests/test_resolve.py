@@ -234,11 +234,12 @@ def test_resolve_pair_rejects_a_lone_baseline_flag(tmp_path: Path) -> None:
         resolve_pair(loaded, None, "a", None)
 
 
-def test_resolve_pair_rejects_a_diffpair_missing_a_side(tmp_path: Path) -> None:
+def test_a_diffpair_with_a_typoed_key_is_a_load_error(tmp_path: Path) -> None:
+    # The strict EnvironmentsConfig/DiffPair structs turn a mistyped diffPair key
+    # into a hard load error, so a run can never silently gate the wrong pair.
     import pytest
 
-    from comparo.core.resolve import EnvironmentSelectionError
-    from comparo.core.resolve import resolve_pair
+    from comparo.core.diagnostics import LoadError
 
     (tmp_path / "env.yaml").write_text(
         "apiVersion: comparo/v1\nkind: Environment\nmetadata: {name: A, id: environment.a}\n"
@@ -248,12 +249,11 @@ def test_resolve_pair_rejects_a_diffpair_missing_a_side(tmp_path: Path) -> None:
     (tmp_path / "comparo.yaml").write_text(
         "apiVersion: comparo/v1\nkind: Project\nmetadata: {name: P, id: project.p}\n"
         "spec:\n  data: .\n  environments:\n    diffPairs:\n"
-        "      - {name: p, baseline: a, candid: b}\n",  # 'candid' typo -> no candidate
+        "      - {name: p, baseline: a, candid: b}\n",  # 'candid' typo
         encoding="utf-8",
     )
-    loaded = load_project(tmp_path / "comparo.yaml")
-    with pytest.raises(EnvironmentSelectionError, match="missing a baseline or candidate"):
-        resolve_pair(loaded, None, None, None)
+    with pytest.raises(LoadError):
+        load_project(tmp_path / "comparo.yaml")
 
 
 def test_a_val_cycle_is_a_captured_error_not_a_recursion_crash(tmp_path: Path) -> None:

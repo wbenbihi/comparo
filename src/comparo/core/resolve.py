@@ -49,9 +49,7 @@ def select_environment(project: LoadedProject, requested: str | None) -> Environ
     name = requested
     if name is None and project.project is not None:
         config = project.project.spec.environments
-        if isinstance(config, dict):
-            default = config.get("default")
-            name = default if isinstance(default, str) else None
+        name = config.default if config is not None else None
     if name is None:
         message = "no environment given and the project declares no default"
         raise EnvironmentSelectionError(message)
@@ -108,17 +106,12 @@ def _find_pair(project: LoadedProject, pair: str | None) -> tuple[str | None, st
     if project.project is None:
         return None
     config = project.project.spec.environments
-    pairs = config.get("diffPairs") if isinstance(config, dict) else None
-    if not isinstance(pairs, list):
+    pairs = config.diff_pairs if config is not None else None
+    if not pairs:
         return None
     for entry in pairs:
-        if isinstance(entry, dict) and (pair is None or entry.get("name") == pair):
-            found_baseline = entry.get("baseline")
-            found_candidate = entry.get("candidate")
-            return (
-                found_baseline if isinstance(found_baseline, str) else None,
-                found_candidate if isinstance(found_candidate, str) else None,
-            )
+        if pair is None or entry.name == pair:
+            return entry.baseline, entry.candidate
     return None
 
 

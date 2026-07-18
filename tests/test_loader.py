@@ -198,3 +198,46 @@ def test_a_yaml_native_date_in_a_body_loads_as_an_iso_string(tmp_path: Path) -> 
     request = loaded.objects["request.r"]
     assert isinstance(request, Request)
     assert request.spec.request.body == {"when": "2026-07-18"}
+
+
+def test_a_typoed_matrix_target_is_a_load_error(tmp_path: Path) -> None:
+    (tmp_path / "m.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Matrix\nmetadata: {name: M, id: matrix.m}\n"
+        "spec:\n  target: request.qeury\n  values: [{code: '200'}]\n",  # 'qeury' typo
+        encoding="utf-8",
+    )
+    with pytest.raises(LoadError):
+        load_project(tmp_path)
+
+
+def test_a_bare_or_wrong_kind_matrix_ref_is_a_load_error(tmp_path: Path) -> None:
+    (tmp_path / "m.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Matrix\nmetadata: {name: M, id: matrix.m}\n"
+        "spec:\n  target: request.query\n  values: [{code: '200'}]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
+        "spec:\n  matrix: [matrix.m]\n  request: {method: GET, endpoint: /x}\n",  # bare string
+        encoding="utf-8",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_project(tmp_path)
+    assert any("matrix entry is not" in d.message for d in caught.value.diagnostics)
+
+
+def test_a_val_pointing_at_a_non_instance_is_a_load_error(tmp_path: Path) -> None:
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\nmetadata: {name: E, id: environment.e}\n"
+        "spec: {baseUrl: 'http://h'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
+        "spec:\n  request:\n    method: GET\n    endpoint: /x\n"
+        "    query: {v: {$val: environment.e}}\n",  # $val -> an Environment, not an Instance
+        encoding="utf-8",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_project(tmp_path)
+    assert any("not an Instance" in d.message for d in caught.value.diagnostics)

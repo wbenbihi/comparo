@@ -233,6 +233,8 @@ def _check_profiles(
     from comparo.core.models import AssertionProfileSpec
     from comparo.core.models import DiffProfileSpec
     from comparo.core.models import ExecutionProfile
+    from comparo.core.models import Instance
+    from comparo.core.models import Matrix
     from comparo.core.models import Request
     from comparo.core.refs import SpecResolutionError
     from comparo.core.refs import resolve_specs
@@ -279,10 +281,51 @@ def _check_profiles(
             if isinstance(item, dict) and "$ref" not in item:
                 check_includes(file, item.get("include"))
 
+    def check_matrix_refs(file: Path, refs: object) -> None:
+        # A request's matrix entry must be a {$ref: id} pointing at a Matrix; a bare
+        # string or wrong-kind ref is silently dropped at runtime (coverage vanishes).
+        for entry in refs if isinstance(refs, list) else []:
+            ref = entry.get("$ref") if isinstance(entry, dict) else None
+            target = loaded.objects.get(ref) if isinstance(ref, str) else None
+            if not isinstance(ref, str):
+                diagnostics.append(
+                    Diagnostic(file, f"matrix entry is not a {{$ref: id}}: {entry!r}")
+                )
+            elif not isinstance(target, Matrix):
+                what = f"a {type(target).__name__}" if target is not None else "an unknown id"
+                diagnostics.append(
+                    Diagnostic(file, f"matrix $ref '{ref}' resolves to {what}, not a Matrix")
+                )
+
+    def check_val_kinds(file: Path, raw: object) -> None:
+        # A $val must point at an Instance; a wrong-kind target silently resolves to
+        # None at runtime (a stripped header or a literal "None" on the wire).
+        for reference in _find_references(raw):
+            if reference.sigil != "$val" or "/" in reference.target:
+                continue
+            target = loaded.objects.get(reference.target)
+            if target is not None and not isinstance(target, Instance):
+                diagnostics.append(
+                    Diagnostic(
+                        file,
+                        f"$val '{reference.target}' resolves to a {type(target).__name__}, "
+                        "not an Instance",
+                        reference.line,
+                    )
+                )
+
+    raw_by_id = {
+        entry.obj.metadata.id: entry.raw
+        for entry in entries
+        if getattr(entry.obj, "metadata", None) is not None and entry.obj.metadata.id is not None
+    }
     for obj in loaded.objects.values():
         obj_id = getattr(obj.metadata, "id", None)
         file = file_by_id.get(obj_id, loaded.root) if obj_id is not None else loaded.root
+        if obj_id is not None and obj_id in raw_by_id:
+            check_val_kinds(file, raw_by_id[obj_id])
         if isinstance(obj, Request):
+            check_matrix_refs(file, obj.spec.matrix)
             response = obj.spec.response
             if response is not None:
                 check(file, response.diff, DiffProfileSpec)

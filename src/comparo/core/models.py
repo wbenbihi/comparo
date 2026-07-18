@@ -112,10 +112,15 @@ class InstanceSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     value: Any = None
 
 
+#: A matrix injects into exactly one of these request positions; a typo like
+#: ``request.qeury`` is rejected at load instead of silently no-op'ing.
+MatrixTarget = Annotated[str, msgspec.Meta(pattern=r"^(request\.)?(query|body|path)$")]
+
+
 class MatrixSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     """The body of a ``Matrix`` object — a list of atomic cases."""
 
-    target: str
+    target: MatrixTarget
     values: list[dict[str, Any]]
     mode: Literal["merge", "replace"] = "merge"
     create_path: bool = False
@@ -143,16 +148,72 @@ class DiffProfileSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True
     rules: list[DiffRule] | None = None
 
 
+class DiffPair(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """A named baseline/candidate pairing the Diff screen and ``--pair`` resolve."""
+
+    name: str
+    baseline: str
+    candidate: str
+
+
+class EnvironmentsConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """The manifest's ``environments`` block: a default and named diff pairs."""
+
+    default: str | None = None
+    diff_pairs: list[DiffPair] | None = None
+
+
+class RetryConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """Retry policy for transport failures."""
+
+    attempts: int | None = None
+    backoff: Literal["constant", "linear", "exponential"] | None = None
+
+
+class RunConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """Run-wide execution defaults: concurrency and retry."""
+
+    concurrency: int | None = None
+    retry: RetryConfig | None = None
+
+
+class SelectionConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """The default request selection for headless ``run``/``diff``."""
+
+    tags: list[str] | None = None
+    requests: list[str] | None = None
+
+
+class ReportConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """Report defaults: formats to write, the artifact output dir, archive dir."""
+
+    formats: list[str] | None = None
+    output: str | None = None
+    dir: str | None = None
+
+
+class RedactionConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
+    """Redaction options. The declared-secret display masking is always on."""
+
+    string_match_backstop: bool | None = None
+
+
 class ProjectSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
-    """The body of the root ``Project`` manifest."""
+    """The body of the root ``Project`` manifest.
+
+    Interiors are strict structs so a mistyped key (``defualt``, ``concurency``)
+    is a hard load error, not a silently-ignored setting. ``diff`` stays ``Any``
+    because it holds ``$ref``/inline profile holes; ``plugins`` is gated by a
+    dedicated load error.
+    """
 
     data: str | None = None
-    environments: Any = None
-    run: Any = None
+    environments: EnvironmentsConfig | None = None
+    run: RunConfig | None = None
     diff: Any = None
-    selection: Any = None
-    report: Any = None
-    redaction: Any = None
+    selection: SelectionConfig | None = None
+    report: ReportConfig | None = None
+    redaction: RedactionConfig | None = None
     plugins: Any = None
 
 

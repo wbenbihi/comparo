@@ -639,7 +639,8 @@
       "type": "object",
       "properties": {
         "target": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^(request\\.)?(query|body|path)$"
         },
         "values": {
           "type": "array",
@@ -1156,7 +1157,7 @@
     },
     "ProjectSpec": {
       "title": "ProjectSpec",
-      "description": "The body of the root ``Project`` manifest.",
+      "description": "The body of the root ``Project`` manifest.\n\nInteriors are strict structs so a mistyped key (``defualt``, ``concurency``)\nis a hard load error, not a silently-ignored setting. ``diff`` stays ``Any``\nbecause it holds ``$ref``/inline profile holes; ``plugins`` is gated by a\ndedicated load error.",
       "type": "object",
       "properties": {
         "data": {
@@ -1171,24 +1172,288 @@
           "default": null
         },
         "environments": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentsConfig"
+            }
+          ],
           "default": null
         },
         "run": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/RunConfig"
+            }
+          ],
           "default": null
         },
         "diff": {
           "default": null
         },
         "selection": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/SelectionConfig"
+            }
+          ],
           "default": null
         },
         "report": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ReportConfig"
+            }
+          ],
           "default": null
         },
         "redaction": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/RedactionConfig"
+            }
+          ],
           "default": null
         },
         "plugins": {
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "EnvironmentsConfig": {
+      "title": "EnvironmentsConfig",
+      "description": "The manifest's ``environments`` block: a default and named diff pairs.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "diffPairs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DiffPair"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "DiffPair": {
+      "title": "DiffPair",
+      "description": "A named baseline/candidate pairing the Diff screen and ``--pair`` resolve.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "baseline": {
+          "type": "string"
+        },
+        "candidate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "baseline",
+        "candidate"
+      ],
+      "additionalProperties": false
+    },
+    "RunConfig": {
+      "title": "RunConfig",
+      "description": "Run-wide execution defaults: concurrency and retry.",
+      "type": "object",
+      "properties": {
+        "concurrency": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/RetryConfig"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "RetryConfig": {
+      "title": "RetryConfig",
+      "description": "Retry policy for transport failures.",
+      "type": "object",
+      "properties": {
+        "attempts": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "backoff": {
+          "anyOf": [
+            {
+              "enum": [
+                "constant",
+                "exponential",
+                "linear"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "SelectionConfig": {
+      "title": "SelectionConfig",
+      "description": "The default request selection for headless ``run``/``diff``.",
+      "type": "object",
+      "properties": {
+        "tags": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ReportConfig": {
+      "title": "ReportConfig",
+      "description": "Report defaults: formats to write, the artifact output dir, archive dir.",
+      "type": "object",
+      "properties": {
+        "formats": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "RedactionConfig": {
+      "title": "RedactionConfig",
+      "description": "Redaction options. The declared-secret display masking is always on.",
+      "type": "object",
+      "properties": {
+        "stringMatchBackstop": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null
         }
       },

@@ -164,10 +164,11 @@ def test_servers_become_a_diff_pair(tmp_path: Path) -> None:
     loaded = load_project(manifest)
     assert loaded.project is not None
     environments = loaded.project.spec.environments
-    assert isinstance(environments, dict)
-    pairs = environments["diffPairs"]
-    assert pairs == [
-        {"name": "staging-vs-production", "baseline": "staging", "candidate": "production"}
+    assert environments is not None
+    pairs = environments.diff_pairs
+    assert pairs is not None
+    assert [(pair.name, pair.baseline, pair.candidate) for pair in pairs] == [
+        ("staging-vs-production", "staging", "production")
     ]
 
     # Server template variables and trailing slashes are resolved in the base URLs.

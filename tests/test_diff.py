@@ -89,3 +89,18 @@ def test_a_deeply_nested_body_does_not_raise_recursionerror() -> None:
     # Well beyond the old ~330 crash threshold — must compare, not overflow.
     result = diff(nest(600), nest(600), "exact", [])
     assert result  # produced field diffs instead of crashing
+
+
+def test_a_later_rule_overrides_an_earlier_rule_on_the_same_path() -> None:
+    from comparo.core.diff import State
+    from comparo.core.diff import diff
+    from comparo.core.models import DiffRule
+
+    # An execution override (appended last) re-checks a path the request ignored.
+    rules = [
+        DiffRule(path="$.a", mode="ignore"),
+        DiffRule(path="$.a", mode="exact"),
+    ]
+    result = diff({"a": 1}, {"a": 2}, "exact", rules)
+    a = next(field for field in result if field.path == "$.a")
+    assert a.state is State.DRIFT  # the later 'exact' rule won, so the change is seen
