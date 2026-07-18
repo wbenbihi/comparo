@@ -2566,9 +2566,7 @@ class DiffView(Vertical):
         )
         wrap.border_subtitle = "press o to return to the field diff"
         self.query_one("#compare-content", Static).update(
-            _outbound_diff_view(
-                baseline, candidate, baseline_env, candidate_env, redact=redact
-            )
+            _outbound_diff_view(baseline, candidate, baseline_env, candidate_env, redact=redact)
         )
 
     def _selected_group(self) -> tuple[str, list[tuple[CellDiff, FieldDiff]]] | None:
@@ -6492,8 +6490,11 @@ def _outbound_diff_view(
         if sa != sb:
             diffs.append((label, sa, sb))
 
-    def mapping(prefix: str, a: list[tuple[str, object]] | dict[str, object],
-                b: list[tuple[str, object]] | dict[str, object]) -> None:
+    def mapping(
+        prefix: str,
+        a: list[tuple[str, object]] | dict[str, object],
+        b: list[tuple[str, object]] | dict[str, object],
+    ) -> None:
         am = a if isinstance(a, dict) else dict(a)
         bm = b if isinstance(b, dict) else dict(b)
         ad = {redact(str(k)): redact(str(v)) for k, v in am.items()}

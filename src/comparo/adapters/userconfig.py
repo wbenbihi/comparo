@@ -69,6 +69,7 @@ def load() -> UserConfig:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return UserConfig()
+
     def section(name: str) -> dict[str, object]:
         value = raw.get(name)
         return value if isinstance(value, dict) else {}
