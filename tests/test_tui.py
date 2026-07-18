@@ -1579,23 +1579,65 @@ def test_no_footer_hint_labels_q_as_anything_but_quit() -> None:
     assert not offenders, f"q mislabeled as non-quit in footers: {offenders}"
 
 
-def test_running_body_shows_real_pass_fail_counts_not_fabricated_metrics() -> None:
-    # H13: the live view must reflect real ✓/✗ from the per-cell glyphs and never
-    # the old hardcoded "0 ✗" / "~410ms/cell".
+def test_running_counter_reflects_real_verdicts_from_engine_ticks() -> None:
+    # H-1: the live counter must reflect the real per-cell verdict the engine
+    # reports (ExecutionProgress.ok), not stick at "0 ✓ 0 ✗". The regression was
+    # that the app wrote a verdict-less "●" the ✓/✗ tally could never count, and
+    # an errored (ok=False) cell was painted green. Drive it end-to-end.
     from rich.console import Console
 
-    from comparo.tui.render import _running_body
+    from comparo.core.execution import ExecutionProgress
 
-    glyphs = ["✓", "✓", "✗", "◐"]  # 2 passed, 1 failed, 1 still running
-    group = _running_body("release-gate", done=3, total=4, current=None, recent=[], glyphs=glyphs)
-    console = Console(width=120)
-    with console.capture() as capture:
-        console.print(group)
-    out = capture.get()
-    assert "2 ✓" in out
-    assert "1 ✗" in out
-    assert "410ms" not in out  # the fabricated throughput is gone
-    assert "0 ✗" not in out
+    loaded = load_project(SAMPLE)
+    profile = next(obj for obj in loaded.objects.values() if isinstance(obj, ExecutionProfile))
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("4")  # Execution tab
+            await pilot.pause()
+            view = app.query_one(ExecutionView)
+            view._profile = profile
+            view._show("exec-running")
+            # Two clean passes, one failure (ok=False), then one cell still in flight.
+            view.update_progress(
+                ExecutionProgress("request.get-json", "", 0, 4, done=True, ok=True)
+            )
+            view.update_progress(
+                ExecutionProgress("request.post-json", "", 1, 4, done=True, ok=True)
+            )
+            view.update_progress(
+                ExecutionProgress("request.echo-anything", "", 2, 4, done=True, ok=False)
+            )
+            view.update_progress(ExecutionProgress("request.get-json", "", 3, 4, done=False))
+            await pilot.pause()
+
+            # The app recorded real verdict glyphs, not a verdict-less "●".
+            assert view._plan_glyphs.count("✓") == 2
+            assert view._plan_glyphs.count("✗") == 1
+            assert "●" not in view._plan_glyphs
+
+            # Those real glyphs drive the live counter (rendered from the same state).
+            from comparo.tui.render import _running_body
+
+            body = _running_body(
+                "release-gate",
+                view._done,
+                view._total,
+                view._current,
+                view._recent,
+                view._plan_glyphs,
+            )
+            console = Console(width=120)
+            with console.capture() as capture:
+                console.print(body)
+            out = capture.get()
+            assert "2 ✓" in out
+            assert "1 ✗" in out
+            assert "0 ✗" not in out  # the stuck-at-zero signature is gone
+
+    asyncio.run(go())
 
 
 def test_diff_can_rerun_from_results_after_picking_a_new_pair() -> None:

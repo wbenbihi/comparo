@@ -159,6 +159,7 @@ class ExecutionProgress:
     baseline_ms: int | None = None  # baseline latency, once finished
     candidate_ms: int | None = None  # candidate latency, once finished
     drift: str = ""  # the first drifted field path, once finished (else "")
+    ok: bool = True  # the cell's verdict once finished — no error, assertions hold, no drift
 
 
 async def run_execution(
@@ -271,6 +272,7 @@ async def run_execution(
                             else None
                         ),
                         drift=diff.drifts[0].path if diff is not None and diff.drifts else "",
+                        ok=outcome.ok,
                     )
                 )
             return index, outcome
