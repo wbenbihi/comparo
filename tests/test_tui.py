@@ -23,6 +23,7 @@ from comparo.core.loader import load_project
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
+from comparo.core.streams import parse_sse
 from comparo.tui.app import ComparoApp
 from comparo.tui.app import ConfirmModal
 from comparo.tui.app import DiffView
@@ -38,7 +39,6 @@ from comparo.tui.app import _body_diff_lines
 from comparo.tui.app import _edges
 from comparo.tui.app import _environments
 from comparo.tui.app import _help_body
-from comparo.tui.app import _parse_sse
 from comparo.tui.app import _record_detail
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
@@ -560,7 +560,7 @@ def test_selecting_an_environment_makes_it_the_default() -> None:
 
 def test_parse_sse_splits_events_and_joins_multiline_data() -> None:
     stream = 'event: message\ndata: {"n": 1}\n\nid: 2\ndata: hello\ndata: world\n\n'
-    events = _parse_sse(stream)
+    events = parse_sse(stream)
     assert len(events) == 2
     assert events[0]["event"] == "message"
     assert events[0]["data"] == '{"n": 1}'

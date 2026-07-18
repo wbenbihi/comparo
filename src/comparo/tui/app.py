@@ -122,6 +122,7 @@ from comparo.core.resolve import Sink
 from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
 from comparo.core.secrets import SecretError
+from comparo.core.streams import parse_sse
 from comparo.core.triage import TriageError
 from comparo.core.triage import profile_path
 from comparo.core.triage import silence
@@ -5913,7 +5914,7 @@ def _body_into(
 
 
 def _sse_into(node: TreeNode[object], text: str, redact: Callable[[str], str] = str) -> None:
-    events = _parse_sse(text)
+    events = parse_sse(text)
     if not events:
         node.add_leaf(Text("(no events)", style=_DIM))
         return
@@ -5930,32 +5931,6 @@ def _sse_into(node: TreeNode[object], text: str, redact: Callable[[str], str] = 
         except (ValueError, TypeError):
             # Redact before the 200-char clip so a straddling secret can't leak.
             entry.add_leaf(Text.assemble(("data: ", _DIM), (redact(data)[:200], _TEXT)))
-
-
-def _parse_sse(text: str) -> list[dict[str, str]]:
-    """Parse a Server-Sent-Events stream into a list of ``field: value`` events."""
-    events: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-    data: list[str] = []
-    for line in text.splitlines():
-        if not line:
-            if data or current:
-                current["data"] = "\n".join(data)
-                events.append(current)
-                current, data = {}, []
-            continue
-        if line.startswith(":"):
-            continue
-        field, _, value = line.partition(":")
-        value = value[1:] if value.startswith(" ") else value
-        if field == "data":
-            data.append(value)
-        elif field in ("event", "id", "retry"):
-            current[field] = value
-    if data or current:
-        current["data"] = "\n".join(data)
-        events.append(current)
-    return events
 
 
 class _HtmlOutline(HTMLParser):

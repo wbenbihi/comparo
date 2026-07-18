@@ -22,13 +22,25 @@ def parse_stream(body: bytes, content_type: str) -> list[object]:
     """
     text = body.decode("utf-8", errors="replace")
     if "event-stream" in content_type.lower():
-        return _parse_sse(text)
+        return list(parse_sse(text))
     records = _parse_json_stream(text)
     return records if records else [text]
 
 
-def _parse_sse(text: str) -> list[object]:
-    events: list[object] = []
+def parse_sse(text: str) -> list[dict[str, str]]:
+    """Parse a Server-Sent-Events body into an ordered list of field mappings.
+
+    Each event is a ``{field: value}`` mapping; multiple ``data`` lines join with
+    a newline, a leading space after the colon is stripped, and a ``:`` comment
+    line is ignored. Every field name is preserved.
+
+    Args:
+        text: The decoded SSE body.
+
+    Returns:
+        One mapping per event, in order.
+    """
+    events: list[dict[str, str]] = []
     fields: dict[str, str] = {}
     for line in text.splitlines():
         if not line.strip():

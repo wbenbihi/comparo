@@ -29,6 +29,11 @@ runs/
 *.credentials
 /secrets/
 
+# Ignore Helpers
+# Patterns like file.ignore.txt
+*.ignore.*
+*.deprecated.*
+
 # Editor / OS
 .idea/
 *.swp
