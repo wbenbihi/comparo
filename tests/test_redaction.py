@@ -862,3 +862,29 @@ def test_live_detail_view_masks_a_server_issued_credential_header() -> None:
 
     rendered = "\n".join(labels(tree.root))
     assert "SERVERSIDETOKEN" not in rendered
+
+
+def test_redactor_masks_percent_encoded_and_traversal_is_a_load_error(tmp_path: Path) -> None:
+    # A secret echoed back percent-encoded (a server reflecting the request URL)
+    # must still be masked; and a report path escaping the project is a load error.
+    from comparo.core.diagnostics import LoadError
+
+    redactor = Redactor.from_values({"pa ss/w0rd"})
+    assert "pa%20ss" not in redactor.text("Location: /x?t=pa%20ss%2Fw0rd")
+    assert "pa+ss" not in redactor.text("body=pa+ss%2Fw0rd")
+
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\nmetadata: {name: e, id: environment.e}\n"
+        "spec: {baseUrl: 'http://h'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\nmetadata: {name: p, id: project.p}\n"
+        "spec:\n  data: .\n  report: {output: ../../../../tmp/escape}\n",
+        encoding="utf-8",
+    )
+    import pytest
+
+    with pytest.raises(LoadError) as caught:
+        load_project(tmp_path / "comparo.yaml")
+    assert any("escapes the project root" in d.message for d in caught.value.diagnostics)

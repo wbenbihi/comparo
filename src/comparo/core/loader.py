@@ -361,6 +361,22 @@ def _check_profiles(
             diagnostics.append(
                 Diagnostic(loaded.root, "spec.plugins is not supported yet — remove it")
             )
+        report = loaded.project.spec.report
+        if report is not None:
+            # A report dir/output must stay within the project — an absolute or
+            # ``..`` path would let a config write report files anywhere on disk.
+            root = loaded.root.resolve()
+            for label, value in (("dir", report.dir), ("output", report.output)):
+                if (
+                    isinstance(value, str)
+                    and value
+                    and not (root / value).resolve().is_relative_to(root)
+                ):
+                    diagnostics.append(
+                        Diagnostic(
+                            loaded.root, f"spec.report.{label} '{value}' escapes the project root"
+                        )
+                    )
 
 
 def _find_references(node: object) -> Iterator[_Reference]:

@@ -9,6 +9,7 @@ This module is that single string-match backstop.
 
 import dataclasses
 import json
+import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 
@@ -74,12 +75,16 @@ def _encoded_forms(value: str) -> set[str]:
 
     A detail or body is ``json.dumps``-ed *before* a sink redacts it, so a secret
     containing ``"``/``\``/newline appears escaped (``p@ss\"w0rd``) and a raw
-    substring match would miss it. Registering the JSON-escaped inner form
-    (under both ``ensure_ascii`` settings) closes that leak.
+    substring match would miss it. A secret sent in a URL is percent-encoded, and
+    a server can echo the request URL back into an error/Location. Registering the
+    JSON-escaped and percent-encoded forms closes both leaks.
     """
     forms = {value}
     for ensure_ascii in (False, True):
         forms.add(json.dumps(value, ensure_ascii=ensure_ascii)[1:-1])
+    forms.add(urllib.parse.quote(value))  # path-encoded (leaves "/" as-is)
+    forms.add(urllib.parse.quote(value, safe=""))  # fully encoded ("/" -> %2F)
+    forms.add(urllib.parse.quote_plus(value))  # form-encoded (" " -> "+")
     return forms
 
 
