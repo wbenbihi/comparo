@@ -16,7 +16,7 @@ from pathlib import Path
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
 from comparo.core.secrets import ExecuteSecrets
-from comparo.core.secrets import SecretError
+from comparo.core.secrets import SecretUnavailableError
 
 #: What a redacted secret becomes — the same glyph the DISPLAY sink uses.
 MASK = "••••••"
@@ -54,8 +54,15 @@ def environment_secret_values(environment: Environment, root: Path) -> set[str]:
     for name in sources:
         try:
             value = secrets[name]
-        except SecretError:
+        except SecretUnavailableError:
+            # The source is simply absent (unset $env, exhausted `from` chain): the
+            # value was never available this session, so a response cannot have
+            # echoed it. Skipping it does not shrink the mask over a live secret.
             continue
+        # Any other SecretError — an unreadable or root-escaping $file, i.e. a
+        # declared secret we cannot read *now* though it may have been sent — is
+        # fatal: fail closed rather than silently drop it from the mask and risk
+        # writing that secret to a report or the archive.
         if value:
             values.add(value)
     return values

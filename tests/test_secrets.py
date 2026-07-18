@@ -6,6 +6,7 @@ import pytest
 
 from comparo.core.secrets import ExecuteSecrets
 from comparo.core.secrets import SecretError
+from comparo.core.secrets import SecretUnavailableError
 
 
 def test_env_secret(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -19,10 +20,39 @@ def test_literal_secret(tmp_path: Path) -> None:
     assert secrets["API"] == "lit"
 
 
-def test_missing_env_raises(tmp_path: Path) -> None:
+def test_missing_env_raises_unavailable(tmp_path: Path) -> None:
+    # An unset $env is a *benign* gap (the value was never available), so it
+    # raises the SecretUnavailableError subclass the redactor is allowed to skip.
     secrets = ExecuteSecrets({"API": {"$env": "COMPARO_DEFINITELY_UNSET"}}, tmp_path)
-    with pytest.raises(SecretError):
+    with pytest.raises(SecretUnavailableError):
         _ = secrets["API"]
+
+
+def test_undeclared_secret_is_unavailable(tmp_path: Path) -> None:
+    secrets = ExecuteSecrets({"API": {"$literal": "x"}}, tmp_path)
+    with pytest.raises(SecretUnavailableError):
+        _ = secrets["MISSING"]
+
+
+def test_unreadable_file_is_anomalous_not_unavailable(tmp_path: Path) -> None:
+    # A declared $file we cannot read is *anomalous*: it raises a plain SecretError,
+    # NOT the benign SecretUnavailableError — so the redactor fails closed on it.
+    secrets = ExecuteSecrets({"API": {"$file": "does-not-exist.txt"}}, tmp_path)
+    with pytest.raises(SecretError) as exc:
+        _ = secrets["API"]
+    assert not isinstance(exc.value, SecretUnavailableError)
+
+
+def test_exhausted_from_chain_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("COMPARO_MISS_A", raising=False)
+    monkeypatch.delenv("COMPARO_MISS_B", raising=False)
+    sources: dict[str, object] = {
+        "API": {"from": [{"$env": "COMPARO_MISS_A"}, {"$env": "COMPARO_MISS_B"}]}
+    }
+    with pytest.raises(SecretUnavailableError):
+        _ = ExecuteSecrets(sources, tmp_path)["API"]
 
 
 def test_file_secret_reads_within_the_project(tmp_path: Path) -> None:

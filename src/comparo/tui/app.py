@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import os
 from datetime import datetime
+from functools import cached_property
 from pathlib import Path
 from typing import ClassVar
 from typing import cast
@@ -531,13 +532,11 @@ class ExplorerView(Horizontal):
                     obj,
                     resolved,
                     raw=self.raw,
-                    redact=Redactor.for_project(self.project).text,
+                    redact=_app_redact(self),
                 )
             )
             context.border_title = "PROVENANCE"
-            self._set_context(
-                _render_provenance(resolved.trail, Redactor.for_project(self.project).text)
-            )
+            self._set_context(_render_provenance(resolved.trail, _app_redact(self)))
         elif isinstance(obj, Environment):
             env_id = obj.metadata.id or ""
             detail.border_title = _title(obj, "ENVIRONMENT")
@@ -546,7 +545,7 @@ class ExplorerView(Horizontal):
                 _environment_detail(
                     obj,
                     self.health_reports.get(env_id),
-                    Redactor.for_project(self.project).text,
+                    _app_redact(self),
                     checked=self.health_checked.get(env_id),
                 )
             )
@@ -555,7 +554,7 @@ class ExplorerView(Horizontal):
         elif isinstance(obj, Project):
             detail.border_title = _title(obj, "PROJECT")
             detail.border_subtitle = "the manifest"
-            self._set_detail(_project_detail(obj, Redactor.for_project(self.project).text))
+            self._set_detail(_project_detail(obj, _app_redact(self)))
             context.border_title = "DESCRIPTION"
             self._set_context(_description(obj))
         elif isinstance(obj, Instance):
@@ -565,11 +564,11 @@ class ExplorerView(Horizontal):
             self._set_detail(
                 _json(
                     obj.spec.value if self.raw else value,
-                    Redactor.for_project(self.project).text,
+                    _app_redact(self),
                 )
             )
             titled, content = (
-                ("PROVENANCE", _render_provenance(trail, Redactor.for_project(self.project).text))
+                ("PROVENANCE", _render_provenance(trail, _app_redact(self)))
                 if trail and not self.raw
                 else ("DESCRIPTION", _description(obj))
             )
@@ -578,7 +577,7 @@ class ExplorerView(Horizontal):
         else:
             detail.border_title = _title(obj, type(obj).__name__.upper())
             detail.border_subtitle = ""
-            self._set_detail(_object_detail(obj, Redactor.for_project(self.project).text))
+            self._set_detail(_object_detail(obj, _app_redact(self)))
             context.border_title = "DESCRIPTION"
             self._set_context(_description(obj))
         self._update_footer(obj)
@@ -821,7 +820,7 @@ class RunView(Vertical):
 
     def _prep_label(self, request: Request, cell: MatrixCell) -> Text:
         key = _run_key(request, cell)
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         label = redact(cell.key) or request.metadata.name
         row = Text()
         if not self._cell_enabled(cell):  # turned off globally by the matrix picker
@@ -1177,7 +1176,7 @@ class RunView(Vertical):
     def _populate_details(self, request: Request, cell: MatrixCell) -> None:
         self._focus_cell = cell
         wrap = self.query_one("#col-details")
-        crumb = Redactor.for_project(self.project).text(cell.key) or request.metadata.name
+        crumb = _app_redact(self)(cell.key) or request.metadata.name
         wrap.border_title = Text.from_markup(f"DETAIL [{_DIM}]·[/] {crumb}")
         # RUN-27: the switchable facet strip doubles as the panel subtitle.
         wrap.border_subtitle = _seg_toggle(
@@ -1196,7 +1195,7 @@ class RunView(Vertical):
             self._exec.get(key),
             self._state.get(key, "pending"),
             self._checks.get(key, []),
-            Redactor.for_project(self.project).text,
+            _app_redact(self),
             focus=self._detail_focus,
         )
 
@@ -1311,7 +1310,7 @@ class RunView(Vertical):
         response = execution.response if execution else None
         code = str(response.status) if response else "—"
         time = f"{response.elapsed_ms:.0f}ms" if response else "—"
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         return [
             Text(glyph, style=colour),
             Text(redact(cell.key) or "base", style=_AXIS),
@@ -1716,7 +1715,7 @@ class DiffView(Vertical):
 
     def _prep_label(self, request: Request, cell: MatrixCell) -> Text:
         key = _run_key(request, cell)
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         label = redact(cell.key) or request.metadata.name
         row = Text()
         if not self._cell_enabled(cell):
@@ -1862,7 +1861,7 @@ class DiffView(Vertical):
         return list(profiles.values())
 
     def _silence_prompt(self, path: str, profiles: list[DiffProfile]) -> Text:
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         text = Text(justify="left")
         text.append("Write an ignore rule for ", style=_TEXT)
         text.append(redact(path), style=f"bold {_TEXT_HI}")
@@ -1890,7 +1889,7 @@ class DiffView(Vertical):
         return text
 
     def _write_silence(self, path: str, profiles: list[DiffProfile]) -> None:
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         if redact(path) != path:
             # The field's path itself carries a secret (a server echoed it as a
             # JSON key) — writing it into a tracked diff profile would commit the
@@ -1926,7 +1925,7 @@ class DiffView(Vertical):
         from comparo.adapters.httpx_client import HttpxClient
 
         baseline, candidate = pair
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         client = HttpxClient()
         candidate_client = HttpxClient()
         concurrency, retry = run_settings(self.project)
@@ -2067,7 +2066,7 @@ class DiffView(Vertical):
             self._populate_rules(table)
         else:
             self._populate_fields(table)
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         for cell in errors:
             key = f"error::{cell.cell_key}::{id(cell)}"
             self._row_cells[key] = cell
@@ -2112,14 +2111,14 @@ class DiffView(Vertical):
         self.query_one("#drift-legend", Static).update(legend)
 
     def _rule_example(self) -> str:
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         for path, entries in self._groups:
             field = entries[0][1]
             return f"{redact(path)} · {field.mode} · {_clip(redact(field.detail)) or 'differs'}"
         return "the DiffProfile rules that fired"
 
     def _populate_fields(self, table: DataTable[Text]) -> None:
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         table.add_column("", key="st", width=3)
         table.add_column("FIELD", key="field")
         table.add_column("META", key="meta", width=18)
@@ -2157,7 +2156,7 @@ class DiffView(Vertical):
 
     def _populate_rules(self, table: DataTable[Text]) -> None:
         # One row per fired rule: which mode flagged which field, and the change.
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         table.add_column("", key="st", width=3)
         table.add_column("FIELD", key="field")
         table.add_column("RULE · CHANGE", key="meta")
@@ -2245,7 +2244,7 @@ class DiffView(Vertical):
         baseline_env, candidate_env = self._pair
         baseline = Resolver(self.project, baseline_env).resolve_request(cell.request, matrix_cell)
         candidate = Resolver(self.project, candidate_env).resolve_request(cell.request, matrix_cell)
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         wrap = self.query_one("#col-compare")
         wrap.border_title = Text.from_markup(
             f"COMPARE [{_DIM}]· outbound request · {redact(cell.request.metadata.name)}[/]"
@@ -2282,7 +2281,7 @@ class DiffView(Vertical):
         envs = ""
         if self._pair is not None:
             envs = f" · {self._pair[0].metadata.name} ⇄ {self._pair[1].metadata.name}"
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         wrap.border_title = Text.from_markup(
             f"COMPARE [{_DIM}]·[/] {redact(path)} [{_DIM}]· {request}{envs}[/]"
         )
@@ -2295,7 +2294,7 @@ class DiffView(Vertical):
         """Render the transport/execution error for a cell — request, env, message."""
         wrap = self.query_one("#col-compare")
         wrap.border_title = Text.from_markup(f"COMPARE [{_DIM}]· error[/]")
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         self.query_one("#compare-content", Static).update(
             _diff_error_view(cell, self._pair, redact=redact)
         )
@@ -2305,7 +2304,7 @@ class DiffView(Vertical):
         group = next((g for g in self._skip_groups if g[0] == path), None)
         wrap = self.query_one("#col-compare")
         wrap.border_title = Text.from_markup(f"COMPARE [{_DIM}]· skipped[/]")
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         self.query_one("#compare-content", Static).update(_diff_skip_view(path, group, redact))
 
     def _render_progress(self) -> None:
@@ -2704,7 +2703,7 @@ class ReportView(Vertical):
         table.add_column("", key="st", width=3)
         table.add_column("FIELD", key="field")
         table.add_column("META", key="meta", width=17)
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         groups = _replay_drift_groups(record)
         for path, requests in groups:
             meta = Text(f" ×{len(requests)}", style=_AXIS)
@@ -2737,7 +2736,7 @@ class ReportView(Vertical):
 
     def _render_replay_compare(self, record: ReportRecord) -> None:
         self.query_one("#report-compare-content", Static).update(
-            _replay_compare_well(record, self._unified, Redactor.for_project(self.project).text)
+            _replay_compare_well(record, self._unified, _app_redact(self))
         )
 
     def _show_run_replay(self, record: ReportRecord) -> None:
@@ -2967,7 +2966,14 @@ class SettingsView(Horizontal):
         detail.border_title = label.upper()
         detail.border_subtitle = _SETTINGS_SUBTITLE.get(key, "read-only")
         self.query_one("#settings-content", Static).update(
-            _settings_body(self.project, self._config(), key, self._selfcheck, self._checking)
+            _settings_body(
+                self.project,
+                self._config(),
+                key,
+                self._selfcheck,
+                self._checking,
+                _app_redact(self),
+            )
         )
 
     def _reshow(self) -> None:
@@ -3719,7 +3725,7 @@ class ExecutionView(Vertical):
     def _populate_profiles(self) -> None:
         options = self.query_one("#exec-profile-list", OptionList)
         options.clear_options()
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         for index, profile in enumerate(self._profiles):
             options.add_option(_exec_profile_card(self.project, profile, redact, caret=index == 0))
         self.query_one("#exec-profiles").border_title = Text.from_markup(f"[{_ACCENT}]PROFILES[/]")
@@ -3735,7 +3741,7 @@ class ExecutionView(Vertical):
     def _sync_profile_caret(self, highlighted: int) -> None:
         """Move the accent ``▸`` caret to the highlighted profile card."""
         options = self.query_one("#exec-profile-list", OptionList)
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         for index, profile in enumerate(self._profiles):
             options.replace_option_prompt_at_index(
                 index,
@@ -3765,7 +3771,7 @@ class ExecutionView(Vertical):
         setup.border_title = Text.from_markup(f"SETUP [{_DIM}]· {profile.metadata.name}[/]")
         setup.border_subtitle = "space toggle"
         self.query_one("#exec-setup-content", Static).update(
-            _exec_setup(self.project, profile, Redactor.for_project(self.project).text)
+            _exec_setup(self.project, profile, _app_redact(self))
         )
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
@@ -3837,7 +3843,7 @@ class ExecutionView(Vertical):
 
     def update_progress(self, event: ExecutionProgress) -> None:
         """Advance the running display for one start/finish tick from the engine."""
-        redact = Redactor.for_project(self.project).text
+        redact = _app_redact(self)
         self._total = event.total
         while len(self._plan_glyphs) < event.total:
             self._plan_glyphs.append("○")
@@ -4170,7 +4176,7 @@ class ExecutionView(Vertical):
         path = outcome.diff.drifts[0].path
         profile_id = profile.metadata.id
         file = profile_path(project, profile_id)
-        redact = Redactor.for_project(project).text
+        redact = _app_redact(self)
         prompt = Text()
         prompt.append("Write an ignore rule for ", style=_TEXT)
         prompt.append(redact(path), style=f"bold {_TEXT_HI}")
@@ -4185,7 +4191,7 @@ class ExecutionView(Vertical):
         )
 
     def _do_silence(self, project: LoadedProject, profile_id: str, path: str) -> None:
-        if Redactor.for_project(project).text(path) != path:
+        if _app_redact(self)(path) != path:
             self.app.notify(
                 "That field's path contains a secret value — writing it into a diff "
                 "profile would commit the secret to a tracked file. Nothing written.",
@@ -4298,6 +4304,19 @@ class ComparoApp(App[None]):
         #: Guards the confirm-on-quit dialog against re-entrancy (a second ``q``).
         self._quitting = False
 
+    @cached_property
+    def redactor(self) -> Redactor:
+        """The project's secret-redactor, built once and reused across renders.
+
+        The app holds one project for its whole lifetime (``_reload`` re-checks a
+        failed load but never swaps a live project), so this is safe to cache —
+        every view redacts through the same instance instead of rebuilding it, and
+        re-reading every declared secret file, on each render frame. Only valid
+        once a project is loaded; use ``_app_redact`` at sites that tolerate none.
+        """
+        assert self.project is not None
+        return Redactor.for_project(self.project)
+
     def _handle_exception(self, error: Exception) -> None:
         """On an unhandled crash, show a redacted report with a prefilled issue.
 
@@ -4313,7 +4332,7 @@ class ComparoApp(App[None]):
             if self._exception is None:
                 self._exception = error
                 self._exception_event.set()
-            redact = Redactor.for_project(self.project).text if self.project is not None else str
+            redact = _app_redact(self)
             self.panic(_crash_report(error, redact))
         except Exception:
             # Never let the reporter hide the real crash it is reporting.
@@ -4556,7 +4575,7 @@ class ComparoApp(App[None]):
             run_id=uuid4().hex[:6],
             created=datetime.now().isoformat(timespec="seconds"),
             name=name,
-            redact=Redactor.for_project(self.project).text,
+            redact=_app_redact(self),
         )
 
     def save_execution_report(
@@ -4604,7 +4623,7 @@ class ComparoApp(App[None]):
             diffs,
             run_id=uuid4().hex[:6],
             created=datetime.now().isoformat(timespec="seconds"),
-            redact=Redactor.for_project(self.project).text,
+            redact=_app_redact(self),
         )
         try:
             save_record(directory, record)
@@ -4625,7 +4644,7 @@ class ComparoApp(App[None]):
             cells,
             run_id=uuid4().hex[:6],
             created=datetime.now().isoformat(timespec="seconds"),
-            redact=Redactor.for_project(self.project).text,
+            redact=_app_redact(self),
         )
         try:
             save_record(directory, record)
