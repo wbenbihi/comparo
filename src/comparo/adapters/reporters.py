@@ -36,13 +36,18 @@ class JUnitReporter:
         suite = ElementTree.SubElement(suites, "testsuite", {"name": "comparo diff", **counts})
         for cell in report.cells:
             case = ElementTree.SubElement(
-                suite, "testcase", name=_name(cell.request_id, cell.cell_key), classname="comparo"
+                suite,
+                "testcase",
+                name=_xml_safe(_name(cell.request_id, cell.cell_key)),
+                classname="comparo",
             )
             if cell.state == "drift":
                 failure = ElementTree.SubElement(case, "failure", message="drift")
-                failure.text = "\n".join(f"{drift.path} {drift.detail}" for drift in cell.drifts)
+                failure.text = _xml_safe(
+                    "\n".join(f"{drift.path} {drift.detail}" for drift in cell.drifts)
+                )
             elif cell.state == "error":
-                ElementTree.SubElement(case, "error", message=cell.error or "error")
+                ElementTree.SubElement(case, "error", message=_xml_safe(cell.error or "error"))
         return ElementTree.tostring(suites, encoding="unicode", xml_declaration=True)
 
 
@@ -96,11 +101,14 @@ class MarkdownReporter:
         for cell in report.cells:
             detail = ""
             if cell.state == "drift":
-                detail = "<br>".join(f"`{drift.path}` {drift.detail}" for drift in cell.drifts)
+                detail = "<br>".join(
+                    f"`{_md_cell(drift.path)}` {_md_cell(drift.detail)}" for drift in cell.drifts
+                )
             elif cell.state == "error":
-                detail = cell.error or ""
+                detail = _md_cell(cell.error or "")
             lines.append(
-                f"| `{cell.request_id}` | {cell.cell_key} | {_ICONS[cell.state]} | {detail} |"
+                f"| `{_md_cell(cell.request_id)}` | {_md_cell(cell.cell_key)} "
+                f"| {_ICONS[cell.state]} | {detail} |"
             )
         gate = "**PASS** ✅" if report.passed else "**FAIL** ❌"
         summary = (
@@ -143,5 +151,49 @@ def _result(text: str, location: str) -> dict[str, object]:
         "ruleId": "drift",
         "level": "error",
         "message": {"text": text},
-        "locations": [{"logicalLocations": [{"fullyQualifiedName": location}]}],
+        # GitHub code-scanning drops any result without a
+        # ``physicalLocation.artifactLocation.uri``. A RunReport has no source
+        # file per cell, so this is a best-effort synthetic anchor: the project
+        # config file, with the request/cell carried as the logical location.
+        "locations": [
+            {
+                "physicalLocation": {"artifactLocation": {"uri": "comparo.yaml"}},
+                "logicalLocations": [{"fullyQualifiedName": location}],
+            }
+        ],
     }
+
+
+def _xml_safe(text: str) -> str:
+    """Drop characters that are not well-formed in XML 1.0.
+
+    ElementTree writes control characters verbatim even though they make the
+    document not-well-formed, and a server controls the JSON keys/values that
+    reach a drift path or an error message. Keep tab/newline/carriage-return and
+    drop the rest of the forbidden range so the JUnit document stays parseable.
+    """
+    return "".join(char for char in text if _xml_ok(ord(char)))
+
+
+def _xml_ok(code: int) -> bool:
+    """Whether *code* is a codepoint allowed in a well-formed XML 1.0 document."""
+    if code in (0x09, 0x0A, 0x0D):
+        return True
+    if 0x20 <= code <= 0xD7FF:
+        return True
+    if 0xE000 <= code <= 0xFFFD:
+        return True
+    return 0x10000 <= code <= 0x10FFFF
+
+
+def _md_cell(text: str) -> str:
+    """Escape *text* for a Markdown table cell.
+
+    A raw ``|`` starts a new column and a newline ends the row, so a server-
+    controlled field path or detail could shatter the table; escape the pipe and
+    fold every newline into a ``<br>``.
+    """
+    escaped = text.replace("|", "\\|")
+    for newline in ("\r\n", "\r", "\n"):
+        escaped = escaped.replace(newline, "<br>")
+    return escaped

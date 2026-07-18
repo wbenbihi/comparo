@@ -22,6 +22,11 @@ from comparo.core.execution import ExecutionResult
 from comparo.core.redaction import mask_credential_header
 from comparo.core.report import diff_gate
 
+#: Schema version stamped into every saved record so a future format change is
+#: detectable. Bump when the on-disk shape changes; a reader may then branch on
+#: it. Legacy files written before this field existed load as version ``0``.
+ARCHIVE_VERSION = 1
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class AssertionLine:
@@ -97,6 +102,8 @@ class ReportRecord:
     requests: list[RequestBreakdown]
     #: Per-cell detail for a faithful replay (body diff, metrics, detail tree).
     cells: list[CellRecord] = dataclasses.field(default_factory=list)
+    #: On-disk schema version; carried so future code can branch on the format.
+    version: int = ARCHIVE_VERSION
 
 
 # ── building records ──────────────────────────────────────────────────────────
@@ -417,12 +424,36 @@ def archive_dir(root: Path, data: str | None, report_config: object) -> Path:
     return base / name
 
 
-def save_record(directory: Path, record: ReportRecord) -> Path:
-    """Write *record* to ``<directory>/<id>.json``, creating the directory."""
+def save_record(directory: Path, record: ReportRecord, keep: int | None = None) -> Path:
+    """Write *record* to ``<directory>/<id>.json``, creating the directory.
+
+    When *keep* is not ``None``, prune the archive to the newest *keep* records
+    after writing (see :func:`prune`); the default ``None`` leaves every older
+    record in place — unchanged behavior for callers that omit it.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{record.id}.json"
     path.write_text(json.dumps(_to_dict(record), indent=2), encoding="utf-8")
+    if keep is not None:
+        prune(directory, keep)
     return path
+
+
+def prune(directory: Path, keep: int) -> None:
+    """Delete all but the newest *keep* records in *directory*, by created time.
+
+    Records are ordered newest-first by their ``created`` timestamp (reusing
+    :func:`list_records`); every record past the first *keep* has its
+    ``<id>.json`` file unlinked. A non-positive *keep* removes every loadable
+    record. Corrupt files that :func:`list_records` skips are left untouched.
+    """
+    kept = max(keep, 0)
+    for record in list_records(directory)[kept:]:
+        path = directory / f"{record.id}.json"
+        try:
+            path.unlink()
+        except OSError:
+            continue
 
 
 def list_records(directory: Path) -> list[ReportRecord]:
@@ -550,4 +581,6 @@ def _from_dict(data: dict[str, object]) -> ReportRecord:
         candidate_assertions=_summary_from(data.get("candidate_assertions")),
         requests=requests,
         cells=cells,
+        # Legacy files predate the version field and load as version 0.
+        version=_as_int(data.get("version")),
     )

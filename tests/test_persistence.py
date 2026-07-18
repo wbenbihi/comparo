@@ -11,6 +11,7 @@ import dataclasses
 import json
 from pathlib import Path
 
+from comparo.core.archive import ARCHIVE_VERSION
 from comparo.core.archive import AssertionLine
 from comparo.core.archive import AssertionSummary
 from comparo.core.archive import CellRecord
@@ -18,6 +19,7 @@ from comparo.core.archive import ReportRecord
 from comparo.core.archive import RequestBreakdown
 from comparo.core.archive import list_records
 from comparo.core.archive import load_record
+from comparo.core.archive import prune
 from comparo.core.archive import save_record
 from comparo.core.redaction import MASK
 from comparo.core.redaction import Redactor
@@ -96,6 +98,54 @@ def test_a_record_from_a_future_schema_still_loads(tmp_path: Path) -> None:
     loaded = load_record(tmp_path / "r1.json")
     assert loaded.id == "r1"
     assert loaded.cells[0].request == "users"
+
+
+def test_a_saved_record_stamps_and_round_trips_its_version(tmp_path: Path) -> None:
+    # The archive stamps a schema version so a future format change is
+    # detectable; a freshly written record carries the current ARCHIVE_VERSION
+    # on disk and reads it back unchanged.
+    record = _record("r1", "2026-07-18T10:00:00Z")
+    assert record.version == ARCHIVE_VERSION
+    save_record(tmp_path, record)
+    raw = json.loads((tmp_path / "r1.json").read_text(encoding="utf-8"))
+    assert raw["version"] == ARCHIVE_VERSION
+    assert load_record(tmp_path / "r1.json").version == ARCHIVE_VERSION
+
+
+def test_a_legacy_record_without_a_version_loads_as_version_zero(tmp_path: Path) -> None:
+    # Backward tolerance: a file written before the version field existed lacks
+    # the key and must load as version 0, with every other field still intact.
+    save_record(tmp_path, _record("r1", "2026-07-18T10:00:00Z"))
+    raw = json.loads((tmp_path / "r1.json").read_text(encoding="utf-8"))
+    del raw["version"]
+    (tmp_path / "r1.json").write_text(json.dumps(raw), encoding="utf-8")
+    loaded = load_record(tmp_path / "r1.json")
+    assert loaded.version == 0
+    assert loaded.id == "r1"
+    assert loaded.cells[0].request == "users"
+
+
+def test_prune_keeps_only_the_newest_records(tmp_path: Path) -> None:
+    # Retention: .reports/ is bounded by pruning to the newest `keep` records by
+    # created timestamp; older files are unlinked, newer ones stay.
+    save_record(tmp_path, _record("r1", "2026-07-15T09:00:00Z"))
+    save_record(tmp_path, _record("r2", "2026-07-16T09:00:00Z"))
+    save_record(tmp_path, _record("r3", "2026-07-17T09:00:00Z"))
+    save_record(tmp_path, _record("r4", "2026-07-18T09:00:00Z"))
+    prune(tmp_path, keep=2)
+    assert {record.id for record in list_records(tmp_path)} == {"r3", "r4"}
+    assert not (tmp_path / "r1.json").exists()
+    assert not (tmp_path / "r2.json").exists()
+
+
+def test_save_record_prunes_when_keep_is_passed(tmp_path: Path) -> None:
+    # The optional `keep` on save_record wires in retention: after writing, only
+    # the newest `keep` records remain. Omitting it leaves everything in place.
+    save_record(tmp_path, _record("r1", "2026-07-15T09:00:00Z"))
+    save_record(tmp_path, _record("r2", "2026-07-16T09:00:00Z"))
+    save_record(tmp_path, _record("r3", "2026-07-17T09:00:00Z"), keep=2)
+    assert {record.id for record in list_records(tmp_path)} == {"r2", "r3"}
+    assert not (tmp_path / "r1.json").exists()
 
 
 def test_redaction_masks_the_longer_secret_whole_when_one_contains_another() -> None:
