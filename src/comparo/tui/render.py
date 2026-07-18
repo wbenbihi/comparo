@@ -69,6 +69,7 @@ from comparo.core.models import Schema
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
 from comparo.core.redaction import Redactor
+from comparo.core.redaction import mask_credential_header
 from comparo.core.refs import ref_id as _ref_id
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
@@ -1039,7 +1040,8 @@ def _build_report_tree(
         node = root.add(Text("RESPONSE", style=f"bold {_LABEL}"), expand=True)
         headers = node.add(Text("headers", style=_DIM), expand=headers_only)
         for key, value in response.headers[:24]:
-            headers.add_leaf(Text.assemble((f"{redact(key)}: ", _DIM), (redact(str(value)), _TEXT)))
+            shown = redact(mask_credential_header(str(key), str(value)))
+            headers.add_leaf(Text.assemble((f"{redact(key)}: ", _DIM), (shown, _TEXT)))
         if not headers_only:
             body = node.add(Text("body", style=_DIM), expand=len(response.body) < 800)
             _body_into(body, response.body, _content_type(response.headers), redact)
@@ -1071,7 +1073,8 @@ def _raw_detail_into(
         node = root.add(Text("RAW RESPONSE", style=f"bold {_LABEL}"), expand=True)
         node.add_leaf(Text(f"HTTP {response.status}", style=_TEXT_HI))
         for key, value in response.headers[:24]:
-            node.add_leaf(Text(f"{redact(str(key))}: {redact(str(value))}", style=_DIM))
+            shown = redact(mask_credential_header(str(key), str(value)))
+            node.add_leaf(Text(f"{redact(str(key))}: {shown}", style=_DIM))
         raw = response.body.decode("utf-8", "replace") if response.body else ""
         body = node.add(Text("body", style=_DIM), expand=True)
         for line in redact(raw).splitlines()[:200] or [""]:

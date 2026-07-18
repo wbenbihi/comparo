@@ -219,9 +219,9 @@ A single HTTP header. Appears in `Environment.spec.headers` and `HealthCheck.hea
 The root manifest — run-wide defaults. Exactly one `Project` object per tree, and the only
 kind with **no** `metadata.id`.
 
-`spec` accepts the following top-level keys. Their inner shapes are consumed by the run
-engine, the reporters, and the front-ends rather than validated by the envelope, so treat the
-sub-fields below as the conventional structure the sample project uses.
+`spec` accepts the following top-level keys. Their inner shapes are now **strict** (each is a
+`forbid_unknown_fields` struct, so a mistyped key like `concurency` or `difPairs` is a hard load
+error) and are consumed by the run engine, the reporters, and the front-ends.
 
 | Field        | YAML key       | Description                                                                       |
 | ------------ | -------------- | --------------------------------------------------------------------------------- |
@@ -240,14 +240,13 @@ sub-fields below as the conventional structure the sample project uses.
 - `diffPairs` — a list of `{name, baseline, candidate}` entries. `comparo diff --pair <name>`
   replays every request against `baseline` and `candidate` and diffs the results.
 
-**`report`** configures where saved output lands. It is a free-form block; two keys are read:
+**`report`** configures reporting. It is a strict block (unknown keys are a load error); its keys:
 
-- `dir` — the directory the TUI writes saved run reports (the [archive](#saved-reports-the-archive))
-  to, resolved under `spec.data`. Defaults to `.reports`.
-- `output` — the directory the TUI's Markdown export writes to. Defaults to `reports`.
-
-The reporter *formats* a `comparo diff` writes are chosen with the CLI `--report` flag (see the
-[CLI reference](cli.md#report-formats)), not from the manifest — a `report.formats` key is not consumed.
+- `dir` — the directory saved run reports (the [archive](#saved-reports-the-archive)) go to,
+  resolved under `spec.data`. Defaults to `.reports`.
+- `output` — the directory rendered report files go to. Defaults to `reports`.
+- `formats` — the reporter formats `comparo diff` writes when `--report` is omitted; the CLI flag
+  overrides it. Recognized: `junit`, `sarif`, `json`, `markdown`.
 
 ```yaml
 apiVersion: comparo/v1
@@ -948,8 +947,10 @@ Resolution runs in one of two sinks:
 
 Values remember their **origin** — `literal`, `variable`, `secret`, `instance`, `matrix`, or
 `file` — and `secret` and `file` origins are *tainted*: masked in display and never persisted.
-The project-level `redaction.stringMatchBackstop` option adds a safety net, masking any string
-equal to a known secret value even if it arrived through an untainted path.
+The `redaction.stringMatchBackstop` safety net — masking any string equal to a known secret
+value even if it arrived through an untainted path — is **always on**: it is a security floor
+that cannot be disabled (setting it `false` is accepted but never turns masking off, since doing
+so would write a server-echoed secret to disk). The key is retained for forward-compatibility.
 
 ---
 

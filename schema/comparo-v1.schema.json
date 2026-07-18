@@ -1300,7 +1300,8 @@
         "concurrency": {
           "anyOf": [
             {
-              "type": "integer"
+              "type": "integer",
+              "minimum": 1
             },
             {
               "type": "null"
@@ -1331,7 +1332,8 @@
         "attempts": {
           "anyOf": [
             {
-              "type": "integer"
+              "type": "integer",
+              "minimum": 1
             },
             {
               "type": "null"

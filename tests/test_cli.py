@@ -171,7 +171,9 @@ def test_manifest_selection_filters_the_default_request_set(tmp_path: Path) -> N
     assert [r.metadata.id for r in _select_requests(loaded, None)] == ["request.a"]
 
 
-def test_redaction_backstop_toggle_disables_the_report_backstop(tmp_path: Path) -> None:
+def test_redaction_backstop_is_an_unconditional_floor(tmp_path: Path) -> None:
+    # Security floor: stringMatchBackstop:false must NOT disable masking — a
+    # persisted sink would otherwise write a server-echoed secret to disk.
     from comparo.core.loader import load_project
     from comparo.core.redaction import Redactor
 
@@ -188,8 +190,8 @@ def test_redaction_backstop_toggle_disables_the_report_backstop(tmp_path: Path) 
         encoding="utf-8",
     )
     loaded = load_project(tmp_path / "comparo.yaml")
-    assert Redactor.for_project(loaded).values == ()  # backstop off → identity redactor
-    assert "SUPERSECRETVALUE" in Redactor.for_project(loaded).text("SUPERSECRETVALUE")  # unmasked
+    # Even with the toggle off, the redactor still masks (the floor holds).
+    assert Redactor.for_project(loaded).text("echo=SUPERSECRETVALUE") == "echo=••••••"
 
 
 def test_validate_fails_on_a_manifest_with_no_objects(tmp_path: Path) -> None:

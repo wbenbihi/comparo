@@ -159,8 +159,9 @@ def _compare(
     try:
         baseline_body = json.loads(baseline_response.body)
         candidate_body = json.loads(candidate_response.body)
-    except ValueError:
-        # Empty or non-JSON responses (e.g. a status-only check) diff as raw bytes.
+    except (ValueError, RecursionError):
+        # Empty or non-JSON responses (e.g. a status-only check) diff as raw bytes;
+        # a pathologically deep JSON body (RecursionError) also falls back to raw.
         return _raw_compare(
             request,
             key,

@@ -15,6 +15,7 @@ import httpx
 
 from comparo.core.http import HttpError
 from comparo.core.http import HttpResponse
+from comparo.core.http import HttpTimeoutError
 from comparo.core.http import TimeoutBudget
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.streams import parse_stream
@@ -141,7 +142,7 @@ class HttpxClient:
                     await response.aclose()
         except TimeoutError as error:
             message = f"read exceeded the {total:g}s total deadline"
-            raise HttpError(message) from error
+            raise HttpTimeoutError(message) from error
         return response.status_code, list(response.headers.items()), b"".join(body_chunks)
 
     async def aclose(self) -> None:

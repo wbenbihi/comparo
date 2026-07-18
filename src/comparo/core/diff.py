@@ -96,8 +96,9 @@ def _walk(
     if mode == "tolerance":
         return [_tolerance(rendered, baseline, candidate, rule)]
     if depth >= _MAX_DEPTH:
-        # Too deep to recurse safely — compare the remaining subtree as one leaf.
-        return [_leaf(rendered, baseline == candidate, mode, baseline, candidate)]
+        # Too deep to recurse safely, AND too deep to compare/render as a leaf
+        # (``==`` and ``json.dumps`` would recurse just as far) — mark it uncompared.
+        return [FieldDiff(rendered, State.SKIP, mode, "not compared: max depth exceeded")]
     return _structural(baseline, candidate, path, rules, default_mode, mode, rule, depth)
 
 

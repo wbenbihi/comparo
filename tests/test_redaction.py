@@ -830,3 +830,35 @@ def test_export_masks_a_server_issued_set_cookie(tmp_path: Path) -> None:
     env, entry = _run_entry(loaded, response)
     out = export_run(loaded, env, [entry])
     assert "SERVERSIDETOKEN" not in out
+
+
+def test_live_detail_view_masks_a_server_issued_credential_header() -> None:
+    # R5: a Set-Cookie the server issues (never declared) must be masked in the
+    # TUI RESPONSE header view by the credential-header policy, not just on disk.
+    from textual.widgets import Tree
+
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.matrix import MatrixCell
+    from comparo.core.models import Environment
+    from comparo.tui.render import _build_report_tree
+
+    loaded = load_project(SAMPLE)
+    request = _request(loaded)
+    environment = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    redact = Redactor(values=()).text  # no declared secrets — only the policy can mask it
+    response = HttpResponse(200, [("set-cookie", "session=SERVERSIDETOKEN-9f2c")], b"{}", 5.0)
+    execution = Execution(request=request, environment=environment, cell_key="", response=response)
+    tree: Tree[object] = Tree("root")
+    _build_report_tree(
+        tree, loaded, environment, request, MatrixCell("", ()), execution, "ok", [], redact
+    )
+
+    def labels(node: object) -> list[str]:
+        out = [str(node.label)]  # type: ignore[attr-defined]
+        for child in node.children:  # type: ignore[attr-defined]
+            out += labels(child)
+        return out
+
+    rendered = "\n".join(labels(tree.root))
+    assert "SERVERSIDETOKEN" not in rendered

@@ -233,3 +233,31 @@ def test_execute_all_honors_configured_concurrency() -> None:
     # sample-project declares run.concurrency: 4
     concurrency, _ = run_settings(loaded)
     assert concurrency == 4
+
+
+def test_retry_does_not_reattempt_a_deadline_timeout() -> None:
+    # R3: a deadline timeout must not be retried — retrying would multiply the
+    # wall-clock bound the deadline exists to enforce.
+    from comparo.core.http import HttpTimeoutError
+    from comparo.core.models import RetryConfig
+
+    class _TimeoutClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def send(self, request: ResolvedRequest, timeout: TimeoutBudget) -> HttpResponse:
+            self.calls += 1
+            raise HttpTimeoutError("deadline")
+
+        async def aclose(self) -> None:
+            return None
+
+    loaded = load_project(SAMPLE)
+    env = select_environment(loaded, "local")
+    request = loaded.objects["request.get-json"]
+    assert isinstance(request, Request)
+    client = _TimeoutClient()
+    retry = RetryConfig(attempts=3, backoff="constant")
+    result = asyncio.run(execute_request(loaded, env, request, client, retry=retry))
+    assert not result.ok
+    assert client.calls == 1  # tried once, not three times

@@ -12,6 +12,7 @@ import dataclasses
 from comparo.core.http import HttpClient
 from comparo.core.http import HttpError
 from comparo.core.http import HttpResponse
+from comparo.core.http import HttpTimeoutError
 from comparo.core.http import TimeoutBudget
 from comparo.core.interpolation import InterpolationError
 from comparo.core.loader import LoadedProject
@@ -56,6 +57,10 @@ async def _send_with_retry(
     for attempt in range(attempts):
         try:
             return await client.send(resolved, timeout)  # type: ignore[arg-type]
+        except HttpTimeoutError:
+            # A deadline timeout is never retried — retrying would multiply the
+            # wall-clock bound the deadline exists to give.
+            raise
         except HttpError as error:
             last = error
             if attempt + 1 < attempts and retry is not None:

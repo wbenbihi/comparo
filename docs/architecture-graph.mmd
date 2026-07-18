@@ -1,0 +1,101 @@
+graph TD
+    classDef hot fill:#e0566b,color:#fff,stroke:#b0303f
+    classDef port fill:#6d9eff,color:#0d1017,stroke:#3f6fd0
+    classDef leaf fill:#48a97f,color:#0d1017,stroke:#2f7a5a
+
+    subgraph CLI["cli  ·  thin front-end (no engine logic)"]
+        cliapp["app<br/>992 LOC"]
+    end
+
+    subgraph TUI["tui  ·  terminal UI  (split from one 8.1k-line god file)"]
+        tapp["app<br/>19 views + ComparoApp · 4571"]
+        trender["render<br/>137 helpers + 2 classes · 3316"]
+        ttokens["tokens<br/>63 constants · 611"]
+        ttheme["theme"]
+        tapp --> trender
+        tapp --> ttokens
+        tapp --> ttheme
+        trender --> ttokens
+        trender -. "TYPE_CHECKING only<br/>(no runtime cycle)" .-> tapp
+    end
+
+    subgraph ADAPTERS["adapters  ·  I/O implementations of core ports"]
+        httpx["httpx_client<br/>(the only httpx import)"]:::port
+        reporters
+        openapi
+        doctor["doctor<br/>(never-leak self-check)"]
+        updates
+        userconfig
+    end
+
+    subgraph CORE["core  ·  pure engine  —  imports no HTTP library (CI-enforced)"]
+        models["models<br/>&#8592;21 fan-in"]:::hot
+        loader["loader<br/>&#8592;16 fan-in"]:::hot
+        resolve["resolve<br/>&#8592;11"]
+        refs["refs"]
+        diagnostics
+        provenance
+        interpolation
+        matrix
+        schema
+        secrets
+        redaction
+        curl
+        http["http<br/>(HttpClient port)"]:::port
+        streams
+        execute
+        execution
+        compare
+        diff
+        assertions
+        checks["checks<br/>(2nd validation engine)"]
+        report
+        archive
+        export
+        triage
+        health
+
+        loader --> models
+        loader --> diagnostics
+        loader --> refs
+        refs --> loader
+        interpolation --> provenance
+        resolve --> interpolation
+        resolve --> matrix
+        resolve --> secrets
+        matrix --> loader
+        redaction --> secrets
+        http --> models
+        http --> resolve
+        execute --> http
+        execute --> resolve
+        execute --> matrix
+        compare --> diff
+        compare --> execute
+        execution --> compare
+        execution --> assertions
+        execution --> execute
+        assertions --> execute
+        checks --> execute
+        report --> compare
+        archive --> execution
+        archive --> report
+        archive --> redaction
+        export --> resolve
+        export --> redaction
+        curl --> resolve
+        health --> http
+        triage --> loader
+    end
+
+    cliapp --> TUI
+    cliapp --> ADAPTERS
+    cliapp --> CORE
+    tapp --> ADAPTERS
+    tapp --> CORE
+    trender --> CORE
+    httpx --> http
+    httpx --> streams
+    reporters --> report
+    openapi --> models
+    doctor --> archive

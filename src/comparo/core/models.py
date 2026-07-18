@@ -166,14 +166,16 @@ class EnvironmentsConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=T
 class RetryConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     """Retry policy for transport failures."""
 
-    attempts: int | None = None
+    attempts: Annotated[int, msgspec.Meta(ge=1)] | None = None
     backoff: Literal["constant", "linear", "exponential"] | None = None
 
 
 class RunConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     """Run-wide execution defaults: concurrency and retry."""
 
-    concurrency: int | None = None
+    #: In-flight request cap; must be ≥ 1 (a negative/zero value is a load error,
+    #: not a crashing ``asyncio.Semaphore(-1)`` at run time).
+    concurrency: Annotated[int, msgspec.Meta(ge=1)] | None = None
     retry: RetryConfig | None = None
 
 

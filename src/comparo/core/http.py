@@ -23,6 +23,14 @@ class HttpError(Exception):
     """A transport-level failure, raised by adapters and caught by the engine."""
 
 
+class HttpTimeoutError(HttpError):
+    """A request that exceeded its deadline.
+
+    Distinct from a generic transport error so a retry never re-attempts it —
+    retrying would multiply the wall-clock bound the deadline exists to give.
+    """
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class HttpResponse:
     """A response materialized from the wire.
