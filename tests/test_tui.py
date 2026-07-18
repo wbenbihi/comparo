@@ -35,11 +35,11 @@ from comparo.tui.app import NavBar
 from comparo.tui.app import ReportView
 from comparo.tui.app import RunView
 from comparo.tui.app import SettingsView
-from comparo.tui.app import _body_diff_lines
-from comparo.tui.app import _edges
-from comparo.tui.app import _environments
-from comparo.tui.app import _help_body
-from comparo.tui.app import _record_detail
+from comparo.tui.render import _body_diff_lines
+from comparo.tui.render import _edges
+from comparo.tui.render import _environments
+from comparo.tui.render import _help_body
+from comparo.tui.render import _record_detail
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
 
@@ -105,9 +105,9 @@ def test_help_never_lists_a_key_twice() -> None:
 
 def test_diff_footer_swaps_between_prepare_and_results_keys() -> None:
     # KEY-05: the persistent footer must match the active diff state, not mix them.
-    from comparo.tui.app import _DIFF_PREPARE_KEYS
-    from comparo.tui.app import _DIFF_RESULTS_KEYS
     from comparo.tui.app import DiffView
+    from comparo.tui.tokens import _DIFF_PREPARE_KEYS
+    from comparo.tui.tokens import _DIFF_RESULTS_KEYS
 
     loaded = load_project(SAMPLE)
 
@@ -245,8 +245,8 @@ def test_matrix_and_env_keys_are_inert_outside_prepare() -> None:
 
 def test_instance_footer_omits_the_request_only_curl_key() -> None:
     # KEY-05: 'p' (curl) is inert on an Instance, so its footer must not show it.
-    from comparo.tui.app import _INSTANCE_KEYS
-    from comparo.tui.app import _RESOLVE_KEYS
+    from comparo.tui.tokens import _INSTANCE_KEYS
+    from comparo.tui.tokens import _RESOLVE_KEYS
 
     assert "p" not in {k for k, _ in _INSTANCE_KEYS}
     assert "p" in {k for k, _ in _RESOLVE_KEYS}  # requests keep it
@@ -288,7 +288,7 @@ def test_diff_well_is_a_full_width_rounded_banded_panel() -> None:
 
     from comparo.core.compare import CellDiff
     from comparo.core.diff import diff
-    from comparo.tui.app import _diff_body_view
+    from comparo.tui.render import _diff_body_view
 
     loaded = load_project(Path(__file__).parent.parent / "examples" / "canary-project")
     request = loaded.objects["request.basic-auth"]
@@ -317,7 +317,7 @@ def test_live_diff_view_masks_a_secret_echoed_into_the_response() -> None:
 
     from comparo.core.compare import CellDiff
     from comparo.core.redaction import Redactor
-    from comparo.tui.app import _diff_body_view
+    from comparo.tui.render import _diff_body_view
 
     secret = "cG9zdG1hbjpwYXNzd29yZA=="  # the canary BASIC_AUTH literal
     loaded = load_project(Path(__file__).parent.parent / "examples" / "canary-project")
@@ -961,7 +961,7 @@ def test_execution_launch_lists_profiles_with_a_counted_plan() -> None:
     # listed, with the SETUP plan preview counting the cells it will run.
     from textual.widgets import OptionList
 
-    from comparo.tui.app import _exec_setup
+    from comparo.tui.render import _exec_setup
 
     loaded = load_project(SAMPLE)
     profiles = [o for o in loaded.objects.values() if isinstance(o, ExecutionProfile)]
@@ -1153,7 +1153,7 @@ def test_pad_cells_aligns_by_display_width_not_len() -> None:
     # same/drift/skip bars line up regardless of name length or wide Unicode.
     from rich.cells import cell_len
 
-    from comparo.tui.app import _pad_cells
+    from comparo.tui.render import _pad_cells
 
     assert cell_len(_pad_cells("Checkout", 14)) == 14
     assert cell_len(_pad_cells("Price quote", 14)) == 14
@@ -1273,7 +1273,7 @@ def test_deep_dive_never_shows_drift_as_a_naked_count() -> None:
     from comparo.core.archive import AssertionSummary
     from comparo.core.archive import ReportRecord
     from comparo.core.archive import RequestBreakdown
-    from comparo.tui.app import _breakdown_legend
+    from comparo.tui.render import _breakdown_legend
 
     empty = AssertionSummary(0, 0, 0, [])
     legacy = ReportRecord(
@@ -1441,7 +1441,7 @@ def test_run_detail_focus_carves_sections_and_adds_raw() -> None:
     from comparo.core.execute import Execution
     from comparo.core.http import HttpResponse
     from comparo.core.matrix import expand
-    from comparo.tui.app import _build_report_tree
+    from comparo.tui.render import _build_report_tree
 
     loaded = load_project(SAMPLE)
     request = next(o for o in loaded.objects.values() if isinstance(o, Request))
@@ -1483,7 +1483,7 @@ def test_outbound_diff_flags_url_drift_and_never_leaks_a_secret() -> None:
     from rich.console import Console
 
     from comparo.core.resolve import ResolvedRequest
-    from comparo.tui.app import _outbound_diff_view
+    from comparo.tui.render import _outbound_diff_view
 
     loaded = load_project(SAMPLE)
     env_a, env_b = _environments(loaded)[:2]
@@ -1560,7 +1560,7 @@ def test_running_body_shows_real_pass_fail_counts_not_fabricated_metrics() -> No
     # the old hardcoded "0 ✗" / "~410ms/cell".
     from rich.console import Console
 
-    from comparo.tui.app import _running_body
+    from comparo.tui.render import _running_body
 
     glyphs = ["✓", "✓", "✗", "◐"]  # 2 passed, 1 failed, 1 still running
     group = _running_body("release-gate", done=3, total=4, current=None, recent=[], glyphs=glyphs)
@@ -1629,7 +1629,7 @@ def test_run_env_is_pinned_and_survives_a_default_env_change() -> None:
     # H14: a run saves/labels against the env it executed on, not whatever the
     # default happens to be later. Pinning _run_env decouples the two.
 
-    from comparo.tui.app import _app_env
+    from comparo.tui.render import _app_env
 
     loaded = load_project(SAMPLE)
 

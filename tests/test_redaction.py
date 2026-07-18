@@ -62,7 +62,7 @@ def test_run_detail_tree_masks_a_secret_echoed_into_the_response() -> None:
     from comparo.core.http import HttpResponse
     from comparo.core.matrix import MatrixCell
     from comparo.core.models import Environment
-    from comparo.tui.app import _build_report_tree
+    from comparo.tui.render import _build_report_tree
 
     loaded = load_project(SAMPLE)
     request = _request(loaded)
@@ -102,7 +102,7 @@ def test_run_tree_body_redacts_before_truncating_at_every_boundary() -> None:
     from comparo.core.http import HttpResponse
     from comparo.core.matrix import MatrixCell
     from comparo.core.models import Environment
-    from comparo.tui.app import _build_report_tree
+    from comparo.tui.render import _build_report_tree
 
     loaded = load_project(SAMPLE)
     request = _request(loaded)
@@ -141,7 +141,7 @@ def test_a_secret_echoed_as_a_json_key_is_masked_on_disk_and_screen() -> None:
     from comparo.core.archive import record_from_diff
     from comparo.core.compare import CellDiff
     from comparo.core.diff import diff
-    from comparo.tui.app import _diff_body_view
+    from comparo.tui.render import _diff_body_view
 
     loaded = load_project(SAMPLE)
     request = _request(loaded)
@@ -199,11 +199,11 @@ def test_execution_screen_renders_mask_a_secret_echoed_as_a_key_or_path() -> Non
     from comparo.core.diff import diff
     from comparo.core.execution import CellOutcome
     from comparo.core.execution import ExecutionResult
-    from comparo.tui.app import _cell_verdict
-    from comparo.tui.app import _diff_body_view
-    from comparo.tui.app import _diff_skip_view
-    from comparo.tui.app import _drift_change
-    from comparo.tui.app import _exec_diff_legend
+    from comparo.tui.render import _cell_verdict
+    from comparo.tui.render import _diff_body_view
+    from comparo.tui.render import _diff_skip_view
+    from comparo.tui.render import _drift_change
+    from comparo.tui.render import _exec_diff_legend
 
     loaded = load_project(SAMPLE)
     request = _request(loaded)
@@ -274,7 +274,7 @@ def test_assertion_label_carrying_a_secret_is_masked_on_disk_and_screen() -> Non
     # (.reports/*.json) and on the Execution screen — not only the offending detail.
     from rich.console import Console
 
-    from comparo.tui.app import _exec_assert_body
+    from comparo.tui.render import _exec_assert_body
 
     loaded = load_project(SAMPLE)
     redact = Redactor.for_project(loaded).text
@@ -362,7 +362,7 @@ def test_sse_event_name_echoing_a_secret_is_masked() -> None:
     from comparo.core.http import HttpResponse
     from comparo.core.matrix import MatrixCell
     from comparo.core.models import Environment
-    from comparo.tui.app import _build_report_tree
+    from comparo.tui.render import _build_report_tree
 
     loaded = load_project(SAMPLE)
     request = _request(loaded)
@@ -396,7 +396,7 @@ def test_request_preview_masks_an_untainted_declared_secret() -> None:
 
     from comparo.cli.app import _print_resolved
     from comparo.core.resolve import ResolvedRequest
-    from comparo.tui.app import _request_detail
+    from comparo.tui.render import _request_detail
 
     loaded = load_project(SAMPLE)
     request = _request(loaded)
@@ -451,8 +451,8 @@ def test_explorer_config_views_mask_an_untainted_secret() -> None:
 
     from comparo.core.models import ExecutionProfile
     from comparo.core.models import Project
-    from comparo.tui.app import _execution_profile_detail
-    from comparo.tui.app import _project_detail
+    from comparo.tui.render import _execution_profile_detail
+    from comparo.tui.render import _project_detail
 
     redact = Redactor(values=(SECRET,)).text
     console = Console(width=200)
@@ -493,7 +493,7 @@ def test_exec_header_masks_a_secret_in_select_tags_or_requests() -> None:
 
     from comparo.core.execution import ExecutionResult
     from comparo.core.models import ExecutionProfile
-    from comparo.tui.app import _exec_header
+    from comparo.tui.render import _exec_header
 
     profile = msgspec.convert(
         {
@@ -541,7 +541,7 @@ def test_provenance_masks_a_matrix_case_value() -> None:
 
     from comparo.core.provenance import Origin
     from comparo.core.provenance import Trail
-    from comparo.tui.app import _render_provenance
+    from comparo.tui.render import _render_provenance
 
     redact = Redactor(values=(SECRET,)).text
     trail = [Trail("headers.x", Origin.MATRIX, f"token={SECRET}")]
@@ -559,8 +559,8 @@ def test_project_and_environment_detail_mask_config_secrets() -> None:
 
     from comparo.core.models import Environment
     from comparo.core.models import Project
-    from comparo.tui.app import _environment_detail
-    from comparo.tui.app import _project_detail
+    from comparo.tui.render import _environment_detail
+    from comparo.tui.render import _project_detail
 
     redact = Redactor(values=(SECRET,)).text
     console = Console(width=200)
@@ -607,7 +607,7 @@ def test_environment_detail_masks_a_secret_in_base_url_or_a_variable() -> None:
     from rich.console import Console
 
     from comparo.core.models import Environment
-    from comparo.tui.app import _environment_detail
+    from comparo.tui.render import _environment_detail
 
     env = msgspec.convert(
         {
@@ -632,7 +632,7 @@ def test_assertion_profile_detail_masks_a_secret_rule_value() -> None:
     from rich.console import Console
 
     from comparo.core.models import AssertionProfile
-    from comparo.tui.app import _assertion_profile_detail
+    from comparo.tui.render import _assertion_profile_detail
 
     profile = msgspec.convert(
         {
