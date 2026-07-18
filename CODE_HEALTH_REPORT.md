@@ -1,235 +1,167 @@
 # Code Health Report
 
 **Project:** comparo — HTTP regression & diff testing (TUI + headless CLI + CI)
-**Date:** 2026-07-18
+**Date:** 2026-07-18 (re-audit after the `remediation/code-health-a-grade` branch; supersedes the same-day C-grade report)
 **Stack:** Python 3.13, msgspec, ruamel.yaml, httpx / httpx-sse, typer, textual, jsonschema
-**Size:** 70 source files, ~19.7k LOC (src 14.7k, tests 4.9k); 8 runtime deps. `src/comparo/tui/app.py` alone is 8,125 lines.
-**Method:** static tooling (ruff, mypy --strict, import-linter — all green) + a 15-dimension adversarial multi-agent audit with per-claim refutation (151 raw findings → ~90 distinct issues; 75+ independently confirmed, 1 refuted). Every critical/high item below was reproduced by running code, not inferred.
+**Size:** 41 src files, 16,034 LOC; 34 test files, 6,983 LOC; 8 runtime deps
+**Method:** static gates (ruff, ruff-format, mypy --strict, import-linter — all green) + full suite (323 passed, 53s, 77% branch coverage) + six parallel verification/audit passes. Every prior critical/high finding was re-tested by running code (wire-level repros against localhost servers, Textual Pilot for the TUI), not re-read.
 
 ## Executive Summary
 
-**Overall grade: C.** The engine's *design* is genuinely A-grade — a clean ports-and-adapters core with CI-enforced layering, a thoughtful secret-masking model, and a tri-state diff. But the *behavior* ships a gap between promise and reality that a professional showcase can't carry: **one CRITICAL silent-failure bug** (mapping-form request headers are dropped — and comparo's own scaffolded `AGENTS.md` teaches that exact shape), **multiple confirmed bypasses of the headline "never leak a secret" guarantee**, **pervasive "one bad input crashes the whole run" error handling**, and a large TUI that renders **fabricated live metrics** ("0 ✗", "~410ms/cell") and mislabels which environment a saved run belongs to.
+**Overall grade: B+ (up from C).** The remediation is real and verified: the critical silent-header-drop bug, all three secret-redaction bypasses, the status-not-compared gate hole, the timeout hang, the config silent-false-green class, the OpenAPI import breakage, and all seven one-bad-input-kills-the-run crashes are **fixed, wire-proven, and pinned by regression tests**. The engine you'd trust to gate CI now largely earns it: no false-green path was found in a dedicated adversarial sweep, and the e2e suite is genuinely strong.
 
-**Fix before publishing (blocking):**
-1. Mapping-form headers silently dropped + `${VAR}` not interpolated in endpoints — both taught by the scaffolded AGENTS.md (CRITICAL).
-2. Secret-redaction bypasses: JSON-special-char leak, `export.py`'s non-longest-first copy, server-issued credentials never masked (HIGH security).
-3. Diff engine never compares HTTP status — a 200→500 with identical bodies passes the gate (HIGH).
-4. No default HTTP timeout + no total-response deadline — a slow/stalled server hangs CI forever (HIGH).
-5. `docs/design/` publishes a raw AI-session transcript disclosing an NDA client engagement and local `/Users/walid` paths; the PyPI name `comparo` is unregistered and squattable (HIGH security/publish-safety).
+What stands between B+ and A is a short, named list: **(1)** the rewritten live-run counters are stuck at `0 ✓ 0 ✗` — the fix tallies glyphs the app never writes, and its own regression test feeds synthetic glyphs, so it passes while the UI shows zeros; **(2)** the TUI split is glued with a 139-name star-import of private symbols under a file-wide `noqa: F405`, disarming undefined-name analysis over 29% of the codebase; **(3)** `Redactor.for_project` is rebuilt at ~40–50 TUI call sites, doing secret-file I/O on render paths with silent mask-shrink on failure; **(4)** the PyPI name `comparo` is still unregistered (404) while an alpha tag and live release automation now exist — squattable, and the in-app update check points at it.
 
-**Already fixed during this audit** (committed to the working tree): added the missing `packaging` runtime dependency (a plain `pip install comparo` crashed the TUI on launch); hardened `archive.load_record` against non-object JSON; added test isolation of the user config; and added 21 non-regression tests (`test_e2e.py`, `test_distribution.py`, `test_persistence.py`, `conftest.py`).
+Release-engineering note: a `1.0.0` tag briefly existed on 2026-07-18 and was correctly rolled back to a 0.x alpha track (`allow_zero_version = true`). History was rewritten in the rollback; source content is unchanged from the audited tree. The dev venv runs Python 3.14.6 while the project targets 3.13 — CI should test the floor version explicitly.
 
 ## Scorecard
 
-| Category                  | Grade | Findings |
-|---------------------------|-------|----------|
-| Spaghetti & Complexity    | C     | 4        |
-| Coupling & Architecture   | C+    | 6        |
-| Consistency & Patterns    | C     | 9        |
-| Dead Weight               | C     | 6        |
-| Security                  | D+    | 9        |
-| Error Handling            | D+    | 18       |
-| Testing                   | C+    | 11       |
-| Configuration             | C-    | 9        |
-| Documentation             | C     | 12       |
+| Category                  | Grade | Open findings | Prior |
+|---------------------------|-------|---------------|-------|
+| Spaghetti & Complexity    | B     | 6             | C     |
+| Coupling & Architecture   | B−    | 4             | C+    |
+| Consistency & Patterns    | B     | 5             | C     |
+| Dead Weight               | A−    | 3             | C     |
+| Security                  | B+    | 7             | D+    |
+| Error Handling            | B+    | 5             | D+    |
+| Testing                   | B+    | 3             | C+    |
+| Configuration             | B     | 8             | C−    |
+| Documentation             | B+    | 3             | C     |
 
-Security and error handling are the two failing dimensions, and they matter most: comparo's entire value proposition is "trust this to gate your CI and never leak your secrets," and both promises have confirmed, reproducible holes.
+## Prior-Findings Ledger
+
+Of the previous report's **1 critical + 23 high + 36 medium** findings:
+
+- **Critical:** C1 (mapping headers dropped + endpoint never interpolated) — **FIXED**, wire-proven; AGENTS.md template now matches the canonical shape and runs green.
+- **High:** 19 of 23 **FIXED** (H1–H12, H14, H15, H17–H21 — including all redaction bypasses, `$status` diffing, strict diffPairs/manifest structs, timeout defaults + total deadline, OpenAPI auth/refs, README quickstart, `q`-always-quits, root/data_dir split, checks→assertions unification). H16 **partial** (drill-in no longer asserts fault; a real outbound comparison exists but only on the Diff tab, and the hint's `o` key dead-ends from Execution). H22 **fixed with residual** (transcript gone from tree *and* history; see S-6). H13 **regressed differently** (see H-1). H23 **still open** (see H-4).
+- **Medium:** 23 fixed (M1–M9, M11, M12, M14, M16–M20, M23, M25, M27, M28, M33, M35), 6 partial (M13, M22, M26, M30, M32, M36), 7 open (M10, M15, M21, M24, M29, M31, M34). All carried forward below at current severity.
 
 ## Dependency Graph
 
-The layering contract (`cli`/`tui` → `adapters` → `core`; core imports no HTTP library) is real and CI-enforced. The weakness is *inside* the boundary: `tui/app.py` re-implements core orchestration rather than calling it.
+Layering (`cli`/`tui` → `adapters` → `core`, core imports no HTTP library) is real, CI-enforced, and was re-verified beyond import-linter: no runtime cycles, no upward imports, no shared mutable module-level state. Fan-in is where it should be (`models` 21, `loader` 16, `resolve` 11). The one anomalous edge is the star-import glue inside `tui/`.
 
 ```mermaid
 graph TD
     subgraph interfaces
-        CLI[cli/app.py]
-        TUI[tui/app.py · 8125 LOC]
+        CLI[cli/app.py · 1023]
+        APP[tui/app.py · 4579]
+        REN[tui/render.py · 3319]
+        TOK[tui/tokens.py · 611]
     end
     subgraph adapters
         HTTPX[httpx_client]
         REP[reporters]
         OAPI[openapi]
-        UPD[updates]
+        DOC[doctor]
     end
     subgraph core
-        MODELS[models.py]
-        LOADER[loader.py]
-        RESOLVE[resolve.py]
-        EXEC[execute.py]
-        EXECU[execution.py]
-        COMPARE[compare.py]
-        DIFF[diff.py]
-        ASSERT[assertions.py]
-        CHECKS[checks.py]
-        ARCHIVE[archive.py]
-        REPORT[report.py]
-        REDACT[redaction.py]
-        EXPORT[export.py]
-        HTTP[http.py · port]
+        MODELS[models]
+        LOADER[loader]
+        RESOLVE[resolve]
+        EXEC[execute]
+        EXECU[execution]
+        COMPARE[compare/diff]
+        ASSERT[assertions/checks]
+        ARCHIVE[archive]
+        REDACT[redaction/secrets]
+        STREAMS[streams]
+        TRIAGE[triage]
     end
 
-    CLI --> HTTPX & OAPI & LOADER & EXECU & COMPARE & REPORT & REDACT
-    TUI --> HTTPX & UPD & LOADER & EXECU & COMPARE & DIFF & ARCHIVE & REDACT & CHECKS & EXPORT
-    HTTPX -.implements.-> HTTP
-    LOADER --> MODELS
-    RESOLVE --> LOADER & MODELS
-    EXEC --> RESOLVE & HTTP
+    APP -- "import * (139 private names)" --> REN
+    APP -- "import * (63 private names)" --> TOK
+    REN -.TYPE_CHECKING only.-> APP
+    CLI --> HTTPX & OAPI & LOADER & EXECU & COMPARE & REDACT
+    APP --> HTTPX & LOADER & EXECU & COMPARE & ARCHIVE & REDACT & TRIAGE
     EXECU --> EXEC & COMPARE & ASSERT
-    COMPARE --> DIFF & EXEC
-    ARCHIVE --> COMPARE & EXECU & REPORT
-    EXPORT --> RESOLVE
-    REDACT --> LOADER
-
-    classDef hot fill:#e0566b,color:#fff
-    class MODELS,LOADER hot
+    COMPARE --> EXEC
+    EXEC --> RESOLVE
+    RESOLVE --> LOADER --> MODELS
+    ARCHIVE --> COMPARE & EXECU
+    HTTPX --> STREAMS
+    DOC --> REDACT
 ```
-
-**High fan-in (change with care):** `models.py` and `loader.py`/`LoadedProject` are imported by nearly every core module. **Duplication hotspots (red flags):** `tui/app.py` re-implements `execute_all`/`diff_run` orchestration inline (3rd copy of the semaphore loop), copies `execution._select` verbatim, carries a second SSE parser and a second redaction path via `checks.py`, and rebuilds `Redactor.for_project` at ~37 call sites.
-
----
 
 ## Critical Findings (fix before shipping)
 
-### C1 · Mapping-form request headers are silently dropped — and the scaffolded AGENTS.md teaches that exact shape
-**Where:** `src/comparo/core/resolve.py:251-265` (`_header_pairs`), `src/comparo/core/models.py:77` (`headers: Any`), `src/comparo/cli/app.py:793` (AGENTS.md template).
-**Reproduced:** A request with
-```yaml
-headers:
-  Authorization: "Bearer ${API_TOKEN}"
-```
-passes `comparo validate` and runs green, but the request goes out with **no headers at all** (`_header_pairs` only reads a *list* of `{key, value}` and returns `[]` for a mapping; `headers` is typed `Any` so msgspec and the JSON Schema accept anything). The same example additionally shows `endpoint: /users/${USER_ID}` — and **endpoints are never interpolated** (`resolve_request` builds the URL directly; only a path-Matrix fills `${...}`), so `${USER_ID}` is sent literally.
-**Why it's critical:** the mapping shape and the `${VAR}`-in-endpoint shape are *exactly* what `_AGENTS_MD` — dropped into every `comparo init` project for coding agents to follow — documents (`cli/app.py:791-793`). So an agent following comparo's own guide produces requests whose auth silently never goes on the wire, and a CI diff gate green-lights unauthenticated behavior. This is the precise "silent false green" the loader's docstrings claim is impossible.
-**Fix:** accept the mapping form (`HttpRequest.headers: list[Header] | dict[str, Any] | None`, convert in `_header_pairs`) *or* reject it with a load diagnostic; interpolate the endpoint through the resolver like every other field; constrain `headers` in the JSON Schema; and make the AGENTS.md/README example match whichever shape is canonical.
-
----
+**None.** Nothing found in this pass rates critical. (The prior critical, C1, is fixed and regression-tested.)
 
 ## High Priority Findings
 
-### Security — the "never leak" guarantee has confirmed bypasses
-The headline feature is that a declared secret never appears in any output; `comparo doctor` proves it with a canary. The canary (`s3cr3t-CANARY-a1b2c3d4e5f6`) has no special characters and is a single value, so it passes while three real holes stay open:
+### H-1 · Live-run counters are permanently `0 ✓ 0 ✗`, errored cells render as ✓ — and the regression test masks it
+**Where:** `src/comparo/tui/render.py:2142-2143` (tally), `src/comparo/tui/app.py:1827,1838,3731,3736,3740` (writers), `tests/test_tui.py:1558-1566` (the masking test), `src/comparo/core/execution.py:151-161` (`ExecutionProgress`).
+**What:** The old fabricated `"0 ✗"` literal was replaced with a real tally — but the tally counts `"✓"`/`"✗"` glyphs while every production caller writes only `"○"/"◐"/"●"`. Pilot-reproduced: after 2 finished cells (1 drifted), the header reads `2/3 cells   0 ✓  0 ✗`. The regression test passes glyphs `["✓","✓","✗","◐"]` — a vocabulary the app never produces — so CI is green while the UI shows zeros. Separately, `ExecutionProgress` carries only `drift`, so a cell that errored or failed assertions (no field drift) renders ✓ in the finished log.
+**Why it matters:** This is the headline live view of a trust tool, it regressed *while being fixed*, and the test that guards it verifies the wrong contract. (Genuinely fixed from the old H13: throughput literal gone, env labels real.)
+**Fix:** Emit pass/fail state on `ExecutionProgress` (e.g. `state: "ok" | "drift" | "error" | "assert-fail"`) instead of inferring from glyph strings; tally from that; rewrite the test to drive `update_progress` with real progress objects from a run, not hand-fed glyphs.
 
-- **H1 · JSON-special-char leak.** `src/comparo/core/redaction.py:52-57` via `diff.py:224` / `assertions.py:366`. `diff._short()`/`assertions._short()` run `json.dumps()` **before** the Redactor's raw `str.replace`. A secret `p@ss"w0rd` is serialized as `p@ss\"w0rd`, the substring match misses, and the human-readable secret lands in drift details, `.reports/*.json`, JUnit/SARIF/Markdown (committed to git / posted to GitHub step summaries), and CLI stdout. *Reproduced.* **Fix:** register the JSON-escaped inner form alongside each raw secret, or redact the parsed value before serializing; add a canary containing `"`, `\`, `\n` to `doctor`.
-- **H2 · `export.py` dropped the longest-first invariant.** `src/comparo/core/export.py:106-109` re-implements redaction over an **unordered set**, so with secrets `{token, token-SUPERSECRET}` the shorter can mask first and the tail `-SUPERSECRET` survives into `runs/*.json`. `redaction.py:49-50` sorts longest-first with a comment explaining exactly this hazard; the copy in `export.py` doesn't. *Reproduced.* **Fix:** delete `export.py`'s private `_redact`/`_secret_values`/`_MASK` and take a `redact: Redact` param so there is one implementation.
-- **H3 · Server-issued credentials are never masked.** `MEDIUM`-rated but security-relevant: redaction only masks values of *declared* secrets. A `Set-Cookie` session token or an echoed `Authorization` the server returns is persisted verbatim to saved reports and exports. **Fix:** redact response `Set-Cookie`/auth headers by policy, independent of the declared-secret set.
+### H-2 · The TUI split is glued with star-imports of 202 private names under file-wide lint suppression
+**Where:** `src/comparo/tui/app.py:106-108` (`from comparo.tui.render import *`, `...tokens import *`), `app.py:10-12` (`# ruff: noqa: F405` for the whole 4,579-line module), `render.py:118` (`__all__` of 139 underscore names), `tokens.py:21` (63 more).
+**Why it matters:** (a) ruff can no longer flag an undefined name anywhere in the largest file in the codebase — a typo'd helper fails at runtime on whatever keypress reaches it. (b) Provenance is opaque: `_short` exists in four modules with two different meanings; in the merged namespace, "the" `_short` is whichever module won. (c) Nothing guards against a future silent shadowing collision (zero collisions today — verified — but no tool checks it).
+**Fix:** Mechanical: `from comparo.tui import render` + qualified calls, delete both pragmas, drop the `__all__`-of-privates. Re-arms static analysis over 29% of the codebase; do it before the next TUI feature.
 
-### Correctness — the gate can pass when it shouldn't
-- **H4 · HTTP status is never compared.** `src/comparo/core/compare.py:130-168`. Status is captured as baseline-only metadata and never diffed; `comparo diff` runs no assertions. *Reproduced:* baseline 200 vs candidate 500 with identical bodies → `gate: PASS`, exit 0. An empty/identical error body with the wrong status is the single most common regression this tool exists to catch. A strict xfail test is now in `tests/test_e2e.py`. **Fix:** emit a synthetic `$status` `FieldDiff` (exact mode, ignore-able) in `_compare`.
-- **H5 · A one-char typo in a `diffPairs` key compares an env against itself → PASS.** `src/comparo/core/resolve.py:100-108`. `candidate:`→`candid:` makes `_find_pair` return `None` for that side, `select_environment(None)` falls back to the default, and `comparo diff` prints `Local ⇄ Local` → every cell "same" → green CI while the real candidate was never contacted. `validate` accepts it (whole `spec.environments` block is `Any`). *Reproduced.* **Fix:** error when a matched pair lacks a side; model `diffPairs`/`default` as strict structs.
-- **H6 · A lone `--baseline` (or `--candidate`) is silently ignored.** `src/comparo/core/resolve.py:84-90`. `resolve_pair` only honors the flags when *both* are present; otherwise it falls through to the manifest pair. *Reproduced:* `comparo diff --baseline staging` prints `Local ⇄ Prod`. A CI job templating one env flag gates the wrong pair. **Fix:** error (or overlay) when exactly one flag is given.
+### H-3 · `Redactor.for_project` rebuilt at ~40–50 TUI call sites — secret-file I/O per render, silent mask shrink
+**Where:** 37 direct constructions (35 in `tui/app.py` — e.g. `app.py:422-471` has seven in one method — 2 in `tui/render.py`) plus wrapper calls via `render.py:1329 _app_redact`; `core/redaction.py:53-58` (fresh `ExecuteSecrets` per call; `except SecretError: continue`).
+**Why it matters:** Every construction re-resolves every declared secret — including `$file` reads from disk — on tree-cursor moves and progress ticks. A secret file that becomes unreadable mid-session silently drops out of the mask set for subsequent renders: the "never leak" guarantee quietly narrows exactly when something is wrong. And 40+ call sites are 40+ places to forget masking.
+**Fix:** One cached redactor on `ComparoApp`, built at load, invalidated on reload (`r`); make `_app_redact` the only construction site. Surface (don't skip) a secret that fails to resolve.
 
-### Resilience — a slow or stalled server hangs CI forever
-- **H7 · No default timeout, and no total deadline for non-streaming reads.** `src/comparo/adapters/httpx_client.py:51-56,112`; `core/http.py:37-47`. An environment without a `timeout:` block yields `httpx.Timeout(None)` (overriding even httpx's 5s default). And the read timeout is per-socket-read, so a server trickling 1 byte/sec never trips it — the non-streaming branch buffers to EOF with no cap. *Reproduced:* `comparo run` against a trickle server still running at 40s (killed by SIGALRM). In CI this blocks until the job's hard limit. **Fix:** give `TimeoutBudget` sane defaults (connect 5s / read 30s, matching the scaffold), and wrap the non-streaming send in `asyncio.timeout(total)` like the streaming branch already is.
-
-### Config engine — silent no-ops and uncaught crashes from valid-looking config
-All *reproduced*; all pass `comparo validate`:
-- **H8 · Matrix `target` is an unvalidated free string** (`resolve.py:228-239`, `models.py:116`): a typo like `request.qeury` (or `request.headers`) expands into cells whose injection silently no-ops, while the provenance trail falsely records it as applied. **Fix:** validate `target ∈ {query, body, path}` at load; append the Trail entry only after a real dispatch.
-- **H9 · A bare-string or wrong-kind `matrix:` ref is silently dropped** (`matrix.py:96-111`): the request runs as a single unmatrixed cell, so the regression coverage vanishes and the zero-cells fail-closed guard never fires. **Fix:** validate each entry like assertion includes.
-- **H10 · A `$val` cycle between Instances loads clean then crashes with `RecursionError`** at resolve time (`resolve.py:282-300`), escaping `execute_request`'s error capture (`execute.py:67`) — one bad object aborts the whole run. **Fix:** seen-set cycle guard, or detect at load.
-
-### OpenAPI import — produces projects that can't run
-- **H11 · Basic-auth import emits `${API_USERNAME}` but never declares it** (`openapi.py:304-307`) → `InterpolationError` on every request; the "export these vars" hint omits it. **Fix:** declare `API_USERNAME` as a `$env` secret too.
-- **H12 · Emitted Schemas keep internal `#/components/schemas/X` `$refs` that dangle** (`openapi.py:336-346,528-537`) → `jsonschema` `PointerToNowhere` crash when the response contains the ref'd property. **Fix:** inline referenced components into a `$defs` block and rewrite the pointers.
-
-### TUI — trust-eroding display and state bugs (all reproduced via Pilot or reading)
-- **H13 · The live running view fabricates metrics** (`tui/app.py:6926-6946`): fail count is the literal `"0 ✗"`, throughput is the literal `"~410ms/cell"`, env labels are hardcoded `stable`/`candidate`, and every finished cell counts as `✓` — so a run against a broken candidate shows all-green until the results screen contradicts it.
-- **H14 · A saved run is labeled/saved against the *current* default env, not the one it ran on** (`tui/app.py:1302-1311,1581-1593`): run on `local`, switch default to `prod`, save → the archived report says `prod`. A permanently mislabeled artifact for an evidence tool.
-- **H15 · A diff finishing on a background tab steals focus** to a hidden table and overwrites the visible tab's footer (`tui/app.py:2324,2685-2687`) — the visible tab appears dead until clicked.
-- **H16 · Execution cell drill-in asserts "outbound identical → the drift is the service's" without ever comparing the outbound** (`tui/app.py:4451`) — with per-env injected variables the drift may be the user's own config, sending them to blame the wrong party.
-- **H17 · After picking a new env on Diff RESULTS, `x` falsely refuses "a diff is already running"** and can never re-run (`tui/app.py:1840-1853`) — the advertised triage loop is broken.
-- **H18 · Footer hints across Execution/Report label `q` as "close"/"back"/"cancel run"** (`tui/app.py:298-356`), but `q` quits the whole app — actively teaching users to lose an unsaved run, and violating the project's own hard "q always quits" rule.
-
-### Architecture / consistency
-- **H19 · Two divergent single-response validation engines** (`core/checks.py` vs `core/assertions.py`): the TUI Run tab uses `checks.py` (which silently ignores an *inline* `response.schema`), the CLI/CI use `assertions.py` (which enforces it) → the same request shows green in the TUI and red in CI. **Fix:** delete `checks.py`, express the Run tab on `request_rules`+`evaluate_rules`.
-- **H20 · `LoadedProject.root` means "data dir" in manifest loads but every consumer treats it as project root** (`loader.py:118-122`, `archive.py:408-416`): the archive lands in `<data>/<data>/.reports`, and opening the same project as a directory vs a manifest puts saved reports in different places (they "vanish"). `$file` secrets also resolve against the wrong root. **Fix:** carry `root` and `data_dir` as distinct fields.
-
-### Documentation / publish-safety
-- **H21 · README quickstart fails verbatim** (`README.md:56-57`): `comparo init` writes one env and no diffPairs, so `comparo run --env prod` and `comparo diff --pair local-vs-prod` both exit 1 — 2 of the 4 first-contact commands fail.
-- **H22 · `docs/design/comparo-conversation-transcript.md` is git-tracked and discloses an NDA client engagement + local `/Users/walid` paths** (also `comparo-tui-rules.md:396,400`). The untracked `internal-project/` resolves to a nameable client. Git *history* is clean of the client data; this transcript is the remaining leak vector. **Fix:** `git rm` the whole `docs/design/` scaffolding and rewrite the commits that added the transcript (deletion alone leaves it in history).
-- **H23 · The PyPI name `comparo` is unregistered (404) and squattable.** `updates.py:16`, `README.md:41`. Publish the repo before claiming the name and any `pipx install comparo` / update-toast (`tui/app.py:4756`) installs attacker code. **Fix:** reserve the name via a PyPI pending-publisher bound to this repo *before* going public.
-
----
+### H-4 · PyPI name `comparo` still unregistered while an alpha tag and release automation are live
+**Where:** `https://pypi.org/pypi/comparo/json` → 404 (re-checked this session, after the alpha tag was cut); `adapters/updates.py:16` (update check targets that URL), `action.yml:39` (`uv tool install comparo…`), README install instructions.
+**Why it matters:** Anyone can register the name today; a squatter then controls what the in-app update toast advertises and what `pipx install comparo` / the GitHub Action installs. The window is now — the tag and release workflow exist, the name doesn't.
+**Fix:** Reserve via a PyPI pending publisher bound to this repo (or push the alpha) before any further public activity.
 
 ## Medium Priority Findings
 
-**Error handling — one bad input crashes the whole run** (all uncaught, abort the CLI/TUI instead of failing one item):
-| # | What | Where |
-|---|------|-------|
-| M1 | Assertion path with `[*]` or `["key"]` → `ValueError` | `assertions.py:304` |
-| M2 | Invalid regex in a `matches` rule → `re.PatternError` | `assertions.py:216` |
-| M3 | Deeply nested (~330+) JSON body → `RecursionError` | `diff.py` `_walk` |
-| M4 | A YAML-native date in a request body → `TypeError` in `json.dumps` | resolve/serialize path |
-| M5 | `_relative_age` on a `Z`/offset ISO timestamp → `TypeError`, kills the whole Report tab | `tui/app.py:7240` |
-| M6 | Health check whose header interpolates an unresolvable secret → `SecretError` escapes to the panic screen | `core/health.py` (catches only `HttpError`) |
-| M7 | `schema` assertion with a `$ref` → `referencing.Unresolvable` escapes `jsonschema`'s except | `assertions.py:258-263` |
+**Correctness / fail-closed:**
+- **M-1 · `comparo run` exits 0 on a zero-execution run.** `cli/app.py:297-326` checks for zero *requests* but not zero *executions*; a request whose matrix expands to no cells (e.g. `values: []`, which validates — `models.py:124` has no min-length) prints a bare header and exits green. `diff` and `exec` both fail closed on this; `run` is the odd one out.
+- **M-2 · `${VAR?}` unset optionals go out as the literal string `"None"`** in query, header, and cookie positions (prior M10, wire-proven again; `core/interpolation.py:116`, `adapters/httpx_client.py:52-53,66`). Documented behavior is omission. Filter `None`-valued pairs before send.
+- **M-3 · `comparo render` crashes with a raw traceback on any `InterpolationError`** (e.g. a `$val` cycle or unset required var — both pass `validate`): `cli/app.py:290-294` has no handler, unlike the run/diff/exec paths. Also: `validate` doesn't detect `$val` cycles, so the first surface to report one is a crash.
+- **M-4 · `httpx.InvalidURL` aborts the entire multi-request run.** `adapters/httpx_client.py:67-77` builds the request outside the `try/except httpx.HTTPError`, and `InvalidURL` is not an `HTTPError`. Reproduced with `baseUrl: "http://[::1"`: whole run lost, zero results — violating `execute.py`'s own "one bad request never aborts a run of many". Move `build_request` inside the try and translate. Related belt-and-braces: add a per-cell `except Exception → CellOutcome(error=…)` in `execution.py:224-276` `_run_cell` — fail-closed, and it would have downgraded all seven historical whole-run crashes to one red cell.
+- **M-5 · Saved bodies crash redaction at ~1000 levels of nesting.** `core/export.py:106-115` and `core/archive.py:181-193` recurse per level with no cap; the diff engine caps at 200 but stores the *whole* parsed body, so a body that diffs fine crashes on TUI save (`app.py:876-880` catches only `OSError` → panic). Rewrite iteratively or truncate at `diff._MAX_DEPTH`. (Also add `RecursionError` to the except tuples at `assertions.py:323-327` and `streams.py:73-76` — ~120k-deep JSON escapes both.)
 
-**Silent false-greens / wrong output:**
-- **M8 · `comparo validate` exits 0 with "✓ 0 object(s) valid"** when `spec.data` points at a missing/empty directory (`loader.py:119`). *Reproduced.*
-- **M9 · Unknown `--report` format is a stderr warning only** — `comparo diff --report junitxml` exits 0 and writes nothing (`cli/app.py:803-811`).
-- **M10 · `${VAR?}` (unset optional) is sent on the wire as the literal `"None"`** in query/header/cookie (`httpx_client.py:47-48,61`), not omitted as documented. *Reproduced.*
-- **M11 · `$val` to a wrong-kind object silently resolves to `None`** → `?v=None` on the wire / stripped headers (`resolve.py:298-300`). *Reproduced.*
-- **M12 · Two diff rules on the same path: first-loaded wins** (`diff.py:64-66`), so an execution-level override can never re-check a path the request profile ignores, even though its `default` mode *does* win — inconsistent. *Reproduced.*
-- **M13 · Silencing a drift writes to a profile that isn't composed for the request** when the request uses an inline/list diff (`compare.py:218-232` vs `171-187`) — the "Silenced, re-run" toast lies.
-- **M14 · Whole `ProjectSpec` interior is `Any`** (`models.py:144-154`) → manifest typos (`defualt:`, `difPairs:`, `run.concurency:`) pass both the loader and the JSON Schema. *Reproduced.* **Fix:** strict structs for the manifest interiors.
-- **M15 · Loader's `$ref` scan descends into `$literal`** (`loader.py:306-316`) → a body legitimately containing a `{$ref: …}` key is a hard load error inside the documented escape hatch. *Reproduced.*
+**Security (residuals from largely-fixed areas):**
+- **S-1 · The 64 MB body cap truncates silently, and doesn't apply to the streaming branch.** `httpx_client.py:139` bare `break` — a >64 MB response is diffed as if complete (false-green vector for exactly this tool); `HttpResponse` has no `truncated` flag. The streaming branch (`httpx_client.py:109-125`) has no byte cap at all and `stream_max` defaults to `None`. Surface truncation as an error or flagged drift; apply the cap to both branches.
+- **S-2 · `spec.data` is not confined to the project root** while `report.dir`/`report.output` now are (`loader.py:364-378`): `data: ../../../tmp/x` relocates `.reports/` writes outside the project (`archive.py:417-424`). Apply the same guard.
+- **S-3 · `action.yml:39` still interpolates `${{ inputs.version }}` directly into bash** (`uv tool install "comparo${{ inputs.version }}"`) — the other four inputs were correctly moved to `env:`. Same fix.
+- **S-4 · Silencing can write to a profile that isn't composed for the request** (prior M13, narrowed): for a request with an *inline* diff, `profile_for` (`compare.py:259-284`) falls back to the project default profile — but `_compose_diff` (`compare.py:204-220`) never applies the default when `response.diff` is set, so the confirmed write lands in a file that doesn't affect the re-run. (Real improvements landed here: honest refusal when no profile exists, and a refusal to write secret-bearing paths into tracked files — `app.py:1780-1795`.) Return `None` from `profile_for` for inline-diff requests, or offer to edit the inline block.
 
-**OpenAPI import** (`openapi.py`): path params emitted as literal `{id}` sent to the server (M16); `apiKey in: query`/`cookie` declared but wired to nothing → unauthenticated (M17); form-only request bodies silently dropped (M18); external multi-file `$refs` silently ignored → 0 requests, no warning (M19).
+**Saved-report replay (the remaining fabricated-display cluster, prior M21/M24):**
+- **M-6 ·** Replay stamps every drift `mode: exact` / skip `· ignore` as if they were data (`render.py:2746-2748`, hardcoded again at `app.py:2599,2615,2619`); drifted variants render as green ✓ (`app.py:2653-2658`); and the DRIFT INDEX is still inert — cursor movement never changes the COMPARE well because `on_data_table_row_highlighted` doesn't handle `report-drift-table` (`app.py:2504-2514`; `render.py:2711-2716` always returns the first drifted cell). Either persist per-path modes in the archive (see M-8) or stop displaying invented ones; wire the highlight handler.
 
-**Persistence / reporting:** SARIF has no `physicalLocation` so GitHub code-scanning ingestion yields no alerts (M20); saved-report replays stamp every drift `mode: exact` and render failed runs' variants all-green (M21); archive JSON has no schema/version field and the lenient loader coerces renamed fields to zeros silently (M22); the Report-tab filter changes meaning on tab return (id-only vs id/env/kind/gate) so filtered reports "vanish" (M23); the saved-diff DRIFT INDEX is inert — only the first drifted cell is ever shown (M24).
-
-**Config / CI:** `run.concurrency` (scaffolded into every manifest + documented) is read by nothing — concurrency is hardcoded 4, and `run_execution` is fully sequential (M25); `run.retry`, `selection`, `redaction.stringMatchBackstop` are equally dead (M26); `release.yml` runs the PyPI publish step unconditionally, so every non-release push to `main` fails the workflow (M27); the scaffold's own "Next: `comparo --config <manifest>`" hint is a usage error — the root command has no `--config` (M28); `save_user_config` is a non-atomic truncating write with no error handling — a partial write silently resets all preferences (M29).
-
-**Architecture / duplication:** the TUI reimplements core orchestration because `execute_all`/`diff_run` lack the `on_progress` seam `run_execution` has (M30); `Redactor.for_project` is rebuilt at ~37 TUI sites, re-reading `$file` secrets per render, with resolution failures silently shrinking the mask set (M31); `.reports/` grows unbounded with full response bodies embedded per cell and is fully re-parsed on every Report-tab refresh (M32); two divergent SSE parsers (core keeps all fields, TUI drops all but event/id/retry/data) (M33); `_exec_selected_requests`/`_exec_mode` duplicate `execution._select` verbatim (M34).
-
-**Security (medium):** curl export interpolates the HTTP **method** without `shlex.quote` while everything else is quoted — a shell-injection seam if a method ever comes from untrusted input (M35); non-streaming responses buffer to memory with no size cap (decompression/large-body DoS) (M36).
-
----
+**Architecture / duplication (the drift-risk cluster):**
+- **M-7 · Run and Diff views still reimplement core orchestration inline** (`app.py:815-846`, `1811-1868`) because `execute_all`/`diff_run` lack the `on_progress` seam `run_execution` has — and ExecutionView (`app.py:3758`) proves the delegation pattern works. The two copies already disagree with core on pacing (per-cell pairing vs whole-run concurrency). `render.py:1886-1901` is still a verbatim copy of `execution._select`. Add the seam, delete the copies.
+- **M-8 · Three parallel "summarize a run" pipelines + a hand-rolled archive codec.** `report.build_report`, `execution.build_execution_report`, and `archive.record_from_*` each reimplement state classification and gate math; `cli/app.py:952-984` re-flattens instead of using `checks.run_checks` (whose docstring exists to prevent exactly this). The archive additionally uses snake_case keys while every other artifact is camelCase, via ~105 lines of lenient codec (`archive.py:486-586`) that zero-fills bad fields and accepts `version: 99` without complaint — the version field added for M22 is stamped but never enforced. Extract one classifier; msgspec-ify the archive (`rename="camel"`, `ARCHIVE_VERSION = 2`, legacy reader for 0/1, reject futures).
+- **M-9 · Security-relevant helpers duplicated:** the json-render `_short` is byte-identical in `assertions.py:404` and `diff.py:227` (its comment explains the leak it prevents); `archive.py:181 _redact_body` mirrors `export.py:106 _redact_value` by admission. A fix applied to one copy silently reopens the other sink. Move both into `redaction.py`.
+- **M-10 · Crash reporting couples to Textual private internals** (`app.py:4190-4210` manipulates `App._exception`/`_exception_event`/`_return_code`) with `textual>=0.86.0` unbounded. A Textual rename silently breaks the *redacted* crash path. Add an upper bound or a 3-line CI assertion that the attributes exist.
+- **M-11 · Decomposition debt in the two core hotspots:** `loader._check_profiles` (`loader.py:236-379`) is 144 lines / five closures / six unrelated validations — the security-relevant report-path confinement is buried in a function whose name says "profiles"; `execution.run_execution` (`execution.py:164-293`) mixes plan expansion, concurrency, progress plumbing, and assembly. Promote the closures to testable `_validate_*` functions; extract `_build_plan`. Related: `render.py`'s builders thread 8–10 positional params through recursion (`_build_report_tree` 10, `render.py:965`) — a small frozen context object would remove the transposition hazard.
 
 ## Low Priority Findings
 
-Grouped; each is real but low-impact or low-likelihood.
+**Config/CLI:** `$literal` still doesn't shield a `$ref`-shaped payload (`loader.py:382-392` — the documented escape hatch can't hold the one thing it exists for); object discovery globs only `*.yaml`, silently ignoring `.yml`; `comparo schema -o dir/file.json` tracebacks when the parent dir is missing (`cli/app.py:260`); every failure still exits 1 (gate fail, bad config, and internal crash are indistinguishable to CI); `--report` format validation runs *after* the HTTP run (`cli/app.py:367,458` — a typo costs a full run), leaving `_write_reports`' unknown-format branch (`858-863`) unreachable; `save_user_config` is still a non-atomic truncating write (`userconfig.py:109`; impact softened by the tolerant loader); `redaction.stringMatchBackstop` remains accepted-but-inert (now documented as always-on — defensible, but it's a dead knob); empty `matrix.values: []` validates; `.reports/` retention exists (`archive.prune`, `save_record(keep=)`) but **no caller passes `keep`** — the archive still grows unbounded by default; the `$val` cycle message renders from an unordered set (can start mid-cycle).
 
-**Bugs:** `NaN` reports permanent false drift `NaN → NaN` even for byte-identical bodies; SSE parser splits on Unicode line separators (U+2028/85) corrupting data; JSON-lines stream truncated mid-record (what `streamMax` produces) discards *all* records and falls back to one blob; container-level drift renders the same placeholder on both diff sides (candidate value hidden); archive ids are `uuid4().hex[:6]` (24-bit) and `save_record` overwrites on collision; JUnit/Markdown reporters don't escape control chars / `|` / newlines in server-controlled field paths → malformed output; `record_from_run` stamps `PASS` on a zero-cell run (violates fail-closed); path-matrix values substituted with plain `str()` (no URL-encoding); protocol-relative server URL `//host` mangled; `_is_remote` uses substring matching (a remote host containing a local token loses its "live" badge); cookie jar shared per-environment client replays `Set-Cookie` across a run; several Report-replay panels advertise keys (`z maximize`, `⏎ drill`, `⏎ open diff`) bound to nothing.
+**Error-handling polish:** `execution.py:252` merges baseline/candidate errors into one string, losing which env failed (candidate's error silently dropped when both fail). The depth-200 diff cap is a sound, *visible* tradeoff but undocumented in user docs.
 
-**Consistency / dead weight:** `comparo.plugins` ships as an empty package whose docstring advertises a registry while `spec.plugins` is a hard load error; `syrupy` is a declared dev dep never used; `diff.profile_rules` / `assertions.run_assertions` are dead public API; `_ref_id` defined identically 6×, `_short` bound to 3 unrelated meanings; on-disk artifacts split camelCase (`runs/`) vs snake_case (`.reports/`); every failure mode exits `1` (a gate failure, a bad path, a load error, and an internal crash are indistinguishable to CI — a distinct crash code would help).
+**Security (theoretical tier):** credential-header masking is a fixed allowlist (`redaction.py:26-36`) — nonstandard `x-auth-token`-style headers persist verbatim; base64- or `\u`-escaped copies of a secret aren't matched (requires the server to actively re-encode the echo — low realism). **S-6 (publish-safety residual of H22):** the transcript is confirmed gone from working tree *and* all of git history, but `.gitignore:46`'s comment and the previous revision of this report (tracked, so present in history) still reference the private engagement the cleanup removed. Scrub the comment, and rewrite the commits carrying the old report text before open-sourcing.
 
-**Config / discovery:** object discovery globs only `*.yaml` (a `*.yml` file is silently ignored); with `data: .`, any unrelated YAML under the tree is a hard load failure; `comparo schema -o <path>` tracebacks (`FileNotFoundError`) if the parent dir is missing; a malformed user `config.toml` is silently discarded and the next Settings change overwrites the user's hand edits.
+**TUI phantom hints:** `_REPORT_RUN_KEYS` advertises `⏎ drill` and `z maximize` bound to nothing (`tokens.py:359-360`, `app.py:2293-2300`); `_EXEC_CELL_KEYS` advertises `⏎ open diff` (real key: `d`); report-browse footer advertises `esc ⌫ close` that early-returns (`tokens.py:344` vs `app.py:2691-2692`); the Execution drill-in hint points at key `o`, which only exists inside DiffView.
 
-**Docs:** README claims a plugin system that doesn't exist; AGENTS.md/README list Environment fields that don't exist (`cookies` is a Request field) and omit `secrets`; `docs/configuration.md` documents a `--tags` flag no command implements and a stale "streamIdle not yet applied" note; `docs/tui.md` advertises a `--save` flag that doesn't exist; the AI-disclaimer alert uses invalid GitHub `[!WARNING]` syntax so it renders as literal text; the GitHub Action example references a `@v1` tag that doesn't exist.
+**Docs:** README:100 still lists `cookies` as an Environment field (it's Request-level) and elides `secrets` as "credentials"; `docs/cli.md:739` example uses `wbenbihi/comparo@v1` — no `v1` tag exists; classifier `Development Status :: 3 - Alpha` is right for the 0.x track — keep it in sync when leaving alpha.
 
-**Security (low):** `archive_dir`/report output accept absolute or `../` paths from config (write outside the project root); `action.yml` interpolates `${{ inputs.version }}` directly into bash while every other input is passed via `env`.
+**Dead weight (the complete list — the tree is otherwise unusually clean: zero TODO/FIXME, zero commented-out code, no unused deps):** `redaction.identity` never called (callers default to `str`); `assertions.run_assertions` is a public orphan kept alive by one test; the unreachable `_write_reports` branch above. Naming: `execute/execution`, `checks/assertions`, `compare/diff` are three near-synonym module pairs — all load-bearing, but navigation is guesswork; consider `execution → profile_run`, `checks → run_verdict` renames.
 
----
-
-## What I fixed and pinned during this audit
-
-Applied to the working tree (all gates green — ruff, mypy --strict, import-linter, 261 passed + 1 xfail):
-
-| Change | Addresses |
-|--------|-----------|
-| Added `packaging>=24.0` to `[project.dependencies]` + relocked | A plain `pip install comparo` crashed the TUI on launch (`updates.py` imported `packaging`, present only transitively via the dev group). Reproduced in a clean venv. |
-| `archive.load_record` raises `ValueError` (not `AttributeError`) on non-object JSON | The one refuted finding was refuted *because of this fix* — `list_records` now skips a corrupt/hand-edited `.reports/*.json` instead of crashing the Report tab. |
-| `tests/conftest.py` (autouse) pins `COMPARO_CONFIG_HOME` to a tmp dir | The TUI suite read the developer's real `~/.config/comparo`; a changed default-tab or `update.check=true` flipped tests and fired live PyPI calls / rewrote the real file. |
-| `tests/test_e2e.py` — 12 tests driving the real CLI against a real localhost server | The tool's headline "exit 0 iff the gate passes" was only tested with the production seam monkeypatched away. Covers pass/fail gate, unreachable/slow candidate → error (not hang), the never-leak guarantee over the wire, `run`/`exec`/`render`/`validate`, streaming diff, one-dead-cell containment, and an **xfail pinning the status-not-compared bug (H4)**. |
-| `tests/test_distribution.py` — 4 tests | Guards that every `src/` third-party import is a declared runtime dep (would have caught `packaging`); the committed JSON Schema matches the generated one; every example loads + validates against the schema; the broken-project example still produces all six documented diagnostics. |
-| `tests/test_persistence.py` — 6 tests | Full archive round-trip fidelity, corrupt-file skip, forward-compat with future fields, and the redactor's longest-first invariant (a security property). |
-
----
+**Testing gaps:** `tui/render.py` — 3,319 LOC, no dedicated test file (its pure formatting helpers are exactly where M5-class bugs lived; a `test_render.py` is the single highest-value test to add); `tui/app.py` at 63% coverage; the H-1 glyph test must be rewritten against real progress objects. Everything else in testing is strong: behavior-asserting e2e over real sockets, gate semantics pinned, ports faked at the architectural seam, no live network, `COMPARO_CONFIG_HOME` isolation intact.
 
 ## Refactor Roadmap
 
-Ordered so each phase is one focused PR; earliest phases are the highest impact-per-effort and unblock the release.
+Each phase is one focused PR; 1–3 are the A-grade blockers.
 
-**Phase 1 — Ship-blockers (correctness + the never-leak guarantee).**
-Fix C1 (mapping headers + endpoint interpolation, and correct AGENTS.md/README). Fix H1–H3 (redaction: one implementation via `Redactor`, encoding-robust matching, a policy for server-issued creds) and extend the `doctor` canary to special-char + overlapping + multi secrets so these regressions are caught forever. Fix H4 (status diff) and promote the xfail test. Fix H7 (timeout defaults + total deadline). Remove `docs/design/` and purge the transcript from history (H22); reserve the PyPI name (H23).
+**Phase 1 — Restore trust in the live view (H-1).** Add pass/fail state to `ExecutionProgress`, tally from state not glyphs, show ✗ for errored/assert-failed cells, and rewrite the regression test to feed real progress objects. Small, user-visible, and it closes the only finding where a fix shipped broken with a green test.
 
-**Phase 2 — Close the silent-false-green class.**
-Make the loader strict where it's currently `Any`: `ProjectSpec` interiors, `diffPairs`/`default`, Matrix `target`, Request `matrix` entries, `$val` kind (H5, H8, H9, H14, M11). Fix `resolve_pair`'s lone-flag drop (H6). Make `validate` fail on a missing/empty data dir and an unknown `--report` format (M8, M9). Each of these is a "CI passes when it shouldn't" bug — the worst class for this tool.
+**Phase 2 — Re-arm static analysis and cache the redactor (H-2, H-3).** Replace the star-imports with qualified `render.`/`tokens.` access, drop both `noqa` pragmas; one cached `Redactor` on the app with loud resolution failures. Both mechanical; do them before any further TUI work.
 
-**Phase 3 — Resilience: never crash on valid-looking input.**
-Wrap the assertion/diff/serialize paths so one bad rule, regex, deep body, YAML date, or aware timestamp fails *that item*, not the run (M1–M7). Add the `$val`/interpolation cycle guards (H10).
+**Phase 3 — Publish safety (H-4, S-3, S-6).** Reserve the PyPI name (pending publisher) *now*; fix the `action.yml` version interpolation; scrub the `.gitignore` comment and the old report revision from history. Nothing else blocks going public.
 
-**Phase 4 — TUI trust + de-duplication.**
-Replace fabricated live metrics with real tallies (H13); pin a run's environment at launch (H14); guard focus/footer on the active tab (H15, H18); honestly compare or drop the "drift is the service's" claim (H16); fix the diff re-run guard (H17). Then collapse the duplication that caused several of these: give `execute_all`/`diff_run` an `on_progress` seam and delete the inline TUI orchestration (M30, M34); one cached `Redactor` per project (M31); delete `checks.py` in favor of `assertions.py` (H19); one SSE parser (M33).
+**Phase 4 — Fail-closed stragglers (M-1…M-5, S-1, S-2).** Zero-execution `run` gate; drop `None`-valued optional pairs; `render` error handler + load-time cycle detection; move `build_request` into the adapter's try + per-cell catch-all in `_run_cell`; iterative save-path redaction; truncation flag + streaming cap; confine `spec.data`. Each is a one-file change with an obvious test.
 
-**Phase 5 — Polish for the showcase.**
-OpenAPI import correctness (H11, H12, M16–M19); SARIF `physicalLocation` (M20); archive versioning + retention (M22, M32); `release.yml` release-only guard (M27); remove dead config knobs or wire them up (M25, M26); the documentation drift and dead-weight items. Add the remaining missing tests the audit named (Pilot worker path, report-artifact writing, transport-failure containment).
+**Phase 5 — One verdict pipeline (M-7, M-8, M-9).** `on_progress` for `execute_all`/`diff_run` and delete the inline TUI orchestration; one cell-state classifier consumed by report/execution/archive/CLI; msgspec archive codec with enforced versioning; `_short`/`_redact_value` into `redaction.py`. This retires the class of "TUI and CI disagree" bugs permanently.
+
+**Phase 6 — Structure and polish (M-6, M-10, M-11, lows).** Wire the replay DRIFT INDEX and stop rendering invented modes; split `tui/app.py` per screen (natural after Phase 2); decompose `_check_profiles`/`run_execution`; Textual version bound; `test_render.py`; phantom hints; docs nits; distinct crash exit code.
