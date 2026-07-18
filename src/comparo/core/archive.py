@@ -20,6 +20,7 @@ from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
 from comparo.core.execution import ExecutionResult
 from comparo.core.redaction import mask_credential_header
+from comparo.core.redaction import redact_tree
 from comparo.core.report import diff_gate
 
 #: Schema version stamped into every saved record so a future format change is
@@ -178,21 +179,6 @@ def _summarize(
     return AssertionSummary(passed, failed, warned, lines)
 
 
-def _redact_body(value: object, redact: Callable[[str], str]) -> object:
-    """Recursively mask secrets in a parsed body — keys and string values alike.
-
-    Mirrors ``export._redact_value``: a server can echo a secret as a JSON *key*
-    as well as a value, so both are redacted before the body is written to disk.
-    """
-    if isinstance(value, str):
-        return redact(value)
-    if isinstance(value, dict):
-        return {redact(str(key)): _redact_body(item, redact) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_body(item, redact) for item in value]
-    return value
-
-
 def _cell_record(
     request_id: str, diff: CellDiff | None, redact: Callable[[str], str] = str
 ) -> CellRecord:
@@ -208,8 +194,8 @@ def _cell_record(
         path=redact(outbound.endpoint),
         drift_paths=[redact(f.path) for f in diff.fields if f.state is State.DRIFT],
         skip_paths=[redact(f.path) for f in diff.fields if f.state is State.SKIP],
-        baseline_body=_redact_body(diff.baseline_body, redact),
-        candidate_body=_redact_body(diff.candidate_body, redact),
+        baseline_body=redact_tree(diff.baseline_body, redact),
+        candidate_body=redact_tree(diff.candidate_body, redact),
         status=diff.status,
         latency_ms=diff.latency_ms,
         size_bytes=diff.size_bytes,

@@ -46,6 +46,23 @@ def mask_credential_header(name: str, value: str) -> str:
     return MASK if name.strip().lower() in _CREDENTIAL_HEADERS else value
 
 
+def redact_tree(value: object, redact: Callable[[str], str]) -> object:
+    """Recursively mask secrets in a parsed value — object keys and strings alike.
+
+    A server can echo a secret as a JSON *key* as well as a value, so both are
+    redacted before the tree is serialized to a report, an export, or the archive.
+    The single home for request/response body, ``events``, and ``FieldDiff`` /
+    ``AssertionResult`` value redaction.
+    """
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {redact(str(key)): redact_tree(item, redact) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_tree(item, redact) for item in value]
+    return value
+
+
 def environment_secret_values(environment: Environment, root: Path) -> set[str]:
     """One environment's resolved secret values (``$file`` sources confined to *root*)."""
     values: set[str] = set()
