@@ -36,3 +36,6 @@ runs/
 
 # Private client project (NDA) — never commit
 internal-project/
+
+# Runtime report archive (comparo Report tab)
+.reports/
