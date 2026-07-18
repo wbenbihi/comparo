@@ -30,12 +30,24 @@ class State(enum.Enum):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class FieldDiff:
-    """The comparison outcome at one path."""
+    """The comparison outcome at one path.
+
+    ``baseline``/``candidate`` are the raw values compared at this path (``None``
+    when the field was not compared — an ``ignore`` skip or a max-depth cut), so a
+    report can show the structured "was → now" without re-parsing ``detail``. They
+    may hold a secret a server echoed back, so a sink MUST redact them before
+    serializing (the report builder does, via ``redaction.redact_tree``).
+    ``rule`` is the ``DiffRule.path`` of the profile rule that governed the field,
+    or ``None`` when it fell to the default mode.
+    """
 
     path: str
     state: State
     mode: str
     detail: str = ""
+    baseline: object = None
+    candidate: object = None
+    rule: str | None = None
 
 
 #: A recursion cap so a pathologically deep body compares as a leaf instead of
@@ -49,6 +61,7 @@ class _Rule:
     mode: str
     array_length: str | None
     tolerance: float | None
+    path: str  # the rule's original DiffRule.path, surfaced onto matched FieldDiffs
 
 
 def diff(
@@ -88,17 +101,26 @@ def _walk(
 ) -> list[FieldDiff]:
     rule = _match(path, rules)
     mode = rule.mode if rule is not None else default_mode
+    rule_path = rule.path if rule is not None else None
     rendered = _render(path)
     if mode == "ignore":
-        return [FieldDiff(rendered, State.SKIP, mode)]
+        return [FieldDiff(rendered, State.SKIP, mode, rule=rule_path)]
     if mode == "type":
-        return [_leaf(rendered, _type(baseline) == _type(candidate), mode, baseline, candidate)]
+        return [
+            _leaf(
+                rendered, _type(baseline) == _type(candidate), mode, baseline, candidate, rule_path
+            )
+        ]
     if mode == "tolerance":
         return [_tolerance(rendered, baseline, candidate, rule)]
     if depth >= _MAX_DEPTH:
         # Too deep to recurse safely, AND too deep to compare/render as a leaf
         # (``==`` and ``json.dumps`` would recurse just as far) — mark it uncompared.
-        return [FieldDiff(rendered, State.SKIP, mode, "not compared: max depth exceeded")]
+        return [
+            FieldDiff(
+                rendered, State.SKIP, mode, "not compared: max depth exceeded", rule=rule_path
+            )
+        ]
     return _structural(baseline, candidate, path, rules, default_mode, mode, rule, depth)
 
 
@@ -113,9 +135,20 @@ def _structural(
     depth: int,
 ) -> list[FieldDiff]:
     rendered = _render(path)
+    rule_path = rule.path if rule is not None else None
     baseline_type, candidate_type = _type(baseline), _type(candidate)
     if baseline_type != candidate_type:
-        return [FieldDiff(rendered, State.DRIFT, mode, f"type {baseline_type} → {candidate_type}")]
+        return [
+            FieldDiff(
+                rendered,
+                State.DRIFT,
+                mode,
+                f"type {baseline_type} → {candidate_type}",
+                baseline=baseline,
+                candidate=candidate,
+                rule=rule_path,
+            )
+        ]
     if isinstance(baseline, dict) and isinstance(candidate, dict):
         results: list[FieldDiff] = []
         for key in sorted(set(baseline) | set(candidate)):
@@ -125,11 +158,22 @@ def _structural(
                 # count as drift just because it is present on only one side.
                 child_rule = _match(child, rules)
                 child_mode = child_rule.mode if child_rule is not None else mode
+                child_rule_path = child_rule.path if child_rule is not None else None
                 if child_mode == "ignore":
-                    results.append(FieldDiff(_render(child), State.SKIP, "ignore"))
+                    results.append(
+                        FieldDiff(_render(child), State.SKIP, "ignore", rule=child_rule_path)
+                    )
                 else:
                     results.append(
-                        FieldDiff(_render(child), State.DRIFT, child_mode, "missing on one side")
+                        FieldDiff(
+                            _render(child),
+                            State.DRIFT,
+                            child_mode,
+                            "missing on one side",
+                            baseline=baseline.get(key),
+                            candidate=candidate.get(key),
+                            rule=child_rule_path,
+                        )
                     )
             else:
                 results.extend(
@@ -141,7 +185,15 @@ def _structural(
         strict = mode == "exact" or (rule is not None and rule.array_length == "exact")
         if strict and len(baseline) != len(candidate):
             results.append(
-                FieldDiff(rendered, State.DRIFT, mode, f"length {len(baseline)} → {len(candidate)}")
+                FieldDiff(
+                    rendered,
+                    State.DRIFT,
+                    mode,
+                    f"length {len(baseline)} → {len(candidate)}",
+                    baseline=baseline,
+                    candidate=candidate,
+                    rule=rule_path,
+                )
             )
         for index in range(min(len(baseline), len(candidate))):
             child = (*path, f"[{index}]")
@@ -150,18 +202,38 @@ def _structural(
             )
         return results
     if mode == "exact":
-        return [_leaf(rendered, baseline == candidate, "exact", baseline, candidate)]
-    return [FieldDiff(rendered, State.SAME, mode)]
+        return [_leaf(rendered, baseline == candidate, "exact", baseline, candidate, rule_path)]
+    return [
+        FieldDiff(
+            rendered, State.SAME, mode, baseline=baseline, candidate=candidate, rule=rule_path
+        )
+    ]
 
 
-def _leaf(path: str, equal: bool, mode: str, baseline: object, candidate: object) -> FieldDiff:
+def _leaf(
+    path: str,
+    equal: bool,
+    mode: str,
+    baseline: object,
+    candidate: object,
+    rule: str | None = None,
+) -> FieldDiff:
     if equal:
-        return FieldDiff(path, State.SAME, mode)
-    return FieldDiff(path, State.DRIFT, mode, f"{_short(baseline)} → {_short(candidate)}")
+        return FieldDiff(path, State.SAME, mode, baseline=baseline, candidate=candidate, rule=rule)
+    return FieldDiff(
+        path,
+        State.DRIFT,
+        mode,
+        f"{_short(baseline)} → {_short(candidate)}",
+        baseline=baseline,
+        candidate=candidate,
+        rule=rule,
+    )
 
 
 def _tolerance(path: str, baseline: object, candidate: object, rule: _Rule | None) -> FieldDiff:
     limit = rule.tolerance if rule is not None and rule.tolerance is not None else 0.0
+    rule_path = rule.path if rule is not None else None
     if (
         isinstance(baseline, int | float)
         and isinstance(candidate, int | float)
@@ -169,9 +241,24 @@ def _tolerance(path: str, baseline: object, candidate: object, rule: _Rule | Non
         and not isinstance(candidate, bool)
     ):
         if abs(baseline - candidate) <= limit:
-            return FieldDiff(path, State.SAME, "tolerance")
-        return FieldDiff(path, State.DRIFT, "tolerance", f"{baseline} → {candidate} (±{limit})")
-    return _leaf(path, baseline == candidate, "tolerance", baseline, candidate)
+            return FieldDiff(
+                path,
+                State.SAME,
+                "tolerance",
+                baseline=baseline,
+                candidate=candidate,
+                rule=rule_path,
+            )
+        return FieldDiff(
+            path,
+            State.DRIFT,
+            "tolerance",
+            f"{baseline} → {candidate} (±{limit})",
+            baseline=baseline,
+            candidate=candidate,
+            rule=rule_path,
+        )
+    return _leaf(path, baseline == candidate, "tolerance", baseline, candidate, rule_path)
 
 
 def _match(path: tuple[str, ...], rules: list[_Rule]) -> _Rule | None:
@@ -192,7 +279,7 @@ def _segment_matches(rule_segment: str, path_segment: str) -> bool:
 
 
 def _compile(rule: DiffRule) -> _Rule:
-    return _Rule(_parse_path(rule.path), rule.mode, rule.array_length, rule.tolerance)
+    return _Rule(_parse_path(rule.path), rule.mode, rule.array_length, rule.tolerance, rule.path)
 
 
 def _parse_path(path: str) -> tuple[str, ...]:

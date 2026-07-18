@@ -18,6 +18,7 @@ from comparo.core.assertions import profiles_to_rules
 from comparo.core.assertions import request_response_rules
 from comparo.core.compare import CellDiff
 from comparo.core.compare import compare_cell
+from comparo.core.execute import Execution
 from comparo.core.execute import execute_request
 from comparo.core.execute import run_settings
 from comparo.core.http import HttpClient
@@ -44,6 +45,13 @@ class CellOutcome:
     candidate_assertions: list[AssertionResult]
     diff: CellDiff | None
     error: str | None = None
+    #: The two executions this cell ran — the exact request sent and the full
+    #: response received, per side — kept even when no diff was computed, so the
+    #: v1 report builder can serialize both sides. In-memory only (they hold live
+    #: secrets); redacted at build time. ``candidate`` is ``None`` for a
+    #: baseline-only execution.
+    baseline: Execution | None = None
+    candidate: Execution | None = None
 
     @property
     def ok(self) -> bool:
@@ -251,6 +259,8 @@ async def run_execution(
                 ),
                 diff=diff,
                 error=base.error or (cand.error if cand is not None else None),
+                baseline=base,
+                candidate=cand,
             )
             if on_progress is not None:
                 on_progress(

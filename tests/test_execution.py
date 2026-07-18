@@ -143,6 +143,12 @@ def test_execution_asserts_both_envs_and_diffs(tmp_path: Path) -> None:
     assert outcome.diff.drifted
     assert not result.passed
     assert result.drift == 1
+    # Both executions are threaded onto the outcome so a report can serialize each
+    # side's request+response even when no diff is computed.
+    assert outcome.baseline is not None
+    assert outcome.candidate is not None
+    assert outcome.baseline.response is not None
+    assert outcome.candidate.response is not None
 
 
 def test_execution_assertion_failure_fails_the_gate(tmp_path: Path) -> None:

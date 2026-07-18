@@ -45,6 +45,22 @@ def test_execute_request_returns_response() -> None:
     assert result.response is not None
     assert result.response.status == 200
     assert fake.sent[0].url == "http://localhost:8080/json"
+    # The exact request sent is kept on the result, so a report can serialize it.
+    assert result.resolved is fake.sent[0]
+
+
+def test_resolve_failure_leaves_no_resolved_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    # When resolution itself fails (a missing secret), there is no outbound request
+    # to keep — resolved stays None, so a report never serializes a phantom send.
+    monkeypatch.delenv("COMPARO_DEMO_TOKEN", raising=False)
+    loaded = load_project(SAMPLE)
+    env = select_environment(loaded, "prod")
+    request = loaded.objects["request.echo-anything"]
+    assert isinstance(request, Request)
+    fake = _FakeClient(HttpResponse(200, [], b"", 1.0))
+    result = asyncio.run(execute_request(loaded, env, request, fake))
+    assert not result.ok
+    assert result.resolved is None
 
 
 def test_unresolved_secret_becomes_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -44,6 +44,12 @@ class CellDiff:
     latency_ms: int | None = None
     size_bytes: int | None = None
     response_headers: tuple[tuple[str, str], ...] = ()
+    #: The two executions this cell paired — the exact request sent and the full
+    #: response received, per side — so the v1 report builder can serialize both
+    #: sides' request+response. In-memory only (they hold live secrets); redacted
+    #: at build time, never part of an already-serialized report.
+    baseline: Execution | None = None
+    candidate: Execution | None = None
 
     @property
     def drifted(self) -> bool:
@@ -123,14 +129,25 @@ def _compare(
 ) -> CellDiff:
     request, key = baseline.request, baseline.cell_key
     if candidate is None:
-        return CellDiff(request, key, [], "no candidate result")
+        return CellDiff(request, key, [], "no candidate result", baseline=baseline, candidate=None)
     if baseline.error is not None:
-        return CellDiff(request, key, [], f"baseline: {baseline.error}")
+        return CellDiff(
+            request, key, [], f"baseline: {baseline.error}", baseline=baseline, candidate=candidate
+        )
     if candidate.error is not None:
-        return CellDiff(request, key, [], f"candidate: {candidate.error}")
+        return CellDiff(
+            request,
+            key,
+            [],
+            f"candidate: {candidate.error}",
+            baseline=baseline,
+            candidate=candidate,
+        )
     baseline_response, candidate_response = baseline.response, candidate.response
     if baseline_response is None or candidate_response is None:
-        return CellDiff(request, key, [], "missing response")
+        return CellDiff(
+            request, key, [], "missing response", baseline=baseline, candidate=candidate
+        )
     default_mode, rules = _compose_diff(project, request, diff_override)
     # A ``$status`` rule (matched by its literal path, never through the JSON-path
     # compiler, so it can't collide with a body field ``$.status``) governs the
@@ -155,6 +172,8 @@ def _compare(
             latency_ms=latency,
             size_bytes=size,
             response_headers=headers,
+            baseline=baseline,
+            candidate=candidate,
         )
     try:
         baseline_body = json.loads(baseline_response.body)
@@ -168,6 +187,8 @@ def _compare(
             baseline_response.body,
             candidate_response.body,
             status_field,
+            baseline_exec=baseline,
+            candidate_exec=candidate,
             status=status,
             latency=latency,
             size=size,
@@ -183,6 +204,8 @@ def _compare(
         latency_ms=latency,
         size_bytes=size,
         response_headers=headers,
+        baseline=baseline,
+        candidate=candidate,
     )
 
 
@@ -194,11 +217,22 @@ def _status_field(baseline: int, candidate: int, rules: list[DiffRule]) -> Field
     for an endpoint whose status legitimately varies) skips it.
     """
     override = next((rule for rule in rules), None)
+    rule_path = override.path if override is not None else None
     if override is not None and override.mode == "ignore":
-        return FieldDiff("$status", State.SKIP, "ignore")
+        return FieldDiff("$status", State.SKIP, "ignore", rule=rule_path)
     if baseline == candidate:
-        return FieldDiff("$status", State.SAME, "exact")
-    return FieldDiff("$status", State.DRIFT, "exact", f"{baseline} → {candidate}")
+        return FieldDiff(
+            "$status", State.SAME, "exact", baseline=baseline, candidate=candidate, rule=rule_path
+        )
+    return FieldDiff(
+        "$status",
+        State.DRIFT,
+        "exact",
+        f"{baseline} → {candidate}",
+        baseline=baseline,
+        candidate=candidate,
+        rule=rule_path,
+    )
 
 
 def _compose_diff(
@@ -232,16 +266,18 @@ def _project_default_diff(project: LoadedProject) -> list[DiffProfileSpec]:
 def _raw_compare(
     request: Request,
     key: str,
-    baseline: bytes,
-    candidate: bytes,
+    baseline_bytes: bytes,
+    candidate_bytes: bytes,
     status_field: FieldDiff,
     *,
+    baseline_exec: Execution,
+    candidate_exec: Execution,
     status: int,
     latency: int,
     size: int,
     headers: tuple[tuple[str, str], ...],
 ) -> CellDiff:
-    if baseline == candidate:
+    if baseline_bytes == candidate_bytes:
         body_field = FieldDiff("$", State.SAME, "exact")
     else:
         body_field = FieldDiff("$", State.DRIFT, "exact", "response bodies differ")
@@ -253,6 +289,8 @@ def _raw_compare(
         latency_ms=latency,
         size_bytes=size,
         response_headers=headers,
+        baseline=baseline_exec,
+        candidate=candidate_exec,
     )
 
 

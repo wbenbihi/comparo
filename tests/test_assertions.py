@@ -218,3 +218,28 @@ def test_request_response_rules_includes_the_assert_block(tmp_path: Path) -> Non
     good = Execution(request, environment, "", HttpResponse(200, [], b'{"ok": true}', 1.0))
     assert not passed(evaluate_rules(loaded, rules, bad))
     assert passed(evaluate_rules(loaded, rules, good))
+
+
+def test_result_carries_expected_and_actual() -> None:
+    # A structured report shows the declared expectation vs the observed value,
+    # so each result exposes both without re-parsing the detail string.
+    loaded = load_project(SAMPLE)
+    execution = _execution(loaded, status=503)
+    [result] = evaluate_rules(
+        loaded, [AssertionRule(target="status", op="equals", value=200)], execution
+    )
+    assert not result.ok
+    assert result.expected == 200
+    assert result.actual == 503
+
+
+def test_no_response_result_carries_expectation_and_null_actual() -> None:
+    loaded = load_project(SAMPLE)
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    environment = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    execution = Execution(request, environment, "", None, "boom")
+    [result] = evaluate_rules(
+        loaded, [AssertionRule(target="status", op="equals", value=200)], execution
+    )
+    assert result.expected == 200
+    assert result.actual is None
