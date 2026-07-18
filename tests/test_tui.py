@@ -1529,3 +1529,29 @@ def test_a_diff_finishing_on_another_tab_does_not_steal_focus() -> None:
             assert getattr(app.focused, "id", None) == "tree"
 
     asyncio.run(go())
+
+
+def test_run_env_is_pinned_and_survives_a_default_env_change() -> None:
+    # H14: a run saves/labels against the env it executed on, not whatever the
+    # default happens to be later. Pinning _run_env decouples the two.
+
+    from comparo.tui.app import _app_env
+
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("2")  # Run tab
+            await pilot.pause()
+            run = app.query_one(RunView)
+            envs = _environments(loaded)
+            assert len(envs) >= 2
+            run._run_env = envs[0]  # what execute() pins at launch
+            app.set_default_environment(envs[1])  # user changes the default later
+            await pilot.pause()
+            assert run._run_env is envs[0]  # the run's env is unchanged...
+            assert _app_env(run) is envs[1]  # ...even though the default moved
+
+    asyncio.run(go())

@@ -1035,6 +1035,9 @@ class RunView(Vertical):
         self._detail_focus = "all"
         self._worker: Worker[None] | None = None
         self._done = False
+        #: The environment the current run executed against, pinned at launch so a
+        #: later default-env change can't mislabel or mis-save the finished run.
+        self._run_env: Environment | None = None
 
     def compose(self) -> ComposeResult:
         """Yield the two states behind a switcher."""
@@ -1250,6 +1253,7 @@ class RunView(Vertical):
             return
         self._done = False
         self._run_id = uuid4().hex[:6]
+        self._run_env = environment  # pin the run's env; the default may change later
         self._focus = None
         self._focus_cell = None
         self._view = "requests"
@@ -1317,7 +1321,7 @@ class RunView(Vertical):
         if mode != "running" or not self._done or self._run_id is None:
             self.app.notify("Finish a run before saving", severity="information")
             return
-        environment = _app_env(self)
+        environment = self._run_env or _app_env(self)
         if environment is None:
             return
         entries = [
@@ -1530,7 +1534,7 @@ class RunView(Vertical):
         _build_report_tree(
             tree,
             self.project,
-            _app_env(self),
+            self._run_env or _app_env(self),
             request,
             cell,
             self._exec.get(key),
@@ -1596,7 +1600,7 @@ class RunView(Vertical):
         self._render_progress()
 
     def _render_progress(self) -> None:
-        environment = _app_env(self)
+        environment = self._run_env or _app_env(self)
         self.query_one("#col-requests").border_title = Text.from_markup(
             f"REQUESTS{self._filter_suffix()}"
         )
