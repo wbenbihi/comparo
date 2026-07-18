@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from comparo.core.archive import record_from_execution
 from comparo.core.assertions import AssertionResult
 from comparo.core.compare import CellDiff
@@ -18,10 +20,14 @@ from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
 from comparo.core.matrix import MatrixCell
 from comparo.core.models import Environment
+from comparo.core.models import EnvironmentSpec
+from comparo.core.models import Meta
 from comparo.core.models import Request
 from comparo.core.redaction import MASK
 from comparo.core.redaction import Redactor
+from comparo.core.redaction import environment_secret_values
 from comparo.core.report import build_report
+from comparo.core.secrets import SecretError
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "canary-project"
 SECRET = "cG9zdG1hbjpwYXNzd29yZA=="  # the canary BASIC_AUTH literal
@@ -36,6 +42,41 @@ def _request(loaded: object) -> Request:
 def test_secret_values_are_collected() -> None:
     loaded = load_project(SAMPLE)
     assert SECRET in Redactor.for_project(loaded).values
+
+
+def _env_with_secret(source: object) -> Environment:
+    return Environment(
+        api_version="comparo/v1",
+        metadata=Meta(name="Canary", id="canary"),
+        spec=EnvironmentSpec(base_url="http://x", secrets={"API": source}),
+    )
+
+
+def test_redactor_fails_closed_when_a_declared_secret_file_becomes_unreadable(
+    tmp_path: Path,
+) -> None:
+    # H-3: the string-match backstop is a floor. If a declared $file was readable
+    # (so its value may already be in a server-echoed response) and then can't be
+    # read at redaction time, we must NOT quietly return a smaller value set —
+    # that would let the secret slip into a report/archive. It must fail loudly.
+    file = tmp_path / "token.txt"
+    file.write_text("in-tree-secret\n", encoding="utf-8")
+    env = _env_with_secret({"$file": "token.txt"})
+    assert "in-tree-secret" in environment_secret_values(env, tmp_path)
+
+    file.unlink()
+    with pytest.raises(SecretError):
+        environment_secret_values(env, tmp_path)
+
+
+def test_redactor_skips_an_unset_env_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The other side of fail-closed: an unset $env var is a benign gap (never
+    # available, so never echoed). Skipped, not fatal — masking still proceeds.
+    monkeypatch.delenv("COMPARO_UNSET_CANARY", raising=False)
+    env = _env_with_secret({"$env": "COMPARO_UNSET_CANARY"})
+    assert environment_secret_values(env, tmp_path) == set()
 
 
 def test_build_report_redacts_a_leaked_secret() -> None:

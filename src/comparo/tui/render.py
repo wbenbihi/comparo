@@ -27,7 +27,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
-from textual.widget import Widget
+from textual.dom import DOMNode
 from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 
@@ -68,7 +68,6 @@ from comparo.core.models import Request
 from comparo.core.models import Schema
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
-from comparo.core.redaction import Redactor
 from comparo.core.redaction import mask_credential_header
 from comparo.core.refs import ref_id as _ref_id
 from comparo.core.resolve import EnvironmentSelectionError
@@ -1326,10 +1325,15 @@ def _pad_cells(text: str, width: int) -> str:
     return text + " " * (width - cell_len(text))
 
 
-def _app_redact(widget: Widget) -> Callable[[str], str]:
-    """The project's secret-redactor for a widget, or identity if no project is loaded."""
-    project = cast("ComparoApp", widget.app).project
-    return Redactor.for_project(project).text if project is not None else str
+def _app_redact(node: DOMNode) -> Callable[[str], str]:
+    """The project's secret-redactor for a DOM node, or identity if no project loaded.
+
+    Accepts any ``DOMNode`` (a view widget or the ``App`` itself), and is backed by
+    ``ComparoApp.redactor`` (built once per project), so the many render sites share
+    a single redactor instead of each rebuilding one.
+    """
+    app = cast("ComparoApp", node.app)
+    return app.redactor.text if app.project is not None else str
 
 
 def _body_diff_lines(
@@ -3046,12 +3050,13 @@ def _settings_body(
     key: str,
     selfcheck: list[tuple[str, str, bool]] | None,
     checking: bool,
+    redact: Callable[[str], str],
 ) -> RenderableType:
     """Render one settings section - the master/detail right pane."""
     if key == "about":
         return _settings_about()
     if key == "project":
-        return _settings_project(project)
+        return _settings_project(project, redact)
     if key == "security":
         return _settings_security(selfcheck, checking)
     if key == "appearance":
@@ -3087,13 +3092,12 @@ def _settings_about() -> Text:
     return text
 
 
-def _settings_project(project: LoadedProject) -> Text:
+def _settings_project(project: LoadedProject, redact: Callable[[str], str]) -> Text:
     def count(kind: type | tuple[type, ...]) -> int:
         return sum(1 for obj in project.objects.values() if isinstance(obj, kind))
 
     # An env or project NAME can equal a declared secret value (the untainted
     # vector) — this is a display sink, so mask through the project's redactor.
-    redact = Redactor.for_project(project).text
     manifest = project.project
     spec = manifest.spec if manifest else None
     default = _default_environment(project)

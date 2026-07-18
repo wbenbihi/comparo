@@ -44,6 +44,30 @@ from comparo.tui.render import _record_detail
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
 
 
+def test_app_redactor_is_built_once_and_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # H-3: the redactor reads every declared secret file, so it must be built once
+    # per project and shared across render sites, not rebuilt on each access.
+    from comparo.core import redaction
+
+    loaded = load_project(SAMPLE)
+    app = ComparoApp(loaded)
+
+    calls = 0
+    real = redaction.secret_values
+
+    def counting(project: object) -> set[str]:
+        nonlocal calls
+        calls += 1
+        return real(project)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(redaction, "secret_values", counting)
+
+    first = app.redactor
+    second = app.redactor
+    assert first is second  # cached_property hands back the same instance
+    assert calls == 1  # the secret files are read once, not per redact site
+
+
 def test_explorer_tree_keeps_focus_at_boot_and_on_return() -> None:
     # KEY-05 (functional): the Explorer's nav keys are tree-scoped, so the tree
     # must hold focus at boot and whenever the Explorer tab is re-entered.

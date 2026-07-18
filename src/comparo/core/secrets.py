@@ -13,6 +13,18 @@ class SecretError(Exception):
     """Raised when a required secret cannot be resolved from its source."""
 
 
+class SecretUnavailableError(SecretError):
+    """A secret whose source is simply *absent*.
+
+    An unset ``$env`` var, an undeclared name, or a fully-exhausted ``from`` chain.
+    Distinguished from a plain :class:`SecretError` (an *anomalous* failure — an
+    unreadable or root-escaping ``$file``, an unsupported source shape) so the
+    redactor can skip a benign gap while still failing closed on a declared
+    secret it cannot read. The value was never available this session, so it
+    cannot have been echoed back into a response.
+    """
+
+
 @dataclasses.dataclass(slots=True)
 class ExecuteSecrets:
     """Resolves declared secrets to real values on demand."""
@@ -37,7 +49,7 @@ class ExecuteSecrets:
             return self._cache[name]
         if name not in self.sources:
             message = f"no secret named '{name}'"
-            raise SecretError(message)
+            raise SecretUnavailableError(message)
         value = _resolve(name, self.sources[name], self.root)
         self._cache[name] = value
         return value
@@ -50,7 +62,7 @@ def _resolve(name: str, source: object, root: Path) -> str:
             value = os.environ.get(variable)
             if value is None:
                 message = f"secret '{name}': environment variable '{variable}' is not set"
-                raise SecretError(message)
+                raise SecretUnavailableError(message)
             return value
         if "$literal" in source:
             return str(source["$literal"])
@@ -72,7 +84,10 @@ def _resolve(name: str, source: object, root: Path) -> str:
                     return _resolve(name, candidate, root)
                 except SecretError:
                     continue
+            # An explicit fallback chain that resolves to nothing: the secret is
+            # unavailable this session (it would also fail at execute time, so it
+            # was never sent). Benign for the redactor to skip.
             message = f"secret '{name}': no source in 'from' resolved"
-            raise SecretError(message)
+            raise SecretUnavailableError(message)
     message = f"secret '{name}': unsupported source"
     raise SecretError(message)
