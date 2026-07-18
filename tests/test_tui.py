@@ -426,6 +426,100 @@ def test_execution_screen_renders_outcomes_and_gate() -> None:
     asyncio.run(go())
 
 
+def test_execution_rerun_clears_the_stale_cell() -> None:
+    # M-d: launching a re-run must drop any cell drilled into on the previous run,
+    # so a stale CellOutcome can never be rendered against the new result.
+    loaded = load_project(SAMPLE)
+    request = loaded.objects["request.get-json"]
+    assert isinstance(request, Request)
+    ok = AssertionResult("status", "equals", True, "error", "200 == 200")
+    diff = CellDiff(
+        request, "", [FieldDiff("$.a", State.DRIFT, "exact", '"x" → "y"')], None, {"a": "x"}, {}
+    )
+    outcome = CellOutcome("request.get-json", "", [ok], [ok], diff)
+    result = ExecutionResult("exec.demo", "Base", "Cand", True, True, [outcome])
+    profile = loaded.objects["execution.smoke"]
+    assert isinstance(profile, ExecutionProfile)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("4")  # Execution tab
+            await pilot.pause()
+            view = app.query_one(ExecutionView)
+            view.show_result(result, profile, None)
+            await pilot.pause()
+            # drill into the drifting cell (as selecting a drift row would). The
+            # explicit type keeps mypy from narrowing _cell to non-None here, which
+            # would make the post-launch `is None` assertion look unreachable.
+            drilled: CellOutcome | None = outcome
+            view._cell = drilled
+            view._drifted = [outcome]
+
+            # Stub the worker body so the re-run never touches the network.
+            async def _noop(*_args: object, **_kwargs: object) -> None:
+                return None
+
+            view._run = _noop  # type: ignore[method-assign]
+            # re-run resets state synchronously, before the worker starts
+            view.launch(profile)
+            assert view._cell is None  # the fix: no stale cell survives a re-run
+            assert view._drifted == []
+            await pilot.pause()  # let the stubbed worker finish cleanly
+
+    asyncio.run(go())
+
+
+def test_report_filter_survives_returning_to_the_tab() -> None:
+    # M-c/M23: apply_filter matches id/envs/kind/gate/execution, but refresh_screen
+    # (fired on re-entering the tab) used to re-filter on id ALONE — silently
+    # collapsing a gate/envs filter to nothing. Both must share one predicate.
+    from comparo.core.archive import AssertionSummary
+    from comparo.core.archive import ReportRecord
+
+    loaded = load_project(SAMPLE)
+    empty = AssertionSummary(0, 0, 0, [])
+
+    def _rec(rid: str, gate: str) -> ReportRecord:
+        return ReportRecord(
+            id=rid,
+            created="2026-01-01",
+            execution=None,
+            baseline="local",
+            candidate="prod",
+            gate=gate,
+            calls=1,
+            same=0,
+            drift=1 if gate == "FAIL" else 0,
+            error=0,
+            skipped=0,
+            baseline_assertions=empty,
+            candidate_assertions=empty,
+            requests=[],
+        )
+
+    records = [_rec("run-a", "FAIL"), _rec("run-b", "PASS")]
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("5")  # Report tab
+            await pilot.pause()
+            view = app.query_one(ReportView)
+            view._load_records = lambda: records  # type: ignore[method-assign]  # bypass empty archive
+            view._records = records
+            # filter by GATE — the field refresh_screen used to drop
+            assert view.apply_filter("fail") == 1
+            assert [r.id for r in view._filtered] == ["run-a"]
+            # returning to the tab re-runs refresh_screen; the gate filter must hold
+            view.refresh_screen()
+            assert [r.id for r in view._filtered] == ["run-a"]
+
+    asyncio.run(go())
+
+
 def test_diff_toggles_flip_view_and_index() -> None:
     loaded = load_project(SAMPLE)
 

@@ -2322,20 +2322,27 @@ class ReportView(Vertical):
         """Filter the saved-run list by id / envs / kind / gate / execution; returns the count."""
         self.filter_query = query
         needle = query.strip().lower()
-        self._filtered = [
-            record
-            for record in self._records
-            if not needle
+        self._filtered = [record for record in self._records if self._matches(record, needle)]
+        self._populate_list()
+        if self._filtered:
+            self._show(self._filtered[0])
+        return len(self._filtered)
+
+    def _matches(self, record: ReportRecord, needle: str) -> bool:
+        """Whether *record* matches the lower-cased *needle* across every filtered field.
+
+        The one predicate both :meth:`apply_filter` and :meth:`refresh_screen` use —
+        so returning to the tab can never re-filter on a narrower set of fields and
+        silently collapse a gate / envs / kind / execution filter to nothing.
+        """
+        return (
+            not needle
             or needle in record.id.lower()
             or needle in _envs_label(record).lower()
             or needle in _record_kind(record)
             or needle in record.gate.lower()
             or needle in (record.execution or "").lower()
-        ]
-        self._populate_list()
-        if self._filtered:
-            self._show(self._filtered[0])
-        return len(self._filtered)
+        )
 
     def compose(self) -> ComposeResult:
         """Yield the browser, the saved-diff replay, and the saved-run replay."""
@@ -2394,12 +2401,8 @@ class ReportView(Vertical):
         if view == "report-browse":
             selected = self._selected()
             self._records = self._load_records()
-            self._filtered = [
-                record
-                for record in self._records
-                if not self.filter_query.strip()
-                or self.filter_query.strip().lower() in record.id.lower()
-            ]
+            needle = self.filter_query.strip().lower()
+            self._filtered = [record for record in self._records if self._matches(record, needle)]
             self._populate_list()
             self.query_one("#report-table", DataTable).focus()
             if self._filtered:
@@ -3697,6 +3700,11 @@ class ExecutionView(Vertical):
         self._profile = profile
         self._result = None
         self._record = None
+        # A re-run starts from a clean slate: drop any cell drilled into on the
+        # previous run so a stale CellOutcome can never be rendered against the
+        # new result (its drift index is rebuilt by _show_results).
+        self._cell = None
+        self._drifted = []
         self._run_id = uuid4().hex[:4]
         self._done = 0
         self._total = 0
