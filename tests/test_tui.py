@@ -1503,3 +1503,29 @@ def test_diff_can_rerun_from_results_after_picking_a_new_pair() -> None:
             assert diff._run_id != "old99"
 
     asyncio.run(go())
+
+
+def test_a_diff_finishing_on_another_tab_does_not_steal_focus() -> None:
+    # H15: if a diff completes while the user has navigated away, _finish must not
+    # yank focus to the hidden drift table (their visible tab would go dead).
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")  # Diff
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            diff.prime_pair(*[e.metadata.name for e in _environments(loaded)[:2]])
+            diff.execute()
+            await pilot.pause()
+            await pilot.press("1")  # navigate to Explorer while the diff runs
+            await pilot.pause()
+            assert getattr(app.focused, "id", None) == "tree"
+            diff._finish([])  # the diff completes in the background
+            await pilot.pause()
+            # focus stays on the Explorer tree — the background diff didn't steal it
+            assert getattr(app.focused, "id", None) == "tree"
+
+    asyncio.run(go())

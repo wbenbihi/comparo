@@ -2343,9 +2343,12 @@ class DiffView(Vertical):
         self._regroup()
         self._render_progress()
         self._populate_drift()
-        # Focus the results pane so the RESULTS keys (↑↓/r/v/i/s/esc) fire on landing.
-        self.query_one("#drift-table", DataTable).focus()
-        self.refresh_footer()
+        # Only grab focus + the footer if the Diff tab is actually showing — a diff
+        # that finishes while the user is on another tab must not steal their keys
+        # (returning to the Diff tab re-focuses via refresh_screen).
+        if cast("ComparoApp", self.app).query_one(NavBar).active == "diff":
+            self.query_one("#drift-table", DataTable).focus()
+            self.refresh_footer()
         drift = sum(1 for cell in self._cells if cell.drifted)
         errors = sum(1 for cell in self._cells if cell.error is not None)
         passed = diff_passed(len(self._cells), drift, errors)
