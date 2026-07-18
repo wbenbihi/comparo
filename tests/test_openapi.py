@@ -144,9 +144,9 @@ def test_endpoints_bodies_and_response_schema_ref(tmp_path: Path) -> None:
     assert isinstance(list_users, Request)
     assert isinstance(create_user, Request)
 
-    # Path params are kept verbatim; the 2xx $ref response maps to a comparo Schema.
+    # Path params become ${...} holes; the 2xx $ref response maps to a comparo Schema.
     assert get_user.spec.request.method == "GET"
-    assert get_user.spec.request.endpoint == "/users/{id}"
+    assert get_user.spec.request.endpoint == "/users/${id}"
     assert get_user.spec.response is not None
     assert get_user.spec.response.status == 200
     assert get_user.spec.response.schema == {"$ref": "schema.user"}
@@ -227,6 +227,168 @@ def test_load_spec_accepts_yaml() -> None:
     result = openapi.import_openapi(parsed)
     assert result.project_name == "YAML API"
     assert len(result.environments) == 1  # placeholder, no servers declared
+
+
+def test_basic_auth_declares_both_username_and_password_secrets() -> None:
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Basic API"},
+        "components": {
+            "securitySchemes": {
+                "basicAuth": {"type": "http", "scheme": "basic"},
+            },
+        },
+        "paths": {},
+    }
+    result = openapi.import_openapi(spec)
+    environment = result.environments[0].document["spec"]
+    # The auth stub references both holes, so both secrets must be declared.
+    assert environment["auth"] == {
+        "basic": {"username": "${API_USERNAME}", "password": "${API_PASSWORD}"}
+    }
+    assert environment["secrets"] == {
+        "API_PASSWORD": {"$env": "API_PASSWORD"},
+        "API_USERNAME": {"$env": "API_USERNAME"},
+    }
+    assert result.secret_env_vars == ["API_PASSWORD", "API_USERNAME"]
+
+
+def test_path_params_become_holes_backed_by_environment_stubs(tmp_path: Path) -> None:
+    manifest = _import_to(tmp_path, SPEC)
+    loaded = load_project(manifest)
+    get_user = loaded.objects["request.getuser"]
+    assert isinstance(get_user, Request)
+    assert get_user.spec.request.endpoint == "/users/${id}"
+
+    # Every environment declares a same-named stub variable, so ${id} resolves.
+    for environment in (o for o in loaded.objects.values() if isinstance(o, Environment)):
+        assert environment.spec.variables == {"id": "0"}
+
+
+def test_apikey_query_scheme_wires_a_query_param() -> None:
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Query-keyed API"},
+        "components": {
+            "securitySchemes": {
+                "key": {"type": "apiKey", "in": "query", "name": "api_key"},
+            },
+        },
+        "paths": {
+            "/things": {
+                "get": {"operationId": "listThings", "responses": {"200": {"description": "ok"}}},
+            },
+        },
+    }
+    result = openapi.import_openapi(spec)
+    request = result.requests[0].document["spec"]["request"]
+    assert request["query"] == {"api_key": "${API_KEY}"}
+    environment = result.environments[0].document["spec"]
+    assert environment["secrets"] == {"API_KEY": {"$env": "API_KEY"}}
+
+
+def test_apikey_cookie_scheme_wires_a_cookie() -> None:
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Cookie-keyed API"},
+        "components": {
+            "securitySchemes": {
+                "key": {"type": "apiKey", "in": "cookie", "name": "session"},
+            },
+        },
+        "paths": {
+            "/things": {
+                "get": {"operationId": "listThings", "responses": {"200": {"description": "ok"}}},
+            },
+        },
+    }
+    result = openapi.import_openapi(spec)
+    request = result.requests[0].document["spec"]["request"]
+    assert request["cookies"] == {"session": "${API_KEY}"}
+    assert "query" not in request
+
+
+def test_form_only_request_body_becomes_a_form_body() -> None:
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Form API"},
+        "paths": {
+            "/login": {
+                "post": {
+                    "operationId": "login",
+                    "requestBody": {
+                        "content": {
+                            "application/x-www-form-urlencoded": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "username": {"type": "string"},
+                                        "attempts": {"type": "integer"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "responses": {"200": {"description": "ok"}},
+                },
+            },
+        },
+    }
+    result = openapi.import_openapi(spec)
+    request = result.requests[0].document["spec"]["request"]
+    assert request["body"] == {"username": "string", "attempts": 0}
+    assert request["bodyType"] == "form"
+
+
+def test_cross_referencing_schemas_have_no_dangling_component_pointers(tmp_path: Path) -> None:
+    spec = {
+        **SPEC,
+        "components": {
+            **SPEC["components"],
+            "schemas": {
+                "User": SPEC["components"]["schemas"]["User"],
+                "Team": {
+                    "type": "object",
+                    "properties": {
+                        "lead": {"$ref": "#/components/schemas/User"},
+                        "members": {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/User"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+    manifest = _import_to(tmp_path, spec)
+    loaded = load_project(manifest)
+    team = loaded.objects["schema.team"]
+    user = loaded.objects["schema.user"]
+    assert isinstance(team, Schema)
+    assert isinstance(user, Schema)
+
+    # Referenced components are inlined under $defs and pointers made local, so
+    # neither standalone Schema document contains a dangling #/components ref.
+    assert team.spec["properties"]["lead"] == {"$ref": "#/$defs/User"}
+    assert team.spec["$defs"]["User"]["properties"]["manager"] == {"$ref": "#/$defs/User"}
+    assert user.spec["properties"]["manager"] == {"$ref": "#"}
+    assert "#/components" not in json.dumps(team.spec)
+    assert "#/components" not in json.dumps(user.spec)
+
+
+def test_external_path_ref_is_skipped_with_a_warning() -> None:
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Split API"},
+        "paths": {
+            "/users": {"$ref": "./paths/users.yaml"},
+        },
+    }
+    result = openapi.import_openapi(spec)
+    assert result.requests == []
+    assert len(result.warnings) == 1
+    assert "./paths/users.yaml" in result.warnings[0]
+    assert "/users" in result.warnings[0]
 
 
 def test_apikey_header_scheme_becomes_a_header_secret() -> None:

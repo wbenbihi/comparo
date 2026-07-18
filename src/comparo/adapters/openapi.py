@@ -22,6 +22,7 @@ before it is returned, so a mistyped field is a hard error here, not at load.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import io
 import json
@@ -82,6 +83,8 @@ class ImportResult:
     schemas: list[ImportedObject]
     #: Placeholder environment-variable names the declared secrets read from.
     secret_env_vars: list[str]
+    #: Human-readable notes about spec constructs the import had to skip.
+    warnings: list[str] = dataclasses.field(default_factory=list)
 
     @property
     def default_environment(self) -> str:
@@ -135,10 +138,10 @@ def import_openapi(spec: Mapping[str, Any], *, name: str | None = None) -> Impor
     version = _require_openapi_3(spec)
     project_name = _project_name(spec, name)
 
-    auth, secrets, headers = _security(spec)
+    auth, secrets, headers, api_key_params = _security(spec)
     schemas, schema_ids = _schemas(spec)
-    environments = _environments(spec, auth, secrets, headers)
-    requests = _requests(spec, schema_ids)
+    requests, path_variables, warnings = _requests(spec, schema_ids, api_key_params)
+    environments = _environments(spec, auth, secrets, headers, path_variables)
 
     result = ImportResult(
         project_name=project_name,
@@ -146,6 +149,7 @@ def import_openapi(spec: Mapping[str, Any], *, name: str | None = None) -> Impor
         requests=requests,
         schemas=schemas,
         secret_env_vars=sorted(secrets),
+        warnings=warnings,
     )
     for obj in (*environments, *requests, *schemas):
         _validate(obj, version)
@@ -219,11 +223,13 @@ def _environments(
     auth: Any,
     secrets: dict[str, Any],
     headers: list[dict[str, Any]],
+    variables: dict[str, str],
 ) -> list[ImportedObject]:
     """Build one Environment per server (or a single placeholder when there are none).
 
-    Every environment carries the same auth stub, secrets, and header set so a
-    request stays environment-agnostic and a diff pair compares like for like.
+    Every environment carries the same auth stub, secrets, header set, and path
+    stub variables so a request stays environment-agnostic and a diff pair
+    compares like for like.
     """
     servers = spec.get("servers")
     entries: Sequence[Any] = servers if isinstance(servers, list) and servers else [None]
@@ -243,6 +249,8 @@ def _environments(
         environment_id = f"environment.{slug}"
 
         body: dict[str, Any] = {"baseUrl": base_url}
+        if variables:
+            body["variables"] = dict(variables)
         if headers:
             body["headers"] = [dict(header) for header in headers]
         if secrets:
@@ -281,27 +289,33 @@ def _server_base_url(server: Mapping[str, Any]) -> str:
 # ── Security → auth stubs + secrets ──────────────────────────────────────────
 
 
-def _security(spec: Mapping[str, Any]) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
-    """Translate ``securitySchemes`` into an auth stub, secrets, and headers.
+def _security(
+    spec: Mapping[str, Any],
+) -> tuple[Any, dict[str, Any], list[dict[str, Any]], dict[str, dict[str, str]]]:
+    """Translate ``securitySchemes`` into an auth stub, secrets, and key wiring.
 
-    Returns a ``(auth, secrets, headers)`` triple. ``auth`` is the first
-    Basic/Bearer (or OAuth/OIDC) scheme mapped to comparo's first-class ``auth``
-    block; an ``apiKey`` header scheme becomes an environment header. Every
-    credential is a ``$secret`` reference; the secret is declared under the
-    environment and sourced from ``$env`` with a placeholder variable name — no
-    real value is ever emitted.
+    Returns an ``(auth, secrets, headers, api_key_params)`` tuple. ``auth`` is
+    the first Basic/Bearer (or OAuth/OIDC) scheme mapped to comparo's
+    first-class ``auth`` block; an ``apiKey`` header scheme becomes an
+    environment header, while an ``apiKey`` query/cookie scheme is returned in
+    ``api_key_params`` (keyed ``"query"``/``"cookie"``) so each request wires it
+    in. Every credential is a ``$secret`` reference; the secret is declared
+    under the environment and sourced from ``$env`` with a placeholder variable
+    name — no real value is ever emitted.
     """
     schemes = _components(spec).get("securitySchemes")
     auth: Any = None
     secrets: dict[str, Any] = {}
     headers: list[dict[str, Any]] = []
+    api_key_params: dict[str, dict[str, str]] = {}
     if not isinstance(schemes, dict):
-        return auth, secrets, headers
+        return auth, secrets, headers, api_key_params
     for scheme in schemes.values():
         if not isinstance(scheme, dict):
             continue
         scheme_type = str(scheme.get("type", "")).lower()
         if scheme_type == "http" and str(scheme.get("scheme", "")).lower() == "basic":
+            secrets.setdefault("API_USERNAME", {"$env": "API_USERNAME"})
             secrets.setdefault("API_PASSWORD", {"$env": "API_PASSWORD"})
             if auth is None:
                 auth = {"basic": {"username": "${API_USERNAME}", "password": "${API_PASSWORD}"}}
@@ -311,10 +325,14 @@ def _security(spec: Mapping[str, Any]) -> tuple[Any, dict[str, Any], list[dict[s
                 auth = {"bearer": "${API_TOKEN}"}
         elif scheme_type == "apikey":
             secrets.setdefault("API_KEY", {"$env": "API_KEY"})
-            if str(scheme.get("in", "")).lower() == "header":
+            location = str(scheme.get("in", "")).lower()
+            if location == "header":
                 header_name = str(scheme.get("name") or "X-API-Key")
                 headers.append({"key": header_name, "value": "${API_KEY}"})
-    return auth, secrets, headers
+            elif location in ("query", "cookie"):
+                key_name = str(scheme.get("name") or "api_key")
+                api_key_params.setdefault(location, {})[key_name] = "${API_KEY}"
+    return auth, secrets, headers, api_key_params
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -323,9 +341,12 @@ def _security(spec: Mapping[str, Any]) -> tuple[Any, dict[str, Any], list[dict[s
 def _schemas(spec: Mapping[str, Any]) -> tuple[list[ImportedObject], dict[str, str]]:
     """Wrap each ``components.schemas`` entry in a comparo Schema envelope.
 
-    Internal JSON-Schema ``$ref``s are kept intact — comparo leaves ``#/…``
-    pointers untouched. Returns the objects plus a map from OpenAPI component
-    name to comparo schema id, so a response can reference the right Schema.
+    Each emitted Schema is made standalone: components it (transitively)
+    references are inlined under a ``$defs`` block and every
+    ``#/components/schemas/X`` pointer is rewritten to ``#/$defs/X`` (or ``#``
+    for a self-reference), so no pointer dangles outside the document. Returns
+    the objects plus a map from OpenAPI component name to comparo schema id, so
+    a response can reference the right Schema.
     """
     schemas = _components(spec).get("schemas")
     result: list[ImportedObject] = []
@@ -337,27 +358,113 @@ def _schemas(spec: Mapping[str, Any]) -> tuple[list[ImportedObject], dict[str, s
         slug = _unique(_slug(str(component_name)), used)
         schema_id = f"schema.{slug}"
         ids[str(component_name)] = schema_id
+        if isinstance(schema, dict):
+            spec_body = _standalone_schema(str(component_name), schema, schemas)
+        else:
+            spec_body = {}
         document = {
             "apiVersion": API_VERSION,
             "kind": "Schema",
             "metadata": {"name": str(component_name), "id": schema_id},
-            "spec": schema if isinstance(schema, dict) else {},
+            "spec": spec_body,
         }
         result.append(ImportedObject(schema_id, "Schema", document))
     return result, ids
 
 
+def _standalone_schema(
+    name: str, schema: Mapping[str, Any], components: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Deep-copy *schema* and make it self-contained for a standalone document.
+
+    Components the schema transitively references are inlined under ``$defs``
+    and each ``#/components/schemas/X`` pointer is rewritten to ``#/$defs/X``
+    (a reference back to *name* itself becomes ``#``, the document root). A
+    pointer to a component the spec never defines is left untouched — it
+    dangled in the source spec too.
+    """
+    body: dict[str, Any] = copy.deepcopy(dict(schema))
+    defs: dict[str, Any] = {}
+    queue = sorted(_referenced_components(body))
+    while queue:
+        target = queue.pop(0)
+        if target == name or target in defs or not isinstance(components.get(target), dict):
+            continue
+        inlined = copy.deepcopy(components[target])
+        defs[target] = inlined
+        queue.extend(sorted(_referenced_components(inlined)))
+    known = {name, *defs}
+    for node in (body, *defs.values()):
+        _rewrite_component_refs(node, name, known)
+    if defs:
+        existing = body.get("$defs")
+        if isinstance(existing, dict):
+            defs = {**defs, **existing}
+        body["$defs"] = {key: defs[key] for key in sorted(defs)}
+    return body
+
+
+def _referenced_components(node: Any) -> set[str]:
+    """Collect every ``#/components/schemas/X`` component name referenced in *node*."""
+    refs: set[str] = set()
+    if isinstance(node, dict):
+        component = _component_name(node.get("$ref"), "schemas")
+        if component is not None:
+            refs.add(component)
+        for value in node.values():
+            refs |= _referenced_components(value)
+    elif isinstance(node, list):
+        for value in node:
+            refs |= _referenced_components(value)
+    return refs
+
+
+def _rewrite_component_refs(node: Any, root: str, known: set[str]) -> None:
+    """Rewrite ``#/components/schemas/X`` pointers in-place to document-local ones."""
+    if isinstance(node, dict):
+        component = _component_name(node.get("$ref"), "schemas")
+        if component == root:
+            node["$ref"] = "#"
+        elif component in known:
+            node["$ref"] = f"#/$defs/{component}"
+        for value in node.values():
+            _rewrite_component_refs(value, root, known)
+    elif isinstance(node, list):
+        for value in node:
+            _rewrite_component_refs(value, root, known)
+
+
 # ── Requests ─────────────────────────────────────────────────────────────────
 
 
-def _requests(spec: Mapping[str, Any], schema_ids: Mapping[str, str]) -> list[ImportedObject]:
-    """Build one Request per method+operation across every path."""
+def _requests(
+    spec: Mapping[str, Any],
+    schema_ids: Mapping[str, str],
+    api_key_params: Mapping[str, Mapping[str, str]],
+) -> tuple[list[ImportedObject], dict[str, str], list[str]]:
+    """Build one Request per method+operation across every path.
+
+    Returns the requests, the ``${param}`` stub variables collected from path
+    templates (declared on every environment so the endpoints resolve), and any
+    warnings recorded for external ``$ref``s the import cannot follow.
+    """
     paths = spec.get("paths")
     result: list[ImportedObject] = []
     used: set[str] = set()
+    variables: dict[str, str] = {}
+    warnings: list[str] = []
     if not isinstance(paths, dict):
-        return result
+        return result, variables, warnings
     for path, item in paths.items():
+        if isinstance(item, dict):
+            ref = item.get("$ref")
+            if isinstance(ref, str) and not ref.startswith("#/"):
+                warnings.append(
+                    f"path '{path}' uses an external $ref '{ref}' — only local '#/' "
+                    "pointers are resolved, so its operations were skipped"
+                )
+                continue
+        item = _deref(item, spec)
         if not isinstance(item, dict):
             continue
         shared = item.get("parameters")
@@ -366,9 +473,19 @@ def _requests(spec: Mapping[str, Any], schema_ids: Mapping[str, str]) -> list[Im
             operation = item.get(method)
             if isinstance(operation, dict):
                 result.append(
-                    _operation(method, str(path), operation, shared_params, spec, schema_ids, used)
+                    _operation(
+                        method,
+                        str(path),
+                        operation,
+                        shared_params,
+                        spec,
+                        schema_ids,
+                        used,
+                        api_key_params,
+                        variables,
+                    )
                 )
-    return result
+    return result, variables, warnings
 
 
 def _operation(
@@ -379,6 +496,8 @@ def _operation(
     spec: Mapping[str, Any],
     schema_ids: Mapping[str, str],
     used: set[str],
+    api_key_params: Mapping[str, Mapping[str, str]],
+    variables: dict[str, str],
 ) -> ImportedObject:
     """Build a single Request from one path operation."""
     operation_id = operation.get("operationId")
@@ -407,13 +526,22 @@ def _operation(
         if clean:
             metadata["tags"] = clean
 
-    request: dict[str, Any] = {"method": method.upper(), "endpoint": path}
-    query = _query(shared_params, operation.get("parameters"), spec)
+    params = _merged_params(shared_params, operation.get("parameters"), spec)
+    endpoint = _endpoint(path, params, spec, variables)
+    request: dict[str, Any] = {"method": method.upper(), "endpoint": endpoint}
+    query = _query(params, spec)
+    for key_name, hole in api_key_params.get("query", {}).items():
+        query.setdefault(key_name, hole)
     if query:
         request["query"] = query
-    body = _request_body(operation.get("requestBody"), spec)
+    body, body_type = _request_body(operation.get("requestBody"), spec)
     if body is not None:
         request["body"] = body
+        if body_type is not None:
+            request["bodyType"] = body_type
+    cookies = api_key_params.get("cookie", {})
+    if cookies:
+        request["cookies"] = dict(cookies)
 
     spec_body: dict[str, Any] = {"request": request}
     response = _response(operation.get("responses"), spec, schema_ids)
@@ -429,12 +557,35 @@ def _operation(
     return ImportedObject(request_id, "Request", document)
 
 
-def _query(
-    shared_params: Sequence[Any], operation_params: Any, spec: Mapping[str, Any]
-) -> dict[str, Any]:
+def _endpoint(
+    path: str,
+    params: Sequence[Mapping[str, Any]],
+    spec: Mapping[str, Any],
+    variables: dict[str, str],
+) -> str:
+    """Rewrite ``{param}`` path templates to ``${param}`` interpolation holes.
+
+    comparo sends an OpenAPI-style ``{param}`` literally, so each template
+    segment becomes a ``${param}`` hole and a same-named environment variable is
+    recorded in *variables* with a schema-derived stub value — the scaffold then
+    resolves (and runs) out of the box, and the user refines the stubs.
+    """
+    declared = {
+        str(param.get("name")): param
+        for param in params
+        if str(param.get("in", "")).lower() == "path"
+    }
+    for match in re.finditer(r"\{([^{}]+)\}", path):
+        name = match.group(1)
+        value = _query_value(declared[name], spec) if name in declared else None
+        variables.setdefault(name, "value" if value is None else str(value))
+    return re.sub(r"\{([^{}]+)\}", r"${\1}", path)
+
+
+def _query(params: Sequence[Mapping[str, Any]], spec: Mapping[str, Any]) -> dict[str, Any]:
     """Collect ``in: query`` parameters into a ``name -> example`` map."""
     query: dict[str, Any] = {}
-    for param in _merged_params(shared_params, operation_params, spec):
+    for param in params:
         if str(param.get("in", "")).lower() != "query":
             continue
         name = param.get("name")
@@ -466,14 +617,28 @@ def _query_value(param: Mapping[str, Any], spec: Mapping[str, Any]) -> Any:
     return _example(schema if isinstance(schema, dict) else {}, spec, frozenset(), 0)
 
 
-def _request_body(request_body: Any, spec: Mapping[str, Any]) -> Any:
-    """Derive a JSON request-body stub from an example or the body schema."""
+def _request_body(request_body: Any, spec: Mapping[str, Any]) -> tuple[Any, str | None]:
+    """Derive a request-body stub and its ``bodyType`` from the body's content map.
+
+    A JSON media type wins and needs no ``bodyType`` (json is the default);
+    otherwise a form media type (``application/x-www-form-urlencoded`` or
+    ``multipart/form-data``) yields the same example/schema-derived stub tagged
+    ``form``. Returns ``(None, None)`` when no usable media type exists.
+    """
     resolved = _deref(request_body, spec)
     if not isinstance(resolved, dict):
-        return None
+        return None, None
     media = _json_media(resolved.get("content"))
-    if media is None:
-        return None
+    if media is not None:
+        return _media_stub(media, spec), None
+    media = _form_media(resolved.get("content"))
+    if media is not None:
+        return _media_stub(media, spec), "form"
+    return None, None
+
+
+def _media_stub(media: Mapping[str, Any], spec: Mapping[str, Any]) -> Any:
+    """Pick a stub value from a media-type object: example, named example, or schema."""
     if "example" in media:
         return media["example"]
     examples = media.get("examples")
@@ -612,6 +777,20 @@ def _json_media(content: Any) -> dict[str, Any] | None:
             return media
     for media_type, media in content.items():
         if isinstance(media, dict) and "json" in str(media_type).lower():
+            return media
+    return None
+
+
+def _form_media(content: Any) -> dict[str, Any] | None:
+    """Pick a form media-type object (urlencoded or multipart) from a ``content`` map."""
+    if not isinstance(content, dict):
+        return None
+    for media_type, media in content.items():
+        name = str(media_type).lower()
+        is_form = name == "application/x-www-form-urlencoded" or name.startswith(
+            "multipart/form-data"
+        )
+        if isinstance(media, dict) and is_form:
             return media
     return None
 
