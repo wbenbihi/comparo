@@ -283,7 +283,7 @@ redacted input.
 | `report.py` | The structured `RunReport` and the `Reporter` port; `build_report` folds diff results into cells with a pass/fail gate (`diff_passed` / `diff_gate`), redacting drift details as it goes. |
 | `archive.py` | The saved-report store under `<data>/.reports/`: `ReportRecord` (gate, counts, assertion roll-ups, per-request breakdown) and `CellRecord` (redacted before/after bodies, response headers, status/latency/bytes for a faithful replay); `record_from_diff` / `record_from_execution` / `record_from_run`, `save_record`, `list_records`. |
 | `redaction.py` | The `Redactor` string-match backstop: masks any declared secret *value* (or key/path) found in any string a sink emits, even when it arrived untainted (e.g. echoed back by the server). |
-| `checks.py` | Pure validations over a materialized response — `reachable`, expected `status`, and JSON `schema` (via `jsonschema`), used by `export.py`. |
+| `checks.py` | A thin Run-tab boundary: flattens the assertion engine's `error`-severity results (status + schema sugar **and** `response.assert`) into flat `reachable`/`status`/`schema` rows. Holds no validation logic — it delegates to `assertions.py` so the Run tab never disagrees with the CLI. |
 | `triage.py` | Silences a drift by appending an `ignore` rule to the owning `DiffProfile`'s YAML file (round-tripped through ruamel so comments survive) — a reviewable, committed act, never an in-memory hide. |
 | `curl.py` | Renders a `ResolvedRequest` as a runnable multi-line `curl`; masked or real depending on the sink it was resolved with. |
 | `export.py` | Serializes a run to JSON with every secret masked — DISPLAY-sink values plus string-match redaction of response bodies (keys and values). |
