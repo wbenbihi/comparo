@@ -184,9 +184,14 @@ comparo init [DIRECTORY] [--name NAME] [--data DIR] [--config FILE] [--descripti
 
 Writes the manifest and a `<data>/` directory containing `environments/local.yaml` and
 `requests/example.yaml` — a runnable starter pointed at `https://postman-echo.com`, so
-the project validates and runs immediately. It **refuses to overwrite** an existing
-manifest or data directory, exiting `1` without touching your files. On success it
-prints what it created and the next commands to run, then exits `0`.
+the project validates and runs immediately. The starter files carry a
+`# yaml-language-server: $schema=…` modeline so editors autocomplete and validate them
+against the [JSON Schema](#comparo-schema), and an **`AGENTS.md`** is dropped alongside
+them — a compact authoring guide (object model, `${…}` grammar, diff modes, the
+`$secret` rule, the `validate` loop) so any coding agent working in the project is
+instantly competent. It **refuses to overwrite** an existing manifest or data directory,
+exiting `1` without touching your files. On success it prints what it created and the
+next commands to run, then exits `0`.
 
 **Example**
 

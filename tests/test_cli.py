@@ -96,8 +96,17 @@ def test_init_scaffolds_a_loadable_project(tmp_path: Path) -> None:
     assert result.exit_code == 0
     manifest = project / "comparo.yaml"
     assert manifest.exists()
+    request = project / ".comparo" / "requests" / "example.yaml"
     assert (project / ".comparo" / "environments" / "local.yaml").exists()
-    assert (project / ".comparo" / "requests" / "example.yaml").exists()
+    assert request.exists()
+    # The starter files carry the schema modeline for editor autocomplete.
+    assert request.read_text().startswith("# yaml-language-server: $schema=")
+    # An agent-authoring guide is dropped so coding agents are competent here.
+    agents = project / ".comparo" / "AGENTS.md"
+    assert agents.exists()
+    guide = agents.read_text()
+    assert "comparo validate" in guide
+    assert "$secret" in guide
     # The scaffold loads and validates via the manifest (file mode + spec.data).
     validated = runner.invoke(app, ["validate", "--config", str(manifest)])
     assert validated.exit_code == 0

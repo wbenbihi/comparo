@@ -42,6 +42,7 @@ from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
+from comparo.core.schema import SCHEMA_ID
 
 app = typer.Typer(
     name="comparo",
@@ -471,9 +472,13 @@ def _scaffold(
     (data_dir / "requests").mkdir(parents=True)
     (data_dir / "environments" / "local.yaml").write_text(_STARTER_ENV, encoding="utf-8")
     (data_dir / "requests" / "example.yaml").write_text(_STARTER_REQUEST, encoding="utf-8")
+    (data_dir / "AGENTS.md").write_text(
+        _AGENTS_MD.replace("__SCHEMA_URL__", SCHEMA_ID), encoding="utf-8"
+    )
     typer.secho(f"✓ created {manifest}", fg=typer.colors.GREEN)
     typer.secho(
-        f"✓ created {data_dir}/ with a sample environment and request", fg=typer.colors.GREEN
+        f"✓ created {data_dir}/ with a sample environment and request, and AGENTS.md",
+        fg=typer.colors.GREEN,
     )
     default_here = config == "comparo.yaml" and directory == Path()
     flag = "" if default_here else f" --config {manifest}"
@@ -513,7 +518,12 @@ def _manifest_yaml(name: str, project_id: str, description: str | None, data: st
     )
 
 
-_STARTER_ENV = """apiVersion: comparo/v1
+#: Editors with the YAML language server autocomplete and validate against this.
+_SCHEMA_MODELINE = f"# yaml-language-server: $schema={SCHEMA_ID}\n"
+
+_STARTER_ENV = (
+    _SCHEMA_MODELINE
+    + """apiVersion: comparo/v1
 kind: Environment
 metadata:
   name: Local
@@ -528,8 +538,11 @@ spec:
     - method: GET
       endpoint: /get
 """
+)
 
-_STARTER_REQUEST = """apiVersion: comparo/v1
+_STARTER_REQUEST = (
+    _SCHEMA_MODELINE
+    + """apiVersion: comparo/v1
 kind: Request
 metadata:
   name: Example
@@ -545,6 +558,93 @@ spec:
       hello: world
   response:
     status: 200
+"""
+)
+
+# Dropped into every scaffolded project so any coding agent working here is
+# instantly competent at authoring comparo config. `__SCHEMA_URL__` is replaced
+# with the real schema URL at write time.
+_AGENTS_MD = """# comparo — authoring guide for coding agents
+
+This directory is a **comparo** project: version-controlled YAML that replays HTTP
+requests across environments and diffs the responses to catch regressions. You may
+author and edit these files. **After any change, run `comparo validate` and fix
+what it reports** — its diagnostics are precise and name the fix.
+
+## The object model
+
+Each file is one object with a Kubernetes-style envelope:
+
+    apiVersion: comparo/v1
+    kind: <Kind>
+    metadata: { id, name, description?, tags? }
+    spec: { ... }
+
+Field names are **camelCase** (`baseUrl`, not `base_url`). The kinds:
+
+- **Environment** — a target: `baseUrl`, `timeout`, `variables`, `auth`, `cookies`, `health`.
+- **Request** — an HTTP request (`method`, `endpoint`, `headers`, `query`, `body`) with an
+  optional response `schema` and `diff`/`assert` profiles. Matrix-expanded.
+- **Schema** — a JSON Schema used for structural validation.
+- **Instance** — reusable values injected by reference, to avoid duplication.
+- **Matrix** — the parameter cases a request runs against (values can inject into the path).
+- **DiffProfile** — how two responses are compared, per JSON path.
+- **AssertionProfile** — assertions on a single response (status, body, latency, schema).
+- **ExecutionProfile** — one run that asserts BOTH environments and diffs the pair, gated.
+- **Project** — the manifest (`comparo.yaml`): data dir, environments, concurrency.
+
+## References and secrets
+
+- `$ref: <id>` — link to another object by its `metadata.id`.
+- `$val: <instance-id>.path` — pull a value out of an Instance.
+- `$secret: NAME` — a secret declared in the environment. **Never write a real secret
+  value in these files.** Declare it once under an Environment's `secrets` (sourced from
+  `$env` or `$file`) and reference it by name. comparo masks declared secrets everywhere.
+- `$file: path` — read a value from a file (confined to the project root).
+
+## `${...}` interpolation (inside strings)
+
+- `${VAR}` — required (fails if unset)
+- `${VAR?}` — optional (empty if unset)
+- `${VAR | default}` — a default used only when unset
+- `${VAR:int}` — a typed cast (`int` | `number` | `bool`)
+
+## Diff modes (in a DiffProfile, per JSON path)
+
+- `ignore` — skip it (volatile fields: timestamps, generated ids)
+- `exact` — must be equal (recurses)
+- `type` — same JSON type
+- `shape` — same structure, values may differ (recurses)
+- `tolerance` — numbers within a delta
+
+## The loop
+
+1. Edit YAML.
+2. `comparo validate` — fix every diagnostic before moving on.
+3. `comparo run --env <env>` to execute, or
+   `comparo diff --baseline <A> --candidate <B>` to compare two environments.
+4. `comparo schema` prints the full JSON Schema — the complete, authoritative field
+   surface. Editors autocomplete against it via the modeline already on each file:
+   `# yaml-language-server: $schema=__SCHEMA_URL__`
+
+## Example — a request with a schema and a diff profile
+
+    # yaml-language-server: $schema=__SCHEMA_URL__
+    apiVersion: comparo/v1
+    kind: Request
+    metadata: { id: request.user, name: Get user }
+    spec:
+      request:
+        method: GET
+        endpoint: /users/${USER_ID}
+        headers:
+          Authorization: "Bearer ${API_TOKEN}"   # API_TOKEN is a $secret in the env
+      response:
+        schema: { $ref: schema.user }
+        diff: { $ref: diffprofile.user }
+
+Do not invent fields. When unsure, consult `comparo schema` or let `comparo validate`
+correct you.
 """
 
 
