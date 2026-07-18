@@ -146,8 +146,32 @@ forbidden_modules = ["httpx", "requests", "aiohttp", "urllib3", "httpcore"]
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-commit_parser = "angular"
+commit_parser = "conventional"
 build_command = "pip install uv && uv build"
+# Pre-1.0: keep every release in the 0.x line. allow_zero_version keeps 0.x
+# versions (never forcing a 1.0.0 minimum), and major_on_zero = false means even
+# a breaking change bumps the minor (0.x -> 0.(x+1)) instead of leaping to 1.0.0
+# before we deliberately cut a stable release.
+allow_zero_version = true
+major_on_zero = false
 
+# main cuts stable 0.x releases; alpha/beta/rc are the prerelease promotion
+# tracks: 0.x.0-alpha.N -> -beta.N -> -rc.N -> stable.
 [tool.semantic_release.branches.main]
 match = "main"
+prerelease = false
+
+[tool.semantic_release.branches.alpha]
+match = "alpha"
+prerelease = true
+prerelease_token = "alpha"
+
+[tool.semantic_release.branches.beta]
+match = "beta"
+prerelease = true
+prerelease_token = "beta"
+
+[tool.semantic_release.branches.rc]
+match = "rc"
+prerelease = true
+prerelease_token = "rc"
