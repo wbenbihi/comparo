@@ -39,6 +39,12 @@ class TimeoutBudget:
 
     connect: float | None = None
     read: float | None = None
+    #: For a streaming read, end the stream gracefully after this long with no new
+    #: data (so an *idle* Server-Sent Events feed terminates instead of hanging).
+    stream_idle: float | None = None
+    #: A total cap on a streaming read: stop and diff what arrived after this long,
+    #: no matter how busy the stream (so a *steady* public SSE feed still ends).
+    stream_max: float | None = None
 
     @classmethod
     def resolve(cls, request: Duration | None, environment: Duration | None) -> "TimeoutBudget":
@@ -51,9 +57,12 @@ class TimeoutBudget:
         Returns:
             The effective, parsed timeout budget.
         """
-        chosen_connect = _first(request, environment, "connect")
-        chosen_read = _first(request, environment, "read")
-        return cls(connect=_seconds(chosen_connect), read=_seconds(chosen_read))
+        return cls(
+            connect=_seconds(_first(request, environment, "connect")),
+            read=_seconds(_first(request, environment, "read")),
+            stream_idle=_seconds(_first(request, environment, "stream_idle")),
+            stream_max=_seconds(_first(request, environment, "stream_max")),
+        )
 
 
 class HttpClient(Protocol):

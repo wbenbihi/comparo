@@ -181,7 +181,8 @@ of `ms`, `s`, `m`, or `h`.
 | ----------- | ------------- | ------------- | ---------------------------------------- |
 | connect     | `connect`     | duration      | Connection-establishment budget.         |
 | read        | `read`        | duration      | Response-read budget.                    |
-| stream_idle | `streamIdle`  | duration      | Idle budget between streamed chunks (accepted, not yet enforced). |
+| stream_idle | `streamIdle`  | duration      | For a streaming read, end the stream gracefully after this long with no new data — so an *idle* Server-Sent Events feed terminates instead of hanging. |
+| stream_max  | `streamMax`   | duration      | A *total* cap on a streaming read: stop and diff what arrived after this long, regardless of activity — so a *steady* SSE feed (one that emits on a timer and never idles) still terminates. |
 
 ```yaml
 timeout:

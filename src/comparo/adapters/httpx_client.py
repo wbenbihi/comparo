@@ -5,6 +5,7 @@ resolved request onto an httpx call and a materialized response back, translatin
 httpx transport errors into the core's :class:`HttpError`.
 """
 
+import asyncio
 import json
 import time
 from collections.abc import Mapping
@@ -45,7 +46,14 @@ class HttpxClient:
         """
         headers = [(key, str(value)) for key, value in request.headers]
         params = {key: str(value) for key, value in request.query.items()}
-        httpx_timeout = httpx.Timeout(timeout.read, connect=timeout.connect)
+        # For a streaming read the read timeout is really an idle timeout — how long
+        # to wait for the next event before deciding the stream has ended.
+        read_timeout = (
+            timeout.stream_idle
+            if request.streaming and timeout.stream_idle is not None
+            else timeout.read
+        )
+        httpx_timeout = httpx.Timeout(read_timeout, connect=timeout.connect)
         json_body, data_body, content_body = _encode_body(request)
         auth, auth_header = _auth(request.auth)
         if auth_header is not None:
@@ -65,7 +73,7 @@ class HttpxClient:
         start = time.perf_counter()
         try:
             status, resp_headers, body = await self._roundtrip(
-                build, auth, streaming=request.streaming
+                build, auth, streaming=request.streaming, stream_max=timeout.stream_max
             )
         except httpx.HTTPError as error:
             message = f"{type(error).__name__}: {error}"
@@ -82,11 +90,22 @@ class HttpxClient:
         auth: httpx.Auth | None,
         *,
         streaming: bool,
+        stream_max: float | None = None,
     ) -> tuple[int, list[tuple[str, str]], bytes]:
         if streaming:
             response = await self._client.send(request, auth=auth, stream=True)
+            chunks: list[bytes] = []
             try:
-                chunks = [chunk async for chunk in response.aiter_bytes()]
+                # stream_max caps the whole read (a steady, never-idle SSE feed still
+                # ends); stream_idle (the httpx read timeout) catches a quiet stream.
+                # asyncio.timeout(None) is a no-op, so an unset cap means read to close.
+                async with asyncio.timeout(stream_max):
+                    async for chunk in response.aiter_bytes():
+                        chunks.append(chunk)
+            except (httpx.ReadTimeout, TimeoutError):
+                # Idle read or the total cap — both mean "the stream is done", not a
+                # failure. Diff whatever arrived.
+                pass
             finally:
                 await response.aclose()
             return response.status_code, list(response.headers.items()), b"".join(chunks)

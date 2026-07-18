@@ -248,6 +248,18 @@
             }
           ],
           "default": null
+        },
+        "streamMax": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]+(ms|s|m|h)$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [],

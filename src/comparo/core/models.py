@@ -25,6 +25,7 @@ class Duration(msgspec.Struct, rename="camel", forbid_unknown_fields=True, froze
     connect: DurationStr | None = None
     read: DurationStr | None = None
     stream_idle: DurationStr | None = None
+    stream_max: DurationStr | None = None
 
 
 class Meta(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
