@@ -32,7 +32,20 @@ jobs:
         run: uv sync --frozen
 
       - name: Semantic release (version, changelog, tag, build)
-        run: uv run semantic-release version
+        id: release
+        run: |
+          before="$(git rev-parse HEAD)"
+          uv run semantic-release version
+          after="$(git rev-parse HEAD)"
+          # semantic-release only commits a version bump when it actually releases,
+          # so a changed HEAD (and a populated dist/) means a release was cut.
+          if [ "$before" != "$after" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No releasable commits since the last tag — skipping publish."
+          fi
 
       - name: Publish to PyPI
+        if: steps.release.outputs.released == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1

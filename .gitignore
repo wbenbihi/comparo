@@ -37,5 +37,10 @@ runs/
 # Private client project (NDA) — never commit
 internal-project/
 
+# Internal design scaffolding: raw AI-session transcripts, mockups, and working
+# notes. Never publish — the transcript discloses the NDA engagement. Also purge
+# it from history before making the repo public (see CODE_HEALTH_REPORT.md).
+docs/design/
+
 # Runtime report archive (comparo Report tab)
 .reports/
