@@ -1399,7 +1399,7 @@ def test_outbound_diff_flags_url_drift_and_never_leaks_a_secret() -> None:
         return console.export_text()
 
     # Same masked auth header on both, different base URLs.
-    header = [("Authorization", "Bearer ••••••")]
+    header: list[tuple[str, object]] = [("Authorization", "Bearer ••••••")]
     a = ResolvedRequest("GET", "http://localhost:8080/x", header, {}, None, [])
     b = ResolvedRequest("GET", "https://prod.example/x", header, {}, None, [])
     text = render(_outbound_diff_view(a, b, env_a, env_b))

@@ -79,7 +79,10 @@ def test_toggling_update_check_persists(monkeypatch: pytest.MonkeyPatch, tmp_pat
             await pilot.pause()
             await pilot.press("enter")  # toggle it on
             await pilot.pause()
-            assert app.user_config.update_check is True
+            # a fresh read — the toggle reassigns app.user_config, which mypy can't
+            # see through the key press (so it would otherwise narrow to the default).
+            toggled = app.user_config
+            assert toggled.update_check is True
             assert userconfig.load().update_check is True  # persisted to disk
 
     asyncio.run(go())
