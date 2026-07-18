@@ -21,6 +21,7 @@ from comparo.core.matrix import expand
 from comparo.core.models import Environment
 from comparo.core.models import Request
 from comparo.core.models import RetryConfig
+from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
 from comparo.core.secrets import SecretError
@@ -71,13 +72,20 @@ async def _send_with_retry(
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Execution:
-    """The outcome of executing one request cell: a response, or an error."""
+    """The outcome of executing one request cell: a response, or an error.
+
+    ``resolved`` is the exact request that was sent (real secret values in its
+    url/headers/body), kept so a report can serialize what actually went out; it
+    is ``None`` only when resolution itself failed. Like ``request``/``response``
+    it holds live secrets, so a sink MUST redact it before serializing.
+    """
 
     request: Request
     environment: Environment
     cell_key: str
     response: HttpResponse | None
     error: str | None = None
+    resolved: ResolvedRequest | None = None
 
     @property
     def ok(self) -> bool:
@@ -117,8 +125,8 @@ async def execute_request(
     try:
         response = await _send_with_retry(client, resolved, timeout, retry)
     except HttpError as error:
-        return Execution(request, environment, key, None, str(error))
-    return Execution(request, environment, key, response, None)
+        return Execution(request, environment, key, None, str(error), resolved=resolved)
+    return Execution(request, environment, key, response, None, resolved=resolved)
 
 
 async def execute_all(

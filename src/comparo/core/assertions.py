@@ -37,6 +37,12 @@ class AssertionResult:
     detail: str
     #: A human label for the rule, e.g. ``status == 200`` or ``latency <= 800ms``.
     label: str = ""
+    #: The rule's declared expectation and the observed value, so a report can show
+    #: the structured comparison without re-parsing ``detail``. ``actual`` may hold
+    #: a secret echoed into a body field, so a sink MUST redact both before
+    #: serializing (the report builder does, via ``redaction.redact_tree``).
+    expected: object = None
+    actual: object = None
 
 
 _OP_SYMBOL = {"equals": "==", "lt": "<", "lte": "<=", "gt": ">", "gte": ">=", "matches": "~"}
@@ -205,7 +211,16 @@ def _evaluate(project: LoadedProject, rule: AssertionRule, execution: Execution)
     response = execution.response
     if response is None:
         detail = execution.error or "no response"
-        return AssertionResult(rule.target, rule.op, False, rule.severity, detail, rule_label(rule))
+        return AssertionResult(
+            rule.target,
+            rule.op,
+            False,
+            rule.severity,
+            detail,
+            rule_label(rule),
+            expected=rule.value,
+            actual=None,
+        )
     actual, present = _target(rule.target, response, execution)
     return _apply(project, rule, actual, present)
 
@@ -242,7 +257,9 @@ def _apply(
     label = rule_label(rule)
 
     def result(ok: bool, detail: str) -> AssertionResult:
-        return AssertionResult(rule.target, op, ok, rule.severity, detail, label)
+        return AssertionResult(
+            rule.target, op, ok, rule.severity, detail, label, expected=expected, actual=actual
+        )
 
     if op == "exists":
         return result(present and actual is not None, "present" if present else "missing")

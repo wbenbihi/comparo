@@ -60,10 +60,14 @@ def test_compare_cell_diffs_streamed_event_sequences() -> None:
     def execution(events: list[object]) -> Execution:
         return Execution(request, env, "", HttpResponse(200, [], b"", 1.0, events=events))
 
-    cell = compare_cell(loaded, execution([{"n": 1}, {"n": 2}]), execution([{"n": 1}, {"n": 9}]))
+    baseline_exec, candidate_exec = execution([{"n": 1}, {"n": 2}]), execution([{"n": 1}, {"n": 9}])
+    cell = compare_cell(loaded, baseline_exec, candidate_exec)
     assert cell.drifted
     assert any("[1]" in field.path for field in cell.drifts)  # the second event drifted
     assert cell.baseline_body == [{"n": 1}, {"n": 2}]  # the event sequence is the diffed body
+    # Both executions are threaded onto the cell so a report can serialize each side.
+    assert cell.baseline is baseline_exec
+    assert cell.candidate is candidate_exec
 
 
 def test_diff_run_routes_candidate_to_its_own_client() -> None:

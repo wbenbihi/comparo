@@ -34,6 +34,32 @@ def test_unignored_key_present_on_one_side_is_still_drift() -> None:
     assert ident.state is State.DRIFT
 
 
+def test_leaf_drift_carries_structured_values_and_no_rule() -> None:
+    # A drifted leaf exposes the raw before/after (for a structured report) and,
+    # having matched no explicit rule, records rule=None.
+    fields = diff({"a": 1}, {"a": 2}, "exact", [])
+    a = next(field for field in fields if field.path == "$.a")
+    assert a.state is State.DRIFT
+    assert a.baseline == 1
+    assert a.candidate == 2
+    assert a.rule is None
+
+
+def test_field_surfaces_the_matched_rule_path() -> None:
+    rules = [DiffRule(path="$.trace", mode="ignore")]
+    fields = diff({"trace": "abc"}, {"trace": "xyz"}, "exact", rules)
+    trace = next(field for field in fields if field.path == "$.trace")
+    assert trace.state is State.SKIP
+    assert trace.rule == "$.trace"  # the DiffRule.path that governed this field
+
+
+def test_missing_key_drift_carries_the_present_side() -> None:
+    fields = diff({"id": "abc"}, {}, "exact", [])
+    ident = next(field for field in fields if field.path == "$.id")
+    assert ident.baseline == "abc"
+    assert ident.candidate is None
+
+
 def test_shape_ignores_scalar_values() -> None:
     fields = diff({"x": 1, "y": "a"}, {"x": 999, "y": "z"}, "shape", [])
     assert State.DRIFT not in _states(fields)
