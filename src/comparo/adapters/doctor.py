@@ -1,0 +1,296 @@
+"""A runtime redaction self-check: run a canary secret through every leak sink.
+
+The guarantee comparo makes is that a declared secret value never appears in any
+string that leaves the process. This module proves it at runtime: it writes a
+minimal canary project, declares a distinctive secret, and pushes that secret
+through the real code of every redaction sink — the display renderer, the runs
+and reports on disk, the four CI reporters, the yanked curl command, and the
+crash-report scrubber. Each sink is fed output that *would* carry the canary if
+unmasked; the check passes only when the canary is absent from what the sink
+produced.
+
+It powers the Settings "never-leak" self-check and the ``comparo doctor`` CLI.
+Every check is defensive: a sink that raises is reported as a failure, so
+:func:`run_selfcheck` never propagates an exception.
+"""
+
+import dataclasses
+import json
+import tempfile
+from collections.abc import Callable
+from pathlib import Path
+
+from comparo.adapters.reporters import JsonReporter
+from comparo.adapters.reporters import JUnitReporter
+from comparo.adapters.reporters import MarkdownReporter
+from comparo.adapters.reporters import SarifReporter
+from comparo.core.archive import record_from_diff
+from comparo.core.archive import save_record
+from comparo.core.checks import Check
+from comparo.core.compare import CellDiff
+from comparo.core.curl import to_curl
+from comparo.core.diff import FieldDiff
+from comparo.core.diff import State
+from comparo.core.execute import Execution
+from comparo.core.export import RunEntry
+from comparo.core.export import export_run
+from comparo.core.http import HttpResponse
+from comparo.core.loader import LoadedProject
+from comparo.core.loader import load_project
+from comparo.core.matrix import MatrixCell
+from comparo.core.models import Environment
+from comparo.core.models import Request
+from comparo.core.redaction import Redact
+from comparo.core.redaction import Redactor
+from comparo.core.report import RunReport
+from comparo.core.report import build_report
+from comparo.core.resolve import Resolver
+from comparo.core.resolve import Sink
+
+#: The canary secret every sink is challenged with — distinctive, so an accidental
+#: appearance in any output is unmistakable and can never be a coincidence.
+CANARY = "s3cr3t-CANARY-a1b2c3d4e5f6"
+
+_PROJECT_YAML = """\
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: comparo-doctor-canary
+spec:
+  data: .
+"""
+
+_ENVIRONMENT_YAML = f"""\
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: Canary
+  id: environment.canary
+spec:
+  baseUrl: https://canary.invalid
+  secrets:
+    CANARY_TOKEN:
+      from:
+        - $literal: {CANARY}
+"""
+
+_REQUEST_YAML = """\
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Canary probe
+  id: request.canary
+spec:
+  request:
+    method: GET
+    endpoint: /probe
+    headers:
+      - key: authorization
+        value:
+          $secret: CANARY_TOKEN
+"""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SinkCheck:
+    """One sink's verdict: its name, a short where/how note, and pass/fail."""
+
+    name: str
+    detail: str
+    ok: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Scenario:
+    """The loaded canary project plus the objects every sink producer needs."""
+
+    directory: Path
+    project: LoadedProject
+    environment: Environment
+    request: Request
+    redact: Redact
+
+
+def _build_scenario(directory: Path) -> _Scenario:
+    """Write a minimal canary project into *directory*, load it, and index it."""
+    (directory / "comparo.yaml").write_text(_PROJECT_YAML, encoding="utf-8")
+    (directory / "environment.yaml").write_text(_ENVIRONMENT_YAML, encoding="utf-8")
+    (directory / "request.yaml").write_text(_REQUEST_YAML, encoding="utf-8")
+    project = load_project(directory)
+    return _Scenario(
+        directory=directory,
+        project=project,
+        environment=_first_environment(project),
+        request=_canary_request(project),
+        redact=Redactor.for_project(project).text,
+    )
+
+
+def _first_environment(project: LoadedProject) -> Environment:
+    """Return the canary project's one environment, whose secret is the canary."""
+    for obj in project.objects.values():
+        if isinstance(obj, Environment):
+            return obj
+    message = "canary project declares no environment"
+    raise RuntimeError(message)
+
+
+def _canary_request(project: LoadedProject) -> Request:
+    """Return the canary probe request, whose header references the secret."""
+    request = project.objects.get("request.canary")
+    if not isinstance(request, Request):
+        message = "canary project declares no request.canary"
+        raise RuntimeError(message)
+    return request
+
+
+def _tainted_cell(request: Request) -> CellDiff:
+    """A cell whose response echoes the canary everywhere a sink might persist it.
+
+    The canary appears as a body value AND a JSON key, as a drift and a skip field
+    path, in a response-header name and value, and in the matrix case key — every
+    place a server could reflect it back into what a report or archive writes.
+    """
+    base = {CANARY: CANARY, "tokens": {CANARY: 1}}
+    cand = {CANARY: CANARY, "tokens": {CANARY: 2}}
+    fields = [
+        FieldDiff(f"$.{CANARY}", State.DRIFT, "exact", f'"{CANARY}" -> "other"'),
+        FieldDiff(f"$.headers.{CANARY}", State.SKIP, "ignore", "volatile"),
+    ]
+    return CellDiff(
+        request,
+        f"token={CANARY}",
+        fields,
+        None,
+        base,
+        cand,
+        status=200,
+        latency_ms=42,
+        size_bytes=128,
+        response_headers=((CANARY, CANARY), ("content-type", "application/json")),
+    )
+
+
+def _display(scenario: _Scenario) -> str:
+    """The TUI display sink masks a declared secret before it is drawn on screen."""
+    return scenario.redact(f"authorization: Basic {CANARY} (as rendered on screen)")
+
+
+def _saved_runs(scenario: _Scenario) -> str:
+    """The runs/*.json export masks a secret echoed as a body value, key, or header."""
+    body = json.dumps({"echo": CANARY, CANARY: "as-a-key"}).encode()
+    response = HttpResponse(200, [("x-echo", CANARY), (CANARY, "reflected")], body, 5.0)
+    execution = Execution(
+        request=scenario.request, environment=scenario.environment, cell_key="", response=response
+    )
+    entry = RunEntry(
+        scenario.request,
+        MatrixCell("", ()),
+        execution,
+        [Check("auth", ok=False, detail=f"server returned {CANARY}")],
+    )
+    return export_run(scenario.project, scenario.environment, [entry])
+
+
+def _saved_reports(scenario: _Scenario) -> str:
+    """The saved-report archive masks a secret before writing .reports/<id>.json."""
+    record = record_from_diff(
+        f"Stable {CANARY}",
+        f"Canary {CANARY}",
+        [_tainted_cell(scenario.request)],
+        run_id="doctor",
+        created="1970-01-01T00:00:00Z",
+        redact=scenario.redact,
+    )
+    path = save_record(scenario.directory / "reports", record)
+    return path.read_text(encoding="utf-8")
+
+
+def _report(scenario: _Scenario) -> RunReport:
+    """A structured report built from the tainted cell, with secrets already masked."""
+    return build_report(
+        f"Stable {CANARY}", f"Canary {CANARY}", [_tainted_cell(scenario.request)], scenario.redact
+    )
+
+
+def _junit(scenario: _Scenario) -> str:
+    """The JUnit reporter renders the masked report to reports/junit.xml."""
+    return JUnitReporter().render(_report(scenario))
+
+
+def _sarif(scenario: _Scenario) -> str:
+    """The SARIF reporter renders the masked report to reports/comparo.sarif."""
+    return SarifReporter().render(_report(scenario))
+
+
+def _json_report(scenario: _Scenario) -> str:
+    """The JSON reporter renders the masked report to reports/comparo.json."""
+    return JsonReporter().render(_report(scenario))
+
+
+def _markdown(scenario: _Scenario) -> str:
+    """The Markdown reporter renders the masked report for a GitHub step summary."""
+    return MarkdownReporter().render(_report(scenario))
+
+
+def _curl(scenario: _Scenario) -> str:
+    """The yanked curl command resolves via the DISPLAY sink, masking the secret."""
+    resolved = Resolver(scenario.project, scenario.environment, Sink.DISPLAY).resolve_request(
+        scenario.request
+    )
+    return to_curl(resolved)
+
+
+def _crash(scenario: _Scenario) -> str:
+    """A crash report scrubs any secret a captured traceback frame may carry."""
+    traceback = (
+        "Traceback (most recent call last):\n"
+        '  File "comparo/core/execute.py", line 66, in execute_request\n'
+        f"    raise HttpError('sending authorization=Basic {CANARY}')\n"
+        f"comparo.core.http.HttpError: sending authorization=Basic {CANARY}"
+    )
+    return scenario.redact(traceback)
+
+
+#: The nine sinks in the stable order the UI mockup pins, each paired with its
+#: display detail and the producer that runs its real code.
+_SINKS: tuple[tuple[str, str, Callable[[_Scenario], str]], ...] = (
+    ("TUI display", "masked on render", _display),
+    ("saved runs", ".runs/*.json", _saved_runs),
+    ("saved reports", ".reports/*.json", _saved_reports),
+    ("JUnit reporter", "reports/junit.xml", _junit),
+    ("SARIF reporter", "reports/comparo.sarif", _sarif),
+    ("JSON reporter", "reports/comparo.json", _json_report),
+    ("Markdown reporter", "GitHub step summary", _markdown),
+    ("curl copy", "yanked command", _curl),
+    ("crash report", "traceback scrub", _crash),
+)
+
+
+def _run_sink(
+    name: str, detail: str, produce: Callable[[_Scenario], str], scenario: _Scenario
+) -> SinkCheck:
+    """Run one sink's producer; the check passes iff the canary is absent from it."""
+    try:
+        output = produce(scenario)
+    except Exception as error:  # defence in depth — a broken sink is a failed check
+        return SinkCheck(name, f"{detail} — {type(error).__name__}: {error}", ok=False)
+    return SinkCheck(name, detail, ok=CANARY not in output)
+
+
+def run_selfcheck() -> list[SinkCheck]:
+    """Run a canary secret through every sink; one :class:`SinkCheck` per sink.
+
+    Returns:
+        One check per redaction sink, in a stable order, each reporting whether
+        the canary was masked in that sink's real output. The function never
+        raises: a sink (or the scenario build) that fails is reported ``ok=False``
+        with the error noted in its detail.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            scenario = _build_scenario(Path(directory))
+            return [_run_sink(name, detail, produce, scenario) for name, detail, produce in _SINKS]
+    except Exception as error:  # scenario build failed — report every sink as failing
+        reason = f"{type(error).__name__}: {error}"
+        return [SinkCheck(name, f"{detail} — {reason}", ok=False) for name, detail, _ in _SINKS]
