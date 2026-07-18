@@ -84,10 +84,11 @@ def test_diff_x_does_not_relaunch_an_in_flight_diff() -> None:
             await pilot.pause()
             diff = app.query_one(DiffView)
             diff.prime_pair(*[e.metadata.name for e in _environments(loaded)[:2]])
-            diff.query_one("#diff-mode", ContentSwitcher).current = "diff-results"
+            # The real in-flight state is the RUNNING panel; x there is a no-op.
+            diff.query_one("#diff-mode", ContentSwitcher).current = "diff-running"
             diff._done = False
             diff._run_id = "keep99"
-            diff.execute()  # x while a diff is in flight
+            diff.execute()  # x while the diff is actually running
             await pilot.pause()
             assert diff._run_id == "keep99"
 
@@ -1477,3 +1478,28 @@ def test_running_body_shows_real_pass_fail_counts_not_fabricated_metrics() -> No
     assert "1 ✗" in out
     assert "410ms" not in out  # the fabricated throughput is gone
     assert "0 ✗" not in out
+
+
+def test_diff_can_rerun_from_results_after_picking_a_new_pair() -> None:
+    # H17: after a diff finishes and the user picks a new env (which clears _done
+    # while staying on RESULTS), pressing x must re-run — not falsely refuse.
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            diff.prime_pair(*[e.metadata.name for e in _environments(loaded)[:2]])
+            diff.query_one("#diff-mode", ContentSwitcher).current = "diff-results"
+            diff._done = False  # what _set_env leaves behind after picking a new pair
+            diff._run_id = "old99"
+            diff.execute()  # x from RESULTS with a valid pair must re-run
+            await pilot.pause()
+            # a re-run started: it moved to the RUNNING panel and minted a new id
+            assert diff.query_one("#diff-mode", ContentSwitcher).current == "diff-running"
+            assert diff._run_id != "old99"
+
+    asyncio.run(go())

@@ -1939,7 +1939,9 @@ class DiffView(Vertical):
         is a no-op (the exclusive worker would otherwise be cancelled and restarted).
         """
         switcher = self.query_one("#diff-mode", ContentSwitcher)
-        if switcher.current in ("diff-results", "diff-running") and not self._done:
+        # A diff is in flight iff the RUNNING panel is showing; from RESULTS (even
+        # after picking a new pair, which clears _done) a re-run must be allowed.
+        if switcher.current == "diff-running":
             self.app.notify("A diff is already running…", severity="warning")
             return
         if self._pair is None:
