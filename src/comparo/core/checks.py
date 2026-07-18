@@ -49,11 +49,24 @@ def run_checks(project: LoadedProject, request: Request, execution: Execution) -
         checks.append(
             Check("status", ok=matched, detail=f"{response.status} {arrow} {expected.status}")
         )
-    schema_id = _ref_id(expected.schema)
-    schema = project.objects.get(schema_id) if schema_id else None
-    if isinstance(schema, Schema):
-        checks.append(_schema_check(response.body, schema))
+    schema_body = _schema_body(project, expected.schema)
+    if schema_body is not None:
+        checks.append(_schema_check(response.body, schema_body))
     return checks
+
+
+def _schema_body(project: LoadedProject, expected: object) -> object:
+    """Resolve a ``response.schema`` slot — a ``{$ref}`` or an inline dict — to a schema.
+
+    Mirrors :func:`comparo.core.assertions._schema_body` so the TUI Run tab and the
+    CLI/execution assertion engine agree on inline schemas (a divergence otherwise
+    passes in one and fails in the other).
+    """
+    schema_id = _ref_id(expected)
+    if schema_id is not None:
+        obj = project.objects.get(schema_id)
+        return obj.spec if isinstance(obj, Schema) else None
+    return expected if isinstance(expected, dict) else None
 
 
 def passed(checks: list[Check]) -> bool:
@@ -68,15 +81,19 @@ def passed(checks: list[Check]) -> bool:
     return bool(checks) and all(check.ok for check in checks)
 
 
-def _schema_check(body: bytes, schema: Schema) -> Check:
+def _schema_check(body: bytes, schema: object) -> Check:
     try:
         payload = json.loads(body)
     except (ValueError, TypeError):
         return Check("schema", ok=False, detail="response body is not JSON")
     try:
-        jsonschema.validate(payload, schema.spec)
+        jsonschema.validate(payload, schema)  # type: ignore[arg-type]
     except jsonschema.ValidationError as error:
         return Check("schema", ok=False, detail=error.message)
     except jsonschema.SchemaError as error:
         return Check("schema", ok=False, detail=f"invalid schema: {error.message}")
+    except Exception as error:
+        # An unresolvable $ref (or any schema-machinery error) fails the check,
+        # never the whole run — parity with the assertions engine.
+        return Check("schema", ok=False, detail=f"schema check failed: {error}")
     return Check("schema", ok=True, detail="valid")
