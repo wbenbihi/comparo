@@ -50,3 +50,22 @@ def test_curl_masks_secrets_but_reveals_them_under_the_execute_sink(
     assert "••••••" in masked
     assert "real-token-abc" in revealed
     assert "••••••" not in revealed
+
+
+def test_curl_shell_quotes_the_method() -> None:
+    # M35: the method is interpolated into the shell command, so it must be quoted
+    # like the URL/headers/body — an unusual method can't inject shell syntax.
+    from comparo.core.curl import to_curl
+    from comparo.core.resolve import ResolvedRequest
+
+    resolved = ResolvedRequest(
+        method="GET; rm -rf /",  # a hostile "method"
+        url="https://api.test/x",
+        headers=[],
+        query={},
+        body=None,
+        trail=[],
+    )
+    command = to_curl(resolved)
+    assert "-X 'GET; rm -rf /'" in command  # quoted as one argument
+    assert "curl -X GET; rm" not in command  # not injected raw

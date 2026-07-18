@@ -26,7 +26,7 @@ def to_curl(resolved: ResolvedRequest) -> str:
     if resolved.query:
         query = urlencode({key: str(value) for key, value in resolved.query.items()})
         url = f"{url}{'&' if '?' in url else '?'}{query}"
-    lines = [f"curl -X {resolved.method} {shlex.quote(url)}"]
+    lines = [f"curl -X {shlex.quote(resolved.method)} {shlex.quote(url)}"]
     has_content_type = any(key.lower() == "content-type" for key, _ in resolved.headers)
     for key, value in resolved.headers:
         lines.append(f"-H {shlex.quote(f'{key}: {value}')}")

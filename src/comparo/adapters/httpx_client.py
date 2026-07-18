@@ -19,6 +19,10 @@ from comparo.core.http import TimeoutBudget
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.streams import parse_stream
 
+#: Upper bound on a buffered (non-streaming) response body — generous enough for
+#: any real API payload, but a ceiling so a runaway response can't exhaust memory.
+_MAX_BODY_BYTES = 64 * 1024 * 1024
+
 
 class HttpxClient:
     """Sends resolved requests through an ``httpx.AsyncClient``."""
@@ -118,15 +122,27 @@ class HttpxClient:
             finally:
                 await response.aclose()
             return response.status_code, list(response.headers.items()), b"".join(chunks)
+        body_chunks: list[bytes] = []
         try:
             # A trickling server resets httpx's per-read timeout on every byte; the
             # total cap ends the read regardless. asyncio.timeout(None) is a no-op.
+            # Stream the body (rather than buffering .content) so a runaway response
+            # is bounded at _MAX_BODY_BYTES instead of exhausting memory.
             async with asyncio.timeout(total):
-                response = await self._client.send(request, auth=auth)
+                response = await self._client.send(request, auth=auth, stream=True)
+                size = 0
+                try:
+                    async for chunk in response.aiter_bytes():
+                        body_chunks.append(chunk)
+                        size += len(chunk)
+                        if size > _MAX_BODY_BYTES:
+                            break
+                finally:
+                    await response.aclose()
         except TimeoutError as error:
             message = f"read exceeded the {total:g}s total deadline"
             raise HttpError(message) from error
-        return response.status_code, list(response.headers.items()), response.content
+        return response.status_code, list(response.headers.items()), b"".join(body_chunks)
 
     async def aclose(self) -> None:
         """Close the underlying httpx client."""

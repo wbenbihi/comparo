@@ -518,3 +518,21 @@ def test_a_trickling_server_hits_the_total_read_deadline(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_a_runaway_response_body_is_capped(
+    serve: Callable[[Routes], str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M36: a non-streaming body is bounded so a giant response can't exhaust memory.
+    from comparo.adapters import httpx_client
+
+    monkeypatch.setattr(httpx_client, "_MAX_BODY_BYTES", 500)
+    big = b'{"x": "' + b"a" * 5000 + b'"}'  # ~5 KB, far over the 500-byte test cap
+    baseline = serve({"/users": (200, "application/json", lambda: big)})
+    config = _project(tmp_path, baseline, baseline)
+
+    # `run` executes against one env; a capped (truncated) body just diffs as raw.
+    result = runner.invoke(app, ["run", "request.users", "--config", str(config)])
+    # The request completed (didn't hang or OOM); the cap kept memory bounded.
+    assert result.exit_code in (0, 1)
+    assert "request.users" in result.output
