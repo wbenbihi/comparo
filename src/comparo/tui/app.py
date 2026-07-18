@@ -7,9 +7,6 @@ Diff screen carries the signature tri-state gutter. The core never depends on
 this module.
 """
 
-# ruff: noqa: F405 -- comparo.tui.tokens / comparo.tui.render are re-exported below via
-# `import *` (both declare `__all__`) so every constant/helper that used to live in this
-# module stays importable from here; ruff cannot see across that boundary.
 import asyncio
 import contextlib
 import os
@@ -103,9 +100,124 @@ from comparo.core.secrets import SecretError
 from comparo.core.triage import TriageError
 from comparo.core.triage import profile_path
 from comparo.core.triage import silence
-from comparo.tui.render import *  # noqa: F403
+from comparo.tui.render import _app_env
+from comparo.tui.render import _app_redact
+from comparo.tui.render import _assert_count_text
+from comparo.tui.render import _assert_tally
+from comparo.tui.render import _bash
+from comparo.tui.render import _branch
+from comparo.tui.render import _build_report_tree
+from comparo.tui.render import _cell_verdict
+from comparo.tui.render import _check_result
+from comparo.tui.render import _clip
+from comparo.tui.render import _crash_report
+from comparo.tui.render import _default_environment
+from comparo.tui.render import _default_pair
+from comparo.tui.render import _description
+from comparo.tui.render import _diff_body_view
+from comparo.tui.render import _diff_error_view
+from comparo.tui.render import _diff_legend
+from comparo.tui.render import _diff_ready
+from comparo.tui.render import _diff_skip_view
+from comparo.tui.render import _drift_change
+from comparo.tui.render import _environment_detail
+from comparo.tui.render import _environments
+from comparo.tui.render import _envs_label
+from comparo.tui.render import _error_report
+from comparo.tui.render import _exec_assert_body
+from comparo.tui.render import _exec_assert_rows
+from comparo.tui.render import _exec_diff_legend
+from comparo.tui.render import _exec_diff_summary
+from comparo.tui.render import _exec_env_names
+from comparo.tui.render import _exec_gate_body
+from comparo.tui.render import _exec_header
+from comparo.tui.render import _exec_profile_card
+from comparo.tui.render import _exec_profiles_hint
+from comparo.tui.render import _exec_setup
+from comparo.tui.render import _exec_stacked_diff
+from comparo.tui.render import _graph
+from comparo.tui.render import _help_body
+from comparo.tui.render import _json
+from comparo.tui.render import _keys_bar
+from comparo.tui.render import _leaf
+from comparo.tui.render import _matches
+from comparo.tui.render import _object_detail
+from comparo.tui.render import _ok_report
+from comparo.tui.render import _outbound_diff_view
+from comparo.tui.render import _p50
+from comparo.tui.render import _pair
+from comparo.tui.render import _project_detail
+from comparo.tui.render import _project_leaf
+from comparo.tui.render import _record_kind
+from comparo.tui.render import _record_markdown
+from comparo.tui.render import _rel_dir
+from comparo.tui.render import _relative_age
+from comparo.tui.render import _render_provenance
+from comparo.tui.render import _replay_banner
+from comparo.tui.render import _replay_compare_well
+from comparo.tui.render import _replay_detail_tree
+from comparo.tui.render import _replay_drift_groups
+from comparo.tui.render import _replay_drift_summary
+from comparo.tui.render import _replay_run_progress
+from comparo.tui.render import _replay_skip_groups
+from comparo.tui.render import _report_reading_pane
+from comparo.tui.render import _req_short
+from comparo.tui.render import _request_detail
+from comparo.tui.render import _request_latencies
+from comparo.tui.render import _requests
+from comparo.tui.render import _run_key
+from comparo.tui.render import _run_label
+from comparo.tui.render import _running_body
+from comparo.tui.render import _running_row_from_progress
+from comparo.tui.render import _RunningRow
+from comparo.tui.render import _save_run
+from comparo.tui.render import _seg_toggle
+from comparo.tui.render import _settings_body
+from comparo.tui.render import _title
 from comparo.tui.theme import COMPARO_INK
-from comparo.tui.tokens import *  # noqa: F403
+from comparo.tui.tokens import _ACCENT
+from comparo.tui.tokens import _AXIS
+from comparo.tui.tokens import _DANGER
+from comparo.tui.tokens import _DIFF_PREPARE_KEYS
+from comparo.tui.tokens import _DIFF_RESULTS_KEYS
+from comparo.tui.tokens import _DIFF_RUNNING_KEYS
+from comparo.tui.tokens import _DIM
+from comparo.tui.tokens import _DRIFT
+from comparo.tui.tokens import _ENV_KEYS
+from comparo.tui.tokens import _ERROR_KEYS
+from comparo.tui.tokens import _EXEC_CELL_KEYS
+from comparo.tui.tokens import _EXEC_DIFF_KEYS
+from comparo.tui.tokens import _EXEC_KEYS
+from comparo.tui.tokens import _EXEC_LAUNCH_KEYS
+from comparo.tui.tokens import _EXEC_RESULTS_KEYS
+from comparo.tui.tokens import _EXEC_RUNNING_KEYS
+from comparo.tui.tokens import _EXPLORER_KEYS
+from comparo.tui.tokens import _GATE_COLOR
+from comparo.tui.tokens import _HEALTH_LABEL
+from comparo.tui.tokens import _HEALTH_SEVERITY
+from comparo.tui.tokens import _INSTANCE_KEYS
+from comparo.tui.tokens import _KIND_GLYPH
+from comparo.tui.tokens import _KINDS
+from comparo.tui.tokens import _LABEL
+from comparo.tui.tokens import _METHOD
+from comparo.tui.tokens import _MODE
+from comparo.tui.tokens import _PREPARE_KEYS
+from comparo.tui.tokens import _REPORT_DIFF_KEYS
+from comparo.tui.tokens import _REPORT_LIST_KEYS
+from comparo.tui.tokens import _REPORT_RUN_KEYS
+from comparo.tui.tokens import _RESOLVE_KEYS
+from comparo.tui.tokens import _RUN_GLYPH
+from comparo.tui.tokens import _RUNNING_DONE_KEYS
+from comparo.tui.tokens import _RUNNING_KEYS
+from comparo.tui.tokens import _SAME
+from comparo.tui.tokens import _SETTINGS_KEYS
+from comparo.tui.tokens import _SETTINGS_SUBTITLE
+from comparo.tui.tokens import _SKIP
+from comparo.tui.tokens import _STATUS
+from comparo.tui.tokens import _TAB_NAMES
+from comparo.tui.tokens import _TEXT
+from comparo.tui.tokens import _TEXT_HI
+from comparo.tui.tokens import _WARN
 
 
 class NavBar(Horizontal):
