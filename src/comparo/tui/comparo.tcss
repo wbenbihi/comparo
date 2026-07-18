@@ -18,12 +18,12 @@ Screen {
 #nav-logo {
     color: $accent;
     text-style: bold;
-    padding: 0 5 0 0;
+    padding: 0 3 0 0;
 }
 
 .nav-item {
     color: $text-muted;
-    padding: 0 2;
+    padding: 0 1;
 }
 
 .nav-item:hover {
@@ -43,7 +43,11 @@ Screen {
 
 #nav-status {
     width: 1fr;
+    min-width: 22;
     content-align: right middle;
+    text-align: right;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
     color: $text-muted;
 }
 
@@ -168,6 +172,12 @@ Screen {
     padding: 1 0 0 0;
 }
 
+/* PROD-90 — the equivalent headless command, shown under the run/diff CTA. */
+.cli-preview {
+    padding: 1 0 0 0;
+    color: $text-muted;
+}
+
 /* RUNNING — a compact progress line over dynamic Miller columns. */
 #run-progress {
     height: 1;
@@ -251,63 +261,240 @@ Screen {
     width: 1fr;
 }
 
-/* ── Report ──────────────────────────────────────────────────────────────── */
-#report-gate {
-    height: 3;
-    padding: 0 2;
-    margin-bottom: 1;
-    border: round $border;
-    border-title-color: $text-muted;
-    content-align: left middle;
-}
-
-#report-gate.pass {
-    border: round $success;
-    border-title-color: $success;
-}
-
-#report-gate.fail {
-    border: round $error;
-    border-title-color: $error;
-}
-
-#report-pills {
-    height: 4;
-    margin-bottom: 1;
-}
-
-.pill {
-    width: 1fr;
-    height: 4;
-    margin-right: 1;
-    padding: 0 0 0 2;
-    background: $panel;
-    border: round $border;
-}
-
-.pill:last-of-type {
-    margin-right: 0;
-}
-
-#report-cols {
+/* ── Report — a saved-run archive replayed with the live Diff / Run panels ─── */
+#report-switch {
     height: 1fr;
 }
 
-#report-breakdown {
-    width: 1fr;
+#report-browse {
     height: 1fr;
-    margin-right: 1;
 }
 
-#report-export {
+#report-list {
     width: 46;
     height: 1fr;
+    margin-right: 1;
+    padding: 0;
+}
+
+#report-table {
+    background: transparent;
+    width: 1fr;
+    height: 1fr;
+}
+
+#report-table > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: none;
+}
+
+#report-table > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
+}
+
+#report-read {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* The reading pane stays dim; only its subtitle carries the gate verdict colour. */
+#report-read.pass {
+    border-subtitle-color: $success;
+}
+
+#report-read.fail {
+    border-subtitle-color: $error;
+}
+
+#report-kind {
+    height: auto;
+    padding: 1 1 0 1;
+    color: $text-muted;
+    border-top: solid #28313f;
+}
+
+#report-list-legend {
+    height: auto;
+    padding: 1 1 0 1;
+    color: $text-muted;
+}
+
+/* Report → saved-diff replay (the Diff screen's layout, read-only). */
+#report-diff {
+    height: 1fr;
+}
+
+#report-diff-banner {
+    height: 1;
+    margin-bottom: 1;
+}
+
+#report-diff-cols {
+    height: 1fr;
+}
+
+#report-drift {
+    width: 52;
+    height: 1fr;
+    margin-right: 1;
+}
+
+/* The DRIFT INDEX is a passive read-only replay pane — keep it dim, not accent,
+   even though its table holds focus. */
+#report-drift:focus,
+#report-drift:focus-within {
+    border: round $border;
+    border-title-color: $text-muted;
+}
+
+#report-drift-table {
+    background: transparent;
+    width: 1fr;
+    height: 1fr;
+}
+
+#report-drift-table > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: none;
+}
+
+#report-drift-table > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
+}
+
+#report-drift-legend {
+    height: auto;
+    padding: 1 0 0 0;
+    color: $text-muted;
+    border-top: solid #28313f;
+}
+
+#report-compare {
+    width: 1fr;
+    height: 1fr;
+    border: round $secondary;
+    border-title-color: $secondary;
+    border-subtitle-color: $secondary;
+}
+
+/* Report → saved-run replay (the Run screen's Miller rows + detail tree). */
+#report-run {
+    height: 1fr;
+}
+
+#report-run-banner {
+    height: 1;
+    margin-bottom: 1;
+}
+
+#report-run-progress {
+    height: 1;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#report-run-cols {
+    height: 1fr;
+}
+
+#report-req {
+    width: 44;
+    height: 1fr;
+    margin-right: 1;
+    border: round $secondary;
+    border-title-color: $secondary;
+    border-subtitle-color: $secondary;
+}
+
+#report-req-table {
+    background: transparent;
+    width: 1fr;
+    height: 1fr;
+}
+
+#report-req-table > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: none;
+}
+
+#report-req-table > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
+}
+
+#report-detail {
+    width: 1fr;
+    height: 1fr;
+}
+
+#report-detail-tree {
+    background: transparent;
+    padding: 1 1;
+    overflow-x: hidden;
+    scrollbar-size-vertical: 1;
+}
+
+#report-detail-tree > .tree--cursor {
+    background: #1e2b45;
+    color: $text;
+    text-style: bold;
+}
+
+#report-detail-tree > .tree--guides,
+#report-detail-tree > .tree--guides-hover,
+#report-detail-tree > .tree--guides-selected {
+    color: #1c2532;
 }
 
 /* ── Diff ────────────────────────────────────────────────────────────────── */
+#diff-mode, #diff-prepare, #diff-results, #diff-running {
+    height: 1fr;
+}
+
+/* PREPARE — pick the pair and which requests/cases to diff (mirrors Run). */
+#diff-prepare {
+    align: center top;
+    padding: 1 0 0 0;
+}
+
+#diff-prepare-panel {
+    width: 82;
+    max-width: 96%;
+    height: auto;
+    max-height: 100%;
+    padding: 1 2;
+}
+
+#diff-prep-head {
+    padding: 0 0 1 0;
+}
+
+#diff-prep-tree {
+    background: transparent;
+    height: auto;
+    max-height: 24;
+    padding: 0 0 1 0;
+}
+
+#diff-prep-tree > .tree--cursor {
+    background: #1e2b45;
+    color: $text;
+    text-style: bold;
+}
+
+#diff-prep-cta {
+    border-top: solid $border;
+    padding: 1 0 0 0;
+}
+
 #diff-progress {
-    height: 1;
-    padding: 0 2;
+    height: 3;
+    padding: 0 1;
     margin-bottom: 1;
 }
 
@@ -316,7 +503,7 @@ Screen {
 }
 
 #col-drift {
-    width: 48;
+    width: 56;
     height: 1fr;
     margin-right: 1;
 }
@@ -330,6 +517,13 @@ Screen {
     background: transparent;
     width: 1fr;
     height: 1fr;
+}
+
+#drift-legend {
+    height: auto;
+    padding: 1 0 0 0;
+    color: $text-muted;
+    border-top: solid #28313f;
 }
 
 #drift-table > .datatable--header {
@@ -395,39 +589,177 @@ ConfirmModal, EnvPickerModal {
     height: auto;
 }
 
-/* ── execution screen (launched from the Explorer) ───────────────────────── */
-ExecutionScreen {
-    align: center middle;
-    background: $background;
-}
-
-#exec-screen {
-    width: 100%;
-    height: 100%;
-    padding: 1 2 0 2;
-}
-
-#exec-header {
-    height: 1;
-    margin-bottom: 1;
-}
-
-#exec-cols {
+/* ── Execution tab — launch → run → gate → cell → diff, one ContentSwitcher ── */
+#exec-switch {
     height: 1fr;
 }
 
-#exec-cells {
-    width: 54;
+/* launch (step 1) — profile picker + SETUP */
+#exec-launch {
+    height: 1fr;
+}
+
+#exec-profiles {
+    width: 36;
+    height: 1fr;
+    margin-right: 1;
+    padding: 0;
+    border-title-color: $accent;
+    border: round $accent;
+}
+
+#exec-profiles-hint {
+    height: auto;
+    padding: 1 1 0 1;
+}
+
+#exec-profile-list {
+    background: transparent;
+    height: 1fr;
+    border: none;
+    padding: 1 1;
+}
+
+#exec-profile-list > .option-list--option-highlighted,
+#exec-profile-list:focus > .option-list--option-highlighted {
+    background: #26365a;
+    color: $text;
+    text-style: bold;
+}
+
+#exec-setup {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* running (step 2) */
+#exec-running {
+    height: 1fr;
+}
+
+/* The RUNNING panel stays dim even while focused — it is a passive read-out,
+   not the active panel, so it must not claim the accent focus border. */
+#exec-running:focus,
+#exec-running:focus-within,
+#exec-diff:focus,
+#exec-diff:focus-within,
+#cell-body:focus,
+#cell-body:focus-within {
+    border: round $border;
+    border-title-color: $text-muted;
+}
+
+/* results (step 3) — header / assertions / diff / gate */
+#exec-results {
+    height: 1fr;
+}
+
+#exec-header {
+    height: 4;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#exec-assert {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#exec-assert-base {
+    width: 1fr;
+    height: auto;
     margin-right: 1;
 }
 
-#exec-detail {
+#exec-assert-cand {
     width: 1fr;
+    height: auto;
+}
+
+#exec-diff {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#exec-diff-summary {
+    height: auto;
+    padding: 0 0 1 0;
+}
+
+#exec-drift-table {
+    background: transparent;
+    height: auto;
+    max-height: 8;
+}
+
+#exec-drift-table > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
+}
+
+#exec-diff-legend {
+    height: auto;
+    padding: 1 0 0 0;
+    color: $text-muted;
+    border-top: solid #28313f;
 }
 
 #exec-gate {
-    height: 1;
+    height: auto;
     padding: 0 1;
+    margin-bottom: 1;
+    border: round $error;
+    border-title-color: $error;
+    border-subtitle-color: $text-muted;
+}
+
+#exec-gate.pass {
+    border: round $success;
+    border-title-color: $success;
+}
+
+#exec-gate.fail {
+    border: round $error;
+    border-title-color: $error;
+}
+
+/* cell (step 4) — breadcrumb / assertions stacked left / body diff right */
+#exec-cell {
+    height: 1fr;
+}
+
+#cell-header {
+    height: 3;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#cell-cols {
+    height: 1fr;
+}
+
+#cell-assert {
+    width: 46;
+    margin-right: 1;
+}
+
+#cell-assert-base, #cell-assert-cand {
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+#cell-verdict {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#cell-body {
+    width: 1fr;
+}
+
+/* in-flow diff (step 5) — stacked git-style wells, scoped to the run */
+#exec-diff-screen {
+    height: 1fr;
 }
 
 #confirm-hints {
