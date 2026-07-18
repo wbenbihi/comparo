@@ -19,6 +19,7 @@ from comparo.core.compare import CellDiff
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
 from comparo.core.execution import ExecutionResult
+from comparo.core.redaction import mask_credential_header
 from comparo.core.report import diff_gate
 
 
@@ -206,7 +207,8 @@ def _cell_record(
         latency_ms=diff.latency_ms,
         size_bytes=diff.size_bytes,
         response_headers={
-            redact(str(key)): redact(str(value)) for key, value in diff.response_headers
+            redact(str(key)): redact(mask_credential_header(str(key), str(value)))
+            for key, value in diff.response_headers
         },
     )
 
@@ -440,7 +442,11 @@ def list_records(directory: Path) -> list[ReportRecord]:
 
 def load_record(path: Path) -> ReportRecord:
     """Read a single saved record from *path*."""
-    return _from_dict(json.loads(path.read_text(encoding="utf-8")))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        message = f"not a report record: {path}"
+        raise ValueError(message)
+    return _from_dict(data)
 
 
 def _to_dict(record: ReportRecord) -> dict[str, object]:

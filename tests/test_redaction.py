@@ -1,5 +1,6 @@
 """A secret echoed into a drifting response must never reach a report or archive."""
 
+import json
 from pathlib import Path
 
 from comparo.core.archive import record_from_execution
@@ -7,9 +8,16 @@ from comparo.core.assertions import AssertionResult
 from comparo.core.compare import CellDiff
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
+from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionResult
+from comparo.core.export import RunEntry
+from comparo.core.export import export_run
+from comparo.core.http import HttpResponse
+from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
+from comparo.core.matrix import MatrixCell
+from comparo.core.models import Environment
 from comparo.core.models import Request
 from comparo.core.redaction import MASK
 from comparo.core.redaction import Redactor
@@ -744,3 +752,81 @@ def test_execution_record_cells_mask_a_secret_on_disk() -> None:
     assert SECRET not in json.dumps(cell.candidate_body)
     assert not any(SECRET in path for path in cell.drift_paths + cell.skip_paths)
     assert not any(SECRET in key or SECRET in value for key, value in cell.response_headers.items())
+
+
+# ── encoding-robust redaction, overlapping secrets, server-issued credentials ──
+
+
+def _project_with_secrets(
+    tmp_path: Path, secrets: dict[str, str], *, with_request: bool = False
+) -> LoadedProject:
+    """Write a minimal project declaring *secrets* as ``$literal`` values."""
+    manifest = "apiVersion: comparo/v1\nkind: Project\n"
+    manifest += "metadata: {name: x, id: project.x}\nspec: {data: .}\n"
+    (tmp_path / "comparo.yaml").write_text(manifest, encoding="utf-8")
+    lines = [
+        "apiVersion: comparo/v1",
+        "kind: Environment",
+        "metadata: {name: e, id: environment.e}",
+        "spec:",
+        "  baseUrl: http://127.0.0.1:1",
+    ]
+    if secrets:
+        lines.append("  secrets:")
+        for name, value in secrets.items():
+            lines += [f"    {name}:", "      from:", f"        - $literal: {json.dumps(value)}"]
+    (tmp_path / "env.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if with_request:
+        (tmp_path / "req.yaml").write_text(
+            "apiVersion: comparo/v1\nkind: Request\n"
+            "metadata: {name: p, id: request.probe}\n"
+            "spec:\n  request: {method: GET, endpoint: /x}\n",
+            encoding="utf-8",
+        )
+    return load_project(tmp_path / "comparo.yaml")
+
+
+def _run_entry(loaded: LoadedProject, response: HttpResponse) -> tuple[Environment, RunEntry]:
+    env = loaded.objects["environment.e"]
+    request = loaded.objects["request.probe"]
+    assert isinstance(env, Environment)
+    assert isinstance(request, Request)
+    execution = Execution(request, env, "", response)
+    return env, RunEntry(request, MatrixCell("", ()), execution, [])
+
+
+def test_a_secret_with_json_special_chars_is_masked_after_json_dumps(tmp_path: Path) -> None:
+    # A detail/body is json.dumps-ed before a sink redacts it; a secret with a
+    # quote/backslash/newline appears escaped and a raw match would miss it.
+    secret = 'LEAKME"tok\\en\nTAIL'
+    loaded = _project_with_secrets(tmp_path, {"TOKEN": secret})
+    redact = Redactor.for_project(loaded).text
+    escaped = json.dumps(secret)  # exactly what diff._short / assertions._short emit
+    masked = redact(escaped)
+    assert "LEAKME" not in masked
+    assert "TAIL" not in masked
+    assert MASK in masked
+    assert "LEAKME" not in redact(f"header={secret}")  # plain form masked too
+
+
+def test_export_run_masks_overlapping_secrets_longest_first(tmp_path: Path) -> None:
+    # A non-longest-first redactor masks the shorter secret first, leaving the
+    # longer secret's tail on disk. export_run must mask the long secret whole.
+    loaded = _project_with_secrets(
+        tmp_path, {"A": "tok-SHORT", "B": "tok-SHORT-and-LONGTAIL"}, with_request=True
+    )
+    body = b'{"echo": "tok-SHORT-and-LONGTAIL"}'
+    env, entry = _run_entry(loaded, HttpResponse(200, [], body, 3.0))
+    out = export_run(loaded, env, [entry])
+    assert "LONGTAIL" not in out
+    assert "tok-SHORT-and-LONGTAIL" not in out
+
+
+def test_export_masks_a_server_issued_set_cookie(tmp_path: Path) -> None:
+    # A Set-Cookie the server issues was never declared, so value-matching can't
+    # mask it; the header-name policy must.
+    loaded = _project_with_secrets(tmp_path, {}, with_request=True)
+    response = HttpResponse(200, [("set-cookie", "session=SERVERSIDETOKEN-xyz")], b"{}", 3.0)
+    env, entry = _run_entry(loaded, response)
+    out = export_run(loaded, env, [entry])
+    assert "SERVERSIDETOKEN" not in out

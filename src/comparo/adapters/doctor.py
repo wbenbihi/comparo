@@ -47,9 +47,24 @@ from comparo.core.report import build_report
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
 
-#: The canary secret every sink is challenged with — distinctive, so an accidental
-#: appearance in any output is unmistakable and can never be a coincidence.
+#: The marker every canary value embeds. A leak in ANY form — the raw value, its
+#: JSON-escaped form, or the surviving tail of an overlap — still exposes this
+#: substring, so a single ``_MARKER not in output`` check catches every class.
+_MARKER = "CANARY"
+
+#: The base canary secret every sink is challenged with — distinctive, so an
+#: accidental appearance in any output is unmistakable and never a coincidence.
 CANARY = "s3cr3t-CANARY-a1b2c3d4e5f6"
+#: A secret carrying JSON-special chars (``"``, ``\\``, newline): it must survive
+#: the ``json.dumps`` a detail/body passes through before a sink redacts it.
+CANARY_SPECIAL = 's3cr3t-CANARY-special-"\\-\n-end'
+#: Two overlapping secrets — the shorter is a prefix of the longer, whose tail
+#: also embeds the marker, so a non-longest-first redactor leaks ``CANARY``.
+CANARY_OVERLAP_SHORT = "s3cr3t-CANARY-overlap"
+CANARY_OVERLAP_LONG = "s3cr3t-CANARY-overlap-then-CANARY-tail"
+#: A credential the SERVER issues (never declared) — only the header-name policy
+#: masks it, so a missing policy leaks it into saved runs and reports.
+CANARY_COOKIE = "session=srv-CANARY-issued-token"
 
 _PROJECT_YAML = """\
 apiVersion: comparo/v1
@@ -60,19 +75,30 @@ spec:
   data: .
 """
 
-_ENVIRONMENT_YAML = f"""\
-apiVersion: comparo/v1
-kind: Environment
-metadata:
-  name: Canary
-  id: environment.canary
-spec:
-  baseUrl: https://canary.invalid
-  secrets:
-    CANARY_TOKEN:
-      from:
-        - $literal: {CANARY}
-"""
+#: Declared secrets, keyed by a name that never embeds the marker (so the marker
+#: only ever appears as a secret *value* to be masked). ``$literal`` values are
+#: emitted via ``json.dumps`` so special characters survive the YAML round-trip.
+_SECRETS = {
+    "DOCTOR_TOKEN": CANARY,
+    "DOCTOR_SPECIAL": CANARY_SPECIAL,
+    "DOCTOR_OVERLAP_A": CANARY_OVERLAP_SHORT,
+    "DOCTOR_OVERLAP_B": CANARY_OVERLAP_LONG,
+}
+
+_ENVIRONMENT_YAML = (
+    "apiVersion: comparo/v1\n"
+    "kind: Environment\n"
+    "metadata:\n"
+    "  name: Canary\n"
+    "  id: environment.canary\n"
+    "spec:\n"
+    "  baseUrl: https://canary.invalid\n"
+    "  secrets:\n"
+    + "".join(
+        f"    {name}:\n      from:\n        - $literal: {json.dumps(value)}\n"
+        for name, value in _SECRETS.items()
+    )
+)
 
 _REQUEST_YAML = """\
 apiVersion: comparo/v1
@@ -87,7 +113,7 @@ spec:
     headers:
       - key: authorization
         value:
-          $secret: CANARY_TOKEN
+          $secret: DOCTOR_TOKEN
 """
 
 
@@ -145,16 +171,21 @@ def _canary_request(project: LoadedProject) -> Request:
 
 
 def _tainted_cell(request: Request) -> CellDiff:
-    """A cell whose response echoes the canary everywhere a sink might persist it.
+    """A cell whose response echoes every canary where a sink might persist it.
 
-    The canary appears as a body value AND a JSON key, as a drift and a skip field
-    path, in a response-header name and value, and in the matrix case key — every
-    place a server could reflect it back into what a report or archive writes.
+    Each canary appears as a body value AND a JSON key, as a drift and a skip
+    field path, in a response-header name and value, and in the matrix case key —
+    every place a server could reflect one back into what a report or archive
+    writes. The drift detail is built the way the real engine builds it (a
+    ``json.dumps``-ed value), so the JSON-escaped-secret leak path is exercised.
     """
-    base = {CANARY: CANARY, "tokens": {CANARY: 1}}
-    cand = {CANARY: CANARY, "tokens": {CANARY: 2}}
+    base = {CANARY: CANARY, "special": CANARY_SPECIAL, "overlap": CANARY_OVERLAP_LONG}
+    cand = {CANARY: "other", "special": "other", "overlap": "other"}
     fields = [
-        FieldDiff(f"$.{CANARY}", State.DRIFT, "exact", f'"{CANARY}" -> "other"'),
+        # detail rendered as the diff engine renders it — json.dumps BEFORE redaction
+        FieldDiff(f"$.{CANARY}", State.DRIFT, "exact", f"{json.dumps(CANARY)} → {json.dumps('x')}"),
+        FieldDiff("$.special", State.DRIFT, "exact", f'{json.dumps(CANARY_SPECIAL)} → "x"'),
+        FieldDiff("$.overlap", State.DRIFT, "exact", f'{json.dumps(CANARY_OVERLAP_LONG)} → "x"'),
         FieldDiff(f"$.headers.{CANARY}", State.SKIP, "ignore", "volatile"),
     ]
     return CellDiff(
@@ -167,7 +198,11 @@ def _tainted_cell(request: Request) -> CellDiff:
         status=200,
         latency_ms=42,
         size_bytes=128,
-        response_headers=((CANARY, CANARY), ("content-type", "application/json")),
+        response_headers=(
+            (CANARY, CANARY),
+            ("set-cookie", CANARY_COOKIE),
+            ("content-type", "application/json"),
+        ),
     )
 
 
@@ -177,9 +212,26 @@ def _display(scenario: _Scenario) -> str:
 
 
 def _saved_runs(scenario: _Scenario) -> str:
-    """The runs/*.json export masks a secret echoed as a body value, key, or header."""
-    body = json.dumps({"echo": CANARY, CANARY: "as-a-key"}).encode()
-    response = HttpResponse(200, [("x-echo", CANARY), (CANARY, "reflected")], body, 5.0)
+    """The runs/*.json export masks a secret echoed as a body value, key, or header.
+
+    Includes the overlapping-secret pair (a non-longest-first redactor would leak
+    the longer secret's tail) and an undeclared ``Set-Cookie`` (only the header
+    policy masks it).
+    """
+    body = json.dumps(
+        {
+            "echo": CANARY,
+            CANARY: "as-a-key",
+            "special": CANARY_SPECIAL,
+            "overlap": CANARY_OVERLAP_LONG,
+        }
+    ).encode()
+    response = HttpResponse(
+        200,
+        [("x-echo", CANARY), (CANARY, "reflected"), ("set-cookie", CANARY_COOKIE)],
+        body,
+        5.0,
+    )
     execution = Execution(
         request=scenario.request, environment=scenario.environment, cell_key="", response=response
     )
@@ -275,7 +327,10 @@ def _run_sink(
         output = produce(scenario)
     except Exception as error:  # defence in depth — a broken sink is a failed check
         return SinkCheck(name, f"{detail} — {type(error).__name__}: {error}", ok=False)
-    return SinkCheck(name, detail, ok=CANARY not in output)
+    # Every canary embeds _MARKER, so any leak — raw, JSON-escaped, or overlap tail
+    # — surfaces it. _MARKER never appears in legitimate output (secret names and
+    # object names deliberately avoid it), so its presence is unambiguously a leak.
+    return SinkCheck(name, detail, ok=_MARKER not in output)
 
 
 def run_selfcheck() -> list[SinkCheck]:

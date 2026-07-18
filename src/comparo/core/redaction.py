@@ -8,7 +8,9 @@ This module is that single string-match backstop.
 """
 
 import dataclasses
+import json
 from collections.abc import Callable
+from pathlib import Path
 
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
@@ -18,23 +20,67 @@ from comparo.core.secrets import SecretError
 #: What a redacted secret becomes — the same glyph the DISPLAY sink uses.
 MASK = "••••••"
 
+#: Response header names whose value is a credential the *server* issues (never a
+#: declared secret, so the value-match redactor would miss it). Masked by name.
+_CREDENTIAL_HEADERS = frozenset(
+    {
+        "set-cookie",
+        "cookie",
+        "authorization",
+        "proxy-authorization",
+        "www-authenticate",
+        "proxy-authenticate",
+        "x-api-key",
+    }
+)
+
+
+def mask_credential_header(name: str, value: str) -> str:
+    """Mask *value* when *name* is a credential-bearing header, else return it.
+
+    Redaction elsewhere only masks values of *declared* secrets; a server can
+    hand back a session cookie or echo an ``Authorization`` header that was never
+    declared, so those header values are masked by name as a policy backstop.
+    """
+    return MASK if name.strip().lower() in _CREDENTIAL_HEADERS else value
+
+
+def environment_secret_values(environment: Environment, root: Path) -> set[str]:
+    """One environment's resolved secret values (``$file`` sources confined to *root*)."""
+    values: set[str] = set()
+    sources = environment.spec.secrets or {}
+    secrets = ExecuteSecrets(dict(sources), root)
+    for name in sources:
+        try:
+            value = secrets[name]
+        except SecretError:
+            continue
+        if value:
+            values.add(value)
+    return values
+
 
 def secret_values(project: LoadedProject) -> set[str]:
     """Every environment's resolved secret values (a superset masked everywhere)."""
     values: set[str] = set()
     for obj in project.objects.values():
-        if not isinstance(obj, Environment):
-            continue
-        sources = obj.spec.secrets or {}
-        secrets = ExecuteSecrets(dict(sources), project.root)
-        for name in sources:
-            try:
-                value = secrets[name]
-            except SecretError:
-                continue
-            if value:
-                values.add(value)
+        if isinstance(obj, Environment):
+            values |= environment_secret_values(obj, project.root)
     return values
+
+
+def _encoded_forms(value: str) -> set[str]:
+    r"""Every serialized form a secret can take once it reaches a sink.
+
+    A detail or body is ``json.dumps``-ed *before* a sink redacts it, so a secret
+    containing ``"``/``\``/newline appears escaped (``p@ss\"w0rd``) and a raw
+    substring match would miss it. Registering the JSON-escaped inner form
+    (under both ``ensure_ascii`` settings) closes that leak.
+    """
+    forms = {value}
+    for ensure_ascii in (False, True):
+        forms.add(json.dumps(value, ensure_ascii=ensure_ascii)[1:-1])
+    return forms
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -44,10 +90,21 @@ class Redactor:
     values: tuple[str, ...]
 
     @classmethod
+    def from_values(cls, values: "set[str]") -> "Redactor":
+        """Build a redactor over raw secret *values*, adding their encoded forms.
+
+        Longest-first, so a secret that contains a shorter one is masked whole
+        (and an escaped form, always ≥ its raw value, is tried before the raw).
+        """
+        forms: set[str] = set()
+        for value in values:
+            forms |= _encoded_forms(value)
+        return cls(tuple(sorted(forms, key=len, reverse=True)))
+
+    @classmethod
     def for_project(cls, project: LoadedProject) -> "Redactor":
         """Build a redactor over every resolved secret value in *project*."""
-        # Longest-first, so a secret that contains a shorter one is masked whole.
-        return cls(tuple(sorted(secret_values(project), key=len, reverse=True)))
+        return cls.from_values(secret_values(project))
 
     def text(self, text: str) -> str:
         """Return *text* with every known secret value replaced by the mask."""

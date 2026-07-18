@@ -1,12 +1,15 @@
 """Serialize a run's results to JSON with secrets masked.
 
 Request values render through the display sink, so declared secrets arrive
-already masked. Response bodies are redacted by string-match against the real
-secret values, so a secret echoed back by the server is masked too.
+already masked. Response bodies are redacted through the single project-wide
+:class:`~comparo.core.redaction.Redactor` (longest-first, encoding-robust), so a
+secret echoed back by the server is masked too — and server-issued credential
+headers are masked by name even when they were never declared.
 """
 
 import dataclasses
 import json
+from collections.abc import Callable
 
 from comparo.core.checks import Check
 from comparo.core.execute import Execution
@@ -14,12 +17,12 @@ from comparo.core.loader import LoadedProject
 from comparo.core.matrix import MatrixCell
 from comparo.core.models import Environment
 from comparo.core.models import Request
+from comparo.core.redaction import Redactor
+from comparo.core.redaction import environment_secret_values
+from comparo.core.redaction import mask_credential_header
+from comparo.core.redaction import secret_values
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
-from comparo.core.secrets import ExecuteSecrets
-from comparo.core.secrets import SecretError
-
-_MASK = "••••••"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -43,17 +46,23 @@ def export_run(project: LoadedProject, environment: Environment, entries: list[R
     Returns:
         A JSON document safe to write to disk — no real secret value survives.
     """
-    secrets = _secret_values(project, environment)
+    # Mask secrets declared anywhere in the project AND in the environment the run
+    # used (which a caller may pass without indexing it into the project).
+    values = secret_values(project) | environment_secret_values(environment, project.root)
+    redact = Redactor.from_values(values).text
     payload = {
         "environment": environment.metadata.name,
-        "baseUrl": _redact(environment.spec.base_url, secrets),
-        "results": [_entry(project, environment, entry, secrets) for entry in entries],
+        "baseUrl": redact(environment.spec.base_url),
+        "results": [_entry(project, environment, entry, redact) for entry in entries],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
 def _entry(
-    project: LoadedProject, environment: Environment, entry: RunEntry, secrets: set[str]
+    project: LoadedProject,
+    environment: Environment,
+    entry: RunEntry,
+    redact: Callable[[str], str],
 ) -> dict[str, object]:
     resolver = Resolver(project, environment, Sink.DISPLAY)
     resolved = resolver.resolve_request(entry.request, entry.cell)
@@ -61,71 +70,46 @@ def _entry(
     return {
         # A matrix case value can equal a declared secret, so the case key
         # (``token=<value>``) — and, defensively, the request id — are masked too.
-        "request": _redact(entry.request.metadata.id or entry.request.metadata.name, secrets),
-        "case": _redact(entry.cell.key, secrets) if entry.cell.key else None,
+        "request": redact(entry.request.metadata.id or entry.request.metadata.name),
+        "case": redact(entry.cell.key) if entry.cell.key else None,
         "method": resolved.method,
-        "url": _redact(resolved.url, secrets),
-        "requestHeaders": {
-            _redact(key, secrets): _redact(str(value), secrets) for key, value in resolved.headers
-        },
-        "requestBody": _redact_value(resolved.body, secrets),
+        "url": redact(resolved.url),
+        "requestHeaders": {redact(key): redact(str(value)) for key, value in resolved.headers},
+        "requestBody": _redact_value(resolved.body, redact),
         "status": response.status if response else None,
         "durationMs": round(response.elapsed_ms, 1) if response else None,
-        "error": _redact(entry.execution.error, secrets) if entry.execution.error else None,
+        "error": redact(entry.execution.error) if entry.execution.error else None,
         "checks": [
-            {"name": check.name, "ok": check.ok, "detail": _redact(check.detail, secrets)}
+            {"name": check.name, "ok": check.ok, "detail": redact(check.detail)}
             for check in entry.checks
         ],
         "responseHeaders": (
-            {_redact(key, secrets): _redact(value, secrets) for key, value in response.headers}
+            {
+                redact(key): redact(mask_credential_header(key, value))
+                for key, value in response.headers
+            }
             if response
             else None
         ),
-        "responseBody": _redact_body(response.body, secrets) if response else None,
+        "responseBody": _redact_body(response.body, redact) if response else None,
     }
 
 
-def _secret_values(project: LoadedProject, environment: Environment) -> set[str]:
-    # Union every environment's declared secrets (project-wide), matching the core
-    # Redactor — so a secret declared in another environment is masked here too.
-    values: set[str] = set()
-    environments = [obj for obj in project.objects.values() if isinstance(obj, Environment)]
-    for env in environments or [environment]:
-        sources = env.spec.secrets or {}
-        execute = ExecuteSecrets(dict(sources), project.root)
-        for name in sources:
-            try:
-                value = execute[name]
-            except SecretError:
-                continue
-            if value:
-                values.add(value)
-    return values
-
-
-def _redact(text: str, secrets: set[str]) -> str:
-    for value in secrets:
-        text = text.replace(value, _MASK)
-    return text
-
-
-def _redact_body(body: bytes, secrets: set[str]) -> object:
+def _redact_body(body: bytes, redact: Callable[[str], str]) -> object:
     try:
         payload = json.loads(body)
     except (ValueError, TypeError):
-        return _redact(body.decode("utf-8", "replace"), secrets)
-    return _redact_value(payload, secrets)
+        return redact(body.decode("utf-8", "replace"))
+    return _redact_value(payload, redact)
 
 
-def _redact_value(value: object, secrets: set[str]) -> object:
+def _redact_value(value: object, redact: Callable[[str], str]) -> object:
     if isinstance(value, str):
-        return _redact(value, secrets)
+        return redact(value)
     if isinstance(value, dict):
         # Redact the KEY too: a server can echo a secret as an object key, so
         # masking only the value would still write the secret to disk.
-        return {
-            _redact(str(key), secrets): _redact_value(item, secrets) for key, item in value.items()
-        }
+        return {redact(str(key)): _redact_value(item, redact) for key, item in value.items()}
     if isinstance(value, list):
-        return [_redact_value(item, secrets) for item in value]
+        return [_redact_value(item, redact) for item in value]
     return value
