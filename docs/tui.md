@@ -263,8 +263,8 @@ tab.
 ## Report
 
 The Report tab is a **browser over saved reports** archived under `<data>/.reports/` (configurable
-via `spec.report.dir`, default `.reports`), fed by executions, saved diffs, saved runs, and
-`--save`. Its key idea: a saved report doesn't just restate numbers — it **replays through the
+via `spec.report.dir`, default `.reports`), fed by executions and by saved diffs and runs (the
+`s` key). Its key idea: a saved report doesn't just restate numbers — it **replays through the
 same live Diff and Run panels**, read-only, so re-reading a past run feels exactly like the live
 screens.
 

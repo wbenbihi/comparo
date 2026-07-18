@@ -9,7 +9,7 @@ diff** you configure: ignore volatile fields, tolerate array-length differences,
 a schema, or require exact equality, per JSON path.
 
 It is **not tied to any particular API** — the bundled example targets httpbin, but the engine
-knows nothing about your domain. Anything domain-specific lives behind a plugin.
+knows nothing about your domain. What to compare, ignore, or tolerate is all declarative config.
 
 One engine (`comparo.core`) powers three front-ends that never leak back into it:
 
@@ -22,7 +22,8 @@ One engine (`comparo.core`) powers three front-ends that never leak back into it
 Pre-1.0, under active development — a first beta. A runnable, self-contained example lives in
 [`examples/sample-project`](examples/sample-project).
 
-> [!WARNING] Warning: AI Disclaimer
+> [!WARNING]
+> **AI Disclaimer**
 >
 > `comparo` was created as a personal initiative to learn and play with terminal user interface frameworks
 > and coding agents for real-life use cases. This tool has been really handy for both my personal and corporate projects.
@@ -51,10 +52,16 @@ from a directory with a `comparo.yaml`, commands need no path and a bare `compar
 comparo init
 comparo
 
-# validate, run, and diff — the ./comparo.yaml is picked up automatically
+# validate and run — the ./comparo.yaml is picked up automatically
 comparo validate
-comparo run --env prod
-comparo diff --pair local-vs-prod --report junit --report markdown
+comparo run --env local
+```
+
+`comparo init` scaffolds a single `local` environment; add a second environment and a
+`diffPairs` entry to the manifest, then diff them:
+
+```console
+comparo diff --baseline local --candidate staging --report junit --report markdown
 ```
 
 Or work on a project elsewhere by pointing `--config` at its manifest — for example the
@@ -98,7 +105,7 @@ Projects are described by version-controlled YAML objects, each with a Kubernete
 | `DiffProfile`      | how two responses are compared, per JSON path |
 | `AssertionProfile` | composable assertions run against a single response (status, body, latency, schema, …) |
 | `ExecutionProfile` | one declarative run that asserts **both** environments and diffs the pair, with a gate |
-| `Project`          | run-wide defaults: environments, concurrency, reporting, plugins |
+| `Project`          | run-wide defaults: environments, concurrency, retry, selection, reporting |
 
 The full format — every field, the `${...}` interpolation grammar, the `$ref`/`$val`/`$secret`
 sigils, matrices, and diff modes — is in the [configuration reference](docs/configuration.md).

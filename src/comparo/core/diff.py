@@ -17,7 +17,6 @@ import dataclasses
 import enum
 import json
 
-from comparo.core.models import DiffProfile
 from comparo.core.models import DiffRule
 
 
@@ -77,20 +76,6 @@ def diff(
         )
     ]
     return _walk(baseline, candidate, (), compiled, default_mode)
-
-
-def profile_rules(profile: DiffProfile | None) -> tuple[str, list[DiffRule]]:
-    """Return the ``(default_mode, rules)`` of *profile*, or a strict fallback.
-
-    Args:
-        profile: The diff profile, or ``None``.
-
-    Returns:
-        The default mode and rules; ``("exact", [])`` when no profile applies.
-    """
-    if profile is None:
-        return "exact", []
-    return profile.spec.default, profile.spec.rules or []
 
 
 def _walk(

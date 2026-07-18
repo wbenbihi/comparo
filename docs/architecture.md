@@ -69,7 +69,6 @@ src/comparo/
 ├── adapters/    implementations of the core's ports (httpx, reporters)
 ├── cli/         the Typer console front-end
 ├── tui/         the Textual terminal UI
-└── plugins/     registry for custom comparators, reporters, auth, generators
 ```
 
 `comparo/__init__.py` states the intent plainly: *"The public surface is the

@@ -86,6 +86,7 @@ def _version_callback(*, value: bool) -> None:
 def main(
     ctx: typer.Context,
     *,
+    config: ConfigOption = DEFAULT_CONFIG,
     version: Annotated[
         bool,
         typer.Option(
@@ -99,10 +100,11 @@ def main(
 ) -> None:
     """Replay requests across environments and diff the responses.
 
-    Run ``comparo`` with no command to open the terminal UI on ``./comparo.yaml``.
+    Run ``comparo`` with no command to open the terminal UI on ``./comparo.yaml``,
+    or ``comparo --config <manifest>`` to open it on a project elsewhere.
     """
     if ctx.invoked_subcommand is None:
-        _launch_tui(DEFAULT_CONFIG)
+        _launch_tui(config)
 
 
 @app.command()

@@ -136,7 +136,7 @@ Common to every kind. `Project` is the only kind that does **not** declare an `i
 | name          | `name`        | string          | yes                         | Human-readable label shown in the TUI and reports.               |
 | id            | `id`          | string          | yes, except on `Project`    | Stable identity other objects reference. Must be unique.         |
 | description   | `description` | string          | no                          | Free-text explanation.                                           |
-| tags          | `tags`        | list of strings | no                          | Labels used by headless selection (e.g. `--tags smoke`).         |
+| tags          | `tags`        | list of strings | no                          | Labels for the manifest's default `selection.tags` and matrix filtering. |
 
 By convention an `id` is namespaced by kind: `environment.local`, `request.get-json`,
 `schema.slideshow`, `instance.auth-headers`, `matrix.locales`, `diff.lenient`. Reference
@@ -191,7 +191,7 @@ timeout:
 ```
 
 > Only `connect` and `read` currently reach the transport (as httpx connect/read
-> timeouts). `streamIdle` is a valid key but not yet applied.
+> timeouts). `streamIdle` and `streamMax` bound a streaming read (idle gap and total cap).
 
 Used by `Environment.spec.timeout` and `Request.spec.timeout`.
 
