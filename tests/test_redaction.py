@@ -24,9 +24,11 @@ from comparo.core.models import EnvironmentSpec
 from comparo.core.models import Meta
 from comparo.core.models import Request
 from comparo.core.redaction import MASK
+from comparo.core.redaction import Redact
 from comparo.core.redaction import Redactor
 from comparo.core.redaction import environment_secret_values
-from comparo.core.report import build_report
+from comparo.core.report_builder import record_from_diff as _v1_from_diff
+from comparo.core.report_record import ReportRecord
 from comparo.core.secrets import SecretError
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "canary-project"
@@ -37,6 +39,30 @@ def _request(loaded: object) -> Request:
     request = loaded.objects["request.basic-auth"]  # type: ignore[attr-defined]
     assert isinstance(request, Request)
     return request
+
+
+def _env(name: str) -> Environment:
+    return Environment(
+        api_version="comparo/v1",
+        metadata=Meta(name=name, id="environment.x"),
+        spec=EnvironmentSpec(base_url="http://x"),
+    )
+
+
+def _diff_record(
+    cells: object, redact: Redact, *, baseline: str = "Stable", candidate: str = "Canary"
+) -> ReportRecord:
+    return _v1_from_diff(
+        _env(baseline),
+        _env(candidate),
+        cells,  # type: ignore[arg-type]
+        record_id="r",
+        created="t",
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=redact,
+    )
 
 
 def test_secret_values_are_collected() -> None:
@@ -79,16 +105,19 @@ def test_redactor_skips_an_unset_env_secret(
     assert environment_secret_values(env, tmp_path) == set()
 
 
-def test_build_report_redacts_a_leaked_secret() -> None:
+def test_report_record_redacts_a_leaked_secret() -> None:
+    import msgspec
+
     loaded = load_project(SAMPLE)
     redact = Redactor.for_project(loaded).text
     # The server echoed the secret back into a field that drifted.
-    field = FieldDiff("$.authenticated", State.DRIFT, "exact", f'"{SECRET}" → "other"')
+    field = FieldDiff(
+        "$.authenticated", State.DRIFT, "exact", "", baseline=SECRET, candidate="other"
+    )
     cell = CellDiff(_request(loaded), "", [field])
-    report = build_report("Stable", "Canary", [cell], redact)
-    detail = report.cells[0].drifts[0].detail
-    assert SECRET not in detail
-    assert MASK in detail
+    blob = msgspec.json.encode(_diff_record([cell], redact)).decode()
+    assert SECRET not in blob
+    assert MASK in blob
 
 
 def test_run_detail_tree_masks_a_secret_echoed_into_the_response() -> None:
@@ -385,9 +414,9 @@ def test_cell_key_equal_to_a_secret_is_masked_in_report_and_cli() -> None:
     redact = Redactor(values=(SECRET,)).text
     fields = diff({"a": 1}, {"a": 2}, "exact", [])
     cell = CellDiff(request, f"token={SECRET}", fields, None, {"a": 1}, {"a": 2})
-    report = build_report("Stable", "Canary", [cell], redact)
-    assert SECRET not in report.cells[0].cell_key
-    assert MASK in report.cells[0].cell_key
+    record = _diff_record([cell], redact)
+    assert SECRET not in record.cells[0].variant
+    assert MASK in record.cells[0].variant
     buffer = io.StringIO()
     with redirect_stdout(buffer):
         _print_diffs([cell], "Stable", "Canary", redact)
@@ -557,22 +586,24 @@ def test_report_and_archive_mask_env_names() -> None:
     # Env names flow to JSON/Markdown reporters and to .reports/*.json; on the
     # vanishing chance a name equals a declared secret it is masked (the backstop).
     from comparo.adapters.reporters import MarkdownReporter
-    from comparo.core.archive import record_from_diff
+    from comparo.core.archive import record_from_diff as archive_from_diff
     from comparo.core.compare import CellDiff
 
     loaded = load_project(SAMPLE)
     request = _request(loaded)
     redact = Redactor(values=(SECRET,)).text
     cell = CellDiff(request, "", [])
-    report = build_report(SECRET, f"c-{SECRET}", [cell], redact)
-    assert SECRET not in report.baseline
-    assert SECRET not in (report.candidate or "")
-    assert SECRET not in MarkdownReporter().render(report)
-    record = record_from_diff(
+    record = _diff_record([cell], redact, baseline=SECRET, candidate=f"c-{SECRET}")
+    environments = record.invocation.environments
+    assert SECRET not in environments.baseline.name
+    assert environments.candidate is not None
+    assert SECRET not in environments.candidate.name
+    assert SECRET not in MarkdownReporter().render(record)
+    saved = archive_from_diff(
         SECRET, f"c-{SECRET}", [cell], run_id="r", created="now", redact=redact
     )
-    assert SECRET not in record.baseline
-    assert SECRET not in (record.candidate or "")
+    assert SECRET not in saved.baseline
+    assert SECRET not in (saved.candidate or "")
 
 
 def test_provenance_masks_a_matrix_case_value() -> None:
@@ -693,17 +724,18 @@ def test_assertion_profile_detail_masks_a_secret_rule_value() -> None:
     assert SECRET not in capture.get()
 
 
-def test_build_report_redacts_a_long_leaked_secret() -> None:
+def test_report_record_redacts_a_long_leaked_secret() -> None:
+    import msgspec
+
     from comparo.core.diff import diff
 
     long_secret = "tok_" + "a" * 90
     fields = diff({"echo": long_secret}, {"echo": "x"}, "exact", [])
     cell = CellDiff(_request(load_project(SAMPLE)), "", fields)
     redact = Redactor(values=(long_secret,)).text
-    report = build_report("Stable", "Canary", [cell], redact)
-    detail = report.cells[0].drifts[0].detail
-    assert long_secret not in detail
-    assert MASK in detail
+    blob = msgspec.json.encode(_diff_record([cell], redact)).decode()
+    assert long_secret not in blob
+    assert MASK in blob
 
 
 def test_archive_redacts_leaked_secret_in_assertion_detail() -> None:

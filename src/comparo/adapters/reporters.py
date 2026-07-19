@@ -1,23 +1,48 @@
-"""Built-in reporters: render a RunReport to JUnit, SARIF, JSON, or markdown."""
+"""Built-in reporters: project a :class:`ReportRecord` to JUnit, SARIF, JSON, or markdown.
 
-import dataclasses
+The reporters are pure projections of the one saved artifact — the same
+``ReportRecord`` the archive stores — so a CI report can never disagree with a
+replayed one. A CI *finding* is a drifted field or a failed error-severity
+assertion; a cell that only warns or passes is green.
+"""
+
 import json
 import xml.etree.ElementTree as ElementTree
+from typing import Protocol
 
-from comparo.core.report import Reporter
-from comparo.core.report import RunReport
+import msgspec
 
-_ICONS = {"same": "✅ same", "drift": "❌ drift", "error": "⚠️ error"}
+from comparo.core.report_record import Cell
+from comparo.core.report_record import FieldDiffRecord
+from comparo.core.report_record import ReportRecord
+
+_ICONS = {
+    "same": "✅ same",
+    "pass": "✅ pass",
+    "drift": "❌ drift",
+    "fail": "❌ fail",
+    "error": "⚠️ error",
+}
+
+
+class Reporter(Protocol):
+    """A named renderer that projects a report record to a file's text."""
+
+    filename: str
+
+    def render(self, record: ReportRecord) -> str:
+        """Render *record* to this reporter's output format."""
+        ...
 
 
 class JsonReporter:
-    """Renders a report as pretty JSON."""
+    """Emits the full report record as pretty JSON — the machine-readable artifact."""
 
     filename = "report.json"
 
-    def render(self, report: RunReport) -> str:
-        """Render *report* as JSON with a summary block."""
-        return json.dumps(_as_dict(report), indent=2, ensure_ascii=False)
+    def render(self, record: ReportRecord) -> str:
+        """Render the whole *record* as indented JSON (camelCase keys)."""
+        return json.dumps(msgspec.to_builtins(record), indent=2, ensure_ascii=False)
 
 
 class JUnitReporter:
@@ -25,29 +50,27 @@ class JUnitReporter:
 
     filename = "junit.xml"
 
-    def render(self, report: RunReport) -> str:
-        """Render *report* as JUnit XML (drift is a failure, error is an error)."""
-        counts = {
-            "tests": str(len(report.cells)),
-            "failures": str(report.drift),
-            "errors": str(report.errors),
-        }
+    def render(self, record: ReportRecord) -> str:
+        """Render *record* as JUnit XML (a drift/fail is a failure, an error is an error)."""
+        failures = sum(1 for cell in record.cells if cell.verdict in ("drift", "fail"))
+        errors = sum(1 for cell in record.cells if cell.verdict == "error")
+        counts = {"tests": str(len(record.cells)), "failures": str(failures), "errors": str(errors)}
         suites = ElementTree.Element("testsuites", counts)
-        suite = ElementTree.SubElement(suites, "testsuite", {"name": "comparo diff", **counts})
-        for cell in report.cells:
+        suite = ElementTree.SubElement(
+            suites, "testsuite", {"name": f"comparo {record.kind}", **counts}
+        )
+        for cell in record.cells:
             case = ElementTree.SubElement(
-                suite,
-                "testcase",
-                name=_xml_safe(_name(cell.request_id, cell.cell_key)),
-                classname="comparo",
+                suite, "testcase", name=_xml_safe(_name(cell)), classname="comparo"
             )
-            if cell.state == "drift":
-                failure = ElementTree.SubElement(case, "failure", message="drift")
+            if cell.verdict == "error":
+                message = cell.sides.baseline.error or "error"
+                ElementTree.SubElement(case, "error", message=_xml_safe(message))
+            elif cell.verdict in ("drift", "fail"):
+                failure = ElementTree.SubElement(case, "failure", message=cell.verdict)
                 failure.text = _xml_safe(
-                    "\n".join(f"{drift.path} {drift.detail}" for drift in cell.drifts)
+                    "\n".join(f"{path} {detail}" for path, detail in _findings(cell))
                 )
-            elif cell.state == "error":
-                ElementTree.SubElement(case, "error", message=_xml_safe(cell.error or "error"))
         return ElementTree.tostring(suites, encoding="unicode", xml_declaration=True)
 
 
@@ -56,16 +79,16 @@ class SarifReporter:
 
     filename = "comparo.sarif"
 
-    def render(self, report: RunReport) -> str:
-        """Render *report* as SARIF, one result per drift or error."""
+    def render(self, record: ReportRecord) -> str:
+        """Render *record* as SARIF, one result per drift, failed assertion, or error."""
         results: list[dict[str, object]] = []
-        for cell in report.cells:
-            location = _name(cell.request_id, cell.cell_key)
-            if cell.state == "drift":
-                for drift in cell.drifts:
-                    results.append(_result(f"{location}: {drift.path} {drift.detail}", location))
-            elif cell.state == "error":
-                results.append(_result(f"{location}: {cell.error}", location))
+        for cell in record.cells:
+            location = _name(cell)
+            if cell.verdict == "error":
+                results.append(_result(f"{location}: {cell.sides.baseline.error}", location))
+                continue
+            for path, detail in _findings(cell):
+                results.append(_result(f"{location}: {path} {detail}", location))
         document = {
             "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
             "version": "2.1.0",
@@ -90,32 +113,25 @@ class MarkdownReporter:
 
     filename = "summary.md"
 
-    def render(self, report: RunReport) -> str:
-        """Render *report* as a markdown table with a gate line."""
-        lines = [
-            f"## comparo diff · {report.baseline} ⇄ {report.candidate}",
-            "",
-            "| request | cell | result | detail |",
-            "|---|---|---|---|",
-        ]
-        for cell in report.cells:
-            detail = ""
-            if cell.state == "drift":
+    def render(self, record: ReportRecord) -> str:
+        """Render *record* as a markdown table with a gate line."""
+        environments = record.invocation.environments
+        title = f"comparo {record.kind} · {environments.baseline.name}"
+        if environments.candidate is not None:
+            title += f" ⇄ {environments.candidate.name}"
+        lines = [f"## {title}", "", "| request | cell | result | detail |", "|---|---|---|---|"]
+        for cell in record.cells:
+            if cell.verdict == "error":
+                detail = _md_cell(cell.sides.baseline.error or "")
+            else:
                 detail = "<br>".join(
-                    f"`{_md_cell(drift.path)}` {_md_cell(drift.detail)}" for drift in cell.drifts
+                    f"`{_md_cell(path)}` {_md_cell(text)}" for path, text in _findings(cell)
                 )
-            elif cell.state == "error":
-                detail = _md_cell(cell.error or "")
+            icon = _ICONS.get(cell.verdict, cell.verdict)
             lines.append(
-                f"| `{_md_cell(cell.request_id)}` | {_md_cell(cell.cell_key)} "
-                f"| {_ICONS[cell.state]} | {detail} |"
+                f"| `{_md_cell(cell.request_id)}` | {_md_cell(cell.variant)} | {icon} | {detail} |"
             )
-        gate = "**PASS** ✅" if report.passed else "**FAIL** ❌"
-        summary = (
-            f"**{report.same} same · {report.drift} drift · "
-            f"{report.errors} error · {report.skipped} skipped** — gate: {gate}"
-        )
-        lines += ["", summary]
+        lines += ["", _summary_line(record)]
         return "\n".join(lines)
 
 
@@ -127,23 +143,48 @@ REPORTERS: dict[str, Reporter] = {
 }
 
 
-def _name(request_id: str, cell_key: str) -> str:
-    return f"{request_id} [{cell_key}]" if cell_key else request_id
+def _name(cell: Cell) -> str:
+    return f"{cell.request_id} [{cell.variant}]" if cell.variant else cell.request_id
 
 
-def _as_dict(report: RunReport) -> dict[str, object]:
-    return {
-        "baseline": report.baseline,
-        "candidate": report.candidate,
-        "summary": {
-            "same": report.same,
-            "drift": report.drift,
-            "errors": report.errors,
-            "skipped": report.skipped,
-            "passed": report.passed,
-        },
-        "cells": [dataclasses.asdict(cell) for cell in report.cells],
-    }
+def _diff_detail(field: FieldDiffRecord) -> str:
+    """A compact ``before → after`` for a drift, or the mode note for a skip."""
+    if field.state == "skip":
+        return f"skipped ({field.mode})"
+    before = json.dumps(field.baseline, ensure_ascii=False)
+    after = json.dumps(field.candidate, ensure_ascii=False)
+    return f"{before} → {after}"
+
+
+def _findings(cell: Cell) -> list[tuple[str, str]]:
+    """The cell's CI findings: each drifted field and each failed error assertion."""
+    findings: list[tuple[str, str]] = []
+    if cell.comparison is not None:
+        for field in cell.comparison.fields:
+            if field.state == "drift":
+                findings.append((field.path, _diff_detail(field)))
+    for label, side in (("baseline", cell.sides.baseline), ("candidate", cell.sides.candidate)):
+        if side is None or side.assertions is None:
+            continue
+        for assertion in side.assertions:
+            if not assertion.ok and assertion.severity == "error":
+                findings.append((f"assert[{label}] {assertion.target}", assertion.detail or ""))
+    return findings
+
+
+def _summary_line(record: ReportRecord) -> str:
+    gate = "**PASS** ✅" if record.summary.gate == "PASS" else f"**{record.summary.gate}** ❌"
+    parts: list[str] = []
+    if record.summary.diff is not None:
+        diff = record.summary.diff
+        parts.append(
+            f"{diff.same} same · {diff.drift} drift · {diff.error} error · {diff.skipped} skipped"
+        )
+    if record.summary.assertions is not None:
+        asserts = record.summary.assertions
+        parts.append(f"{asserts.passed} passed · {asserts.failed} failed · {asserts.warned} warned")
+    body = " — ".join(parts) if parts else f"{record.summary.cells} cells"
+    return f"**{body}** — gate: {gate}"
 
 
 def _result(text: str, location: str) -> dict[str, object]:
@@ -152,9 +193,9 @@ def _result(text: str, location: str) -> dict[str, object]:
         "level": "error",
         "message": {"text": text},
         # GitHub code-scanning drops any result without a
-        # ``physicalLocation.artifactLocation.uri``. A RunReport has no source
-        # file per cell, so this is a best-effort synthetic anchor: the project
-        # config file, with the request/cell carried as the logical location.
+        # ``physicalLocation.artifactLocation.uri``. A report has no source file per
+        # cell, so this is a best-effort synthetic anchor: the project config file,
+        # with the request/cell carried as the logical location.
         "locations": [
             {
                 "physicalLocation": {"artifactLocation": {"uri": "comparo.yaml"}},

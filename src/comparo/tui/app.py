@@ -90,8 +90,6 @@ from comparo.core.models import Project
 from comparo.core.models import Request
 from comparo.core.provenance import Trail
 from comparo.core.redaction import Redactor
-from comparo.core.report import RunReport
-from comparo.core.report import build_report
 from comparo.core.report import diff_passed
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import Resolver
@@ -1975,8 +1973,6 @@ class DiffView(Vertical):
         finally:
             await client.aclose()
             await candidate_client.aclose()
-        report = build_report(baseline.metadata.name, candidate.metadata.name, self._cells, redact)
-        cast("ComparoApp", self.app).last_report = report
         self._finish(self._cells)
 
     def _render_diff_running(self) -> None:
@@ -4300,7 +4296,6 @@ class ComparoApp(App[None]):
         self.project = project
         self.error = error
         self.environment = _default_environment(project) if project is not None else None
-        self.last_report: RunReport | None = None
         #: Persisted app preferences (theme, opt-in update check, diff default…).
         self.user_config: UserConfig = userconfig.load()
         #: Guards the confirm-on-quit dialog against re-entrancy (a second ``q``).

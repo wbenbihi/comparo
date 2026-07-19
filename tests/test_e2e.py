@@ -152,8 +152,12 @@ def test_identical_environments_pass_the_gate_and_write_valid_reports(
     sarif = json.loads((output / "comparo.sarif").read_text(encoding="utf-8"))
     assert sarif["version"] == "2.1.0"
     assert sarif["runs"][0]["results"] == []
-    summary = json.loads((output / "report.json").read_text(encoding="utf-8"))
-    assert summary["summary"] == {"same": 1, "drift": 0, "errors": 0, "skipped": 0, "passed": True}
+    report = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert report["schemaVersion"] == 1
+    assert report["kind"] == "diff"
+    assert report["summary"]["gate"] == "PASS"
+    assert report["summary"]["diff"]["drift"] == 0
+    assert report["cells"][0]["verdict"] == "same"
     markdown = (output / "summary.md").read_text(encoding="utf-8")
     assert "PASS" in markdown
 

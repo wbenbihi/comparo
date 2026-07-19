@@ -348,9 +348,27 @@ def _diff_cell(diff: CellDiff, redact: Redact) -> Cell:
     )
 
 
+def _execution_environments(result: ExecutionResult, redact: Redact) -> Environments:
+    """Derive the env refs from the outcomes' executions (they hold the real envs).
+
+    Falls back to the result's env *names* (baseUrl unknown) when a run produced no
+    outcomes, so an empty execution still records what it targeted.
+    """
+    baseline: EnvRef | None = None
+    candidate: EnvRef | None = None
+    for outcome in result.outcomes:
+        if baseline is None and outcome.baseline is not None:
+            baseline = _env_ref(outcome.baseline.environment, redact)
+        if candidate is None and outcome.candidate is not None:
+            candidate = _env_ref(outcome.candidate.environment, redact)
+    if baseline is None:
+        baseline = EnvRef(name=redact(result.baseline), base_url="")
+    if candidate is None and result.candidate is not None:
+        candidate = EnvRef(name=redact(result.candidate), base_url="")
+    return Environments(baseline, candidate)
+
+
 def record_from_execution(
-    baseline: Environment,
-    candidate: Environment | None,
     profile: ExecutionProfile,
     result: ExecutionResult,
     *,
@@ -387,10 +405,7 @@ def record_from_execution(
     )
     invocation = Invocation(
         command=redact(f"comparo exec {profile.metadata.id or profile.metadata.name}"),
-        environments=Environments(
-            _env_ref(baseline, redact),
-            _env_ref(candidate, redact) if candidate is not None else None,
-        ),
+        environments=_execution_environments(result, redact),
         concurrency=concurrency,
         selection=_redact_selection(selection, redact),
         profile=redact(profile.metadata.id) if profile.metadata.id else None,

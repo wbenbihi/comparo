@@ -27,8 +27,8 @@ from comparo.core.compare import diff_run
 from comparo.core.diagnostics import LoadError
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_all
+from comparo.core.execute import run_settings
 from comparo.core.execution import ExecutionResult
-from comparo.core.execution import build_execution_report
 from comparo.core.execution import run_execution
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
@@ -36,9 +36,10 @@ from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
 from comparo.core.redaction import Redactor
-from comparo.core.report import RunReport
-from comparo.core.report import build_report
 from comparo.core.report import diff_passed
+from comparo.core.report_builder import record_from_diff
+from comparo.core.report_builder import record_from_execution
+from comparo.core.report_record import ReportRecord
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
@@ -374,7 +375,21 @@ def exec_profile(
         raise typer.Exit(1) from error
     redact = Redactor.for_project(loaded).text
     _print_execution(result, redact)
-    _emit_reports(loaded, report, output, lambda: build_execution_report(result, redact))
+    _emit_reports(
+        loaded,
+        report,
+        output,
+        lambda: record_from_execution(
+            profile,
+            result,
+            record_id=_record_id(),
+            created=_record_created(),
+            tool=f"comparo {__version__}",
+            project=_project_name(loaded),
+            concurrency=run_settings(loaded)[0],
+            redact=redact,
+        ),
+    )
     raise typer.Exit(0 if result.passed else 1)
 
 
@@ -469,17 +484,44 @@ def diff(
         loaded,
         report,
         output,
-        lambda: build_report(base_env.metadata.name, candidate_env.metadata.name, results, redact),
+        lambda: record_from_diff(
+            base_env,
+            candidate_env,
+            results,
+            record_id=_record_id(),
+            created=_record_created(),
+            tool=f"comparo {__version__}",
+            project=_project_name(loaded),
+            concurrency=run_settings(loaded)[0],
+            redact=redact,
+        ),
     )
     if not passed:
         raise typer.Exit(1)
+
+
+def _record_id() -> str:
+    from uuid import uuid4
+
+    return uuid4().hex[:6]
+
+
+def _record_created() -> str:
+    from datetime import UTC
+    from datetime import datetime
+
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _project_name(loaded: LoadedProject) -> str | None:
+    return loaded.project.metadata.name if loaded.project is not None else None
 
 
 def _emit_reports(
     loaded: LoadedProject,
     report: list[str] | None,
     output: Path | None,
-    build: Callable[[], RunReport],
+    build: Callable[[], ReportRecord],
 ) -> None:
     """Write CI report artifacts, falling back to the manifest's report defaults.
 
@@ -861,7 +903,7 @@ correct you.
 """
 
 
-def _write_reports(report: RunReport, formats: list[str], output: Path) -> None:
+def _write_reports(record: ReportRecord, formats: list[str], output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     for name in formats:
         reporter = REPORTERS.get(name)
@@ -871,7 +913,7 @@ def _write_reports(report: RunReport, formats: list[str], output: Path) -> None:
                 f"unknown report format '{name}' (known: {known})", fg=typer.colors.YELLOW, err=True
             )
             continue
-        rendered = reporter.render(report)
+        rendered = reporter.render(record)
         destination = output / reporter.filename
         destination.write_text(rendered, encoding="utf-8")
         typer.secho(f"  wrote {destination}", dim=True)
