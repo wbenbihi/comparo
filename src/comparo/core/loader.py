@@ -290,6 +290,97 @@ def _check_references(
                 )
 
 
+def _check_spec(
+    loaded: LoadedProject, diagnostics: list[Diagnostic], file: Path, value: object, spec_type: type
+) -> None:
+    """A profile attachment slot must resolve, or it is a load error."""
+    from comparo.core.refs import SpecResolutionError
+    from comparo.core.refs import resolve_specs
+
+    if value is None:
+        return
+    try:
+        resolve_specs(loaded, value, spec_type)
+    except SpecResolutionError as error:
+        diagnostics.append(Diagnostic(file, str(error)))
+
+
+def _check_includes(
+    loaded: LoadedProject, diagnostics: list[Diagnostic], file: Path, includes: object
+) -> None:
+    # Each include must be a {$ref: id} pointing at an AssertionProfile; a bare
+    # string or wrong-kind ref would be silently dropped at runtime (false green).
+    from comparo.core.models import AssertionProfile
+
+    for entry in includes if isinstance(includes, list) else []:
+        ref = entry.get("$ref") if isinstance(entry, dict) else None
+        target = loaded.objects.get(ref) if isinstance(ref, str) else None
+        if not isinstance(ref, str):
+            diagnostics.append(
+                Diagnostic(file, f"assertion include is not a {{$ref: id}}: {entry!r}")
+            )
+        elif not isinstance(target, AssertionProfile):
+            what = f"a {type(target).__name__}" if target is not None else "an unknown id"
+            diagnostics.append(
+                Diagnostic(
+                    file,
+                    f"assertion include $ref '{ref}' resolves to {what}, not an AssertionProfile",
+                )
+            )
+
+
+def _check_inline_assertions(
+    loaded: LoadedProject, diagnostics: list[Diagnostic], file: Path, value: object
+) -> None:
+    # Standalone profiles are validated in the object loop; an INLINE assert spec
+    # (attached to a request/execution) has no object, so validate its include here
+    # too — else its wrong-kind includes load clean and vanish.
+    for item in value if isinstance(value, list) else [value]:
+        if isinstance(item, dict) and "$ref" not in item:
+            _check_includes(loaded, diagnostics, file, item.get("include"))
+
+
+def _check_matrix_refs(
+    loaded: LoadedProject, diagnostics: list[Diagnostic], file: Path, refs: object
+) -> None:
+    # A request's matrix entry must be a {$ref: id} pointing at a Matrix; a bare
+    # string or wrong-kind ref is silently dropped at runtime (coverage vanishes).
+    from comparo.core.models import Matrix
+
+    for entry in refs if isinstance(refs, list) else []:
+        ref = entry.get("$ref") if isinstance(entry, dict) else None
+        target = loaded.objects.get(ref) if isinstance(ref, str) else None
+        if not isinstance(ref, str):
+            diagnostics.append(Diagnostic(file, f"matrix entry is not a {{$ref: id}}: {entry!r}"))
+        elif not isinstance(target, Matrix):
+            what = f"a {type(target).__name__}" if target is not None else "an unknown id"
+            diagnostics.append(
+                Diagnostic(file, f"matrix $ref '{ref}' resolves to {what}, not a Matrix")
+            )
+
+
+def _check_val_kinds(
+    loaded: LoadedProject, diagnostics: list[Diagnostic], file: Path, raw: object
+) -> None:
+    # A $val must point at an Instance; a wrong-kind target silently resolves to None
+    # at runtime (a stripped header or a literal "None" on the wire).
+    from comparo.core.models import Instance
+
+    for reference in _find_references(raw):
+        if reference.sigil != "$val" or "/" in reference.target:
+            continue
+        target = loaded.objects.get(reference.target)
+        if target is not None and not isinstance(target, Instance):
+            diagnostics.append(
+                Diagnostic(
+                    file,
+                    f"$val '{reference.target}' resolves to a {type(target).__name__}, "
+                    "not an Instance",
+                    reference.line,
+                )
+            )
+
+
 def _check_profiles(
     loaded: LoadedProject, entries: list[_Entry], diagnostics: list[Diagnostic]
 ) -> None:
@@ -302,116 +393,40 @@ def _check_profiles(
     from comparo.core.models import AssertionProfileSpec
     from comparo.core.models import DiffProfileSpec
     from comparo.core.models import ExecutionProfile
-    from comparo.core.models import Instance
-    from comparo.core.models import Matrix
     from comparo.core.models import Request
-    from comparo.core.refs import SpecResolutionError
-    from comparo.core.refs import resolve_specs
 
-    file_by_id = {
-        entry.obj.metadata.id: entry.file
-        for entry in entries
-        if getattr(entry.obj, "metadata", None) is not None and entry.obj.metadata.id is not None
-    }
+    file_by_id: dict[str, Path] = {}
+    raw_by_id: dict[str, object] = {}
+    for entry in entries:
+        ident = getattr(getattr(entry.obj, "metadata", None), "id", None)
+        if ident is not None:
+            file_by_id[ident] = entry.file
+            raw_by_id[ident] = entry.raw
 
-    def check(file: Path, value: object, spec_type: type) -> None:
-        if value is None:
-            return
-        try:
-            resolve_specs(loaded, value, spec_type)
-        except SpecResolutionError as error:
-            diagnostics.append(Diagnostic(file, str(error)))
-
-    def check_includes(file: Path, includes: object) -> None:
-        # Each include must be a {$ref: id} pointing at an AssertionProfile; a bare
-        # string or wrong-kind ref would be silently dropped at runtime (false green).
-        for entry in includes if isinstance(includes, list) else []:
-            ref = entry.get("$ref") if isinstance(entry, dict) else None
-            target = loaded.objects.get(ref) if isinstance(ref, str) else None
-            if not isinstance(ref, str):
-                diagnostics.append(
-                    Diagnostic(file, f"assertion include is not a {{$ref: id}}: {entry!r}")
-                )
-            elif not isinstance(target, AssertionProfile):
-                what = f"a {type(target).__name__}" if target is not None else "an unknown id"
-                diagnostics.append(
-                    Diagnostic(
-                        file,
-                        f"assertion include $ref '{ref}' resolves to {what}, not an "
-                        "AssertionProfile",
-                    )
-                )
-
-    def check_inline_assertions(file: Path, value: object) -> None:
-        # Standalone profiles are validated in the object loop; an INLINE assert
-        # spec (attached to a request/execution) has no object, so validate its
-        # include here too — else its wrong-kind includes load clean and vanish.
-        for item in value if isinstance(value, list) else [value]:
-            if isinstance(item, dict) and "$ref" not in item:
-                check_includes(file, item.get("include"))
-
-    def check_matrix_refs(file: Path, refs: object) -> None:
-        # A request's matrix entry must be a {$ref: id} pointing at a Matrix; a bare
-        # string or wrong-kind ref is silently dropped at runtime (coverage vanishes).
-        for entry in refs if isinstance(refs, list) else []:
-            ref = entry.get("$ref") if isinstance(entry, dict) else None
-            target = loaded.objects.get(ref) if isinstance(ref, str) else None
-            if not isinstance(ref, str):
-                diagnostics.append(
-                    Diagnostic(file, f"matrix entry is not a {{$ref: id}}: {entry!r}")
-                )
-            elif not isinstance(target, Matrix):
-                what = f"a {type(target).__name__}" if target is not None else "an unknown id"
-                diagnostics.append(
-                    Diagnostic(file, f"matrix $ref '{ref}' resolves to {what}, not a Matrix")
-                )
-
-    def check_val_kinds(file: Path, raw: object) -> None:
-        # A $val must point at an Instance; a wrong-kind target silently resolves to
-        # None at runtime (a stripped header or a literal "None" on the wire).
-        for reference in _find_references(raw):
-            if reference.sigil != "$val" or "/" in reference.target:
-                continue
-            target = loaded.objects.get(reference.target)
-            if target is not None and not isinstance(target, Instance):
-                diagnostics.append(
-                    Diagnostic(
-                        file,
-                        f"$val '{reference.target}' resolves to a {type(target).__name__}, "
-                        "not an Instance",
-                        reference.line,
-                    )
-                )
-
-    raw_by_id = {
-        entry.obj.metadata.id: entry.raw
-        for entry in entries
-        if getattr(entry.obj, "metadata", None) is not None and entry.obj.metadata.id is not None
-    }
     for obj in loaded.objects.values():
         obj_id = getattr(obj.metadata, "id", None)
         file = file_by_id.get(obj_id, loaded.root) if obj_id is not None else loaded.root
         if obj_id is not None and obj_id in raw_by_id:
-            check_val_kinds(file, raw_by_id[obj_id])
+            _check_val_kinds(loaded, diagnostics, file, raw_by_id[obj_id])
         if isinstance(obj, Request):
-            check_matrix_refs(file, obj.spec.matrix)
+            _check_matrix_refs(loaded, diagnostics, file, obj.spec.matrix)
             response = obj.spec.response
             if response is not None:
-                check(file, response.diff, DiffProfileSpec)
-                check(file, response.assertions, AssertionProfileSpec)
-                check_inline_assertions(file, response.assertions)
+                _check_spec(loaded, diagnostics, file, response.diff, DiffProfileSpec)
+                _check_spec(loaded, diagnostics, file, response.assertions, AssertionProfileSpec)
+                _check_inline_assertions(loaded, diagnostics, file, response.assertions)
         elif isinstance(obj, ExecutionProfile):
             profiles = obj.spec.profiles
             if profiles is not None:
-                check(file, profiles.diff, DiffProfileSpec)
-                check(file, profiles.assert_, AssertionProfileSpec)
-                check_inline_assertions(file, profiles.assert_)
+                _check_spec(loaded, diagnostics, file, profiles.diff, DiffProfileSpec)
+                _check_spec(loaded, diagnostics, file, profiles.assert_, AssertionProfileSpec)
+                _check_inline_assertions(loaded, diagnostics, file, profiles.assert_)
         elif isinstance(obj, AssertionProfile):
-            check_includes(file, obj.spec.include)
+            _check_includes(loaded, diagnostics, file, obj.spec.include)
     if loaded.project is not None:
         config = loaded.project.spec.diff
         if isinstance(config, dict):
-            check(loaded.root, config.get("default"), DiffProfileSpec)
+            _check_spec(loaded, diagnostics, loaded.root, config.get("default"), DiffProfileSpec)
         if loaded.project.spec.plugins:
             # The plugin system does not exist yet; accepting config for it would
             # silently no-op, so a configured plugins block is a hard error.
