@@ -46,7 +46,13 @@ def mask_credential_header(name: str, value: str) -> str:
     return MASK if name.strip().lower() in _CREDENTIAL_HEADERS else value
 
 
-def redact_tree(value: object, redact: Callable[[str], str]) -> object:
+#: A recursion cap so a pathologically deep body (a server can send one) is
+#: redacted as an opaque leaf instead of overflowing the stack — far beyond any
+#: realistic API payload nesting, and matching the diff engine's cap.
+_MAX_REDACT_DEPTH = 200
+
+
+def redact_tree(value: object, redact: Callable[[str], str], _depth: int = 0) -> object:
     """Recursively mask secrets in a parsed value — object keys and strings alike.
 
     A server can echo a secret as a JSON *key* as well as a value, so both are
@@ -56,10 +62,17 @@ def redact_tree(value: object, redact: Callable[[str], str]) -> object:
     """
     if isinstance(value, str):
         return redact(value)
+    if _depth >= _MAX_REDACT_DEPTH:
+        # Too deep to recurse safely; stringify-and-redact the remaining subtree as
+        # one leaf so a hostile payload can't overflow the stack (nor slip through
+        # unmasked). ``default=str`` keeps a non-JSON value from crashing.
+        return redact(json.dumps(value, ensure_ascii=False, default=str))
     if isinstance(value, dict):
-        return {redact(str(key)): redact_tree(item, redact) for key, item in value.items()}
+        return {
+            redact(str(key)): redact_tree(item, redact, _depth + 1) for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [redact_tree(item, redact) for item in value]
+        return [redact_tree(item, redact, _depth + 1) for item in value]
     return value
 
 
