@@ -20,7 +20,6 @@ EXPECTED = [
     ("TUI display", "masked on render"),
     ("saved runs", ".runs/*.json"),
     ("saved reports", ".reports/*.json"),
-    ("saved reports v1", "report record"),
     ("JUnit reporter", "reports/junit.xml"),
     ("SARIF reporter", "reports/comparo.sarif"),
     ("JSON reporter", "reports/comparo.json"),

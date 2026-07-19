@@ -17,12 +17,14 @@ from comparo.core.compare import CellDiff
 from comparo.core.diagnostics import LoadError
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
+from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionResult
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
+from comparo.core.report_record import ReportRecord
 from comparo.core.streams import parse_sse
 from comparo.tui.app import ComparoApp
 from comparo.tui.app import ConfirmModal
@@ -499,28 +501,30 @@ def test_report_filter_survives_returning_to_the_tab() -> None:
     # M-c/M23: apply_filter matches id/envs/kind/gate/execution, but refresh_screen
     # (fired on re-entering the tab) used to re-filter on id ALONE — silently
     # collapsing a gate/envs filter to nothing. Both must share one predicate.
-    from comparo.core.archive import AssertionSummary
-    from comparo.core.archive import ReportRecord
+    from comparo.tui.replay import AssertionSummary
+    from comparo.tui.replay import ReplayRecord
 
     loaded = load_project(SAMPLE)
     empty = AssertionSummary(0, 0, 0, [])
 
-    def _rec(rid: str, gate: str) -> ReportRecord:
-        return ReportRecord(
+    def _rec(rid: str, gate: str) -> ReplayRecord:
+        return ReplayRecord(
             id=rid,
             created="2026-01-01",
-            execution=None,
-            baseline="local",
-            candidate="prod",
+            kind="diff",
             gate=gate,
             calls=1,
             same=0,
             drift=1 if gate == "FAIL" else 0,
             error=0,
             skipped=0,
+            baseline="local",
+            candidate="prod",
+            execution=None,
             baseline_assertions=empty,
             candidate_assertions=empty,
             requests=[],
+            cells=[],
         )
 
     records = [_rec("run-a", "FAIL"), _rec("run-b", "PASS")]
@@ -831,18 +835,39 @@ def test_error_screen_replaces_the_explorer(tmp_path: Path) -> None:
 
 
 def _seed_report(root: Path) -> None:
+    import json
+
     from comparo.core import archive
-    from comparo.core.compare import CellDiff
+    from comparo.core.compare import compare_cell
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.report_builder import record_from_diff
+    from comparo.core.resolve import ResolvedRequest
+    from comparo.core.resolve import select_environment
 
     loaded = load_project(root)
     request = loaded.objects["request.get-json"]
     assert isinstance(request, Request)
-    field = FieldDiff("$.headers.x-trace", State.DRIFT, "exact", '"a" → "b"')
-    record = archive.record_from_diff(
-        "staging", "prod", [CellDiff(request, "", [field])], run_id="seed01", created="2026-01-01"
+    env = select_environment(loaded, "local")
+
+    def execution(trace: str) -> Execution:
+        response = HttpResponse(200, [], json.dumps({"headers": {"x-trace": trace}}).encode(), 5.0)
+        resolved = ResolvedRequest("GET", "http://x/json", [], {}, None, [])
+        return Execution(request, env, "", response, resolved=resolved)
+
+    cell = compare_cell(loaded, execution("a"), execution("b"))
+    record = record_from_diff(
+        env,
+        env,
+        [cell],
+        record_id="seed01",
+        created="2026-01-01",
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=str,
     )
-    directory = app_archive_dir(loaded)
-    archive.save_record(directory, record)
+    archive.save_record(app_archive_dir(loaded), record)
 
 
 def app_archive_dir(loaded: object) -> Path:
@@ -852,6 +877,62 @@ def app_archive_dir(loaded: object) -> Path:
     data = manifest.spec.data if manifest else None
     report = manifest.spec.report if manifest else None
     return archive_dir(loaded.root, data, report)  # type: ignore[attr-defined]
+
+
+def _tui_execution(loaded: object, request_id: str, body: object) -> Execution:
+    import json
+
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.resolve import ResolvedRequest
+    from comparo.core.resolve import select_environment
+
+    request = loaded.objects[request_id]  # type: ignore[attr-defined]
+    assert isinstance(request, Request)
+    env = select_environment(loaded, "local")  # type: ignore[arg-type]
+    response = HttpResponse(200, [], json.dumps(body).encode(), 5.0)
+    resolved = ResolvedRequest("GET", "http://x/json", [], {}, None, [])
+    return Execution(request, env, "", response, resolved=resolved)
+
+
+def _tui_run_record(loaded: object, cells: object, *, record_id: str, created: str) -> ReportRecord:
+    from comparo.core.report_builder import record_from_run
+    from comparo.core.resolve import select_environment
+
+    return record_from_run(
+        select_environment(loaded, "local"),  # type: ignore[arg-type]
+        cells,  # type: ignore[arg-type]
+        record_id=record_id,
+        created=created,
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=str,
+    )
+
+
+def _tui_diff_record(loaded: object, *, record_id: str, created: str) -> ReportRecord:
+    from comparo.core.compare import compare_cell
+    from comparo.core.report_builder import record_from_diff
+    from comparo.core.resolve import select_environment
+
+    env = select_environment(loaded, "local")  # type: ignore[arg-type]
+    cell = compare_cell(
+        loaded,  # type: ignore[arg-type]
+        _tui_execution(loaded, "request.get-json", {"headers": {"x-trace": "a"}}),
+        _tui_execution(loaded, "request.get-json", {"headers": {"x-trace": "b"}}),
+    )
+    return record_from_diff(
+        env,
+        env,
+        [cell],
+        record_id=record_id,
+        created=created,
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=str,
+    )
 
 
 def test_execution_transition_screen_shows_live_progress() -> None:
@@ -1096,11 +1177,14 @@ def test_report_saved_run_replays_the_run_panels(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     shutil.copytree(SAMPLE, root)
     loaded = load_project(root)
-    ok = AssertionResult("status", "", True, "error", "200 == 200", "status")
-    record = archive.record_from_run(
-        "staging",
-        [("request.get-json", [ok]), ("request.post-json", [ok])],
-        run_id="run09",
+    ok = AssertionResult("status", "equals", True, "error", "200 == 200", "status")
+    record = _tui_run_record(
+        loaded,
+        [
+            (_tui_execution(loaded, "request.get-json", {}), [ok]),
+            (_tui_execution(loaded, "request.echo-anything", {}), [ok]),
+        ],
+        record_id="run09",
         created="2026-05-05",
     )
     archive.save_record(app_archive_dir(loaded), record)
@@ -1128,20 +1212,17 @@ def test_report_list_shows_each_rows_kind_and_filters_by_it(tmp_path: Path) -> N
     # `/` filters the list by kind (as well as id / envs / gate).
     from comparo.core import archive
     from comparo.core.assertions import AssertionResult
-    from comparo.core.compare import CellDiff
 
     root = tmp_path / "proj"
     shutil.copytree(SAMPLE, root)
     loaded = load_project(root)
-    request = loaded.objects["request.get-json"]
-    assert isinstance(request, Request)
-    field = FieldDiff("$.headers.x-trace", State.DRIFT, "exact", '"a" → "b"')
-    diff_rec = archive.record_from_diff(
-        "staging", "prod", [CellDiff(request, "", [field])], run_id="dif01", created="2026-02-02"
-    )
-    ok = AssertionResult("status", "", True, "error", "200 == 200", "status")
-    run_rec = archive.record_from_run(
-        "staging", [("request.get-json", [ok])], run_id="run01", created="2026-01-01"
+    diff_rec = _tui_diff_record(loaded, record_id="dif01", created="2026-02-02")
+    ok = AssertionResult("status", "equals", True, "error", "200 == 200", "status")
+    run_rec = _tui_run_record(
+        loaded,
+        [(_tui_execution(loaded, "request.get-json", {}), [ok])],
+        record_id="run01",
+        created="2026-01-01",
     )
     archive.save_record(app_archive_dir(loaded), diff_rec)
     archive.save_record(app_archive_dir(loaded), run_rec)
@@ -1294,27 +1375,29 @@ def test_deep_dive_never_shows_drift_as_a_naked_count() -> None:
     # still be named as unrecorded, never rendered as a bare integer.
     import dataclasses
 
-    from comparo.core.archive import AssertionSummary
-    from comparo.core.archive import ReportRecord
-    from comparo.core.archive import RequestBreakdown
     from comparo.tui.render import _breakdown_legend
+    from comparo.tui.replay import AssertionSummary
+    from comparo.tui.replay import ReplayRecord
+    from comparo.tui.replay import RequestBreakdown
 
     empty = AssertionSummary(0, 0, 0, [])
-    legacy = ReportRecord(
+    legacy = ReplayRecord(
         id="old01",
         created="2026-01-01",
-        execution=None,
-        baseline="a",
-        candidate="b",
+        kind="diff",
         gate="FAIL",
         calls=1,
         same=0,
         drift=4,
         error=0,
         skipped=0,
+        baseline="a",
+        candidate="b",
+        execution=None,
         baseline_assertions=empty,
         candidate_assertions=empty,
         requests=[RequestBreakdown("checkout", 0, 4, 0, "drift", [])],
+        cells=[],
     )
     console = Console()
     with console.capture() as capture:
@@ -1345,16 +1428,22 @@ def test_run_save_archives_a_report_visible_in_the_report_tab(tmp_path: Path) ->
         app = ComparoApp(loaded)
         async with app.run_test(size=(130, 40)) as pilot:
             await pilot.pause()
-            ok = AssertionResult("status", "", True, "error", "200 == 200", "status")
-            bad = AssertionResult("status", "", False, "error", "500 ≠ 200", "status")
+            from comparo.core.resolve import select_environment
+
+            ok = AssertionResult("status", "equals", True, "error", "200 == 200", "status")
+            bad = AssertionResult("status", "equals", False, "error", "500 != 200", "status")
             record = app.save_run_report(
-                "staging", [("request.get-json", [ok]), ("request.post-json", [bad])]
+                select_environment(loaded, "local"),
+                [
+                    (_tui_execution(loaded, "request.get-json", {}), [ok]),
+                    (_tui_execution(loaded, "request.echo-anything", {}), [bad]),
+                ],
             )
             assert record is not None
-            assert record.candidate is None  # a run has no candidate
-            assert record.gate == "FAIL"  # one check failed
+            assert record.invocation.environments.candidate is None  # a run has no candidate
+            assert record.summary.gate == "FAIL"  # one check failed
             surfaced = list_records(app_archive_dir(loaded))
-            assert any(rec.id == record.id for rec in surfaced)
+            assert any(rec.metadata.id == record.metadata.id for rec in surfaced)
 
     asyncio.run(go())
 
@@ -1376,18 +1465,8 @@ def test_report_reload_works_when_the_archive_started_empty(tmp_path: Path) -> N
             assert report.query_one("#report-table", DataTable).row_count == 0
             # A run lands on disk after the (empty) screen opened …
             from comparo.core import archive
-            from comparo.core.compare import CellDiff
 
-            request = loaded.objects["request.get-json"]
-            assert isinstance(request, Request)
-            field = FieldDiff("$.headers.x-trace", State.DRIFT, "exact", '"a" → "b"')
-            record = archive.record_from_diff(
-                "staging",
-                "prod",
-                [CellDiff(request, "", [field])],
-                run_id="late01",
-                created="2026-03-03",
-            )
+            record = _tui_diff_record(loaded, record_id="late01", created="2026-03-03")
             archive.save_record(app_archive_dir(loaded), record)
             await pilot.press("r")  # app-level dispatch, no table focus required
             await pilot.pause()
@@ -1412,18 +1491,8 @@ def test_report_reload_rereads_the_archive_from_disk(tmp_path: Path) -> None:
             assert report.query_one("#report-table", DataTable).row_count == 1
             # A second run lands on disk while the screen is open …
             from comparo.core import archive
-            from comparo.core.compare import CellDiff
 
-            request = loaded.objects["request.get-json"]
-            assert isinstance(request, Request)
-            field = FieldDiff("$.headers.x-trace", State.DRIFT, "exact", '"a" → "b"')
-            record = archive.record_from_diff(
-                "staging",
-                "prod",
-                [CellDiff(request, "", [field])],
-                run_id="seed02",
-                created="2026-01-02",
-            )
+            record = _tui_diff_record(loaded, record_id="seed02", created="2026-01-02")
             archive.save_record(app_archive_dir(loaded), record)
             # … and 'r' surfaces it without leaving the screen.
             await pilot.press("r")

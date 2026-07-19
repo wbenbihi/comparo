@@ -10,6 +10,7 @@ this module.
 import asyncio
 import contextlib
 import os
+from datetime import UTC
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
@@ -47,14 +48,12 @@ from comparo import __version__
 from comparo.adapters import updates as updates_adapter
 from comparo.adapters import userconfig
 from comparo.adapters.userconfig import UserConfig
-from comparo.core.archive import ReportRecord
 from comparo.core.archive import archive_dir
 from comparo.core.archive import list_records
-from comparo.core.archive import record_from_diff
-from comparo.core.archive import record_from_execution
-from comparo.core.archive import record_from_run
 from comparo.core.archive import save_record
 from comparo.core.assertions import AssertionResult
+from comparo.core.assertions import evaluate_rules
+from comparo.core.assertions import request_response_rules
 from comparo.core.checks import Check
 from comparo.core.checks import passed as checks_passed
 from comparo.core.checks import run_checks
@@ -91,6 +90,10 @@ from comparo.core.models import Request
 from comparo.core.provenance import Trail
 from comparo.core.redaction import Redactor
 from comparo.core.report import diff_passed
+from comparo.core.report_builder import record_from_diff
+from comparo.core.report_builder import record_from_execution
+from comparo.core.report_builder import record_from_run
+from comparo.core.report_record import ReportRecord
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
@@ -107,7 +110,6 @@ from comparo.tui.render import _bash
 from comparo.tui.render import _branch
 from comparo.tui.render import _build_report_tree
 from comparo.tui.render import _cell_verdict
-from comparo.tui.render import _check_result
 from comparo.tui.render import _clip
 from comparo.tui.render import _crash_report
 from comparo.tui.render import _default_environment
@@ -173,6 +175,8 @@ from comparo.tui.render import _save_run
 from comparo.tui.render import _seg_toggle
 from comparo.tui.render import _settings_body
 from comparo.tui.render import _title
+from comparo.tui.replay import ReplayRecord
+from comparo.tui.replay import project
 from comparo.tui.theme import COMPARO_INK
 from comparo.tui.tokens import _ACCENT
 from comparo.tui.tokens import _AXIS
@@ -988,17 +992,24 @@ class RunView(Vertical):
             self.app.notify(str(error), title="Could not save", severity="error")
             return
         # Also archive an assertions report so the run shows up in the Report tab.
+        # Re-evaluate the full assertion results (severity/expected/actual) from each
+        # execution — the run's Check rows are lossy (error-only, no values).
         run_cells = [
             (
-                entry.request.metadata.id or entry.request.metadata.name,
-                [_check_result(check) for check in entry.checks],
+                entry.execution,
+                evaluate_rules(
+                    self.project,
+                    request_response_rules(self.project, entry.request),
+                    entry.execution,
+                ),
             )
             for entry in entries
         ]
-        record = cast("ComparoApp", self.app).save_run_report(environment.metadata.name, run_cells)
+        record = cast("ComparoApp", self.app).save_run_report(environment, run_cells)
         if record is not None:
             self.app.notify(
-                f"Saved run to {path.name} · report {record.id} in the archive", title="Saved"
+                f"Saved run to {path.name} · report {record.metadata.id} in the archive",
+                title="Saved",
             )
         else:
             self.app.notify(f"Saved run {self._run_id} to {path}", title="Saved")
@@ -2024,16 +2035,14 @@ class DiffView(Vertical):
             self.app.notify("Nothing to save yet — run a diff first", severity="information")
             return
         baseline, candidate = self._pair
-        record = cast("ComparoApp", self.app).save_diff_report(
-            baseline.metadata.name, candidate.metadata.name, self._cells
-        )
+        record = cast("ComparoApp", self.app).save_diff_report(baseline, candidate, self._cells)
         if record is None:
             self.app.notify("No project archive to save into", severity="warning")
             return
-        self._run_id = record.id
+        self._run_id = record.metadata.id
         self._saved = True
         self.refresh_footer()
-        self.app.notify(f"Saved report {record.id} to the archive", title="Report")
+        self.app.notify(f"Saved report {record.metadata.id} to the archive", title="Report")
 
     def _regroup(self) -> None:
         groups: dict[str, list[tuple[CellDiff, FieldDiff]]] = {}
@@ -2416,10 +2425,10 @@ class ReportView(Vertical):
         """
         super().__init__(id="report-view", classes="view")
         self.project = project
-        self._records: list[ReportRecord] = []
-        self._filtered: list[ReportRecord] = []
+        self._records: list[ReplayRecord] = []
+        self._filtered: list[ReplayRecord] = []
         self.filter_query: str = ""
-        self._analyzed: ReportRecord | None = None
+        self._analyzed: ReplayRecord | None = None
         self._unified = True
 
     def action_find(self) -> None:
@@ -2437,7 +2446,7 @@ class ReportView(Vertical):
             self._show(self._filtered[0])
         return len(self._filtered)
 
-    def _matches(self, record: ReportRecord, needle: str) -> bool:
+    def _matches(self, record: ReplayRecord, needle: str) -> bool:
         """Whether *record* matches the lower-cased *needle* across every filtered field.
 
         The one predicate both :meth:`apply_filter` and :meth:`refresh_screen` use —
@@ -2495,9 +2504,11 @@ class ReportView(Vertical):
         else:
             self._show_empty()
 
-    def _load_records(self) -> list[ReportRecord]:
+    def _load_records(self) -> list[ReplayRecord]:
         directory = cast("ComparoApp", self.app).archive_directory()
-        return list_records(directory) if directory is not None else []
+        if directory is None:
+            return []
+        return [project(record) for record in list_records(directory)]
 
     def _current_view(self) -> str:
         if not self.is_mounted:
@@ -2627,7 +2638,7 @@ class ReportView(Vertical):
         if event.data_table.id == "report-table":
             self.action_analyze()
 
-    def _selected(self) -> ReportRecord | None:
+    def _selected(self) -> ReplayRecord | None:
         table = self.query_one("#report-table", DataTable) if self.is_mounted else None
         if table is None or table.row_count == 0:
             return None
@@ -2650,7 +2661,7 @@ class ReportView(Vertical):
             )
         )
 
-    def _show(self, record: ReportRecord) -> None:
+    def _show(self, record: ReplayRecord) -> None:
         read = self.query_one("#report-read")
         passed = record.gate == "PASS"
         read.set_class(passed, "pass")
@@ -2674,7 +2685,7 @@ class ReportView(Vertical):
         else:
             self._show_run_replay(record)
 
-    def _show_diff_replay(self, record: ReportRecord) -> None:
+    def _show_diff_replay(self, record: ReplayRecord) -> None:
         self.query_one("#report-switch", ContentSwitcher).current = "report-diff"
         self.query_one("#report-diff-banner", Static).update(_replay_banner(record, "diff"))
         self.query_one("#report-drift").border_title = Text.from_markup(
@@ -2695,7 +2706,7 @@ class ReportView(Vertical):
         self._update_nav()
         self.refresh_footer()
 
-    def _populate_replay_drift(self, record: ReportRecord) -> None:
+    def _populate_replay_drift(self, record: ReplayRecord) -> None:
         table = self.query_one("#report-drift-table", DataTable)
         table.clear(columns=True)
         table.add_column("", key="st", width=3)
@@ -2732,12 +2743,12 @@ class ReportView(Vertical):
                 Text("✓", style=_SAME), Text("no drift under compared paths", style=_DIM), Text("")
             )
 
-    def _render_replay_compare(self, record: ReportRecord) -> None:
+    def _render_replay_compare(self, record: ReplayRecord) -> None:
         self.query_one("#report-compare-content", Static).update(
             _replay_compare_well(record, self._unified, _app_redact(self))
         )
 
-    def _show_run_replay(self, record: ReportRecord) -> None:
+    def _show_run_replay(self, record: ReplayRecord) -> None:
         self.query_one("#report-switch", ContentSwitcher).current = "report-run"
         kind = _record_kind(record)
         self.query_one("#report-run-banner", Static).update(_replay_banner(record, kind))
@@ -3907,7 +3918,9 @@ class ExecutionView(Vertical):
         self._profile = profile
         self._result = result
         self._record = record
-        self._run_id = self._run_id or (record.id if record is not None else uuid4().hex[:4])
+        self._run_id = self._run_id or (
+            record.metadata.id if record is not None else uuid4().hex[:4]
+        )
         self._show_results()
 
     def _show_results(self) -> None:
@@ -4018,18 +4031,20 @@ class ExecutionView(Vertical):
         if self._current_view() != "exec-results" or self._result is None:
             return
         if self._record is not None:
-            self.app.notify(f"Already archived as report {self._record.id}", title="Report")
+            self.app.notify(
+                f"Already archived as report {self._record.metadata.id}", title="Report"
+            )
             self.refresh_footer()
             return
-        record = cast("ComparoApp", self.app).save_execution_report(
-            self._result, self._profile.metadata.name if self._profile else None
-        )
+        if self._profile is None:
+            return
+        record = cast("ComparoApp", self.app).save_execution_report(self._result, self._profile)
         if record is None:
             self.app.notify("No project archive to save into", severity="warning")
             return
         self._record = record
         self.refresh_footer()
-        self.app.notify(f"Saved report {record.id} to the archive", title="Report")
+        self.app.notify(f"Saved report {record.metadata.id} to the archive", title="Report")
 
     def action_report(self) -> None:
         """``e`` — point at this run's saved report without leaving the tab.
@@ -4047,7 +4062,8 @@ class ExecutionView(Vertical):
             )
             return
         self.app.notify(
-            f"This run is archived as report {self._record.id} — browse it in the Report tab (5).",
+            f"This run is archived as report {self._record.metadata.id} — "
+            "browse it in the Report tab (5).",
             title="Report",
         )
 
@@ -4563,24 +4579,43 @@ class ComparoApp(App[None]):
         report_config = manifest.spec.report if manifest else None
         return archive_dir(self.project.root, data, report_config)
 
-    def execution_record(self, result: ExecutionResult, name: str | None) -> ReportRecord | None:
+    def _record_env(self) -> tuple[str, str, str, str | None, int]:
+        """Common ``(id, created, tool, project, concurrency)`` for a saved record."""
+        manifest = self.project.project if self.project is not None else None
+        project_name = manifest.metadata.name if manifest is not None else None
+        concurrency = run_settings(self.project)[0] if self.project is not None else 4
+        return (
+            uuid4().hex[:6],
+            datetime.now(UTC).isoformat(timespec="seconds"),
+            f"comparo {__version__}",
+            project_name,
+            concurrency,
+        )
+
+    def execution_record(
+        self, result: ExecutionResult, profile: ExecutionProfile
+    ) -> ReportRecord | None:
         """Build a redacted report record for an execution, without saving it."""
         if self.project is None:
             return None
+        record_id, created, tool, project, concurrency = self._record_env()
         return record_from_execution(
+            profile,
             result,
-            run_id=uuid4().hex[:6],
-            created=datetime.now().isoformat(timespec="seconds"),
-            name=name,
+            record_id=record_id,
+            created=created,
+            tool=tool,
+            project=project,
+            concurrency=concurrency,
             redact=_app_redact(self),
         )
 
     def save_execution_report(
-        self, result: ExecutionResult, name: str | None
+        self, result: ExecutionResult, profile: ExecutionProfile
     ) -> ReportRecord | None:
         """Archive an execution result; returns the saved record, or ``None``."""
         directory = self.archive_directory()
-        record = self.execution_record(result, name)
+        record = self.execution_record(result, profile)
         if directory is None or record is None:
             return None
         try:
@@ -4590,7 +4625,7 @@ class ComparoApp(App[None]):
             return None
         return record
 
-    def export_record_markdown(self, record: ReportRecord) -> None:
+    def export_record_markdown(self, record: ReplayRecord) -> None:
         """Write a Markdown summary of *record* to the project's reports output dir."""
         if self.project is None:
             return
@@ -4608,18 +4643,22 @@ class ComparoApp(App[None]):
         self.notify(f"Wrote {path.name}", title="Exported")
 
     def save_diff_report(
-        self, baseline: str, candidate: str, diffs: list[CellDiff]
+        self, baseline: Environment, candidate: Environment, diffs: list[CellDiff]
     ) -> ReportRecord | None:
         """Archive an ad-hoc diff run; returns the saved record, or ``None``."""
         directory = self.archive_directory()
         if directory is None or self.project is None:
             return None
+        record_id, created, tool, project, concurrency = self._record_env()
         record = record_from_diff(
             baseline,
             candidate,
             diffs,
-            run_id=uuid4().hex[:6],
-            created=datetime.now().isoformat(timespec="seconds"),
+            record_id=record_id,
+            created=created,
+            tool=tool,
+            project=project,
+            concurrency=concurrency,
             redact=_app_redact(self),
         )
         try:
@@ -4630,17 +4669,21 @@ class ComparoApp(App[None]):
         return record
 
     def save_run_report(
-        self, environment: str, cells: list[tuple[str, list[AssertionResult]]]
+        self, environment: Environment, cells: list[tuple[Execution, list[AssertionResult]]]
     ) -> ReportRecord | None:
         """Archive a single-environment run as an assertions report; returns it or ``None``."""
         directory = self.archive_directory()
         if directory is None or self.project is None:
             return None
+        record_id, created, tool, project, concurrency = self._record_env()
         record = record_from_run(
             environment,
             cells,
-            run_id=uuid4().hex[:6],
-            created=datetime.now().isoformat(timespec="seconds"),
+            record_id=record_id,
+            created=created,
+            tool=tool,
+            project=project,
+            concurrency=concurrency,
             redact=_app_redact(self),
         )
         try:
