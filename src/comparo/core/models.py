@@ -192,6 +192,9 @@ class ReportConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     formats: list[str] | None = None
     output: str | None = None
     dir: str | None = None
+    #: How many saved reports to keep in the archive (newest first); older ones are
+    #: pruned on save. ``None`` keeps every report.
+    retention: int | None = None
 
 
 class RedactionConfig(msgspec.Struct, rename="camel", forbid_unknown_fields=True):

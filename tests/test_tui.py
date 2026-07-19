@@ -1784,3 +1784,31 @@ def test_run_env_is_pinned_and_survives_a_default_env_change() -> None:
             assert _app_env(run) is envs[1]  # ...even though the default moved
 
     asyncio.run(go())
+
+
+def test_report_retention_prunes_the_archive_on_save(tmp_path: Path) -> None:
+    # spec.report.retention bounds the .reports archive: saving past the limit
+    # prunes the oldest, keeping only the newest `retention` records.
+    from comparo.core import archive
+
+    root = tmp_path / "proj"
+    shutil.copytree(SAMPLE, root)
+    (root / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\nmetadata: {name: P, id: project.p}\n"
+        "spec:\n  data: .\n  report:\n    retention: 2\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(root)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            baseline = candidate = next(
+                o for o in loaded.objects.values() if isinstance(o, Environment)
+            )
+            for _ in range(3):
+                app.save_diff_report(baseline, candidate, [])
+            assert len(archive.list_records(app_archive_dir(loaded))) == 2
+
+    asyncio.run(go())
