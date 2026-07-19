@@ -332,6 +332,15 @@ def run_requests(
         typer.secho("no requests to run", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     results = asyncio.run(_execute(loaded, environment, requests))
+    if not results:
+        # A selected request whose matrix expands to zero cells verifies nothing —
+        # a run that checked nothing must fail closed, never report a green gate.
+        typer.secho(
+            "nothing ran — the selected requests expanded to zero cells",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
     ok = _print_results(loaded, results, environment.metadata.name)
     if not ok:
         raise typer.Exit(1)
@@ -1033,7 +1042,8 @@ def _print_results(loaded: LoadedProject, results: list[Execution], environment_
             typer.secho(
                 f"  ✗ {identifier:<44} {response.status}  {latency}  {reason}", fg=typer.colors.RED
             )
-    return ok_all
+    # Fail closed: an empty result set verified nothing and can never be a pass.
+    return ok_all and bool(results)
 
 
 def _print_load_error(error: LoadError) -> None:
