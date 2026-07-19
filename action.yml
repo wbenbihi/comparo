@@ -36,7 +36,9 @@ runs:
 
     - name: Install comparo
       shell: bash
-      run: uv tool install "comparo${{ inputs.version }}"
+      env:
+        VERSION: ${{ inputs.version }}
+      run: uv tool install "comparo${VERSION}"
 
     - name: Run comparo diff
       shell: bash

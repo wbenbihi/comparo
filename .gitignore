@@ -39,12 +39,10 @@ runs/
 *.swp
 .DS_Store
 
-# Private client project (NDA) — never commit
+# Local sample project used while developing — not part of the package
 internal-project/
 
-# Internal design scaffolding: raw AI-session transcripts, mockups, and working
-# notes. Never publish — the transcript discloses the NDA engagement. Also purge
-# it from history before making the repo public (see CODE_HEALTH_REPORT.md).
+# Local design scaffolding: mockups and working notes, kept out of the package
 docs/design/
 
 # Runtime report archive (comparo Report tab)
