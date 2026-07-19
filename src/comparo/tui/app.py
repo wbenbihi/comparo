@@ -120,7 +120,6 @@ from comparo.tui.render import _diff_error_view
 from comparo.tui.render import _diff_legend
 from comparo.tui.render import _diff_ready
 from comparo.tui.render import _diff_skip_view
-from comparo.tui.render import _drift_change
 from comparo.tui.render import _environment_detail
 from comparo.tui.render import _environments
 from comparo.tui.render import _envs_label
@@ -136,6 +135,7 @@ from comparo.tui.render import _exec_profile_card
 from comparo.tui.render import _exec_profiles_hint
 from comparo.tui.render import _exec_setup
 from comparo.tui.render import _exec_stacked_diff
+from comparo.tui.render import _exec_triplet
 from comparo.tui.render import _graph
 from comparo.tui.render import _help_body
 from comparo.tui.render import _json
@@ -3951,7 +3951,7 @@ class ExecutionView(Vertical):
         self._render_results_diff()
         self._render_results_gate()
         self._show("exec-results")
-        if self._drifted:
+        if result.outcomes:  # focus the per-cell table so ↑↓/⏎ work immediately
             self.query_one("#exec-drift-table", DataTable).focus()
 
     def _render_results_assertions(self) -> None:
@@ -3982,23 +3982,23 @@ class ExecutionView(Vertical):
         self.query_one("#exec-diff").border_title = Text.from_markup(
             f"DIFF [{_DIM}]· {result.baseline} ⇄ {result.candidate or '—'}[/]"
         )
-        self.query_one("#exec-diff").border_subtitle = f"{result.drift} drift"
+        self.query_one(
+            "#exec-diff"
+        ).border_subtitle = f"{result.drift} drift · {len(result.outcomes)} cells"
         self.query_one("#exec-diff-summary", Static).update(_exec_diff_summary(result, redact))
         table = self.query_one("#exec-drift-table", DataTable)
         table.clear(columns=True)
         table.add_column("", key="st", width=3)
-        table.add_column("cell", key="cell")
-        table.add_column("change", key="change")
-        for index, outcome in enumerate(self._drifted):
+        table.add_column("CELL", key="cell")
+        table.add_column("B·C ASSERT", key="assert", width=14)
+        table.add_column("DIFF", key="diff", width=12)
+        # Every cell, not just the drifted ones — a per-cell triplet (verdict · both
+        # sides' assertions · diff) so the whole run reads at a glance; Enter drills in.
+        for index, outcome in enumerate(result.outcomes):
             label = Text(_req_short(outcome.request_id), style=f"bold {_TEXT_HI}")
             if outcome.cell_key:
                 label.append(f" · {redact(outcome.cell_key)}", style=_AXIS)
-            if outcome.error is not None:
-                glyph, change = Text("!", style=_WARN), Text("error", style=_WARN)
-            else:
-                glyph = Text("✗", style=_DRIFT)
-                change = _drift_change(outcome, redact)
-            table.add_row(glyph, label, change, key=f"drift::{index}")
+            table.add_row(*_exec_triplet(outcome, label), key=f"cell::{index}")
         self.query_one("#exec-diff-legend", Static).update(_exec_diff_legend(result, redact))
 
     def _render_results_gate(self) -> None:
@@ -4017,13 +4017,14 @@ class ExecutionView(Vertical):
             self._drill()
 
     def _drill(self) -> None:
+        result = self._result
         table = self.query_one("#exec-drift-table", DataTable)
-        if table.row_count == 0:
+        if result is None or table.row_count == 0:
             return
         key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-        if key is None or not key.startswith("drift::"):
+        if key is None or not key.startswith("cell::"):
             return
-        self._cell = self._drifted[int(key.removeprefix("drift::"))]
+        self._cell = result.outcomes[int(key.removeprefix("cell::"))]
         self._unified = True
         self._render_cell()
         self._show("exec-cell")
