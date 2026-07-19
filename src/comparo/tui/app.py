@@ -2158,7 +2158,14 @@ class DiffView(Vertical):
             requests = sorted({cell.request.metadata.name for cell, _ in entries})
             who = "all requests" if len(requests) > 1 else requests[0]
             sub = Text(f"  ↳ {who}", style=_DIM)
-            sub.append(" · volatile", style=_SKIP)
+            # Name the exact ignore rule that carved this hole, so a green cell says
+            # out loud *which* rule chose not to check the field — not just "skipped".
+            rule = entries[0][1].rule
+            if rule:
+                sub.append(" · ignored by ", style=_DIM)
+                sub.append(redact(rule), style=_SKIP)
+            else:
+                sub.append(" · volatile", style=_SKIP)
             table.add_row(Text(""), sub, Text(""), key=f"skipsub::{path}")
 
     def _populate_rules(self, table: DataTable[Text]) -> None:
