@@ -320,9 +320,6 @@ def _tainted_cell_v1(scenario: _Scenario, baseline: Execution, candidate: Execut
         f"token={CANARY}",
         fields,
         None,
-        status=200,
-        latency_ms=42,
-        size_bytes=128,
         baseline=baseline,
         candidate=candidate,
     )

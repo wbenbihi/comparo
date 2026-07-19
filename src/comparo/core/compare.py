@@ -39,11 +39,6 @@ class CellDiff:
     error: str | None = None
     baseline_body: object = None
     candidate_body: object = None
-    #: Baseline response metadata, for a saved-run replay's detail tree. Not diffed.
-    status: int | None = None
-    latency_ms: int | None = None
-    size_bytes: int | None = None
-    response_headers: tuple[tuple[str, str], ...] = ()
     #: The two executions this cell paired — the exact request sent and the full
     #: response received, per side — so the v1 report builder can serialize both
     #: sides' request+response. In-memory only (they hold live secrets); redacted
@@ -154,10 +149,6 @@ def _compare(
     # synthetic status comparison; the rest apply to the body.
     status_rules = [rule for rule in rules if rule.path == "$status"]
     rules = [rule for rule in rules if rule.path != "$status"]
-    status = baseline_response.status
-    latency = round(baseline_response.elapsed_ms)
-    size = len(baseline_response.body)
-    headers = tuple(baseline_response.headers)
     status_field = _status_field(baseline_response.status, candidate_response.status, status_rules)
     if baseline_response.events is not None and candidate_response.events is not None:
         # Streamed responses diff as their ordered event sequence, not raw bytes.
@@ -168,10 +159,6 @@ def _compare(
             [status_field, *diff(events_a, events_b, default_mode, rules)],
             baseline_body=events_a,
             candidate_body=events_b,
-            status=status,
-            latency_ms=latency,
-            size_bytes=size,
-            response_headers=headers,
             baseline=baseline,
             candidate=candidate,
         )
@@ -189,10 +176,6 @@ def _compare(
             status_field,
             baseline_exec=baseline,
             candidate_exec=candidate,
-            status=status,
-            latency=latency,
-            size=size,
-            headers=headers,
         )
     return CellDiff(
         request,
@@ -200,10 +183,6 @@ def _compare(
         [status_field, *diff(baseline_body, candidate_body, default_mode, rules)],
         baseline_body=baseline_body,
         candidate_body=candidate_body,
-        status=status,
-        latency_ms=latency,
-        size_bytes=size,
-        response_headers=headers,
         baseline=baseline,
         candidate=candidate,
     )
@@ -272,10 +251,6 @@ def _raw_compare(
     *,
     baseline_exec: Execution,
     candidate_exec: Execution,
-    status: int,
-    latency: int,
-    size: int,
-    headers: tuple[tuple[str, str], ...],
 ) -> CellDiff:
     if baseline_bytes == candidate_bytes:
         body_field = FieldDiff("$", State.SAME, "exact")
@@ -285,10 +260,6 @@ def _raw_compare(
         request,
         key,
         [status_field, body_field],
-        status=status,
-        latency_ms=latency,
-        size_bytes=size,
-        response_headers=headers,
         baseline=baseline_exec,
         candidate=candidate_exec,
     )
