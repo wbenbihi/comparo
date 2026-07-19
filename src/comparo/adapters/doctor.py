@@ -20,12 +20,15 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+import msgspec
+
 from comparo.adapters.reporters import JsonReporter
 from comparo.adapters.reporters import JUnitReporter
 from comparo.adapters.reporters import MarkdownReporter
 from comparo.adapters.reporters import SarifReporter
 from comparo.core.archive import record_from_diff
 from comparo.core.archive import save_record
+from comparo.core.assertions import AssertionResult
 from comparo.core.checks import Check
 from comparo.core.compare import CellDiff
 from comparo.core.curl import to_curl
@@ -44,6 +47,10 @@ from comparo.core.redaction import Redact
 from comparo.core.redaction import Redactor
 from comparo.core.report import RunReport
 from comparo.core.report import build_report
+from comparo.core.report_builder import record_from_diff as _v1_from_diff
+from comparo.core.report_builder import record_from_run as _v1_from_run
+from comparo.core.report_record import Selection
+from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
 
@@ -258,6 +265,175 @@ def _saved_reports(scenario: _Scenario) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _tainted_resolved() -> ResolvedRequest:
+    """A resolved outbound request echoing every canary where a report might persist it.
+
+    Each canary rides a channel the v1 record serializes: the url, a query param,
+    a header value (declared and credential-bearing), the body (value and key),
+    the request cookies, and the auth block (whose value must ALWAYS mask). This is
+    the outbound surface the older ``.reports`` record never captured.
+    """
+    return ResolvedRequest(
+        method="POST",
+        url=f"https://api.invalid/checkout?token={CANARY}&overlap={CANARY_OVERLAP_LONG}",
+        headers=[
+            ("authorization", f"Bearer {CANARY}"),  # credential header — masked by name
+            ("x-api-key", CANARY),  # credential header — masked by name
+            ("cookie", CANARY_COOKIE),  # undeclared token — masked by header name
+            (CANARY, CANARY),  # declared secret as a header name AND value
+        ],
+        query={"token": CANARY, CANARY: CANARY_SPECIAL},
+        body={
+            CANARY: "as-a-key",
+            "cart": CANARY,
+            "special": CANARY_SPECIAL,
+            "overlap": CANARY_OVERLAP_LONG,
+        },
+        trail=[],
+        body_type="json",
+        auth={"bearer": CANARY},  # the value must never survive — auth is always masked
+        cookies={"session": CANARY, CANARY: CANARY_SPECIAL},  # declared secrets
+        streaming=False,
+    )
+
+
+def _tainted_response(*, events: bool) -> HttpResponse:
+    """A response that reflects the canary into its body or event stream and headers."""
+    body = json.dumps(
+        {
+            "echo": CANARY,
+            CANARY: "as-a-key",
+            "special": CANARY_SPECIAL,
+            "overlap": CANARY_OVERLAP_LONG,
+        }
+    ).encode()
+    stream: list[object] | None = (
+        [{"data": CANARY, CANARY: CANARY_SPECIAL}, {"data": CANARY_OVERLAP_LONG}]
+        if events
+        else None
+    )
+    return HttpResponse(
+        200,
+        [("x-echo", CANARY), (CANARY, "reflected"), ("set-cookie", CANARY_COOKIE)],
+        b"" if events else body,
+        5.0,
+        events=stream,
+    )
+
+
+def _tainted_execution(scenario: _Scenario, *, events: bool) -> Execution:
+    return Execution(
+        scenario.request,
+        scenario.environment,
+        f"token={CANARY}",
+        _tainted_response(events=events),
+        resolved=_tainted_resolved(),
+    )
+
+
+def _tainted_cell_v1(scenario: _Scenario, baseline: Execution, candidate: Execution) -> CellDiff:
+    """A diff cell whose fields carry the canary in every serialized channel."""
+    fields = [
+        FieldDiff(
+            f"$.{CANARY}",
+            State.DRIFT,
+            "exact",
+            f"{json.dumps(CANARY)} → x",
+            baseline=CANARY,
+            candidate=CANARY_SPECIAL,
+            rule=f"$.{CANARY}",
+        ),
+        FieldDiff(
+            "$.special",
+            State.DRIFT,
+            "exact",
+            "",
+            baseline=CANARY_SPECIAL,
+            candidate=CANARY_OVERLAP_LONG,
+        ),
+        FieldDiff(
+            f"$.headers.{CANARY}", State.SKIP, "ignore", "volatile", rule=f"$.headers.{CANARY}"
+        ),
+    ]
+    return CellDiff(
+        scenario.request,
+        f"token={CANARY}",
+        fields,
+        None,
+        status=200,
+        latency_ms=42,
+        size_bytes=128,
+        baseline=baseline,
+        candidate=candidate,
+    )
+
+
+def _tainted_assertions() -> list[AssertionResult]:
+    """Assertions carrying the canary in target/expected/actual/detail."""
+    return [
+        AssertionResult(
+            f"body:$.{CANARY}",
+            "equals",
+            False,
+            "error",
+            f"got {json.dumps(CANARY)}",
+            "label",
+            expected=CANARY_OVERLAP_LONG,
+            actual=CANARY,
+        ),
+        AssertionResult(
+            "status",
+            "oneOf",
+            True,
+            "warn",
+            "ok",
+            "label",
+            expected=[CANARY_SPECIAL, CANARY],
+            actual=CANARY,
+        ),
+    ]
+
+
+def _saved_reports_v1(scenario: _Scenario) -> str:
+    """The v1 report record masks every secret across the whole request+response surface.
+
+    Builds a two-sided ``diff`` record (outbound request, response body, streamed
+    events, and the structured field diff) and a ``run`` record (per-side
+    assertions), then serializes both — the never-leak gate for the new format.
+    """
+    baseline = _tainted_execution(scenario, events=False)  # exercises the JSON body channel
+    candidate = _tainted_execution(scenario, events=True)  # exercises the events channel
+    cell = _tainted_cell_v1(scenario, baseline, candidate)
+    selection = Selection(tags=[f"tag-{CANARY}"], requests=[f"req-{CANARY}"])
+    environment = scenario.environment
+    diff_record = _v1_from_diff(
+        environment,
+        environment,
+        [cell],
+        record_id="doctor",
+        created="1970-01-01T00:00:00Z",
+        tool="comparo 0.0.0",
+        project=f"proj-{CANARY}",
+        concurrency=4,
+        redact=scenario.redact,
+        selection=selection,
+    )
+    run_record = _v1_from_run(
+        environment,
+        [(baseline, _tainted_assertions())],
+        record_id="doctor",
+        created="1970-01-01T00:00:00Z",
+        tool="comparo 0.0.0",
+        project=f"proj-{CANARY}",
+        concurrency=4,
+        redact=scenario.redact,
+        selection=selection,
+    )
+    return (
+        msgspec.json.encode(diff_record).decode() + "\n" + msgspec.json.encode(run_record).decode()
+    )
+
+
 def _report(scenario: _Scenario) -> RunReport:
     """A structured report built from the tainted cell, with secrets already masked."""
     return build_report(
@@ -310,6 +486,7 @@ _SINKS: tuple[tuple[str, str, Callable[[_Scenario], str]], ...] = (
     ("TUI display", "masked on render", _display),
     ("saved runs", ".runs/*.json", _saved_runs),
     ("saved reports", ".reports/*.json", _saved_reports),
+    ("saved reports v1", "report record", _saved_reports_v1),
     ("JUnit reporter", "reports/junit.xml", _junit),
     ("SARIF reporter", "reports/comparo.sarif", _sarif),
     ("JSON reporter", "reports/comparo.json", _json_report),

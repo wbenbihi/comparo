@@ -17,6 +17,7 @@ EXPECTED = [
     ("TUI display", "masked on render"),
     ("saved runs", ".runs/*.json"),
     ("saved reports", ".reports/*.json"),
+    ("saved reports v1", "report record"),
     ("JUnit reporter", "reports/junit.xml"),
     ("SARIF reporter", "reports/comparo.sarif"),
     ("JSON reporter", "reports/comparo.json"),
@@ -26,7 +27,7 @@ EXPECTED = [
 ]
 
 
-def test_selfcheck_returns_the_nine_sinks_in_order() -> None:
+def test_selfcheck_returns_every_sink_in_order() -> None:
     checks = run_selfcheck()
     assert [check.name for check in checks] == [name for name, _ in EXPECTED]
     assert [check.detail for check in checks] == [detail for _, detail in EXPECTED]
