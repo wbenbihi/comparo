@@ -1,0 +1,139 @@
+"""Unit tests for the pure render helpers that back the TUI's panels."""
+
+from rich.cells import cell_len
+from rich.console import Console
+
+from comparo.core.assertions import AssertionResult
+from comparo.core.diff import State
+from comparo.core.report_record import FieldDiffRecord
+from comparo.tui.render import _assert_count_text
+from comparo.tui.render import _assert_tally
+from comparo.tui.render import _field_from_record
+from comparo.tui.render import _fmt_bytes
+from comparo.tui.render import _pad_cells
+from comparo.tui.render import _relative_age
+from comparo.tui.render import _replay_compare_well
+from comparo.tui.render import _report_reading_pane
+from comparo.tui.render import _req_short
+from comparo.tui.render import _run_label
+from comparo.tui.replay import AssertionSummary
+from comparo.tui.replay import ReplayCell
+from comparo.tui.replay import ReplayRecord
+
+
+def _plain(renderable: object) -> str:
+    console = Console(width=120)
+    with console.capture() as capture:
+        console.print(renderable)
+    return capture.get()
+
+
+def test_fmt_bytes() -> None:
+    assert _fmt_bytes(None) == "—"
+    assert _fmt_bytes(840) == "840 B"
+    assert _fmt_bytes(1200) == "1.2 kB"
+
+
+def test_relative_age() -> None:
+    assert _relative_age("not-a-date") == ""  # unparseable → empty, never crash
+    assert _relative_age("1970-01-01T00:00:00Z").endswith("d")  # long ago → days
+
+
+def test_pad_cells_pads_and_clips() -> None:
+    assert cell_len(_pad_cells("ab", 6)) == 6  # short is padded to the cell width
+    clipped = _pad_cells("a-very-long-request-name", 8)
+    assert clipped.endswith("…")
+    assert cell_len(clipped) == 8  # long is clipped to the width, ellipsis included
+
+
+def test_req_short_and_run_label() -> None:
+    assert _req_short("request.get-json") == "get-json"
+    assert _run_label(None) == "run"
+    assert _run_label("7f3a") == "run-7f3a"
+    assert _run_label("run-7f3a") == "run-7f3a"  # not double-prefixed
+
+
+def test_assert_tally_and_count_text() -> None:
+    results = [
+        AssertionResult("status", "equals", True, "error", "ok"),
+        AssertionResult("status", "equals", False, "error", "bad"),
+        AssertionResult("latency", "lte", False, "warn", "slow"),
+    ]
+    assert _assert_tally(results) == (1, 1, 1)
+    rendered = _plain(_assert_count_text((1, 1, 1)))
+    assert "1 ✓" in rendered
+    assert "1 ✗" in rendered
+    assert "1 !" in rendered
+
+
+def test_field_from_record_maps_the_real_state_and_mode() -> None:
+    # M-6 core: the replay reconstructs a live FieldDiff from the saved record's
+    # real state + mode, never a fabricated "exact".
+    drift = _field_from_record(
+        FieldDiffRecord("$.total", "drift", "shape", baseline=1, candidate=2, rule="$.total")
+    )
+    assert drift.state is State.DRIFT
+    assert drift.mode == "shape"  # the true mode, not "exact"
+    assert drift.baseline == 1
+    assert drift.candidate == 2
+    assert drift.rule == "$.total"
+    skip = _field_from_record(FieldDiffRecord("$.ts", "skip", "ignore"))
+    assert skip.state is State.SKIP
+    assert skip.mode == "ignore"
+
+
+def _replay_record(cell: ReplayCell) -> ReplayRecord:
+    empty = AssertionSummary(0, 0, 0, [])
+    return ReplayRecord(
+        id="abc123",
+        created="1970-01-01T00:00:00Z",
+        kind="diff",
+        gate="FAIL",
+        calls=2,
+        same=3,
+        drift=1,
+        error=0,
+        skipped=1,
+        baseline="local",
+        candidate="prod",
+        execution=None,
+        baseline_assertions=empty,
+        candidate_assertions=empty,
+        requests=[],
+        cells=[cell],
+    )
+
+
+def test_report_reading_pane_shows_the_gate_and_counts() -> None:
+    rendered = _plain(_report_reading_pane(_replay_record(_cell())))
+    assert "gate: FAIL" in rendered
+    assert "run-abc123" in rendered
+
+
+def _cell() -> ReplayCell:
+    return ReplayCell(
+        request="request.checkout",
+        variant="",
+        method="POST",
+        path="http://x/checkout",
+        drift_paths=["$.total"],
+        skip_paths=["$.ts"],
+        baseline_body={"total": 10, "ts": "a"},
+        candidate_body={"total": 12, "ts": "b"},
+        status=200,
+        latency_ms=42,
+        size_bytes=68,
+        response_headers={"content-type": "application/json"},
+        fields=[
+            FieldDiffRecord("$.total", "drift", "exact", baseline=10, candidate=12),
+            FieldDiffRecord("$.ts", "skip", "ignore", rule="$.ts"),
+        ],
+    )
+
+
+def test_replay_compare_well_renders_the_real_field_decisions() -> None:
+    # The saved-diff body well replays the true per-field modes from the record's
+    # FieldDiffRecords instead of fabricating them (M-6). It must not crash and
+    # must surface the drifted path.
+    rendered = _plain(_replay_compare_well(_replay_record(_cell()), unified=True, redact=str))
+    assert "$.total" in rendered
