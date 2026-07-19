@@ -243,19 +243,29 @@ def schema(
     output: Annotated[
         Path | None, typer.Option("--output", "-o", help="Write to a file instead of stdout.")
     ] = None,
+    report: Annotated[
+        bool,
+        typer.Option(
+            "--report", help="Emit the saved-report record schema instead of the config schema."
+        ),
+    ] = False,
 ) -> None:
-    """Emit the comparo/v1 JSON Schema.
+    """Emit a comparo JSON Schema — the config surface, or the saved-report record.
 
-    The schema is generated from the object models, so it never drifts from the
-    real config. Point an editor's YAML language server at it for autocomplete
-    and inline validation, or hand it to an agent authoring config.
+    Both are generated from the object models, so they never drift from the real
+    shapes. Point an editor's YAML language server at the config schema for
+    autocomplete and inline validation, hand it to an agent authoring config, or
+    use ``--report`` to get the schema external tools consume saved reports with.
 
     Args:
         output: A file to write the schema to; prints to stdout when omitted.
+        report: Emit the report-record schema (run/diff/execution) rather than
+            the config-object schema.
     """
     from comparo.core.schema import json_schema
+    from comparo.core.schema import report_schema
 
-    document = json.dumps(json_schema(), indent=2) + "\n"
+    document = json.dumps(report_schema() if report else json_schema(), indent=2) + "\n"
     if output is not None:
         output.write_text(document, encoding="utf-8")
         typer.secho(f"✓ wrote {output}", fg=typer.colors.GREEN)
