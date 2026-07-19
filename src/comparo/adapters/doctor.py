@@ -45,10 +45,9 @@ from comparo.core.models import Environment
 from comparo.core.models import Request
 from comparo.core.redaction import Redact
 from comparo.core.redaction import Redactor
-from comparo.core.report import RunReport
-from comparo.core.report import build_report
 from comparo.core.report_builder import record_from_diff as _v1_from_diff
 from comparo.core.report_builder import record_from_run as _v1_from_run
+from comparo.core.report_record import ReportRecord
 from comparo.core.report_record import Selection
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
@@ -394,21 +393,14 @@ def _tainted_assertions() -> list[AssertionResult]:
     ]
 
 
-def _saved_reports_v1(scenario: _Scenario) -> str:
-    """The v1 report record masks every secret across the whole request+response surface.
-
-    Builds a two-sided ``diff`` record (outbound request, response body, streamed
-    events, and the structured field diff) and a ``run`` record (per-side
-    assertions), then serializes both — the never-leak gate for the new format.
-    """
+def _tainted_diff_record(scenario: _Scenario) -> ReportRecord:
+    """A two-sided ``diff`` record echoing the canary across every serialized channel."""
     baseline = _tainted_execution(scenario, events=False)  # exercises the JSON body channel
     candidate = _tainted_execution(scenario, events=True)  # exercises the events channel
     cell = _tainted_cell_v1(scenario, baseline, candidate)
-    selection = Selection(tags=[f"tag-{CANARY}"], requests=[f"req-{CANARY}"])
-    environment = scenario.environment
-    diff_record = _v1_from_diff(
-        environment,
-        environment,
+    return _v1_from_diff(
+        scenario.environment,
+        scenario.environment,
         [cell],
         record_id="doctor",
         created="1970-01-01T00:00:00Z",
@@ -416,10 +408,20 @@ def _saved_reports_v1(scenario: _Scenario) -> str:
         project=f"proj-{CANARY}",
         concurrency=4,
         redact=scenario.redact,
-        selection=selection,
+        selection=Selection(tags=[f"tag-{CANARY}"], requests=[f"req-{CANARY}"]),
     )
+
+
+def _saved_reports_v1(scenario: _Scenario) -> str:
+    """The v1 report record masks every secret across the whole request+response surface.
+
+    Serializes a two-sided ``diff`` record (outbound request, response body,
+    streamed events, and the structured field diff) and a ``run`` record (per-side
+    assertions) — the never-leak gate for the new format.
+    """
+    baseline = _tainted_execution(scenario, events=False)
     run_record = _v1_from_run(
-        environment,
+        scenario.environment,
         [(baseline, _tainted_assertions())],
         record_id="doctor",
         created="1970-01-01T00:00:00Z",
@@ -427,18 +429,15 @@ def _saved_reports_v1(scenario: _Scenario) -> str:
         project=f"proj-{CANARY}",
         concurrency=4,
         redact=scenario.redact,
-        selection=selection,
+        selection=Selection(tags=[f"tag-{CANARY}"], requests=[f"req-{CANARY}"]),
     )
-    return (
-        msgspec.json.encode(diff_record).decode() + "\n" + msgspec.json.encode(run_record).decode()
-    )
+    diff_json = msgspec.json.encode(_tainted_diff_record(scenario)).decode()
+    return diff_json + "\n" + msgspec.json.encode(run_record).decode()
 
 
-def _report(scenario: _Scenario) -> RunReport:
-    """A structured report built from the tainted cell, with secrets already masked."""
-    return build_report(
-        f"Stable {CANARY}", f"Canary {CANARY}", [_tainted_cell(scenario.request)], scenario.redact
-    )
+def _report(scenario: _Scenario) -> ReportRecord:
+    """The masked report record the CI reporters project from."""
+    return _tainted_diff_record(scenario)
 
 
 def _junit(scenario: _Scenario) -> str:

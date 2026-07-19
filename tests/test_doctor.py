@@ -8,9 +8,12 @@ from comparo.adapters.reporters import JsonReporter
 from comparo.core.compare import CellDiff
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import State
+from comparo.core.models import Environment
+from comparo.core.models import EnvironmentSpec
+from comparo.core.models import Meta
 from comparo.core.models import Request
 from comparo.core.redaction import Redactor
-from comparo.core.report import build_report
+from comparo.core.report_builder import record_from_diff
 
 #: The exact sinks (name, detail) the Settings mockup and `comparo doctor` pin.
 EXPECTED = [
@@ -56,13 +59,29 @@ def test_selfcheck_is_not_vacuously_green() -> None:
     # canary. That proves a green self-check reflects real masking — not a sink
     # that happened to drop the value on the floor.
     request = _canary_request()
-    fields = [FieldDiff(f"$.{CANARY}", State.DRIFT, "exact", f'"{CANARY}" -> "other"')]
-    cell = CellDiff(request, f"token={CANARY}", fields, None, {CANARY: 1}, {CANARY: 2})
-
-    leaked = JsonReporter().render(build_report(f"b {CANARY}", f"c {CANARY}", [cell], str))
-    assert CANARY in leaked  # identity redaction: the sink WOULD write the canary
-
-    masked = JsonReporter().render(
-        build_report(f"b {CANARY}", f"c {CANARY}", [cell], Redactor((CANARY,)).text)
+    fields = [
+        FieldDiff(f"$.{CANARY}", State.DRIFT, "exact", "", baseline=CANARY, candidate="other")
+    ]
+    cell = CellDiff(request, f"token={CANARY}", fields, None)
+    env = Environment(
+        api_version="comparo/v1",
+        metadata=Meta(name=f"env {CANARY}", id="environment.x"),
+        spec=EnvironmentSpec(base_url=f"http://{CANARY}.test"),
     )
-    assert CANARY not in masked  # the real redactor closes that same leak
+
+    def _render(redact: object) -> str:
+        record = record_from_diff(
+            env,
+            env,
+            [cell],
+            record_id="d",
+            created="t",
+            tool="comparo 0",
+            project=None,
+            concurrency=1,
+            redact=redact,  # type: ignore[arg-type]
+        )
+        return JsonReporter().render(record)
+
+    assert CANARY in _render(str)  # identity redaction: the sink WOULD write the canary
+    assert CANARY not in _render(Redactor((CANARY,)).text)  # the real redactor closes it

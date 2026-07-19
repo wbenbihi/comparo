@@ -4,16 +4,53 @@ import asyncio
 import json
 from pathlib import Path
 
+import msgspec
+
 from comparo.core.assertions import AssertionResult
+from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionResult
-from comparo.core.execution import build_execution_report
 from comparo.core.execution import run_execution
 from comparo.core.http import HttpResponse
 from comparo.core.http import TimeoutBudget
 from comparo.core.loader import load_project
+from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
+from comparo.core.models import ExecutionProfileSpec
+from comparo.core.models import Meta
+from comparo.core.models import Request
+from comparo.core.report_builder import record_from_execution
+from comparo.core.report_record import ReportRecord
 from comparo.core.resolve import ResolvedRequest
+
+SAMPLE = Path(__file__).parent.parent / "examples" / "sample-project"
+_PROFILE = ExecutionProfile(
+    api_version="comparo/v1", metadata=Meta(name="Run", id="exec.run"), spec=ExecutionProfileSpec()
+)
+
+
+def _probe_execution() -> Execution:
+    loaded = load_project(SAMPLE)
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    environment = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    response = HttpResponse(200, [], b"{}", 5.0)
+    resolved = ResolvedRequest("GET", "http://x/probe", [], {}, None, [])
+    return Execution(request, environment, "", response, resolved=resolved)
+
+
+def _exec_record(outcome: CellOutcome, redact: object = str) -> ReportRecord:
+    result = ExecutionResult("exec.run", "Base", "Cand", True, True, [outcome])
+    return record_from_execution(
+        _PROFILE,
+        result,
+        record_id="r",
+        created="t",
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=redact,  # type: ignore[arg-type]
+    )
+
 
 _ENV = """apiVersion: comparo/v1
 kind: Environment
@@ -159,42 +196,60 @@ def test_execution_assertion_failure_fails_the_gate(tmp_path: Path) -> None:
     assert not result.passed
 
 
-def test_build_execution_report_gate_matches_the_execution_gate(tmp_path: Path) -> None:
+def test_execution_record_gate_matches_the_execution_gate(tmp_path: Path) -> None:
     # M-b: comparo exec --report must produce an artifact whose pass/fail is the
     # execution gate, not a diff-only gate.
     _project(tmp_path)
-    result = _run(tmp_path)
-    report = build_execution_report(result)
-    assert report.passed == result.passed
-    assert len(report.cells) == len(result.outcomes)
+    loaded = load_project(tmp_path)
+    profile = loaded.objects["exec.run"]
+    assert isinstance(profile, ExecutionProfile)
+    result = asyncio.run(run_execution(loaded, profile, _EnvEchoClient()))
+    record = record_from_execution(
+        profile,
+        result,
+        record_id="r",
+        created="t",
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=str,
+    )
+    assert (record.summary.gate == "PASS") == result.passed
+    assert len(record.cells) == len(result.outcomes)
 
 
-def test_build_execution_report_flags_an_assertion_only_failure() -> None:
+def test_execution_record_flags_an_assertion_only_failure() -> None:
     # A cell that failed only its assertions (no drift) is still a failure — the
-    # report must not show a green gate. The failed error-rule becomes a drift row.
+    # record must not show a green gate, and the cell verdict is "fail".
     failed = AssertionResult("status", "equals", False, "error", "200 == 201", "status == 201")
     warn = AssertionResult("latency", "lte", False, "warn", "slow", "latency <= 1ms")
-    outcome = CellOutcome("request.probe", "", [failed, warn], [], diff=None)
-    result = ExecutionResult("exec.run", "Base", "Cand", True, True, [outcome])
-    assert not result.passed
-
-    report = build_execution_report(result)
-    assert not report.passed
-    assert report.drift == 1
-    cell = report.cells[0]
-    assert cell.state == "drift"
-    assert any("status == 201" in row.path and "200 == 201" in row.detail for row in cell.drifts)
-    assert not any("latency" in row.path for row in cell.drifts)  # warns never gate the report
+    outcome = CellOutcome(
+        "request.probe", "", [failed, warn], [], diff=None, baseline=_probe_execution()
+    )
+    record = _exec_record(outcome)
+    assert record.summary.gate == "FAIL"
+    assert record.summary.assertions is not None
+    assert record.summary.assertions.failed == 1  # the warn does not count as a failure
+    cell = record.cells[0]
+    assert cell.verdict == "fail"
 
 
-def test_build_execution_report_masks_a_secret_in_a_drift_detail() -> None:
-    # A server can echo a secret into a failed assertion's detail; the redactor
-    # passed to the builder must mask it before it reaches an artifact.
-    failed = AssertionResult("body:$.token", "equals", False, "error", "s3cr3t == x", "token == x")
-    outcome = CellOutcome("request.probe", "", [failed], [], diff=None)
-    result = ExecutionResult("exec.run", "Base", None, True, False, [outcome])
-    report = build_execution_report(result, lambda text: text.replace("s3cr3t", "••••••"))
-    assert "s3cr3t" not in report.cells[0].drifts[0].detail
+def test_execution_record_masks_a_secret_in_an_assertion_detail() -> None:
+    # A server can echo a secret into a failed assertion's detail/value; the
+    # redactor passed to the builder must mask it before it reaches the record.
+    failed = AssertionResult(
+        "body:$.token",
+        "equals",
+        False,
+        "error",
+        "s3cr3t == x",
+        "token == x",
+        expected="x",
+        actual="s3cr3t",
+    )
+    outcome = CellOutcome("request.probe", "", [failed], [], diff=None, baseline=_probe_execution())
+    record = _exec_record(outcome, redact=lambda text: text.replace("s3cr3t", "••••••"))
+    assert "s3cr3t" not in msgspec.json.encode(record).decode()
 
 
 def test_execution_inline_diff_profile_composes(tmp_path: Path) -> None:
