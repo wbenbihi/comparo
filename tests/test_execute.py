@@ -337,3 +337,28 @@ def test_a_malformed_url_is_captured_as_an_error_not_a_run_abort() -> None:
             await client.aclose()
 
     asyncio.run(go())
+
+
+def test_a_response_body_over_the_cap_fails_closed_not_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # S-1: a body larger than the cap must fail the cell, not be silently truncated
+    # (a diff over a cut-off prefix would hide any regression past the cap).
+    from comparo.adapters import httpx_client
+    from comparo.core.http import HttpError
+
+    monkeypatch.setattr(httpx_client, "_MAX_BODY_BYTES", 8)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 100)
+
+    async def go() -> None:
+        client = HttpxClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        try:
+            resolved = ResolvedRequest("GET", "http://x/y", [], {}, None, [])
+            with pytest.raises(HttpError, match="cap"):
+                await client.send(resolved, TimeoutBudget())
+        finally:
+            await client.aclose()
+
+    asyncio.run(go())
