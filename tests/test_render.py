@@ -224,6 +224,38 @@ def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
     assert "event sequence" in rendered
 
 
+def test_outbound_header_collapses_to_a_summary_and_expands_to_the_full_diff() -> None:
+    # The two-layer compare panel: `o` toggles the OUTBOUND layer between a
+    # one-line summary and the full request diff, and a masked secret never leaks.
+    from pathlib import Path
+
+    from comparo.core.loader import load_project
+    from comparo.core.resolve import ResolvedRequest
+    from comparo.tui.render import _environments
+    from comparo.tui.render import _outbound_header
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    env_a, env_b = _environments(loaded)[:2]
+    header: list[tuple[str, object]] = [("Authorization", "Bearer ••••••")]
+    a = ResolvedRequest("GET", "http://localhost:8080/x", header, {}, None, [])
+    b = ResolvedRequest("GET", "https://prod.example/x", header, {}, None, [])
+
+    collapsed = _plain(_outbound_header(a, b, env_a, env_b, expanded=False))
+    assert "OUTBOUND" in collapsed
+    assert "differs" in collapsed
+    assert "to expand" in collapsed
+    assert "localhost:8080" not in collapsed  # collapsed stays a summary, no per-field values
+
+    expanded = _plain(_outbound_header(a, b, env_a, env_b, expanded=True))
+    assert "localhost:8080" in expanded  # expanded shows the differing url
+    assert "prod.example" in expanded
+    assert "to collapse" in expanded
+    assert "SECRETVALUE" not in expanded  # the masked token stayed masked
+
+    identical = _plain(_outbound_header(a, a, env_a, env_b, expanded=False))
+    assert "identical on both sides" in identical
+
+
 def test_exec_triplet_summarizes_a_cell() -> None:
     from pathlib import Path
 

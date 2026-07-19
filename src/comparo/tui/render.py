@@ -199,6 +199,7 @@ __all__ = [
     "_object_detail",
     "_ok_report",
     "_outbound_diff_view",
+    "_outbound_header",
     "_p50",
     "_pad_cells",
     "_pair",
@@ -1569,15 +1570,15 @@ def _diff_body_view(
         # per-cell insight/silence hints are suppressed to keep the stack readable.
         return Group(title, Text(), well)
     insight = Text(
-        "\nthe same request is replayed against both sides — press o to diff the "
-        "outbound and confirm the drift is the service's",
+        "\nthe same request is replayed against both sides — the OUTBOUND header "
+        "above confirms whether the drift is the service's",
         style=_SAME,
     )
     hint = Text("\npress ", style=_DIM)
     hint.append("v", style=f"bold {_ACCENT}")
     hint.append(f" for {'side-by-side' if unified else 'unified'}    ", style=_DIM)
     hint.append("o", style=f"bold {_ACCENT}")
-    hint.append(" outbound    ", style=_DIM)
+    hint.append(" expand outbound    ", style=_DIM)
     hint.append("i", style=f"bold {_ACCENT}")
     hint.append(" to silence this field", style=_DIM)
     return Group(title, Text(), well, _git_legend(baseline, candidate), insight, hint)
@@ -1677,32 +1678,18 @@ def _diff_error_view(
     return Group(*parts)
 
 
-def _outbound_diff_view(
+def _outbound_diffs(
     baseline: ResolvedRequest,
     candidate: ResolvedRequest,
-    base_env: Environment,
-    cand_env: Environment,
     *,
-    redact: Callable[[str], str] = str,
-) -> Group:
-    """Diff the resolved outbound request across the pair (DIFF-27).
+    redact: Callable[[str], str],
+) -> list[tuple[str, str, str]]:
+    """The redacted field-level differences between two outbound requests.
 
-    The same request is replayed against both environments, so the outbound only
-    differs where env config does — a different base URL, a per-env auth token,
-    an env-specific header or variable. Every value is redacted, and masked
-    secrets compare equal, so a hidden token can never surface as a false drift.
+    Each tuple is ``(label, baseline_value, candidate_value)``. Every value is
+    redacted first, so masked secrets compare equal and a hidden token can never
+    surface as a false drift.
     """
-    parts: list[RenderableType] = []
-    head = Text()
-    head.append("OUTBOUND REQUEST", style=f"bold {_LABEL}")
-    parts.append(head)
-    legend = Text("\n")
-    legend.append("− ", style=f"bold {_DRIFT}")
-    legend.append(base_env.metadata.name, style=_DIM)
-    legend.append("    + ", style=f"bold {_SAME}")
-    legend.append(cand_env.metadata.name, style=_DIM)
-    parts.append(legend)
-
     diffs: list[tuple[str, str, str]] = []
 
     def scalar(label: str, a: object, b: object) -> None:
@@ -1730,6 +1717,36 @@ def _outbound_diff_view(
     mapping("query", baseline.query, candidate.query)
     if baseline.body != candidate.body:
         diffs.append(("body", "differs — an env value is injected into the body", ""))
+    return diffs
+
+
+def _outbound_diff_view(
+    baseline: ResolvedRequest,
+    candidate: ResolvedRequest,
+    base_env: Environment,
+    cand_env: Environment,
+    *,
+    redact: Callable[[str], str] = str,
+) -> Group:
+    """Diff the resolved outbound request across the pair (DIFF-27).
+
+    The same request is replayed against both environments, so the outbound only
+    differs where env config does — a different base URL, a per-env auth token,
+    an env-specific header or variable. Every value is redacted, and masked
+    secrets compare equal, so a hidden token can never surface as a false drift.
+    """
+    parts: list[RenderableType] = []
+    head = Text()
+    head.append("OUTBOUND REQUEST", style=f"bold {_LABEL}")
+    parts.append(head)
+    legend = Text("\n")
+    legend.append("− ", style=f"bold {_DRIFT}")
+    legend.append(base_env.metadata.name, style=_DIM)
+    legend.append("    + ", style=f"bold {_SAME}")
+    legend.append(cand_env.metadata.name, style=_DIM)
+    parts.append(legend)
+
+    diffs = _outbound_diffs(baseline, candidate, redact=redact)
 
     body = Text()
     if not diffs:
@@ -1754,7 +1771,50 @@ def _outbound_diff_view(
             style=_DIM,
         )
     parts.append(body)
+    collapse = Text("\n\npress ", style=_DIM)
+    collapse.append("o", style=f"bold {_ACCENT}")
+    collapse.append(" to collapse", style=_DIM)
+    parts.append(collapse)
     return Group(*parts)
+
+
+def _outbound_header(
+    baseline: ResolvedRequest,
+    candidate: ResolvedRequest,
+    base_env: Environment,
+    cand_env: Environment,
+    *,
+    expanded: bool,
+    redact: Callable[[str], str] = str,
+) -> RenderableType:
+    """The compare panel's persistent OUTBOUND layer — a summary or the full diff.
+
+    comparo replays the *same* request against both environments, so the outbound
+    only differs where env config does (host, auth, an env var). This header sits
+    above the response-body diff and answers the first triage question — is the
+    drift the service's, or did we send two different requests? — without leaving
+    the field view. ``o`` toggles it between the one-line summary and the full
+    request diff. Every value is redacted, so a masked secret never leaks or
+    surfaces as a false drift.
+    """
+    if expanded:
+        return _outbound_diff_view(baseline, candidate, base_env, cand_env, redact=redact)
+    diffs = _outbound_diffs(baseline, candidate, redact=redact)
+    line = Text(no_wrap=True)
+    line.append("OUTBOUND  ", style=f"bold {_LABEL}")
+    if diffs:
+        labels = ", ".join(label for label, _, _ in diffs[:3])
+        more = "…" if len(diffs) > 3 else ""
+        line.append("⚠ ", style=f"bold {_WARN}")
+        line.append(f"differs · {len(diffs)} field{'s' if len(diffs) != 1 else ''} ", style=_TEXT)
+        line.append(f"({labels}{more})", style=_DIM)
+    else:
+        line.append("✓ ", style=f"bold {_SAME}")
+        line.append("identical on both sides", style=_DIM)
+    line.append("   press ", style=_DIM)
+    line.append("o", style=f"bold {_ACCENT}")
+    line.append(" to expand", style=_DIM)
+    return _band(line, _HUNK_BG)
 
 
 def _req_short(request_id: str) -> str:
