@@ -256,35 +256,58 @@ def test_a_diffpair_with_a_typoed_key_is_a_load_error(tmp_path: Path) -> None:
         load_project(tmp_path / "comparo.yaml")
 
 
-def test_a_val_cycle_is_a_captured_error_not_a_recursion_crash(tmp_path: Path) -> None:
+def test_a_val_cycle_is_a_captured_error_not_a_recursion_crash() -> None:
+    # Defense in depth: the loader now rejects a $val cycle up front, but if one
+    # ever reached the resolver it must still fail closed with a captured error,
+    # never a recursion crash. Build the cyclic project directly, past the loader.
+    import msgspec
     import pytest
 
     from comparo.core.interpolation import InterpolationError
+    from comparo.core.loader import LoadedProject
+    from comparo.core.models import Environment
+    from comparo.core.models import Instance
+    from comparo.core.models import Object
 
-    (tmp_path / "env.yaml").write_text(
-        "apiVersion: comparo/v1\nkind: Environment\nmetadata: {name: E, id: environment.e}\n"
-        "spec: {baseUrl: 'http://h'}\n",
-        encoding="utf-8",
+    def instance(ident: str, ref: str) -> Instance:
+        obj = msgspec.convert(
+            {
+                "apiVersion": "comparo/v1",
+                "kind": "Instance",
+                "metadata": {"name": ident, "id": ident},
+                "spec": {"value": {"x": {"$val": ref}}},
+            },
+            type=Instance,
+        )
+        return obj
+
+    env = msgspec.convert(
+        {
+            "apiVersion": "comparo/v1",
+            "kind": "Environment",
+            "metadata": {"name": "E", "id": "environment.e"},
+            "spec": {"baseUrl": "http://h"},
+        },
+        type=Environment,
     )
-    (tmp_path / "a.yaml").write_text(
-        "apiVersion: comparo/v1\nkind: Instance\nmetadata: {name: A, id: instance.a}\n"
-        "spec:\n  value: {x: {$val: instance.b}}\n",
-        encoding="utf-8",
+    request = msgspec.convert(
+        {
+            "apiVersion": "comparo/v1",
+            "kind": "Request",
+            "metadata": {"name": "R", "id": "request.r"},
+            "spec": {
+                "request": {"method": "GET", "endpoint": "/x", "body": {"$val": "instance.a"}}
+            },
+        },
+        type=Request,
     )
-    (tmp_path / "b.yaml").write_text(
-        "apiVersion: comparo/v1\nkind: Instance\nmetadata: {name: B, id: instance.b}\n"
-        "spec:\n  value: {y: {$val: instance.a}}\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "req.yaml").write_text(
-        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
-        "spec:\n  request:\n    method: GET\n    endpoint: /x\n    body: {$val: instance.a}\n",
-        encoding="utf-8",
-    )
-    loaded = load_project(tmp_path)
-    env = select_environment(loaded, "environment.e")
-    request = loaded.objects["request.r"]
-    assert isinstance(request, Request)
+    objects: dict[str, Object] = {
+        "instance.a": instance("instance.a", "instance.b"),
+        "instance.b": instance("instance.b", "instance.a"),
+        "environment.e": env,
+        "request.r": request,
+    }
+    loaded = LoadedProject(root=Path(), project=None, objects=objects)
     with pytest.raises(InterpolationError, match="cycle"):
         Resolver(loaded, env, Sink.EXECUTE).resolve_request(request)
 
