@@ -106,7 +106,11 @@ def save(config: UserConfig) -> Path:
             "default_tab": config.default_tab,
         },
     }
-    path.write_text(_dump_toml(sections), encoding="utf-8")
+    # Write to a sibling temp file then atomically rename over the target, so a
+    # crash mid-write can never leave a truncated / corrupt config on disk.
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(_dump_toml(sections), encoding="utf-8")
+    tmp.replace(path)
     return path
 
 

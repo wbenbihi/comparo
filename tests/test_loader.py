@@ -263,3 +263,19 @@ def test_spec_data_escaping_the_project_root_is_refused(tmp_path: Path) -> None:
     with pytest.raises(LoadError) as caught:
         load_project(project / "comparo.yaml")
     assert any("escapes the project root" in d.message for d in caught.value.diagnostics)
+
+
+def test_yml_extension_objects_are_loaded_too(tmp_path: Path) -> None:
+    # Objects may use the .yml extension, not only .yaml.
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\n"
+        "metadata: {name: P, id: project.p}\nspec: {data: .}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: E, id: environment.e}\nspec: {baseUrl: 'http://h'}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path / "comparo.yaml")
+    assert "environment.e" in loaded.objects

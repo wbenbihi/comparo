@@ -164,10 +164,5 @@ class Redactor:
         return text
 
 
-#: A redact callable — a ``Redactor.text`` or the identity when nothing to mask.
+#: A redact callable — a ``Redactor.text`` or ``str`` (identity) when nothing to mask.
 Redact = Callable[[str], str]
-
-
-def identity(text: str) -> str:
-    """The no-op redactor used when a caller has no secrets to mask."""
-    return text

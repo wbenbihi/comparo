@@ -270,6 +270,7 @@ def schema(
 
     document = json.dumps(report_schema() if report else json_schema(), indent=2) + "\n"
     if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)  # -o schema/foo.json in a new dir
         output.write_text(document, encoding="utf-8")
         typer.secho(f"✓ wrote {output}", fg=typer.colors.GREEN)
     else:
@@ -918,15 +919,11 @@ correct you.
 
 
 def _write_reports(record: ReportRecord, formats: list[str], output: Path) -> None:
+    # _emit_reports has already rejected any unknown format, so every name is a
+    # known reporter here.
     output.mkdir(parents=True, exist_ok=True)
     for name in formats:
-        reporter = REPORTERS.get(name)
-        if reporter is None:
-            known = ", ".join(sorted(REPORTERS))
-            typer.secho(
-                f"unknown report format '{name}' (known: {known})", fg=typer.colors.YELLOW, err=True
-            )
-            continue
+        reporter = REPORTERS[name]
         rendered = reporter.render(record)
         destination = output / reporter.filename
         destination.write_text(rendered, encoding="utf-8")

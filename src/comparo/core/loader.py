@@ -126,7 +126,7 @@ def _resolve_sources(source: Path) -> tuple[Path, Path, list[Path]]:
         The project root, the data directory, and the sorted files to parse.
     """
     if source.is_dir():
-        return source, source, sorted(source.rglob("*.yaml"))
+        return source, source, _yaml_files(source)
     root = source.parent
     data_dir = (root / (_manifest_data(source) or ".")).resolve()
     # Confine spec.data to the project root: a ``../..`` or absolute path would make
@@ -135,10 +135,15 @@ def _resolve_sources(source: Path) -> tuple[Path, Path, list[Path]]:
     if not data_dir.is_relative_to(root.resolve()):
         message = f"spec.data escapes the project root: {_manifest_data(source)!r}"
         raise LoadError([Diagnostic(source, message)], root)
-    files = sorted(data_dir.rglob("*.yaml")) if data_dir.is_dir() else []
+    files = _yaml_files(data_dir) if data_dir.is_dir() else []
     if source.resolve() not in {file.resolve() for file in files}:
         files = [source, *files]
     return root, data_dir, files
+
+
+def _yaml_files(directory: Path) -> list[Path]:
+    """Every YAML object file under *directory* — both ``.yaml`` and ``.yml``."""
+    return sorted([*directory.rglob("*.yaml"), *directory.rglob("*.yml")])
 
 
 def _plain(node: object) -> object:
