@@ -150,7 +150,7 @@ async def run_execution(
     # Expand the whole plan first so the total is known before the first request.
     plan: list[tuple[Request, MatrixCell, list[AssertionRule]]] = []
     empty: list[Request] = []
-    for request in _select(project, profile):
+    for request in select_requests(project, profile):
         rules = _assert_rules(project, profile, request) if do_assert else []
         cells = expand(project, request, scopes)
         if not cells:
@@ -263,7 +263,8 @@ def _environments(
     return baseline, candidate
 
 
-def _select(project: LoadedProject, profile: ExecutionProfile) -> list[Request]:
+def select_requests(project: LoadedProject, profile: ExecutionProfile) -> list[Request]:
+    """The requests an ExecutionProfile selects — its ``select`` tags / ids, or all."""
     requests = sorted(
         (obj for obj in project.objects.values() if isinstance(obj, Request)),
         key=lambda request: request.metadata.id or "",
