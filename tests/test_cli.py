@@ -212,3 +212,32 @@ def test_diff_rejects_an_unknown_report_format() -> None:
     )
     assert result.exit_code == 1
     assert "unknown report format" in result.output
+
+
+def test_run_fails_closed_when_the_plan_expands_to_zero_cells(tmp_path: Path) -> None:
+    # M-1: a run whose selected request expands to zero matrix cells verified
+    # nothing — it must exit non-zero, never report a green gate.
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\n"
+        "metadata: {name: P, id: project.p}\nspec: {data: .}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: Local, id: environment.local}\nspec: {baseUrl: 'http://localhost'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "matrix.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Matrix\n"
+        "metadata: {name: Empty, id: matrix.empty}\nspec: {target: request.query, values: []}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
+        "spec:\n  matrix:\n    - $ref: matrix.empty\n  request: {method: GET, endpoint: /x}\n",
+        encoding="utf-8",
+    )
+    config = str(tmp_path / "comparo.yaml")
+    result = runner.invoke(app, ["run", "--config", config, "--env", "local"])
+    assert result.exit_code == 1
+    assert "zero cells" in result.output
