@@ -65,6 +65,11 @@ class ReplayCell:
     latency_ms: int | None
     size_bytes: int | None
     response_headers: dict[str, str]
+    #: The candidate side's call metrics, for the baseline-vs-candidate call ledger
+    #: (``None`` for a run, which has no candidate side).
+    candidate_status: int | None
+    candidate_latency_ms: int | None
+    candidate_size_bytes: int | None
     #: The real per-field diffs (state/mode/baseline/candidate) so the body well
     #: renders the true profile decision instead of fabricating ``exact``.
     fields: list[FieldDiffRecord]
@@ -118,6 +123,11 @@ def _replay_cell(cell: Cell) -> ReplayCell:
     request = cell.sides.baseline.request
     response = cell.sides.baseline.response
     headers = dict(response.headers) if response is not None else {}
+    candidate = (
+        cell.sides.candidate.response
+        if cell.sides.candidate is not None and cell.sides.candidate.response is not None
+        else None
+    )
     return ReplayCell(
         request=cell.request_id,
         variant=cell.variant,
@@ -135,6 +145,9 @@ def _replay_cell(cell: Cell) -> ReplayCell:
         latency_ms=round(response.latency_ms) if response is not None else None,
         size_bytes=response.size_bytes if response is not None else None,
         response_headers=headers,
+        candidate_status=candidate.status if candidate is not None else None,
+        candidate_latency_ms=round(candidate.latency_ms) if candidate is not None else None,
+        candidate_size_bytes=candidate.size_bytes if candidate is not None else None,
         fields=list(fields),
     )
 

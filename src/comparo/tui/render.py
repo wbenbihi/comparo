@@ -2715,6 +2715,64 @@ def _replay_diff_cell(record: ReportRecord) -> "CellRecord | None":
     return None
 
 
+def _call_ledger(cell: CellRecord) -> Table | None:
+    """The per-cell CALL LEDGER — baseline vs candidate status / latency / size, and Δ.
+
+    Both sides' call metrics come straight from the saved record; ``None`` when the
+    cell has no candidate side (a run), where a two-column ledger has nothing to say.
+    """
+    if cell.candidate_status is None and cell.candidate_latency_ms is None:
+        return None
+
+    def ms(value: int | None) -> str:
+        return f"{value}ms" if value is not None else "—"
+
+    def signed(value: int) -> str:
+        return f"+{value}" if value >= 0 else str(value)
+
+    table = _table()
+    table.add_column("CALL", style=_LABEL, no_wrap=True)
+    table.add_column("baseline", justify="right")
+    table.add_column("candidate", justify="right")
+    table.add_column("Δ", justify="right")
+
+    base_ok = cell.status is not None and 200 <= cell.status < 400
+    cand_ok = cell.candidate_status is not None and 200 <= cell.candidate_status < 400
+    same_status = cell.status == cell.candidate_status
+    table.add_row(
+        Text("status", style=_DIM),
+        Text("—" if cell.status is None else str(cell.status), style=_SAME if base_ok else _DRIFT),
+        Text(
+            "—" if cell.candidate_status is None else str(cell.candidate_status),
+            style=_SAME if cand_ok else _DRIFT,
+        ),
+        Text("=" if same_status else "≠", style=_DIM if same_status else _DRIFT),
+    )
+    latency_delta = (
+        signed(cell.candidate_latency_ms - cell.latency_ms) + "ms"
+        if cell.latency_ms is not None and cell.candidate_latency_ms is not None
+        else ""
+    )
+    table.add_row(
+        Text("latency", style=_DIM),
+        Text(ms(cell.latency_ms), style=_TEXT),
+        Text(ms(cell.candidate_latency_ms), style=_TEXT),
+        Text(latency_delta, style=_DIM),
+    )
+    size_delta = (
+        signed(cell.candidate_size_bytes - cell.size_bytes) + " B"
+        if cell.size_bytes is not None and cell.candidate_size_bytes is not None
+        else ""
+    )
+    table.add_row(
+        Text("size", style=_DIM),
+        Text(_fmt_bytes(cell.size_bytes), style=_TEXT),
+        Text(_fmt_bytes(cell.candidate_size_bytes), style=_TEXT),
+        Text(size_delta, style=_DIM),
+    )
+    return table
+
+
 def _field_from_record(field: FieldDiffRecord) -> FieldDiff:
     """Reconstruct a live FieldDiff from a saved record's field — real state and mode."""
     state = State.DRIFT if field.state == "drift" else State.SKIP
@@ -2780,7 +2838,12 @@ def _replay_compare_well(
     legend.append("candidate ", style=_DIM)
     legend.append(record.candidate or "—", style=_DIM)
     note = Text(f"\nreplayed from reports/{record.id}.json", style=_AXIS)
-    return Group(title, Text(), well, legend, note)
+    ledger = _call_ledger(cell)
+    parts: list[RenderableType] = [title, Text(), well]
+    if ledger is not None:
+        parts += [Text("\ncall ledger", style=f"bold {_DIM}"), ledger]
+    parts += [legend, note]
+    return Group(*parts)
 
 
 def _replay_compare_path_well(record: ReportRecord, redact: Callable[[str], str] = str) -> Group:

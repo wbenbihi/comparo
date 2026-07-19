@@ -124,11 +124,53 @@ def _cell() -> ReplayCell:
         latency_ms=42,
         size_bytes=68,
         response_headers={"content-type": "application/json"},
+        candidate_status=500,
+        candidate_latency_ms=88,
+        candidate_size_bytes=70,
         fields=[
             FieldDiffRecord("$.total", "drift", "exact", baseline=10, candidate=12),
             FieldDiffRecord("$.ts", "skip", "ignore", rule="$.ts"),
         ],
     )
+
+
+def test_call_ledger_shows_both_sides_and_the_delta() -> None:
+    from comparo.tui.render import _call_ledger
+
+    ledger = _call_ledger(_cell())
+    assert ledger is not None
+    rendered = _plain(ledger)
+    assert "200" in rendered  # baseline status
+    assert "500" in rendered  # candidate status
+    assert "≠" in rendered  # the statuses differ
+    assert "42ms" in rendered
+    assert "88ms" in rendered
+    assert "+46ms" in rendered  # the latency delta
+
+
+def test_call_ledger_is_none_without_a_candidate_side() -> None:
+    # A run has no candidate side, so a baseline-vs-candidate ledger has nothing to show.
+    from comparo.tui.render import _call_ledger
+
+    run_cell = ReplayCell(
+        request="request.r",
+        variant="",
+        method="GET",
+        path="http://x",
+        drift_paths=[],
+        skip_paths=[],
+        baseline_body={"ok": True},
+        candidate_body=None,
+        status=200,
+        latency_ms=10,
+        size_bytes=12,
+        response_headers={},
+        candidate_status=None,
+        candidate_latency_ms=None,
+        candidate_size_bytes=None,
+        fields=[],
+    )
+    assert _call_ledger(run_cell) is None
 
 
 def test_replay_compare_well_renders_the_real_field_decisions() -> None:
