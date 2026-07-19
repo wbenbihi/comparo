@@ -3,9 +3,9 @@
 import json
 from pathlib import Path
 
+import msgspec
 import pytest
 
-from comparo.core.archive import record_from_execution
 from comparo.core.assertions import AssertionResult
 from comparo.core.compare import CellDiff
 from comparo.core.diff import FieldDiff
@@ -28,7 +28,9 @@ from comparo.core.redaction import Redact
 from comparo.core.redaction import Redactor
 from comparo.core.redaction import environment_secret_values
 from comparo.core.report_builder import record_from_diff as _v1_from_diff
+from comparo.core.report_builder import record_from_run as _v1_from_run
 from comparo.core.report_record import ReportRecord
+from comparo.core.resolve import ResolvedRequest
 from comparo.core.secrets import SecretError
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "canary-project"
@@ -56,6 +58,31 @@ def _diff_record(
         _env(baseline),
         _env(candidate),
         cells,  # type: ignore[arg-type]
+        record_id="r",
+        created="t",
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=redact,
+    )
+
+
+def _run_record_from(
+    loaded: object, assertions: list[AssertionResult], redact: Redact
+) -> ReportRecord:
+    """A one-side run record whose baseline cell carries *assertions*."""
+    request = _request(loaded)
+    environment = next(o for o in loaded.objects.values() if isinstance(o, Environment))  # type: ignore[attr-defined]
+    execution = Execution(
+        request,
+        environment,
+        "",
+        HttpResponse(200, [], b"{}", 5.0),
+        resolved=ResolvedRequest("GET", "http://x", [], {}, None, []),
+    )
+    return _v1_from_run(
+        environment,
+        [(execution, assertions)],
         record_id="r",
         created="t",
         tool="comparo 0",
@@ -208,7 +235,6 @@ def test_a_secret_echoed_as_a_json_key_is_masked_on_disk_and_screen() -> None:
     # object key, which becomes a drift field path — it must not reach disk/screen.
     from rich.console import Console
 
-    from comparo.core.archive import record_from_diff
     from comparo.core.compare import CellDiff
     from comparo.core.diff import diff
     from comparo.tui.render import _diff_body_view
@@ -221,9 +247,9 @@ def test_a_secret_echoed_as_a_json_key_is_masked_on_disk_and_screen() -> None:
     fields = diff(base, cand, "exact", [])
     cell = CellDiff(request, "", fields, None, base, cand)
 
-    # Disk: the archive record's drift_paths must not carry the secret key.
-    record = record_from_diff("A", "B", [cell], run_id="k1", created="now", redact=redact)
-    assert not any(SECRET in path for row in record.requests for path in row.drift_paths)
+    # Disk: the saved record's field paths must not carry the secret key.
+    blob = msgspec.json.encode(_diff_record([cell], redact)).decode()
+    assert SECRET not in blob
 
     # Screen: the live git-diff body must mask the echoed key too.
     drift = next(field for field in fields if field.state is State.DRIFT)
@@ -267,7 +293,6 @@ def test_execution_screen_renders_mask_a_secret_echoed_as_a_key_or_path() -> Non
     from comparo.core.compare import CellDiff
     from comparo.core.diff import FieldDiff
     from comparo.core.diff import diff
-    from comparo.core.execution import CellOutcome
     from comparo.core.execution import ExecutionResult
     from comparo.tui.render import _cell_verdict
     from comparo.tui.render import _diff_body_view
@@ -348,17 +373,20 @@ def test_assertion_label_carrying_a_secret_is_masked_on_disk_and_screen() -> Non
 
     loaded = load_project(SAMPLE)
     redact = Redactor.for_project(loaded).text
-    label = f"authorization contains {SECRET}"
-    leaked = AssertionResult("authorization", "contains", False, "error", "differs", label)
-    outcome = CellOutcome("request.basic-auth", "", [leaked], [], None)
-    result = ExecutionResult("exec.x", "Stable", "Canary", True, True, [outcome])
-
-    # Disk: the persisted assertion line's label must not carry the secret.
-    record = record_from_execution(result, run_id="lab1", created="now", name="X", redact=redact)
-    lines = record.baseline_assertions.lines
-    assert lines
-    assert SECRET not in lines[0].label
-    assert MASK in lines[0].label
+    # A user asserting against a secret literal: the value rides expected/detail.
+    leaked = AssertionResult(
+        "authorization",
+        "contains",
+        False,
+        "error",
+        f"differs from {SECRET}",
+        "authorization contains",
+        expected=SECRET,
+        actual="other",
+    )
+    # Disk: the persisted assertion must not carry the secret anywhere.
+    blob = msgspec.json.encode(_run_record_from(loaded, [leaked], redact)).decode()
+    assert SECRET not in blob
 
     # Screen: the live Execution assertion render must mask it too.
     console = Console(width=200)
@@ -561,7 +589,6 @@ def test_exec_header_masks_a_secret_in_select_tags_or_requests() -> None:
     import msgspec
     from rich.console import Console
 
-    from comparo.core.execution import ExecutionResult
     from comparo.core.models import ExecutionProfile
     from comparo.tui.render import _exec_header
 
@@ -586,7 +613,6 @@ def test_report_and_archive_mask_env_names() -> None:
     # Env names flow to JSON/Markdown reporters and to .reports/*.json; on the
     # vanishing chance a name equals a declared secret it is masked (the backstop).
     from comparo.adapters.reporters import MarkdownReporter
-    from comparo.core.archive import record_from_diff as archive_from_diff
     from comparo.core.compare import CellDiff
 
     loaded = load_project(SAMPLE)
@@ -599,11 +625,8 @@ def test_report_and_archive_mask_env_names() -> None:
     assert environments.candidate is not None
     assert SECRET not in environments.candidate.name
     assert SECRET not in MarkdownReporter().render(record)
-    saved = archive_from_diff(
-        SECRET, f"c-{SECRET}", [cell], run_id="r", created="now", redact=redact
-    )
-    assert SECRET not in saved.baseline
-    assert SECRET not in (saved.candidate or "")
+    # ...and the whole record as written to the archive carries no secret.
+    assert SECRET not in msgspec.json.encode(record).decode()
 
 
 def test_provenance_masks_a_matrix_case_value() -> None:
@@ -744,26 +767,45 @@ def test_archive_redacts_leaked_secret_in_assertion_detail() -> None:
     leaked = AssertionResult(
         "body:$.token", "equals", False, "error", f'"{SECRET}" != "expected"', "token check"
     )
-    outcome = CellOutcome("request.basic-auth", "", [leaked], [], None)
-    result = ExecutionResult("exec.x", "Stable", "Canary", True, True, [outcome])
-    record = record_from_execution(result, run_id="abc123", created="now", name="X", redact=redact)
-    lines = record.baseline_assertions.lines
-    assert lines
-    assert SECRET not in lines[0].detail
-    assert MASK in lines[0].detail
+    blob = msgspec.json.encode(_run_record_from(loaded, [leaked], redact)).decode()
+    assert SECRET not in blob
 
 
 def _tainted_cell() -> CellDiff:
-    # A cell whose response echoes the secret everywhere the saved replay stores:
-    # as a body value AND key, as a drift/skip field path, in a header name/value,
-    # and in the matrix case key.
+    # A cell whose two executions echo the secret everywhere the saved record stores
+    # it: the request url/headers/query/body, the response body value AND key and a
+    # header name/value, the drift/skip field paths, and the matrix case key.
     loaded = load_project(SAMPLE)
     request = _request(loaded)
-    base = {SECRET: SECRET, "tokens": {SECRET: 1}}
-    cand = {SECRET: SECRET, "tokens": {SECRET: 2}}
+    environment = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    base: dict[str, object] = {SECRET: SECRET, "tokens": {SECRET: 1}}
+    cand: dict[str, object] = {SECRET: SECRET, "tokens": {SECRET: 2}}
+
+    def execution(body: dict[str, object]) -> Execution:
+        response = HttpResponse(
+            200,
+            [(SECRET, SECRET), ("content-type", "application/json")],
+            json.dumps(body).encode(),
+            5.0,
+        )
+        resolved = ResolvedRequest(
+            "GET", f"http://x/probe?token={SECRET}", [(SECRET, SECRET)], {SECRET: SECRET}, body, []
+        )
+        return Execution(request, environment, f"token={SECRET}", response, resolved=resolved)
+
     fields = [
-        FieldDiff(f"$.{SECRET}", State.DRIFT, "exact", f'"{SECRET}" → "x"'),
-        FieldDiff(f"$.headers.{SECRET}", State.SKIP, "ignore", "volatile"),
+        FieldDiff(
+            f"$.{SECRET}",
+            State.DRIFT,
+            "exact",
+            "",
+            baseline=SECRET,
+            candidate="x",
+            rule=f"$.{SECRET}",
+        ),
+        FieldDiff(
+            f"$.headers.{SECRET}", State.SKIP, "ignore", "volatile", rule=f"$.headers.{SECRET}"
+        ),
     ]
     return CellDiff(
         request,
@@ -772,59 +814,26 @@ def _tainted_cell() -> CellDiff:
         None,
         base,
         cand,
-        status=200,
-        latency_ms=42,
-        size_bytes=128,
-        response_headers=((SECRET, SECRET), ("content-type", "application/json")),
+        baseline=execution(base),
+        candidate=execution(cand),
     )
 
 
-def test_saved_cell_body_and_metrics_mask_a_secret_on_disk() -> None:
-    # The saved-replay CellRecord persists the before/after bodies, response headers
-    # and field paths to .reports/*.json — a secret the server echoes into ANY of
-    # those must be masked before it reaches disk.
-    import json
+def test_saved_cell_masks_a_secret_across_the_whole_record_on_disk() -> None:
+    # The saved record persists both sides' request+response, the field paths and
+    # values, and the matrix case key to .reports/*.json — a secret the server
+    # echoes into ANY of those must be masked before it reaches disk.
     import tempfile
 
-    from comparo.core.archive import record_from_diff
     from comparo.core.archive import save_record
 
     redact = Redactor(values=(SECRET,)).text
-    record = record_from_diff(
-        "A", "B", [_tainted_cell()], run_id="cellsec", created="now", redact=redact
-    )
-    assert record.cells
-    cell = record.cells[0]
-    assert SECRET not in json.dumps(cell.baseline_body)
-    assert SECRET not in json.dumps(cell.candidate_body)
-    assert not any(SECRET in key or SECRET in value for key, value in cell.response_headers.items())
-    assert not any(SECRET in path for path in cell.drift_paths)
-    assert not any(SECRET in path for path in cell.skip_paths)
-    assert SECRET not in cell.variant
-
-    # The strongest check: the whole record as written to disk carries no secret.
+    record = _diff_record([_tainted_cell()], redact)
     with tempfile.TemporaryDirectory() as directory:
         path = save_record(Path(directory), record)
         text = path.read_text(encoding="utf-8")
     assert SECRET not in text
     assert "cG9zdG1hbj" not in text  # not even the secret's prefix
-
-
-def test_execution_record_cells_mask_a_secret_on_disk() -> None:
-    # The execution save path (`s` on the Execution results) persists per-cell bodies
-    # too — the same secret masking must hold through record_from_execution.
-    import json
-
-    redact = Redactor(values=(SECRET,)).text
-    outcome = CellOutcome("request.basic-auth", f"token={SECRET}", [], [], _tainted_cell())
-    result = ExecutionResult("exec.x", "Stable", "Canary", True, True, [outcome])
-    record = record_from_execution(result, run_id="execsec", created="now", name="X", redact=redact)
-    assert record.cells
-    cell = record.cells[0]
-    assert SECRET not in json.dumps(cell.baseline_body)
-    assert SECRET not in json.dumps(cell.candidate_body)
-    assert not any(SECRET in path for path in cell.drift_paths + cell.skip_paths)
-    assert not any(SECRET in key or SECRET in value for key, value in cell.response_headers.items())
 
 
 # ── encoding-robust redaction, overlapping secrets, server-issued credentials ──

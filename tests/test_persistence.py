@@ -7,58 +7,67 @@ is a security property: losing it would leak the tail of any secret that
 contains a shorter declared secret.
 """
 
-import dataclasses
 import json
 from pathlib import Path
 
-from comparo.core.archive import ARCHIVE_VERSION
-from comparo.core.archive import AssertionLine
-from comparo.core.archive import AssertionSummary
-from comparo.core.archive import CellRecord
-from comparo.core.archive import ReportRecord
-from comparo.core.archive import RequestBreakdown
 from comparo.core.archive import list_records
 from comparo.core.archive import load_record
 from comparo.core.archive import prune
 from comparo.core.archive import save_record
 from comparo.core.redaction import MASK
 from comparo.core.redaction import Redactor
+from comparo.core.report_record import Cell
+from comparo.core.report_record import Comparison
+from comparo.core.report_record import DiffTally
+from comparo.core.report_record import Environments
+from comparo.core.report_record import EnvRef
+from comparo.core.report_record import FieldDiffRecord
+from comparo.core.report_record import Invocation
+from comparo.core.report_record import OutboundRequest
+from comparo.core.report_record import RecordMeta
+from comparo.core.report_record import ReportRecord
+from comparo.core.report_record import ResponseRecord
+from comparo.core.report_record import Side
+from comparo.core.report_record import Sides
+from comparo.core.report_record import Summary
 
 
-def _record(run_id: str, created: str) -> ReportRecord:
-    return ReportRecord(
-        id=run_id,
-        created=created,
-        execution="execution.gate",
-        baseline="Stable",
-        candidate="Canary",
-        gate="FAIL",
-        calls=2,
-        same=1,
-        drift=1,
-        error=0,
-        skipped=3,
-        baseline_assertions=AssertionSummary(
-            2, 1, 0, [AssertionLine("status == 200", "fail", "x")]
+def _record(record_id: str, created: str) -> ReportRecord:
+    baseline = Side(
+        request=OutboundRequest(method="GET", url="/users"),
+        response=ResponseRecord(status=200, body={"total": 1}),
+    )
+    candidate = Side(
+        request=OutboundRequest(method="GET", url="/users"),
+        response=ResponseRecord(status=200, body={"total": 2}),
+    )
+    cell = Cell(
+        request_id="users",
+        name="Users",
+        variant="locale=fr-FR",
+        verdict="drift",
+        sides=Sides(baseline, candidate),
+        comparison=Comparison(
+            verdict="drift",
+            same=1,
+            drift=1,
+            skipped=1,
+            fields=[
+                FieldDiffRecord("$.total", "drift", "exact", baseline=1, candidate=2),
+                FieldDiffRecord("$.ts", "skip", "ignore"),
+            ],
         ),
-        candidate_assertions=AssertionSummary(3, 0, 0, []),
-        requests=[RequestBreakdown("users", 4, 1, 3, "drift", ["$.total"])],
-        cells=[
-            CellRecord(
-                request="users",
-                variant="locale=fr-FR",
-                method="GET",
-                path="/users",
-                drift_paths=["$.total"],
-                skip_paths=["$.ts"],
-                baseline_body={"total": 1},
-                candidate_body={"total": 2},
-                status=200,
-                latency_ms=12,
-                size_bytes=64,
-                response_headers={"content-type": "application/json"},
-            )
-        ],
+    )
+    return ReportRecord(
+        kind="diff",
+        metadata=RecordMeta(id=record_id, created=created, tool="comparo 0"),
+        invocation=Invocation(
+            command="comparo diff",
+            environments=Environments(EnvRef("Stable", "http://s"), EnvRef("Canary", "http://c")),
+            concurrency=2,
+        ),
+        summary=Summary(gate="FAIL", calls=2, cells=1, diff=DiffTally(same=1, drift=1, skipped=1)),
+        cells=[cell],
     )
 
 
@@ -67,23 +76,22 @@ def test_a_full_record_survives_a_save_load_round_trip(tmp_path: Path) -> None:
     # survive the trip, or the Report tab silently shows less than the run saw.
     record = _record("r1", "2026-07-18T10:00:00Z")
     save_record(tmp_path, record)
-    loaded = load_record(tmp_path / "r1.json")
-    assert dataclasses.asdict(loaded) == dataclasses.asdict(record)
+    assert load_record(tmp_path / "r1.json") == record
 
 
 def test_list_records_skips_corrupt_files_instead_of_raising(tmp_path: Path) -> None:
     save_record(tmp_path, _record("good", "2026-07-18T10:00:00Z"))
-    (tmp_path / "truncated.json").write_text('{"id": "t", "created": "20', encoding="utf-8")
+    (tmp_path / "truncated.json").write_text('{"kind": "diff", "metad', encoding="utf-8")
     (tmp_path / "empty.json").write_text("", encoding="utf-8")
     (tmp_path / "wrong-shape.json").write_text('["not", "a", "record"]', encoding="utf-8")
     records = list_records(tmp_path)
-    assert [record.id for record in records] == ["good"]
+    assert [record.metadata.id for record in records] == ["good"]
 
 
 def test_list_records_orders_newest_first(tmp_path: Path) -> None:
     save_record(tmp_path, _record("older", "2026-07-17T09:00:00Z"))
     save_record(tmp_path, _record("newer", "2026-07-18T09:00:00Z"))
-    assert [record.id for record in list_records(tmp_path)] == ["newer", "older"]
+    assert [record.metadata.id for record in list_records(tmp_path)] == ["newer", "older"]
 
 
 def test_a_record_from_a_future_schema_still_loads(tmp_path: Path) -> None:
@@ -92,48 +100,44 @@ def test_a_record_from_a_future_schema_still_loads(tmp_path: Path) -> None:
     # the Report tab.
     save_record(tmp_path, _record("r1", "2026-07-18T10:00:00Z"))
     raw = json.loads((tmp_path / "r1.json").read_text(encoding="utf-8"))
-    raw["some_future_field"] = {"nested": True}
-    raw["cells"][0]["another_future_field"] = 7
+    raw["someFutureField"] = {"nested": True}
+    raw["cells"][0]["anotherFutureField"] = 7
     (tmp_path / "r1.json").write_text(json.dumps(raw), encoding="utf-8")
     loaded = load_record(tmp_path / "r1.json")
-    assert loaded.id == "r1"
-    assert loaded.cells[0].request == "users"
+    assert loaded.metadata.id == "r1"
+    assert loaded.cells[0].request_id == "users"
 
 
-def test_a_saved_record_stamps_and_round_trips_its_version(tmp_path: Path) -> None:
-    # The archive stamps a schema version so a future format change is
-    # detectable; a freshly written record carries the current ARCHIVE_VERSION
-    # on disk and reads it back unchanged.
+def test_a_saved_record_stamps_its_schema_version(tmp_path: Path) -> None:
+    # The archive stamps the format version so a future change is detectable; a
+    # freshly written record carries schemaVersion 1 on disk.
     record = _record("r1", "2026-07-18T10:00:00Z")
-    assert record.version == ARCHIVE_VERSION
+    assert record.schema_version == 1
     save_record(tmp_path, record)
     raw = json.loads((tmp_path / "r1.json").read_text(encoding="utf-8"))
-    assert raw["version"] == ARCHIVE_VERSION
-    assert load_record(tmp_path / "r1.json").version == ARCHIVE_VERSION
+    assert raw["schemaVersion"] == 1
+    assert load_record(tmp_path / "r1.json").schema_version == 1
 
 
-def test_a_legacy_record_without_a_version_loads_as_version_zero(tmp_path: Path) -> None:
-    # Backward tolerance: a file written before the version field existed lacks
-    # the key and must load as version 0, with every other field still intact.
+def test_a_record_without_a_schema_version_loads_with_the_default(tmp_path: Path) -> None:
+    # Backward tolerance: a file missing the version key loads with the default,
+    # every other field still intact — an old or hand-edited file never bricks the tab.
     save_record(tmp_path, _record("r1", "2026-07-18T10:00:00Z"))
     raw = json.loads((tmp_path / "r1.json").read_text(encoding="utf-8"))
-    del raw["version"]
+    del raw["schemaVersion"]
     (tmp_path / "r1.json").write_text(json.dumps(raw), encoding="utf-8")
     loaded = load_record(tmp_path / "r1.json")
-    assert loaded.version == 0
-    assert loaded.id == "r1"
-    assert loaded.cells[0].request == "users"
+    assert loaded.schema_version == 1
+    assert loaded.cells[0].request_id == "users"
 
 
 def test_prune_keeps_only_the_newest_records(tmp_path: Path) -> None:
     # Retention: .reports/ is bounded by pruning to the newest `keep` records by
     # created timestamp; older files are unlinked, newer ones stay.
-    save_record(tmp_path, _record("r1", "2026-07-15T09:00:00Z"))
-    save_record(tmp_path, _record("r2", "2026-07-16T09:00:00Z"))
-    save_record(tmp_path, _record("r3", "2026-07-17T09:00:00Z"))
-    save_record(tmp_path, _record("r4", "2026-07-18T09:00:00Z"))
+    for stamp, day in (("r1", 15), ("r2", 16), ("r3", 17), ("r4", 18)):
+        save_record(tmp_path, _record(stamp, f"2026-07-{day}T09:00:00Z"))
     prune(tmp_path, keep=2)
-    assert {record.id for record in list_records(tmp_path)} == {"r3", "r4"}
+    assert {record.metadata.id for record in list_records(tmp_path)} == {"r3", "r4"}
     assert not (tmp_path / "r1.json").exists()
     assert not (tmp_path / "r2.json").exists()
 
@@ -144,7 +148,7 @@ def test_save_record_prunes_when_keep_is_passed(tmp_path: Path) -> None:
     save_record(tmp_path, _record("r1", "2026-07-15T09:00:00Z"))
     save_record(tmp_path, _record("r2", "2026-07-16T09:00:00Z"))
     save_record(tmp_path, _record("r3", "2026-07-17T09:00:00Z"), keep=2)
-    assert {record.id for record in list_records(tmp_path)} == {"r2", "r3"}
+    assert {record.metadata.id for record in list_records(tmp_path)} == {"r2", "r3"}
     assert not (tmp_path / "r1.json").exists()
 
 

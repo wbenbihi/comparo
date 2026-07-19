@@ -34,10 +34,6 @@ from textual.widgets.tree import TreeNode
 from comparo import __version__
 from comparo.adapters import updates as updates_adapter
 from comparo.adapters.userconfig import UserConfig
-from comparo.core.archive import AssertionSummary
-from comparo.core.archive import CellRecord
-from comparo.core.archive import ReportRecord
-from comparo.core.archive import RequestBreakdown
 from comparo.core.assertions import AssertionResult
 from comparo.core.checks import Check
 from comparo.core.compare import CellDiff
@@ -70,11 +66,16 @@ from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
 from comparo.core.redaction import mask_credential_header
 from comparo.core.refs import ref_id as _ref_id
+from comparo.core.report_record import FieldDiffRecord
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import select_environment
 from comparo.core.streams import parse_sse
+from comparo.tui.replay import AssertionSummary
+from comparo.tui.replay import ReplayCell as CellRecord
+from comparo.tui.replay import ReplayRecord as ReportRecord
+from comparo.tui.replay import RequestBreakdown
 from comparo.tui.tokens import _ACCENT
 from comparo.tui.tokens import _ADD_BG
 from comparo.tui.tokens import _ASSERT_GLYPH
@@ -2732,6 +2733,19 @@ def _replay_diff_cell(record: ReportRecord) -> "CellRecord | None":
     return None
 
 
+def _field_from_record(field: FieldDiffRecord) -> FieldDiff:
+    """Reconstruct a live FieldDiff from a saved record's field — real state and mode."""
+    state = State.DRIFT if field.state == "drift" else State.SKIP
+    return FieldDiff(
+        field.path,
+        state,
+        field.mode,
+        baseline=field.baseline,
+        candidate=field.candidate,
+        rule=field.rule,
+    )
+
+
 def _replay_compare_well(
     record: ReportRecord, unified: bool, redact: Callable[[str], str] = str
 ) -> Group:
@@ -2758,10 +2772,10 @@ def _replay_compare_well(
         cmd.append("/", style=f"bold {_ACCENT}")
         cmd.append(f"{slug}.json ", style=_DIM)
     title.add_row(cmd)
-    # Rebuild the profile decision (drift / skip) per path from the saved paths.
-    states: dict[str, FieldDiff] = {p: FieldDiff(p, State.DRIFT, "exact") for p in cell.drift_paths}
-    for path in cell.skip_paths:
-        states.setdefault(path, FieldDiff(path, State.SKIP, "ignore"))
+    # The saved record carries the REAL per-field decision (state + the profile mode
+    # that governed it), so the replay renders the true modes — never a fabricated
+    # ``exact`` (M-6). Reconstruct a FieldDiff per path from the saved FieldDiffRecord.
+    states = {field.path: _field_from_record(field) for field in cell.fields}
     lines = _body_diff_lines(cell.baseline_body, cell.candidate_body, states, redact=redact)
     body = (
         _diff_unified(lines) if unified else _diff_side_by_side(lines, None, (baseline, candidate))

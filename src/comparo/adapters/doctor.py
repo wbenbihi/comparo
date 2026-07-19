@@ -26,7 +26,6 @@ from comparo.adapters.reporters import JsonReporter
 from comparo.adapters.reporters import JUnitReporter
 from comparo.adapters.reporters import MarkdownReporter
 from comparo.adapters.reporters import SarifReporter
-from comparo.core.archive import record_from_diff
 from comparo.core.archive import save_record
 from comparo.core.assertions import AssertionResult
 from comparo.core.checks import Check
@@ -176,42 +175,6 @@ def _canary_request(project: LoadedProject) -> Request:
     return request
 
 
-def _tainted_cell(request: Request) -> CellDiff:
-    """A cell whose response echoes every canary where a sink might persist it.
-
-    Each canary appears as a body value AND a JSON key, as a drift and a skip
-    field path, in a response-header name and value, and in the matrix case key —
-    every place a server could reflect one back into what a report or archive
-    writes. The drift detail is built the way the real engine builds it (a
-    ``json.dumps``-ed value), so the JSON-escaped-secret leak path is exercised.
-    """
-    base = {CANARY: CANARY, "special": CANARY_SPECIAL, "overlap": CANARY_OVERLAP_LONG}
-    cand = {CANARY: "other", "special": "other", "overlap": "other"}
-    fields = [
-        # detail rendered as the diff engine renders it — json.dumps BEFORE redaction
-        FieldDiff(f"$.{CANARY}", State.DRIFT, "exact", f"{json.dumps(CANARY)} → {json.dumps('x')}"),
-        FieldDiff("$.special", State.DRIFT, "exact", f'{json.dumps(CANARY_SPECIAL)} → "x"'),
-        FieldDiff("$.overlap", State.DRIFT, "exact", f'{json.dumps(CANARY_OVERLAP_LONG)} → "x"'),
-        FieldDiff(f"$.headers.{CANARY}", State.SKIP, "ignore", "volatile"),
-    ]
-    return CellDiff(
-        request,
-        f"token={CANARY}",
-        fields,
-        None,
-        base,
-        cand,
-        status=200,
-        latency_ms=42,
-        size_bytes=128,
-        response_headers=(
-            (CANARY, CANARY),
-            ("set-cookie", CANARY_COOKIE),
-            ("content-type", "application/json"),
-        ),
-    )
-
-
 def _display(scenario: _Scenario) -> str:
     """The TUI display sink masks a declared secret before it is drawn on screen."""
     return scenario.redact(f"authorization: Basic {CANARY} (as rendered on screen)")
@@ -251,17 +214,15 @@ def _saved_runs(scenario: _Scenario) -> str:
 
 
 def _saved_reports(scenario: _Scenario) -> str:
-    """The saved-report archive masks a secret before writing .reports/<id>.json."""
-    record = record_from_diff(
-        f"Stable {CANARY}",
-        f"Canary {CANARY}",
-        [_tainted_cell(scenario.request)],
-        run_id="doctor",
-        created="1970-01-01T00:00:00Z",
-        redact=scenario.redact,
-    )
-    path = save_record(scenario.directory / "reports", record)
-    return path.read_text(encoding="utf-8")
+    """The saved-report archive masks every secret before writing .reports/<id>.json.
+
+    Builds the full v1 record — outbound request, response body + events, the
+    structured field diff, per-side assertions — saves it through the real archive
+    writer, and returns the file plus a run record for the assertion channel.
+    """
+    path = save_record(scenario.directory / "reports", _tainted_diff_record(scenario))
+    run_json = msgspec.json.encode(_tainted_run_record(scenario)).decode()
+    return path.read_text(encoding="utf-8") + "\n" + run_json
 
 
 def _tainted_resolved() -> ResolvedRequest:
@@ -412,15 +373,10 @@ def _tainted_diff_record(scenario: _Scenario) -> ReportRecord:
     )
 
 
-def _saved_reports_v1(scenario: _Scenario) -> str:
-    """The v1 report record masks every secret across the whole request+response surface.
-
-    Serializes a two-sided ``diff`` record (outbound request, response body,
-    streamed events, and the structured field diff) and a ``run`` record (per-side
-    assertions) — the never-leak gate for the new format.
-    """
+def _tainted_run_record(scenario: _Scenario) -> ReportRecord:
+    """A one-sided ``run`` record echoing the canary through the assertion channel."""
     baseline = _tainted_execution(scenario, events=False)
-    run_record = _v1_from_run(
+    return _v1_from_run(
         scenario.environment,
         [(baseline, _tainted_assertions())],
         record_id="doctor",
@@ -431,8 +387,6 @@ def _saved_reports_v1(scenario: _Scenario) -> str:
         redact=scenario.redact,
         selection=Selection(tags=[f"tag-{CANARY}"], requests=[f"req-{CANARY}"]),
     )
-    diff_json = msgspec.json.encode(_tainted_diff_record(scenario)).decode()
-    return diff_json + "\n" + msgspec.json.encode(run_record).decode()
 
 
 def _report(scenario: _Scenario) -> ReportRecord:
@@ -485,7 +439,6 @@ _SINKS: tuple[tuple[str, str, Callable[[_Scenario], str]], ...] = (
     ("TUI display", "masked on render", _display),
     ("saved runs", ".runs/*.json", _saved_runs),
     ("saved reports", ".reports/*.json", _saved_reports),
-    ("saved reports v1", "report record", _saved_reports_v1),
     ("JUnit reporter", "reports/junit.xml", _junit),
     ("SARIF reporter", "reports/comparo.sarif", _sarif),
     ("JSON reporter", "reports/comparo.json", _json_report),
