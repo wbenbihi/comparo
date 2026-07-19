@@ -70,6 +70,10 @@ class ReplayCell:
     candidate_status: int | None
     candidate_latency_ms: int | None
     candidate_size_bytes: int | None
+    #: The streamed event sequences per side, so the replay can render a streamed
+    #: response as a numbered event list; ``None`` for a non-streamed response.
+    baseline_events: list[object] | None
+    candidate_events: list[object] | None
     #: The real per-field diffs (state/mode/baseline/candidate) so the body well
     #: renders the true profile decision instead of fabricating ``exact``.
     fields: list[FieldDiffRecord]
@@ -148,6 +152,8 @@ def _replay_cell(cell: Cell) -> ReplayCell:
         candidate_status=candidate.status if candidate is not None else None,
         candidate_latency_ms=round(candidate.latency_ms) if candidate is not None else None,
         candidate_size_bytes=candidate.size_bytes if candidate is not None else None,
+        baseline_events=response.events if response is not None else None,
+        candidate_events=candidate.events if candidate is not None else None,
         fields=list(fields),
     )
 

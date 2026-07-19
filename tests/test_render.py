@@ -127,6 +127,8 @@ def _cell() -> ReplayCell:
         candidate_status=500,
         candidate_latency_ms=88,
         candidate_size_bytes=70,
+        baseline_events=None,
+        candidate_events=None,
         fields=[
             FieldDiffRecord("$.total", "drift", "exact", baseline=10, candidate=12),
             FieldDiffRecord("$.ts", "skip", "ignore", rule="$.ts"),
@@ -168,6 +170,8 @@ def test_call_ledger_is_none_without_a_candidate_side() -> None:
         candidate_status=None,
         candidate_latency_ms=None,
         candidate_size_bytes=None,
+        baseline_events=None,
+        candidate_events=None,
         fields=[],
     )
     assert _call_ledger(run_cell) is None
@@ -195,3 +199,26 @@ def test_gate_composition_shows_each_factor_and_the_rollup() -> None:
     assert "diff" in rendered
     assert "∧ gate" in rendered
     assert "FAIL" in rendered  # the failed baseline assertion blocks the gate
+
+
+def test_event_sequence_marks_each_streamed_event() -> None:
+    from comparo.tui.render import _event_sequence
+
+    baseline: list[object] = [{"seq": 1}, {"seq": 2}, {"seq": 3}]
+    candidate: list[object] = [{"seq": 1}, {"seq": 99}]  # event 2 differs, event 3 missing
+    rendered = _plain(_event_sequence(baseline, candidate, str))
+    assert "✓" in rendered  # event 1 matches
+    assert "✗" in rendered  # event 2 differs / event 3 missing
+    assert "—" in rendered  # candidate is shorter → em dash on the missing row
+
+
+def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
+    import dataclasses
+
+    cell = dataclasses.replace(
+        _cell(),
+        baseline_events=[{"seq": 1}, {"seq": 2}],
+        candidate_events=[{"seq": 1}, {"seq": 9}],
+    )
+    rendered = _plain(_replay_compare_well(_replay_record(cell), unified=True, redact=str))
+    assert "event sequence" in rendered

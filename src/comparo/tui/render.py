@@ -2821,6 +2821,38 @@ def _call_ledger(cell: CellRecord) -> Table | None:
     return table
 
 
+def _event_sequence(
+    baseline: list[object], candidate: list[object], redact: Callable[[str], str]
+) -> Table:
+    """A streamed response as a numbered event sequence — per event, ✓ same or ✗ drifted.
+
+    Each row aligns event *n* of the two sides so the eye lands on exactly which
+    event in the sequence diverged (a length change shows as a ``—`` on the short side).
+    """
+    table = _table()
+    table.add_column("#", style=_DIM, justify="right", no_wrap=True)
+    table.add_column("", width=2, no_wrap=True)
+    table.add_column("baseline", ratio=1)
+    table.add_column("candidate", ratio=1)
+
+    def one(event: object | None) -> str:
+        if event is None:
+            return "—"
+        return redact(json.dumps(event, ensure_ascii=False, default=str))
+
+    for index in range(max(len(baseline), len(candidate))):
+        left = baseline[index] if index < len(baseline) else None
+        right = candidate[index] if index < len(candidate) else None
+        same = left == right and left is not None
+        table.add_row(
+            str(index + 1),
+            Text("✓" if same else "✗", style=_SAME if same else _DRIFT),
+            Text(one(left), style=_DIM if same else _DRIFT, no_wrap=False),
+            Text(one(right), style=_DIM if same else _SAME, no_wrap=False),
+        )
+    return table
+
+
 def _field_from_record(field: FieldDiffRecord) -> FieldDiff:
     """Reconstruct a live FieldDiff from a saved record's field — real state and mode."""
     state = State.DRIFT if field.state == "drift" else State.SKIP
@@ -2888,6 +2920,11 @@ def _replay_compare_well(
     note = Text(f"\nreplayed from reports/{record.id}.json", style=_AXIS)
     ledger = _call_ledger(cell)
     parts: list[RenderableType] = [title, Text(), well]
+    if cell.baseline_events is not None or cell.candidate_events is not None:
+        parts += [
+            Text("\nevent sequence", style=f"bold {_DIM}"),
+            _event_sequence(cell.baseline_events or [], cell.candidate_events or [], redact),
+        ]
     if ledger is not None:
         parts += [Text("\ncall ledger", style=f"bold {_DIM}"), ledger]
     parts += [legend, note]
