@@ -970,3 +970,16 @@ def test_redactor_masks_percent_encoded_and_traversal_is_a_load_error(tmp_path: 
     with pytest.raises(LoadError) as caught:
         load_project(tmp_path / "comparo.yaml")
     assert any("escapes the project root" in d.message for d in caught.value.diagnostics)
+
+
+def test_redact_tree_caps_recursion_on_a_pathologically_deep_body() -> None:
+    # M-5: a hostile server can send a deeply nested body; redaction must not
+    # overflow the stack, and a secret buried past the cap is still masked.
+    from comparo.core.redaction import redact_tree
+
+    redact = Redactor(values=("s3cr3t",)).text
+    deep: object = "s3cr3t"
+    for _ in range(1000):
+        deep = {"n": deep}
+    result = redact_tree(deep, redact)  # must not RecursionError
+    assert "s3cr3t" not in json.dumps(result)
