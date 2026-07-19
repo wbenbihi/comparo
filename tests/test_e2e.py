@@ -355,7 +355,7 @@ def test_one_dead_cell_never_aborts_the_rest_of_the_run(
 def test_validate_renders_file_and_line_diagnostics_for_a_broken_project() -> None:
     broken = Path(__file__).parent.parent / "examples" / "broken-project"
     result = runner.invoke(app, ["validate", "--config", str(broken)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2  # usage/config error, distinct from a gate failure
     assert "6 problem(s)" in result.output
     assert "matrices/locales.yaml:13" in result.output  # file:line, not just prose
     assert "did you mean 'schema.order'?" in result.output  # near-miss suggestion
