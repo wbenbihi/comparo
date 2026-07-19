@@ -30,6 +30,7 @@ from comparo.core.execute import execute_all
 from comparo.core.execute import run_settings
 from comparo.core.execution import ExecutionResult
 from comparo.core.execution import run_execution
+from comparo.core.interpolation import InterpolationError
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
@@ -46,6 +47,7 @@ from comparo.core.resolve import Resolver
 from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
 from comparo.core.schema import SCHEMA_ID
+from comparo.core.secrets import SecretError
 
 app = typer.Typer(
     name="comparo",
@@ -298,11 +300,14 @@ def render(
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from error
-    _print_resolved(
-        Resolver(loaded, environment).resolve_request(obj),
-        environment.metadata.name,
-        Redactor.for_project(loaded).text,
-    )
+    try:
+        resolved = Resolver(loaded, environment).resolve_request(obj)
+    except (InterpolationError, SecretError) as error:
+        # A required ${VAR} unset (or a bad cast / unresolvable secret) is a config
+        # error, not a crash — surface it cleanly instead of a traceback (M-3).
+        typer.secho(f"could not resolve '{request_id}': {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from error
+    _print_resolved(resolved, environment.metadata.name, Redactor.for_project(loaded).text)
 
 
 @app.command(name="run")

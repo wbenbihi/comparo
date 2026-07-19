@@ -241,3 +241,29 @@ def test_run_fails_closed_when_the_plan_expands_to_zero_cells(tmp_path: Path) ->
     result = runner.invoke(app, ["run", "--config", config, "--env", "local"])
     assert result.exit_code == 1
     assert "zero cells" in result.output
+
+
+def test_render_reports_an_unresolved_variable_cleanly(tmp_path: Path) -> None:
+    # M-3: `comparo render` used to crash with a traceback when a required ${VAR}
+    # was unset; it must surface a clean error and exit non-zero instead.
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\n"
+        "metadata: {name: P, id: project.p}\nspec: {data: .}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: Local, id: environment.local}\nspec: {baseUrl: 'http://h'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
+        "spec: {request: {method: GET, endpoint: '/x/${MISSING_VAR}'}}\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app, ["render", "request.r", "--config", str(tmp_path / "comparo.yaml"), "--env", "local"]
+    )
+    assert result.exit_code == 1
+    assert "could not resolve" in result.output
+    assert "MISSING_VAR" in result.output
