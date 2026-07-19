@@ -129,6 +129,12 @@ def _resolve_sources(source: Path) -> tuple[Path, Path, list[Path]]:
         return source, source, sorted(source.rglob("*.yaml"))
     root = source.parent
     data_dir = (root / (_manifest_data(source) or ".")).resolve()
+    # Confine spec.data to the project root: a ``../..`` or absolute path would make
+    # comparo scan and parse YAML from anywhere on disk (S-2). Refuse it up front,
+    # before globbing, so nothing outside the project is ever read.
+    if not data_dir.is_relative_to(root.resolve()):
+        message = f"spec.data escapes the project root: {_manifest_data(source)!r}"
+        raise LoadError([Diagnostic(source, message)], root)
     files = sorted(data_dir.rglob("*.yaml")) if data_dir.is_dir() else []
     if source.resolve() not in {file.resolve() for file in files}:
         files = [source, *files]
