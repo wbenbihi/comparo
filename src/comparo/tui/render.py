@@ -2344,8 +2344,56 @@ def _exec_diff_legend(result: ExecutionResult, redact: Callable[[str], str] = st
     return text
 
 
+def _gate_composition(result: ExecutionResult) -> Table:
+    """The gate as an explicit AND: baseline ∧ candidate assertions ∧ diff → gate.
+
+    One aligned table so it reads at a glance which factor blocks the run — a run
+    can fail on an assertion with no drift at all, which a single gate glyph hides.
+    """
+
+    def side_tally(getter: Callable[[CellOutcome], list[AssertionResult]]) -> tuple[int, int, int]:
+        passed = failed = warned = 0
+        for outcome in result.outcomes:
+            p, f, w = _assert_tally(getter(outcome))
+            passed, failed, warned = passed + p, failed + f, warned + w
+        return passed, failed, warned
+
+    table = _table()
+    table.add_column("", width=2, no_wrap=True)
+    table.add_column("FACTOR", style=_LABEL, no_wrap=True)
+    table.add_column("", justify="right")
+
+    def factor(label: str, ok: bool, detail: Text) -> None:
+        table.add_row(
+            Text("✓" if ok else "✗", style=_SAME if ok else _DRIFT),
+            Text(label, style=_TEXT),
+            detail,
+        )
+
+    for label, (passed, failed, warned) in (
+        ("baseline assertions", side_tally(lambda o: o.baseline_assertions)),
+        ("candidate assertions", side_tally(lambda o: o.candidate_assertions)),
+    ):
+        note = Text(f"{passed} ✓ · {failed} ✗", style=_DIM)
+        if warned:
+            note.append(f" · {warned} !", style=_WARN)
+        factor(label, failed == 0, note)
+    factor(
+        "diff",
+        result.drift == 0 and result.errors == 0,
+        Text(f"{result.drift} drift · {result.errors} error", style=_DIM),
+    )
+    passed = result.passed
+    table.add_row(
+        Text("✓" if passed else "✗", style=f"bold {_SAME if passed else _DANGER}"),
+        Text("∧ gate", style=f"bold {_TEXT_HI}"),
+        Text("PASS" if passed else "FAIL", style=f"bold {_SAME if passed else _DANGER}"),
+    )
+    return table
+
+
 def _exec_gate_body(result: ExecutionResult) -> Group:
-    parts: list[RenderableType] = []
+    parts: list[RenderableType] = [_gate_composition(result), Text()]
     if result.passed:
         parts.append(Text("✓ gate: PASS", style=f"bold {_SAME}"))
     else:

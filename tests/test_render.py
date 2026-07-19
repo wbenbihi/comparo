@@ -179,3 +179,19 @@ def test_replay_compare_well_renders_the_real_field_decisions() -> None:
     # must surface the drifted path.
     rendered = _plain(_replay_compare_well(_replay_record(_cell()), unified=True, redact=str))
     assert "$.total" in rendered
+
+
+def test_gate_composition_shows_each_factor_and_the_rollup() -> None:
+    from comparo.core.execution import CellOutcome
+    from comparo.core.execution import ExecutionResult
+    from comparo.tui.render import _gate_composition
+
+    failed = AssertionResult("status", "equals", False, "error", "500 != 200", "status")
+    outcome = CellOutcome("request.r", "", [failed], [], diff=None)
+    result = ExecutionResult("exec.r", "Base", "Cand", True, True, [outcome])
+    rendered = _plain(_gate_composition(result))
+    assert "baseline assertions" in rendered
+    assert "candidate assertions" in rendered
+    assert "diff" in rendered
+    assert "∧ gate" in rendered
+    assert "FAIL" in rendered  # the failed baseline assertion blocks the gate
