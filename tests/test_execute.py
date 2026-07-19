@@ -317,3 +317,23 @@ def test_unset_optional_header_and_query_are_omitted_not_sent_as_none() -> None:
     cookie = headers.get("cookie", "")
     assert "gone" not in cookie
     assert "stay=yes" in cookie
+
+
+def test_a_malformed_url_is_captured_as_an_error_not_a_run_abort() -> None:
+    # M-4: httpx.build_request raises httpx.InvalidURL on a malformed resolved URL.
+    # That must be captured as this cell's HttpError (so one bad URL fails one cell),
+    # not raised out to abort the whole gather.
+    from comparo.core.http import HttpError
+
+    async def go() -> None:
+        client = HttpxClient(
+            httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+        )
+        try:
+            bad = ResolvedRequest("GET", "http://host:notaport/y", [], {}, None, [])
+            with pytest.raises(HttpError):
+                await client.send(bad, TimeoutBudget())
+        finally:
+            await client.aclose()
+
+    asyncio.run(go())
