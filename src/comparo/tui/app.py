@@ -10,6 +10,7 @@ this module.
 import asyncio
 import contextlib
 import os
+from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
 from functools import cached_property
@@ -144,7 +145,7 @@ from comparo.tui.render import _leaf
 from comparo.tui.render import _matches
 from comparo.tui.render import _object_detail
 from comparo.tui.render import _ok_report
-from comparo.tui.render import _outbound_diff_view
+from comparo.tui.render import _outbound_header
 from comparo.tui.render import _p50
 from comparo.tui.render import _pair
 from comparo.tui.render import _project_detail
@@ -1440,7 +1441,7 @@ class DiffView(Vertical):
         Binding("c", "pick_candidate", "candidate"),
         Binding("r", "toggle_index", "fields/rules"),
         Binding("v", "toggle_view", "unified/side-by-side"),
-        Binding("o", "outbound", "outbound diff"),
+        Binding("o", "outbound", "outbound"),
         Binding("i", "silence", "ignore field"),
         Binding("s", "save", "save"),
         Binding("escape", "back", "back"),
@@ -2186,9 +2187,11 @@ class DiffView(Vertical):
             )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        """Show the comparison (or error) for the highlighted row."""
-        # Moving the cursor leaves the outbound-request overlay (DIFF-27).
-        self._outbound_shown = False
+        """Show the comparison (or error) for the highlighted row.
+
+        The OUTBOUND header's expand/collapse state persists across rows (DIFF-27);
+        it is a layer of the compare panel now, not a separate overlay mode.
+        """
         self._render_row(event.row_key.value)
 
     def _render_row(self, key: str | None) -> None:
@@ -2216,57 +2219,20 @@ class DiffView(Vertical):
             return None
         return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
 
-    def _current_cell_diff(self) -> CellDiff | None:
-        """Return the CellDiff for the highlighted row.
-
-        A per-cell row names its own cell; a grouped-field row falls back to the
-        first cell that drifts on that field.
-        """
-        key = self._current_row_key()
-        if key is None:
-            return None
-        if key in self._row_cells:  # cell:: / error:: rows carry their cell
-            return self._row_cells[key]
-        group = self._selected_group()
-        if group is not None and group[1]:
-            return group[1][0][0]
-        return None
-
     def action_outbound(self) -> None:
-        """Diff the OUTBOUND request itself across the pair (DIFF-27).
+        """Expand or collapse the persistent OUTBOUND header on the compare panel (DIFF-27).
 
         comparo replays the *same* request against both environments, so the
         outbound only differs where env config does — a different base URL, a
-        per-env auth token, an env-specific header. Showing it answers the first
-        triage question: is the drift the service's, or did we send two different
-        requests? Press ``o`` again to return to the field diff.
+        per-env auth token, an env-specific header. The header sits above the
+        body diff and answers the first triage question: is the drift the
+        service's, or did we send two different requests? ``o`` toggles it between
+        the one-line summary and the full request diff, staying on the field diff.
         """
         if not self._in_results() or self._pair is None:
             return
-        if self._outbound_shown:  # toggle back to whatever row is selected
-            self._outbound_shown = False
-            self._render_row(self._current_row_key())
-            return
-        cell = self._current_cell_diff()
-        if cell is None:
-            self.app.notify("Select a drifted field first", severity="information")
-            return
-        self._outbound_shown = True
-        matrix_cell = next(
-            (c for c in expand(self.project, cell.request) if c.key == cell.cell_key), None
-        )
-        baseline_env, candidate_env = self._pair
-        baseline = Resolver(self.project, baseline_env).resolve_request(cell.request, matrix_cell)
-        candidate = Resolver(self.project, candidate_env).resolve_request(cell.request, matrix_cell)
-        redact = _app_redact(self)
-        wrap = self.query_one("#col-compare")
-        wrap.border_title = Text.from_markup(
-            f"COMPARE [{_DIM}]· outbound request · {redact(cell.request.metadata.name)}[/]"
-        )
-        wrap.border_subtitle = "press o to return to the field diff"
-        self.query_one("#compare-content", Static).update(
-            _outbound_diff_view(baseline, candidate, baseline_env, candidate_env, redact=redact)
-        )
+        self._outbound_shown = not self._outbound_shown
+        self._render_row(self._current_row_key())
 
     def _selected_group(self) -> tuple[str, list[tuple[CellDiff, FieldDiff]]] | None:
         table = self.query_one("#drift-table", DataTable)
@@ -2300,8 +2266,34 @@ class DiffView(Vertical):
             f"COMPARE [{_DIM}]·[/] {redact(path)} [{_DIM}]· {request}{envs}[/]"
         )
         wrap.border_subtitle = _seg_toggle(("unified", "side-by-side"), mode)
-        self.query_one("#compare-content", Static).update(
-            _diff_body_view((path, entries), self._pair, unified=self._unified, redact=redact)
+        body = _diff_body_view((path, entries), self._pair, unified=self._unified, redact=redact)
+        header = self._outbound_layer(entries[0][0] if entries else None, redact)
+        content = Group(header, Text(), body) if header is not None else body
+        self.query_one("#compare-content", Static).update(content)
+
+    def _outbound_layer(
+        self, cell: CellDiff | None, redact: Callable[[str], str]
+    ) -> RenderableType | None:
+        """The persistent OUTBOUND header for *cell*, collapsed unless ``o`` expanded it.
+
+        Reuses the resolved requests already captured on the executed cell (no
+        re-resolve, so no live-secret exposure and no interpolation cost on cursor
+        moves); returns ``None`` when the pair or either resolved request is absent.
+        """
+        if cell is None or self._pair is None:
+            return None
+        baseline = cell.baseline.resolved if cell.baseline is not None else None
+        candidate = cell.candidate.resolved if cell.candidate is not None else None
+        if baseline is None or candidate is None:
+            return None
+        base_env, cand_env = self._pair
+        return _outbound_header(
+            baseline,
+            candidate,
+            base_env,
+            cand_env,
+            expanded=self._outbound_shown,
+            redact=redact,
         )
 
     def _show_error(self, cell: CellDiff) -> None:
