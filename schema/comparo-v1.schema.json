@@ -1437,6 +1437,17 @@
             }
           ],
           "default": null
+        },
+        "retention": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [],
