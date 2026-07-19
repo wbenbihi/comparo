@@ -287,3 +287,34 @@ def test_a_val_cycle_is_a_captured_error_not_a_recursion_crash(tmp_path: Path) -
     assert isinstance(request, Request)
     with pytest.raises(InterpolationError, match="cycle"):
         Resolver(loaded, env, Sink.EXECUTE).resolve_request(request)
+
+
+def test_literal_shields_a_ref_shaped_payload() -> None:
+    # $literal returns its payload verbatim — a nested $ref-shaped dict must be sent
+    # as data, not resolved as a reference (else a literal `{"$ref": ...}` body would
+    # be silently rewritten).
+    import msgspec
+
+    request = msgspec.convert(
+        {
+            "apiVersion": "comparo/v1",
+            "kind": "Request",
+            "metadata": {"name": "R", "id": "request.r"},
+            "spec": {
+                "request": {
+                    "method": "POST",
+                    "endpoint": "/x",
+                    "body": {
+                        "$literal": {"$ref": "diffprofile.nope", "keep": "${NOT_INTERPOLATED}"}
+                    },
+                }
+            },
+        },
+        type=Request,
+    )
+    loaded = load_project(SAMPLE)
+    env = select_environment(loaded, "local")
+    resolved = Resolver(loaded, env, Sink.EXECUTE).resolve_request(request)
+    # The whole payload is passed through untouched — the $ref is not resolved and
+    # the ${...} inside a literal is not interpolated.
+    assert resolved.body == {"$ref": "diffprofile.nope", "keep": "${NOT_INTERPOLATED}"}

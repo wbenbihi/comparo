@@ -279,3 +279,41 @@ def test_yml_extension_objects_are_loaded_too(tmp_path: Path) -> None:
     )
     loaded = load_project(tmp_path / "comparo.yaml")
     assert "environment.e" in loaded.objects
+
+
+def test_a_val_instance_cycle_is_rejected_at_load(tmp_path: Path) -> None:
+    # A $val cycle (A -> B -> A) would only blow up at run time; validate must
+    # catch it statically instead of reporting a false green.
+    _write(
+        tmp_path,
+        "a.yaml",
+        "apiVersion: comparo/v1\nkind: Instance\n"
+        "metadata: {name: A, id: instance.a}\nspec: {value: {$val: instance.b}}\n",
+    )
+    _write(
+        tmp_path,
+        "b.yaml",
+        "apiVersion: comparo/v1\nkind: Instance\n"
+        "metadata: {name: B, id: instance.b}\nspec: {value: {$val: instance.a}}\n",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_project(tmp_path)
+    assert any("$val cycle" in d.message for d in caught.value.diagnostics)
+
+
+def test_a_non_cyclic_val_chain_loads(tmp_path: Path) -> None:
+    # A -> B (no back edge) is fine; the cycle check must not flag a plain chain.
+    _write(
+        tmp_path,
+        "a.yaml",
+        "apiVersion: comparo/v1\nkind: Instance\n"
+        "metadata: {name: A, id: instance.a}\nspec: {value: {$val: instance.b}}\n",
+    )
+    _write(
+        tmp_path,
+        "b.yaml",
+        "apiVersion: comparo/v1\nkind: Instance\n"
+        "metadata: {name: B, id: instance.b}\nspec: {value: 42}\n",
+    )
+    loaded = load_project(tmp_path)
+    assert "instance.a" in loaded.objects

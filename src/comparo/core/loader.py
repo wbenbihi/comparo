@@ -105,6 +105,7 @@ def load_project(source: Path) -> LoadedProject:
     _check_references(entries, set(objects), diagnostics)
     loaded = LoadedProject(root=root, project=project, objects=objects, data_dir=data_dir)
     if not diagnostics:  # profile resolution needs a fully-indexed project
+        _check_val_cycles(entries, objects, diagnostics)
         _check_profiles(loaded, entries, diagnostics)
 
     if diagnostics:
@@ -222,6 +223,51 @@ def _index(
         else:
             objects[identifier] = obj
     return project, objects
+
+
+def _check_val_cycles(
+    entries: list[_Entry], objects: dict[str, Object], diagnostics: list[Diagnostic]
+) -> None:
+    """Reject an Instance ``$val`` reference cycle at load time.
+
+    The resolver already fails closed on a cycle at run time, but ``validate`` never
+    resolves — so without this static check a project with an ``A → B → A`` ``$val``
+    cycle would validate clean and only blow up on the first ``run``/``diff``.
+    """
+    from comparo.core.models import Instance
+
+    graph: dict[str, tuple[Path, list[str]]] = {}
+    for entry in entries:
+        if not isinstance(entry.obj, Instance) or entry.obj.metadata.id is None:
+            continue
+        targets = [
+            reference.target
+            for reference in _find_references(entry.raw)
+            if reference.sigil == "$val" and isinstance(objects.get(reference.target), Instance)
+        ]
+        graph[entry.obj.metadata.id] = (entry.file, targets)
+
+    visiting: set[str] = set()
+    done: set[str] = set()
+
+    def walk(node: str, stack: list[str]) -> bool:
+        visiting.add(node)
+        stack.append(node)
+        for target in graph.get(node, (None, []))[1]:
+            if target in visiting:  # a back edge closes a cycle
+                cycle = [*stack[stack.index(target) :], target]
+                diagnostics.append(Diagnostic(graph[node][0], f"$val cycle: {' → '.join(cycle)}"))
+                return True
+            if target not in done and target in graph and walk(target, stack):
+                return True
+        stack.pop()
+        visiting.discard(node)
+        done.add(node)
+        return False
+
+    for node in graph:
+        if node not in done and walk(node, []):
+            return  # one named cycle is enough to fail validation
 
 
 def _check_references(
