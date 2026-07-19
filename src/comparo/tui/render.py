@@ -2344,6 +2344,43 @@ def _exec_diff_legend(result: ExecutionResult, redact: Callable[[str], str] = st
     return text
 
 
+def _exec_triplet(outcome: CellOutcome, label: Text) -> tuple[Text, Text, Text, Text]:
+    """One execution cell as a triplet row: verdict glyph · label · B·C asserts · diff.
+
+    Shown for EVERY cell (not just the drifted ones), so the results table is a full
+    per-cell overview — a passing cell is as visible as a failing one.
+    """
+    if outcome.error is not None:
+        glyph = Text("!", style=_WARN)
+    elif outcome.ok:
+        glyph = Text("✓", style=_SAME)
+    else:
+        glyph = Text("✗", style=_DRIFT)
+
+    def side(results: list[AssertionResult]) -> Text:
+        passed, failed, _ = _assert_tally(results)
+        text = Text(f"{passed}✓", style=_SAME if not failed else _DIM)
+        if failed:
+            text.append(f" {failed}✗", style=_DRIFT)
+        return text
+
+    asserts = Text()
+    asserts.append_text(side(outcome.baseline_assertions))
+    asserts.append(" · ", style=_DIM)
+    asserts.append_text(side(outcome.candidate_assertions))
+
+    if outcome.error is not None:
+        diff = Text("error", style=_WARN)
+    elif outcome.diff is not None and outcome.diff.drifted:
+        count = len(outcome.diff.drifts)
+        diff = Text(f"{count} drift", style=_DRIFT)
+    elif outcome.diff is not None:
+        diff = Text("same", style=_SAME)
+    else:
+        diff = Text("—", style=_DIM)
+    return glyph, label, asserts, diff
+
+
 def _gate_composition(result: ExecutionResult) -> Table:
     """The gate as an explicit AND: baseline ∧ candidate assertions ∧ diff → gate.
 

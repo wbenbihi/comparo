@@ -222,3 +222,28 @@ def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
     )
     rendered = _plain(_replay_compare_well(_replay_record(cell), unified=True, redact=str))
     assert "event sequence" in rendered
+
+
+def test_exec_triplet_summarizes_a_cell() -> None:
+    from pathlib import Path
+
+    from rich.text import Text
+
+    from comparo.core.compare import CellDiff
+    from comparo.core.diff import FieldDiff
+    from comparo.core.execution import CellOutcome
+    from comparo.core.loader import load_project
+    from comparo.core.models import Request
+    from comparo.tui.render import _exec_triplet
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    ok = AssertionResult("status", "equals", True, "error", "ok")
+    # A drifted cell: verdict ✗, both sides assert, "1 drift" in the diff column.
+    diff_cell = CellDiff(request, "", [FieldDiff("$.total", State.DRIFT, "exact")])
+    outcome = CellOutcome("request.r", "", [ok], [ok], diff_cell)
+    glyph, _label, asserts, diff = _exec_triplet(outcome, Text("r"))
+    rendered = " ".join(_plain(part) for part in (glyph, asserts, diff))
+    assert "✗" in rendered  # the drift fails the cell
+    assert "1✓" in rendered  # each side's assertion held
+    assert "1 drift" in rendered
