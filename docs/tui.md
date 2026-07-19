@@ -282,9 +282,10 @@ screens.
 
 `enter` opens the report's full analysis **inside the Report tab** — never jumping to another tab:
 
-- a saved **diff** reopens in the **Diff screen's layout** — the drift index plus the git-style
-  **body-diff well**, replaying the real before/after values persisted with the report (no
-  requests are re-sent);
+- a saved **diff** reopens in the **Diff screen's layout** — the drift index, a **call ledger**
+  (baseline vs candidate status / latency / size, with the Δ), and the git-style **body-diff
+  well** replaying the real before/after values and the true per-field diff modes persisted with
+  the report (no requests are re-sent);
 - a saved **run / execution** reopens in the **Run screen's layout** — the request rows plus the
   detail tree (metrics, request, response, checks), rebuilt from disk.
 
