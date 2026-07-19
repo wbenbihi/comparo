@@ -326,11 +326,12 @@ $ comparo doctor
 
 ### `comparo schema`
 
-Emit the **`comparo/v1` JSON Schema**. It's generated from the same object models
-the loader validates against, so it can never drift from the real config surface.
+Emit a **JSON Schema** — by default the `comparo/v1` config schema, or with
+`--report` the saved-report record schema. Both are generated from the same object
+models the code uses, so they can never drift from the real shapes.
 
 ```
-comparo schema [--output FILE]
+comparo schema [--output FILE] [--report]
 ```
 
 **Options**
@@ -338,9 +339,10 @@ comparo schema [--output FILE]
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
 | `--output` | `-o` | *(stdout)* | Write the schema to a file instead of printing it. |
+| `--report` | | off | Emit the saved-report record schema (run/diff/execution) instead of the config schema. See [Report format](report-format.md). |
 
-Point your editor's YAML language server at it for autocomplete and inline
-validation. A copy is shipped at [`schema/comparo-v1.schema.json`](../schema/comparo-v1.schema.json);
+Point your editor's YAML language server at the config schema for autocomplete and
+inline validation. A copy is shipped at [`schema/comparo-v1.schema.json`](../schema/comparo-v1.schema.json);
 add a modeline to any project file:
 
 ```yaml
