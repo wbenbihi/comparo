@@ -144,7 +144,12 @@ class HttpxClient:
                         body_chunks.append(chunk)
                         size += len(chunk)
                         if size > _MAX_BODY_BYTES:
-                            break
+                            # Fail closed rather than silently truncate: a diff over a
+                            # cut-off body would compare a prefix as if it were the whole
+                            # response, hiding any regression past the cap (S-1).
+                            cap_mb = _MAX_BODY_BYTES // (1024 * 1024)
+                            message = f"response body exceeded the {cap_mb} MB cap"
+                            raise HttpError(message)
                 finally:
                     await response.aclose()
         except TimeoutError as error:
