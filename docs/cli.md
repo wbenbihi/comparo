@@ -738,7 +738,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Diff staging against prod
-        uses: wbenbihi/comparo@v1
+        uses: wbenbihi/comparo@main   # pin to a released tag once one is published
         with:
           project: examples/sample-project/comparo.yaml
           pair: local-vs-prod
