@@ -138,12 +138,17 @@ def _outbound(execution: Execution, redact: Redact) -> OutboundRequest:
         # Credential-bearing headers (authorization, cookie, x-api-key…) are masked
         # by name — the resolved request carries the *real* value — then any declared
         # secret elsewhere is value-redacted.
+        # An unset optional (``${VAR?}``) resolved to None was not sent, so it is
+        # omitted here too — never serialized as the literal "None".
         headers=[
             (redact(str(key)), redact(mask_credential_header(str(key), str(value))))
             for key, value in resolved.headers
+            if value is not None
         ],
         query={
-            redact(str(key)): redact_tree(value, redact) for key, value in resolved.query.items()
+            redact(str(key)): redact_tree(value, redact)
+            for key, value in resolved.query.items()
+            if value is not None
         },
         body=redact_tree(resolved.body, redact),
         body_type=_body_type(resolved.body_type, resolved.body is not None),
@@ -151,6 +156,7 @@ def _outbound(execution: Execution, redact: Redact) -> OutboundRequest:
         cookies={
             redact(str(key)): redact_tree(value, redact)
             for key, value in (resolved.cookies or {}).items()
+            if value is not None
         },
         streaming=resolved.streaming,
     )

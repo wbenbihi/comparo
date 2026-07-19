@@ -49,8 +49,10 @@ class HttpxClient:
         Raises:
             HttpError: If the request fails at the transport level.
         """
-        headers = [(key, str(value)) for key, value in request.headers]
-        params = {key: str(value) for key, value in request.query.items()}
+        # An unset optional (``${VAR?}``) resolves to None — omit it entirely rather
+        # than send the literal string "None" as a header/query/cookie value (M-2).
+        headers = [(key, str(value)) for key, value in request.headers if value is not None]
+        params = {key: str(value) for key, value in request.query.items() if value is not None}
         # For a streaming read the read timeout is really an idle timeout — how long
         # to wait for the next event before deciding the stream has ended.
         read_timeout = (
@@ -63,7 +65,9 @@ class HttpxClient:
         auth, auth_header = _auth(request.auth)
         if auth_header is not None:
             headers.append(auth_header)
-        cookies = {key: str(value) for key, value in (request.cookies or {}).items()} or None
+        cookies = {
+            key: str(value) for key, value in (request.cookies or {}).items() if value is not None
+        } or None
         build = self._client.build_request(
             request.method,
             request.url,

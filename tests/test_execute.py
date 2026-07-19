@@ -277,3 +277,43 @@ def test_retry_does_not_reattempt_a_deadline_timeout() -> None:
     result = asyncio.run(execute_request(loaded, env, request, client, retry=retry))
     assert not result.ok
     assert client.calls == 1  # tried once, not three times
+
+
+def test_unset_optional_header_and_query_are_omitted_not_sent_as_none() -> None:
+    # M-2: a header/query/cookie value that resolved to None (an unset ${VAR?})
+    # must be dropped, never sent as the literal string "None".
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["headers"] = dict(request.headers)
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"ok": True})
+
+    async def go() -> HttpResponse:
+        client = HttpxClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        try:
+            resolved = ResolvedRequest(
+                "GET",
+                "http://x/y",
+                [("x-opt", None), ("x-set", "v")],
+                {"drop": None, "keep": "1"},
+                None,
+                [],
+                cookies={"gone": None, "stay": "yes"},
+            )
+            return await client.send(resolved, TimeoutBudget())
+        finally:
+            await client.aclose()
+
+    asyncio.run(go())
+    headers = seen["headers"]
+    assert isinstance(headers, dict)
+    assert "x-opt" not in headers
+    assert headers.get("x-set") == "v"
+    url = str(seen["url"])
+    assert "drop" not in url
+    assert "keep=1" in url
+    assert "None" not in url
+    cookie = headers.get("cookie", "")
+    assert "gone" not in cookie
+    assert "stay=yes" in cookie
