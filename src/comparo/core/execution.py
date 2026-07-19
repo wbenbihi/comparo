@@ -28,6 +28,7 @@ from comparo.core.matrix import expand
 from comparo.core.models import AssertionRule
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
+from comparo.core.models import MatrixScope
 from comparo.core.models import Request
 from comparo.core.resolve import select_environment
 
@@ -115,6 +116,32 @@ class ExecutionProgress:
     ok: bool = True  # the cell's verdict once finished — no error, assertions hold, no drift
 
 
+def _build_plan(
+    project: LoadedProject,
+    profile: ExecutionProfile,
+    *,
+    do_assert: bool,
+    scopes: dict[str, MatrixScope],
+) -> tuple[list[tuple[Request, MatrixCell, list[AssertionRule]]], list[Request]]:
+    """Expand the profile's selected requests into a flat cell plan.
+
+    Returns the ``(plan, empty)`` pair: one entry per ``(request, matrix cell)`` to
+    run, and the requests whose matrix expanded to zero cells — recorded so the
+    gate fails closed on them rather than silently skipping.
+    """
+    plan: list[tuple[Request, MatrixCell, list[AssertionRule]]] = []
+    empty: list[Request] = []
+    for request in select_requests(project, profile):
+        rules = _assert_rules(project, profile, request) if do_assert else []
+        cells = expand(project, request, scopes)
+        if not cells:
+            empty.append(request)
+            continue
+        for cell in cells:
+            plan.append((request, cell, rules))
+    return plan, empty
+
+
 async def run_execution(
     project: LoadedProject,
     profile: ExecutionProfile,
@@ -148,18 +175,7 @@ async def run_execution(
     scopes = profile.spec.matrix or {}
     diff_override = _execution_profiles(profile, "diff")
     # Expand the whole plan first so the total is known before the first request.
-    plan: list[tuple[Request, MatrixCell, list[AssertionRule]]] = []
-    empty: list[Request] = []
-    for request in select_requests(project, profile):
-        rules = _assert_rules(project, profile, request) if do_assert else []
-        cells = expand(project, request, scopes)
-        if not cells:
-            # A selected request whose matrix expands to nothing verified nothing;
-            # record it as an error so the gate fails closed instead of silently.
-            empty.append(request)
-            continue
-        for cell in cells:
-            plan.append((request, cell, rules))
+    plan, empty = _build_plan(project, profile, do_assert=do_assert, scopes=scopes)
     total = len(plan)
     outcomes: list[CellOutcome] = [
         CellOutcome(
