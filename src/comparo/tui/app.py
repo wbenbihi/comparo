@@ -4341,12 +4341,12 @@ class ComparoApp(App[None]):
             super()._handle_exception(error)
             return
         try:
-            self._return_code = 1
-            if self._exception is None:
-                self._exception = error
-                self._exception_event.set()
-            redact = _app_redact(self)
-            self.panic(_crash_report(error, redact))
+            # Exit through the public API — a redacted crash report as the exit
+            # message and a non-zero return code — rather than reaching into Textual's
+            # private crash bookkeeping (_return_code / _exception / _exception_event),
+            # which could be renamed between versions (M-10). Not re-raising is
+            # deliberate: we show the redacted report, never the raw traceback.
+            self.exit(return_code=1, message=_crash_report(error, _app_redact(self)))
         except Exception:
             # Never let the reporter hide the real crash it is reporting.
             super()._handle_exception(error)

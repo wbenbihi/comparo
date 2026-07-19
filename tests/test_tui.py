@@ -797,18 +797,19 @@ def test_crash_handler_reports_instead_of_raw_traceback() -> None:
         app = ComparoApp(loaded)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            captured: list[tuple[object, ...]] = []
-            app.panic = lambda *r: captured.append(r)  # type: ignore[method-assign]
+            captured: list[object] = []
+            # The handler exits with the redacted report as the exit message.
+            app.exit = lambda *a, return_code=0, message=None, **k: captured.append(message)  # type: ignore[method-assign]
             app._handle_exception(ValueError("kaboom"))
             assert captured, "the crash handler did not report"
+            assert captured[0] is not None
             console = Console()
             with console.capture() as capture:
-                console.print(*captured[0])
+                console.print(captured[0])
             out = capture.get()
             assert "unexpected error" in out
             assert "kaboom" in out
             assert "github.com/wbenbihi/comparo/issues" in out
-            app._exception = None  # so run_test teardown doesn't re-raise the injected error
 
     asyncio.run(go())
 
