@@ -197,7 +197,7 @@ def test_swagger_2_cli_reports_a_clear_error(tmp_path: Path) -> None:
     result = runner.invoke(
         app, ["import", "openapi", str(spec_file), "--output", str(tmp_path / "out")]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2  # a usage error
     assert "Swagger 2.0 is not supported" in result.output
 
 
@@ -212,7 +212,7 @@ def test_import_refuses_to_overwrite(tmp_path: Path) -> None:
     again = runner.invoke(
         app, ["import", "openapi", str(spec_file), "--output", str(manifest.parent)]
     )
-    assert again.exit_code == 1
+    assert again.exit_code == 2  # a usage error
     assert "refusing" in again.output
 
 
