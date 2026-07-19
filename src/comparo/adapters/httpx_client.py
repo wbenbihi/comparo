@@ -68,23 +68,26 @@ class HttpxClient:
         cookies = {
             key: str(value) for key, value in (request.cookies or {}).items() if value is not None
         } or None
-        build = self._client.build_request(
-            request.method,
-            request.url,
-            headers=headers,
-            params=params,
-            json=json_body,
-            data=data_body,
-            content=content_body,
-            cookies=cookies,
-            timeout=httpx_timeout,
-        )
         # A total deadline for the whole non-streaming read: httpx's read timeout is
         # per-socket-read, so a server trickling bytes never trips it. Sum the
         # phase budgets into one wall-clock cap.
         total = (timeout.connect or 0.0) + (timeout.read or 0.0)
         start = time.perf_counter()
         try:
+            # build_request stays inside the try: a malformed resolved URL raises
+            # httpx.InvalidURL, which must be captured on THIS cell's result, not
+            # raised out to abort the whole run (M-4).
+            build = self._client.build_request(
+                request.method,
+                request.url,
+                headers=headers,
+                params=params,
+                json=json_body,
+                data=data_body,
+                content=content_body,
+                cookies=cookies,
+                timeout=httpx_timeout,
+            )
             status, resp_headers, body = await self._roundtrip(
                 build,
                 auth,
@@ -92,7 +95,7 @@ class HttpxClient:
                 stream_max=timeout.stream_max,
                 total=total or None,
             )
-        except httpx.HTTPError as error:
+        except (httpx.HTTPError, httpx.InvalidURL) as error:
             message = f"{type(error).__name__}: {error}"
             raise HttpError(message) from error
         elapsed_ms = (time.perf_counter() - start) * 1000
