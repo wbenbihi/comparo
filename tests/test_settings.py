@@ -53,7 +53,7 @@ def test_selfcheck_masks_every_sink(monkeypatch: pytest.MonkeyPatch, tmp_path: P
                 if settings._selfcheck is not None:
                     break
             assert settings._selfcheck is not None
-            assert len(settings._selfcheck) == 9
+            assert len(settings._selfcheck) == 10
             assert all(ok for _, _, ok in settings._selfcheck)
 
     asyncio.run(go())
@@ -167,4 +167,4 @@ def test_confirm_on_quit_never_stacks_a_second_dialog(
 def test_doctor_cli_reports_every_sink_masked() -> None:
     result = runner.invoke(cli_app, ["doctor"])
     assert result.exit_code == 0
-    assert "9/9 sinks masked the canary" in result.stdout
+    assert "10/10 sinks masked the canary" in result.stdout
