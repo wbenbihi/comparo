@@ -149,12 +149,14 @@ comparo help
 | Code | Meaning |
 | --- | --- |
 | `0` | Success — the command completed and (for `run`/`exec`/`diff`) the gate passed. |
-| `1` | Failure — the config was missing, the project failed to load, an argument could not be resolved, an execution failed, or a gate (`run` check, `exec`, or `diff`) failed. |
+| `1` | **Gate failure** — the command *ran*, but the gate failed: a `diff` drifted, a `run` / `exec` assertion failed, or a cell errored. This is the real-regression signal CI gates on. |
+| `2` | **Usage / config error** — the command could not run: the config was missing or failed to load, an environment / profile / request was unknown, an argument could not be resolved, a report format was unknown, or the selected plan expanded to zero cells. |
 
-Every command that loads a project exits `1` when the config is missing (`no project at
-'…'`) or the project cannot be loaded, printing each diagnostic to standard error
-followed by a `✗ N problem(s)` summary. The command-specific failure conditions are
-listed under each command below.
+So CI can tell a real regression (`1`) from a broken setup (`2`). Every command that
+loads a project exits `2` when the config is missing (`no project at '…'`) or the
+project cannot be loaded, printing each diagnostic to standard error followed by a
+`✗ N problem(s)` summary. The command-specific failure conditions are listed under each
+command below.
 
 ## Commands
 

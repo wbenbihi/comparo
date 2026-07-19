@@ -40,7 +40,7 @@ def test_validate_accepts_a_config_directory() -> None:
 
 def test_validate_missing_config_points_at_init(tmp_path: Path) -> None:
     result = runner.invoke(app, ["validate", "--config", str(tmp_path / "nope.yaml")])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "comparo init" in result.output
 
 
@@ -63,10 +63,35 @@ def test_exec_exit_code_matches_the_gate(monkeypatch: pytest.MonkeyPatch) -> Non
         assert invoked.exit_code == expected
 
 
-def test_exec_unknown_profile_exits_one() -> None:
+def test_exec_unknown_profile_is_a_usage_error() -> None:
     invoked = runner.invoke(app, ["exec", "execution.nope", "--config", str(CANARY)])
-    assert invoked.exit_code == 1
+    assert invoked.exit_code == 2  # a bad setup, distinct from a gate failure
     assert "no ExecutionProfile" in invoked.output
+
+
+def test_exit_codes_distinguish_a_gate_failure_from_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # CI can tell a real regression (exit 1) from a broken setup (exit 2).
+    import comparo.cli.app as cli
+    from comparo.core.compare import CellDiff
+    from comparo.core.diff import FieldDiff
+    from comparo.core.diff import State
+    from comparo.core.loader import load_project
+    from comparo.core.models import Request
+
+    loaded = load_project(CANARY)
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+
+    async def drifting() -> list[CellDiff]:
+        return [CellDiff(request, "", [FieldDiff("$.x", State.DRIFT, "exact")])]
+
+    monkeypatch.setattr(cli, "_diff", lambda *_a, **_k: drifting())
+    gate = runner.invoke(app, ["diff", "--config", str(CANARY)])
+    assert gate.exit_code == 1  # ran, but drifted → gate failure
+
+    usage = runner.invoke(app, ["diff", "--config", "does-not-exist.yaml"])
+    assert usage.exit_code == 2  # could not even load the project
 
 
 def test_diff_exit_code_matches_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +142,7 @@ def test_init_refuses_to_overwrite_existing(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     runner.invoke(app, ["init", str(project), "--name", "Demo"])
     again = runner.invoke(app, ["init", str(project), "--name", "Demo"])
-    assert again.exit_code == 1
+    assert again.exit_code == 2
     assert "already exists" in again.output
 
 
@@ -133,7 +158,7 @@ def test_bare_invocation_without_a_config_is_friendly(
 ) -> None:
     monkeypatch.chdir(tmp_path)  # empty dir — no comparo.yaml to find
     result = runner.invoke(app, [])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "comparo init" in result.output
 
 
@@ -202,7 +227,7 @@ def test_validate_fails_on_a_manifest_with_no_objects(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     result = runner.invoke(app, ["validate", "--config", str(tmp_path / "comparo.yaml")])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "no objects found" in result.output
 
 
@@ -210,7 +235,7 @@ def test_diff_rejects_an_unknown_report_format() -> None:
     result = runner.invoke(
         app, ["diff", "--config", str(SAMPLE), "--pair", "local-vs-prod", "--report", "junitxml"]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "unknown report format" in result.output
 
 
@@ -239,7 +264,7 @@ def test_run_fails_closed_when_the_plan_expands_to_zero_cells(tmp_path: Path) ->
     )
     config = str(tmp_path / "comparo.yaml")
     result = runner.invoke(app, ["run", "--config", config, "--env", "local"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "zero cells" in result.output
 
 
@@ -264,6 +289,6 @@ def test_render_reports_an_unresolved_variable_cleanly(tmp_path: Path) -> None:
     result = runner.invoke(
         app, ["render", "request.r", "--config", str(tmp_path / "comparo.yaml"), "--env", "local"]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "could not resolve" in result.output
     assert "MISSING_VAR" in result.output

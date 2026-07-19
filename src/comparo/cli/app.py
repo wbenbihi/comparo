@@ -57,6 +57,10 @@ app = typer.Typer(
 
 DEFAULT_CONFIG = Path("comparo.yaml")
 
+#: Exit codes, so CI can tell a real regression from a broken setup.
+_EXIT_GATE = 1  # ran, but the gate failed (drift / assertion failure / errored cell)
+_EXIT_USAGE = 2  # could not run: bad config, unknown env/profile/request, empty plan
+
 ConfigOption = Annotated[
     Path,
     typer.Option(
@@ -211,7 +215,7 @@ def validate(config: ConfigOption = DEFAULT_CONFIG) -> None:
             fg=typer.colors.RED,
             err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     typer.secho(f"✓ {len(loaded.objects)} object(s) valid", fg=typer.colors.GREEN)
 
 
@@ -238,7 +242,7 @@ def doctor() -> None:
         bold=True,
     )
     if passed != total:
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
 
 
 @app.command()
@@ -295,19 +299,19 @@ def render(
     obj = loaded.objects.get(request_id)
     if not isinstance(obj, Request):
         typer.secho(f"no Request with id '{request_id}'", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     try:
         environment = select_environment(loaded, env)
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from error
+        raise typer.Exit(_EXIT_USAGE) from error
     try:
         resolved = Resolver(loaded, environment).resolve_request(obj)
     except (InterpolationError, SecretError) as error:
         # A required ${VAR} unset (or a bad cast / unresolvable secret) is a config
         # error, not a crash — surface it cleanly instead of a traceback (M-3).
         typer.secho(f"could not resolve '{request_id}': {error}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from error
+        raise typer.Exit(_EXIT_USAGE) from error
     _print_resolved(resolved, environment.metadata.name, Redactor.for_project(loaded).text)
 
 
@@ -332,11 +336,11 @@ def run_requests(
         environment = select_environment(loaded, env)
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from error
+        raise typer.Exit(_EXIT_USAGE) from error
     requests = _select_requests(loaded, request_id)
     if not requests:
         typer.secho("no requests to run", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     results = asyncio.run(_execute(loaded, environment, requests))
     if not results:
         # A selected request whose matrix expands to zero cells verifies nothing —
@@ -346,10 +350,10 @@ def run_requests(
             fg=typer.colors.RED,
             err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     ok = _print_results(loaded, results, environment.metadata.name)
     if not ok:
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_GATE)
 
 
 @app.command(name="exec")
@@ -382,12 +386,12 @@ def exec_profile(
     profile = loaded.objects.get(execution_id)
     if not isinstance(profile, ExecutionProfile):
         typer.secho(f"no ExecutionProfile with id '{execution_id}'", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     try:
         result = asyncio.run(_run_execution(loaded, profile))
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from error
+        raise typer.Exit(_EXIT_USAGE) from error
     redact = Redactor.for_project(loaded).text
     _print_execution(result, redact)
     _emit_reports(
@@ -405,7 +409,7 @@ def exec_profile(
             redact=redact,
         ),
     )
-    raise typer.Exit(0 if result.passed else 1)
+    raise typer.Exit(0 if result.passed else _EXIT_GATE)
 
 
 async def _run_execution(loaded: LoadedProject, profile: ExecutionProfile) -> ExecutionResult:
@@ -480,11 +484,11 @@ def diff(
         base_env, candidate_env = resolve_pair(loaded, pair, baseline, candidate)
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from error
+        raise typer.Exit(_EXIT_USAGE) from error
     requests = _select_requests(loaded, request_id)
     if not requests:
         typer.secho("no requests to diff", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     results = asyncio.run(_diff(loaded, base_env, candidate_env, requests))
     redact = Redactor.for_project(loaded).text
     if not results:
@@ -493,7 +497,7 @@ def diff(
             fg=typer.colors.RED,
             err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name, redact)
     _emit_reports(
         loaded,
@@ -512,7 +516,7 @@ def diff(
         ),
     )
     if not passed:
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_GATE)
 
 
 def _record_id() -> str:
@@ -592,12 +596,12 @@ def _open_project(config: Path) -> LoadedProject:
     """
     if not config.exists():
         typer.secho(_missing_config(config), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     try:
         return load_project(config)
     except LoadError as error:
         _print_load_error(error)
-        raise typer.Exit(1) from error
+        raise typer.Exit(_EXIT_USAGE) from error
 
 
 def _launch_tui(config: Path) -> None:
@@ -610,12 +614,12 @@ def _launch_tui(config: Path) -> None:
 
     if not config.exists():
         typer.secho(_missing_config(config), fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(_EXIT_USAGE)
     try:
         loaded = load_project(config)
     except LoadError as error:
         ComparoApp.from_error(error).run()
-        raise typer.Exit(1) from error
+        raise typer.Exit(_EXIT_USAGE) from error
     ComparoApp(loaded).run()
 
 
@@ -736,7 +740,7 @@ def _openapi_diff_pairs(result: openapi.ImportResult) -> list[tuple[str, str, st
 
 def _abort(message: str) -> NoReturn:
     typer.secho(message, fg=typer.colors.RED, err=True)
-    raise typer.Exit(1)
+    raise typer.Exit(_EXIT_USAGE)
 
 
 def _slug(name: str) -> str:
