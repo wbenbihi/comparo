@@ -97,7 +97,7 @@ Projects are described by version-controlled YAML objects, each with a Kubernete
 
 | `kind`             | Purpose |
 | ------------------ | ------- |
-| `Environment`      | a target: base URL, timeout, credentials, variables, auth, cookies, health checks |
+| `Environment`      | a target: base URL, timeout, credentials, variables, auth, health checks |
 | `Request`          | an HTTP request (matrix-expanded, streaming, auth, cookies, body encodings) with a response schema and diff/assertion profiles |
 | `Schema`           | a JSON Schema used for structural validation |
 | `Instance`         | a reusable value injected by reference to avoid duplication |
