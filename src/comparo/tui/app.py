@@ -4579,6 +4579,12 @@ class ComparoApp(App[None]):
         report_config = manifest.spec.report if manifest else None
         return archive_dir(self.project.root, data, report_config)
 
+    def _report_retention(self) -> int | None:
+        """How many saved reports to keep — ``spec.report.retention`` or unlimited."""
+        manifest = self.project.project if self.project is not None else None
+        config = manifest.spec.report if manifest is not None else None
+        return config.retention if config is not None else None
+
     def _record_env(self) -> tuple[str, str, str, str | None, int]:
         """Common ``(id, created, tool, project, concurrency)`` for a saved record."""
         manifest = self.project.project if self.project is not None else None
@@ -4619,7 +4625,7 @@ class ComparoApp(App[None]):
         if directory is None or record is None:
             return None
         try:
-            save_record(directory, record)
+            save_record(directory, record, keep=self._report_retention())
         except OSError as error:
             self.notify(str(error), title="Could not save report", severity="error")
             return None
@@ -4662,7 +4668,7 @@ class ComparoApp(App[None]):
             redact=_app_redact(self),
         )
         try:
-            save_record(directory, record)
+            save_record(directory, record, keep=self._report_retention())
         except OSError as error:
             self.notify(str(error), title="Could not save report", severity="error")
             return None
@@ -4687,7 +4693,7 @@ class ComparoApp(App[None]):
             redact=_app_redact(self),
         )
         try:
-            save_record(directory, record)
+            save_record(directory, record, keep=self._report_retention())
         except OSError as error:
             self.notify(str(error), title="Could not save report", severity="error")
             return None
