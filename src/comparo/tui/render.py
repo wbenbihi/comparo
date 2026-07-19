@@ -45,6 +45,7 @@ from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionProgress
 from comparo.core.execution import ExecutionResult
+from comparo.core.execution import select_requests
 from comparo.core.export import RunEntry
 from comparo.core.export import export_run
 from comparo.core.health import Health
@@ -173,7 +174,6 @@ __all__ = [
     "_exec_plan_line",
     "_exec_profile_card",
     "_exec_profiles_hint",
-    "_exec_selected_requests",
     "_exec_setup",
     "_exec_skip_paths",
     "_exec_stacked_diff",
@@ -1888,24 +1888,6 @@ def _field_skip_count(diff: CellDiff | None) -> int:
     return sum(1 for field in diff.fields if field.state is State.SKIP)
 
 
-def _exec_selected_requests(project: LoadedProject, profile: ExecutionProfile) -> list[Request]:
-    """The requests an ExecutionProfile selects — its ``select`` tags / ids, or all."""
-    requests = sorted(
-        (obj for obj in project.objects.values() if isinstance(obj, Request)),
-        key=lambda request: request.metadata.id or "",
-    )
-    select = profile.spec.select
-    ids = set(select.requests or []) if select is not None else set()
-    tags = set(select.tags or []) if select is not None else set()
-    if not ids and not tags:
-        return requests
-    return [
-        request
-        for request in requests
-        if request.metadata.id in ids or (tags & set(request.metadata.tags or []))
-    ]
-
-
 def _exec_env_names(project: LoadedProject, profile: ExecutionProfile) -> tuple[str, str | None]:
     """Resolve a profile's baseline / candidate environment *names* for display.
 
@@ -2061,7 +2043,7 @@ def _exec_setup(
     parts.append(sel)
     parts.append(Text("\nplan preview", style=f"bold {_DIM}"))
     total = 0
-    for request in _exec_selected_requests(project, profile):
+    for request in select_requests(project, profile):
         line, count = _exec_plan_line(project, profile, request, redact)
         parts.append(line)
         total += count
