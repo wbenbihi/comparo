@@ -241,3 +241,25 @@ def test_a_val_pointing_at_a_non_instance_is_a_load_error(tmp_path: Path) -> Non
     with pytest.raises(LoadError) as caught:
         load_project(tmp_path)
     assert any("not an Instance" in d.message for d in caught.value.diagnostics)
+
+
+def test_spec_data_escaping_the_project_root_is_refused(tmp_path: Path) -> None:
+    # S-2: a spec.data that climbs out of the project (../ or absolute) would make
+    # comparo scan and parse YAML from anywhere on disk. It must be refused up front.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leak.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: E, id: environment.e}\nspec: {baseUrl: 'http://h'}\n",
+        encoding="utf-8",
+    )
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\n"
+        "metadata: {name: P, id: project.p}\nspec: {data: ../outside}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(LoadError) as caught:
+        load_project(project / "comparo.yaml")
+    assert any("escapes the project root" in d.message for d in caught.value.diagnostics)
