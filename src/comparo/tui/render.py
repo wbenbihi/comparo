@@ -1676,24 +1676,48 @@ def _diff_error_view(
     return Group(*parts)
 
 
+def _outbound_source(label: str) -> str:
+    """Attribute an outbound difference to the config surface that produced it.
+
+    comparo replays the *same* request against both sides, so a difference can
+    only come from environment config — the base URL, an env-specific header or
+    query var, auth, or a value injected into the body. Names the surface (not a
+    fabricated var name — that provenance is not tracked yet), so a reviewer knows
+    where to look.
+    """
+    if label == "url":
+        return "env · base url"
+    if label == "method":
+        return "request method"
+    if label == "body":
+        return "env · injected body value"
+    if label.startswith(("header authorization", "header proxy-authorization")):
+        return "env · auth"
+    if label.startswith("header"):
+        return "env · header"
+    if label.startswith("query"):
+        return "env · query var"
+    return "env config"
+
+
 def _outbound_diffs(
     baseline: ResolvedRequest,
     candidate: ResolvedRequest,
     *,
     redact: Callable[[str], str],
-) -> list[tuple[str, str, str]]:
+) -> list[tuple[str, str, str, str]]:
     """The redacted field-level differences between two outbound requests.
 
-    Each tuple is ``(label, baseline_value, candidate_value)``. Every value is
-    redacted first, so masked secrets compare equal and a hidden token can never
-    surface as a false drift.
+    Each tuple is ``(label, baseline_value, candidate_value, source)``. Every
+    value is redacted first, so masked secrets compare equal and a hidden token
+    can never surface as a false drift.
     """
-    diffs: list[tuple[str, str, str]] = []
+    diffs: list[tuple[str, str, str, str]] = []
 
     def scalar(label: str, a: object, b: object) -> None:
         sa, sb = redact(str(a)), redact(str(b))
         if sa != sb:
-            diffs.append((label, sa, sb))
+            diffs.append((label, sa, sb, _outbound_source(label)))
 
     def mapping(
         prefix: str,
@@ -1707,14 +1731,15 @@ def _outbound_diffs(
         for key in sorted(set(ad) | set(bd)):
             av, bv = ad.get(key, "—"), bd.get(key, "—")
             if av != bv:
-                diffs.append((f"{prefix} {key}", av, bv))
+                label = f"{prefix} {key}"
+                diffs.append((label, av, bv, _outbound_source(label)))
 
     scalar("method", baseline.method, candidate.method)
     scalar("url", baseline.url, candidate.url)
     mapping("header", baseline.headers, candidate.headers)
     mapping("query", baseline.query, candidate.query)
     if baseline.body != candidate.body:
-        diffs.append(("body", "differs — an env value is injected into the body", ""))
+        diffs.append(("body", "an env value is injected", "—", _outbound_source("body")))
     return diffs
 
 
@@ -1728,48 +1753,58 @@ def _outbound_diff_view(
 ) -> Group:
     """Diff the resolved outbound request across the pair (DIFF-27).
 
-    The same request is replayed against both environments, so the outbound only
-    differs where env config does — a different base URL, a per-env auth token,
-    an env-specific header or variable. Every value is redacted, and masked
-    secrets compare equal, so a hidden token can never surface as a false drift.
+    A table of every differing field — baseline → candidate — with the config
+    surface each difference came from, so the panel answers the first triage
+    question: is the drift the service's, or did we send two different requests?
+    Every value is redacted, and masked secrets compare equal, so a hidden token
+    can never surface as a false drift.
     """
     parts: list[RenderableType] = []
     head = Text()
     head.append("OUTBOUND REQUEST", style=f"bold {_LABEL}")
+    head.append("   the request we sent to each side", style=_DIM)
     parts.append(head)
-    legend = Text("\n")
-    legend.append("− ", style=f"bold {_DRIFT}")
-    legend.append(base_env.metadata.name, style=_DIM)
-    legend.append("    + ", style=f"bold {_SAME}")
-    legend.append(cand_env.metadata.name, style=_DIM)
-    parts.append(legend)
 
     diffs = _outbound_diffs(baseline, candidate, redact=redact)
+    base_name, cand_name = base_env.metadata.name, cand_env.metadata.name
 
-    body = Text()
     if not diffs:
-        body.append("\n\n✓ identical on both sides", style=f"bold {_SAME}")
-        body.append(
-            "\n\nThe request we send is the same for both environments, so any"
-            "\nresponse drift is the service's — not something we sent differently.",
+        verdict = Text("\n✓ identical on both sides", style=f"bold {_SAME}")
+        verdict.append(
+            "\nWe send the same request to both environments, so any response "
+            "drift is the service's — not something we sent differently.",
             style=_DIM,
         )
+        parts.append(verdict)
     else:
-        for label, a, b in diffs:
-            body.append(f"\n\n{label}", style=_LABEL)
+        heading = Text("\n")
+        heading.append(f"differs on {len(diffs)} ", style=f"bold {_DRIFT}")
+        heading.append("field" if len(diffs) == 1 else "fields", style=f"bold {_DRIFT}")
+        heading.append("  — is the drift the service's, or ours?", style=_DIM)
+        parts.append(heading)
+        legend = Text("− ", style=f"bold {_DRIFT}")
+        legend.append(base_name, style=_DIM)
+        legend.append("    + ", style=f"bold {_SAME}")
+        legend.append(cand_name, style=_DIM)
+        parts.append(legend)
+        body = Text()
+        for label, a, b, source in diffs:
+            body.append(f"\n{label}", style=_LABEL)
+            body.append(f"   ← {source}", style=_DIM)  # where the difference comes from
             body.append("\n  − ", style=f"bold {_DRIFT}")
             body.append(a or "—", style=_TEXT)
-            if b:
+            if b and b != "—":
                 body.append("\n  + ", style=f"bold {_SAME}")
-                body.append(b, style=_TEXT)
-        body.append("\n\n⚠ the outbound differs across environments", style=f"bold {_WARN}")
-        body.append(
-            " — some response drift\nmay be explained by what you send (host, auth, vars), "
-            "not the service.",
+                body.append(b, style=f"bold {_TEXT_HI}")
+        parts.append(body)
+        verdict = Text("\n⚠ the outbound differs across environments", style=f"bold {_WARN}")
+        verdict.append(
+            " — some response drift is\nours: we sent a different request (see the source of "
+            "each field). Fix is likely config, not the service.",
             style=_DIM,
         )
-    parts.append(body)
-    collapse = Text("\n\npress ", style=_DIM)
+        parts.append(verdict)
+    collapse = Text("\npress ", style=_DIM)
     collapse.append("o", style=f"bold {_ACCENT}")
     collapse.append(" to collapse", style=_DIM)
     parts.append(collapse)
@@ -1801,7 +1836,7 @@ def _outbound_header(
     line = Text(no_wrap=True)
     line.append("OUTBOUND  ", style=f"bold {_LABEL}")
     if diffs:
-        labels = ", ".join(label for label, _, _ in diffs[:3])
+        labels = ", ".join(label for label, *_ in diffs[:3])
         more = "…" if len(diffs) > 3 else ""
         line.append("⚠ ", style=f"bold {_WARN}")
         line.append(f"differs · {len(diffs)} field{'s' if len(diffs) != 1 else ''} ", style=_TEXT)
