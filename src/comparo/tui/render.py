@@ -3059,6 +3059,46 @@ def _event_sequence(
     return table
 
 
+def _stream_body_view(
+    baseline: list[object], candidate: list[object], redact: Callable[[str], str] = str
+) -> Group:
+    """A streamed response as an event SEQUENCE, not one assembled blob (d-stream).
+
+    A per-event ✓/✗ strip so the eye lands on which event diverged, then the
+    aligned per-event table. This is what the mockup asks for when the response
+    is chunked/SSE — the diff runs over events, not a single concatenated body.
+    """
+    count = max(len(baseline), len(candidate))
+    drifts = 0
+    strip = Text("event sequence  ", style=f"bold {_LABEL}")
+    for index in range(count):
+        left = baseline[index] if index < len(baseline) else None
+        right = candidate[index] if index < len(candidate) else None
+        same = left == right and left is not None
+        if not same:
+            drifts += 1
+        if index:
+            strip.append(" · ", style=_DIM)
+        strip.append(f"{'✓' if same else '✗'}{index + 1}", style=_SAME if same else _DRIFT)
+    strip.append(f"   — {drifts} of {count} event{'' if count == 1 else 's'} drift", style=_DIM)
+    return Group(strip, Text(), _event_sequence(baseline, candidate, redact))
+
+
+def _cell_events(cell: CellDiff) -> tuple[list[object] | None, list[object] | None]:
+    """The two sides' streamed event lists, or ``(None, None)`` for a normal response."""
+    base = (
+        cell.baseline.response.events
+        if cell.baseline is not None and cell.baseline.response is not None
+        else None
+    )
+    cand = (
+        cell.candidate.response.events
+        if cell.candidate is not None and cell.candidate.response is not None
+        else None
+    )
+    return base, cand
+
+
 def _field_from_record(field: FieldDiffRecord) -> FieldDiff:
     """Reconstruct a live FieldDiff from a saved record's field — real state and mode."""
     state = State.DRIFT if field.state == "drift" else State.SKIP

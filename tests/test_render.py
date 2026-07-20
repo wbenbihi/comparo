@@ -254,6 +254,20 @@ def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
     assert "event sequence" in rendered
 
 
+def test_stream_body_view_renders_a_numbered_event_sequence_not_a_blob() -> None:
+    # d-stream: a streamed response diffs its event SEQUENCE (per-event ✓/✗), never
+    # one assembled blob — the eye lands on exactly which event diverged.
+    from comparo.tui.render import _stream_body_view
+
+    base: list[object] = [{"seq": 1, "price": 98.4}, {"seq": 2, "price": 98.75}, {"seq": 3}]
+    cand: list[object] = [{"seq": 1, "price": 98.4}, {"seq": 2, "price": 98.75}, {"seq": 99}]
+    out = _plain(_stream_body_view(base, cand, str))
+    assert "event sequence" in out
+    assert "✓1" in out  # event 1 matches
+    assert "✗3" in out  # event 3 differs
+    assert "1 of 3 events drift" in out
+
+
 def test_running_table_shows_the_plan_per_side_with_assert_tally_and_state() -> None:
     # d-running/e-running: the live run renders as a per-plan table — each cell a
     # row, per-side status/latency (+ assert tally for exec), and a STATE column
