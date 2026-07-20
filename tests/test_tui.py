@@ -1133,6 +1133,45 @@ def test_execution_esc_steps_back_one_subview_never_quits() -> None:
     asyncio.run(go())
 
 
+def test_execution_diff_from_results_returns_to_results_not_a_stale_cell() -> None:
+    # NAV regression: drilling into a cell then backing out to results used to leave
+    # the cell selected, so `d` from results then `esc` wrongly jumped into the stale
+    # cell detail. Now the origin is tracked and the selection cleared on the way out.
+    loaded = load_project(SAMPLE)
+    request = loaded.objects["request.get-json"]
+    assert isinstance(request, Request)
+    drift = FieldDiff("$.args.taxRate", State.DRIFT, "exact", "0.20 → 0.25")
+    cell = CellDiff(request, "", [drift], None, {"a": "0.20"}, {"a": "0.25"})
+    outcome = CellOutcome("request.get-json", "", [], [], cell)
+    result = ExecutionResult("exec.x", "stable", "canary", True, True, [outcome])
+    profile = next(o for o in loaded.objects.values() if isinstance(o, ExecutionProfile))
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(104, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("4")
+            await pilot.pause()
+            view = app.query_one(ExecutionView)
+            view.show_result(result, profile, None)
+            await pilot.pause()
+            await pilot.press("enter")  # drill into the cell
+            await pilot.pause()
+            assert view._current_view() == "exec-cell"
+            await pilot.press("escape")  # back to results — must clear the selection
+            await pilot.pause()
+            assert view._current_view() == "exec-results"
+            assert view._cell is None
+            await pilot.press("d")  # open the diff from RESULTS, not a cell
+            await pilot.pause()
+            assert view._current_view() == "exec-diff-screen"
+            await pilot.press("escape")  # must land back on results, not the stale cell
+            await pilot.pause()
+            assert view._current_view() == "exec-results"
+
+    asyncio.run(go())
+
+
 def test_execution_cell_v_toggles_unified_and_side_by_side() -> None:
     # EXE: 'v' flips the cell body diff between unified and side-by-side, in place.
     loaded = load_project(SAMPLE)

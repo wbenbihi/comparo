@@ -3585,6 +3585,9 @@ class ExecutionView(Vertical):
         self._record: ReportRecord | None = None
         self._drifted: list[CellOutcome] = []
         self._cell: CellOutcome | None = None
+        #: the sub-view ``d`` was opened from, so ``esc`` returns there exactly
+        #: (never a stale cell detail left over from an earlier drill).
+        self._diff_origin = "exec-results"
         self._unified = True
         self._run_id: str | None = None
         # live-progress state for the running sub-view
@@ -3929,6 +3932,7 @@ class ExecutionView(Vertical):
         result = self._result
         if result is None or self._profile is None:
             return
+        self._cell = None  # leaving any cell detail — do not keep a stale selection
         self._drifted = [
             outcome
             for outcome in result.outcomes
@@ -4213,13 +4217,18 @@ class ExecutionView(Vertical):
 
     # ── in-flow diff (step 5) ─────────────────────────────────────────────────
     def action_open_diff(self) -> None:
-        """``d`` — open the run's scoped body diff, stacked, without leaving the tab."""
+        """``d`` — open the run's drift as a body diff, without leaving the tab.
+
+        Remembers which sub-view it was opened from so ``esc`` returns there
+        exactly — the gate overview or the cell you drilled into.
+        """
         view = self._current_view()
         if view not in ("exec-results", "exec-cell"):
             return
         if not self._drifted:
             self.app.notify("No drift to diff in this run", severity="information")
             return
+        self._diff_origin = view
         self._unified = True
         self._render_exec_diff()
         self._show("exec-diff-screen")
@@ -4232,7 +4241,8 @@ class ExecutionView(Vertical):
         dialog.border_title = Text.from_markup(
             f"EXECUTION DIFF [{_DIM}]· {self._profile.metadata.name if self._profile else ''}[/]"
         )
-        dialog.border_subtitle = "v unified/side · stays in the Execution tab"
+        back = "the cell" if self._diff_origin == "exec-cell" else "the gate"
+        dialog.border_subtitle = f"v unified/side · esc → {back} · never leaves the Execution tab"
         self.query_one("#exec-diff-screen-content", Static).update(
             _exec_stacked_diff(
                 self._drifted,
@@ -4256,7 +4266,8 @@ class ExecutionView(Vertical):
         elif view == "exec-cell":
             self._show_results()
         elif view == "exec-diff-screen":
-            if self._cell is not None:
+            # Return to whichever sub-view opened the diff, not a stale selection.
+            if self._diff_origin == "exec-cell" and self._cell is not None:
                 self._render_cell()
                 self._show("exec-cell")
             else:
