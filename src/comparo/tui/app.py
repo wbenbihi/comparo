@@ -137,6 +137,7 @@ from comparo.tui.render import _exec_setup
 from comparo.tui.render import _exec_stacked_diff
 from comparo.tui.render import _exec_triplet
 from comparo.tui.render import _executions_ledger
+from comparo.tui.render import _field_drill_card
 from comparo.tui.render import _gate_composition
 from comparo.tui.render import _graph
 from comparo.tui.render import _help_body
@@ -1578,6 +1579,8 @@ class DiffView(Vertical):
                         yield Static(id="drift-legend")
                     with VerticalScroll(id="col-compare", classes="panel hero"):
                         yield Static(id="compare-content")
+            with VerticalScroll(id="diff-drill", classes="panel hero"):
+                yield Static(id="diff-drill-content")
 
     def on_mount(self) -> None:
         """Resolve the diff pair, select everything, and build the checklist."""
@@ -1659,6 +1662,11 @@ class DiffView(Vertical):
     def action_back(self) -> None:
         """Return from RUNNING / RESULTS to PREPARE (cancelling an in-flight diff)."""
         current = self.query_one("#diff-mode", ContentSwitcher).current
+        if current == "diff-drill":  # the field-drill card steps back to results
+            self.query_one("#diff-mode", ContentSwitcher).current = "diff-results"
+            self.query_one("#drift-table", DataTable).focus()
+            self.refresh_footer()
+            return
         if current in ("diff-results", "diff-running"):
             if current == "diff-running":
                 self.workers.cancel_group(self, "diff")
@@ -1857,9 +1865,11 @@ class DiffView(Vertical):
 
         The TUI never edits a version-controlled file silently, so this opens a
         confirmation overlay naming the field and the exact file(s) it would
-        touch; the write only happens if the user confirms. RESULTS only.
+        touch; the write only happens if the user confirms. Works from the RESULTS
+        index and from the field-drill card.
         """
-        if not self._in_results():
+        current = self.query_one("#diff-mode", ContentSwitcher).current
+        if current not in ("diff-results", "diff-drill"):
             return
         group = self._selected_group()
         if group is None:
@@ -2237,6 +2247,32 @@ class DiffView(Vertical):
         it is a layer of the compare panel now, not a separate overlay mode.
         """
         self._render_row(event.row_key.value)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """``enter`` on a drifted field opens the focused field-drill card (d-drill)."""
+        if event.data_table.id != "drift-table":
+            return
+        key = event.row_key.value
+        if key is None:
+            return
+        if key.startswith("drift::"):
+            self._open_drill(key.removeprefix("drift::"))
+        elif key.startswith("cell::"):
+            self._open_drill(key.split("::")[1])
+
+    def _open_drill(self, path: str) -> None:
+        group = next((g for g in self._groups if g[0] == path), None)
+        if group is None:
+            return
+        redact = _app_redact(self)
+        wrap = self.query_one("#diff-drill")
+        wrap.border_title = Text.from_markup(f"FIELD DRILL [{_DIM}]· {redact(path)}[/]")
+        wrap.border_subtitle = "esc back · i ignore"
+        self.query_one("#diff-drill-content", Static).update(
+            _field_drill_card(path, group[1], redact)
+        )
+        self.query_one("#diff-mode", ContentSwitcher).current = "diff-drill"
+        self.query_one("#diff-drill").focus()
 
     def _render_row(self, key: str | None) -> None:
         """Render the compare panel for a drift-table row key."""
