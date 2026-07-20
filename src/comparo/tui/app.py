@@ -2301,8 +2301,8 @@ class DiffView(Vertical):
         return _outbound_header(
             baseline,
             candidate,
-            base_env,
-            cand_env,
+            base_env.metadata.name,
+            cand_env.metadata.name,
             expanded=self._outbound_shown,
             redact=redact,
         )

@@ -1746,8 +1746,8 @@ def _outbound_diffs(
 def _outbound_diff_view(
     baseline: ResolvedRequest,
     candidate: ResolvedRequest,
-    base_env: Environment,
-    cand_env: Environment,
+    base_name: str,
+    cand_name: str,
     *,
     redact: Callable[[str], str] = str,
 ) -> Group:
@@ -1766,7 +1766,6 @@ def _outbound_diff_view(
     parts.append(head)
 
     diffs = _outbound_diffs(baseline, candidate, redact=redact)
-    base_name, cand_name = base_env.metadata.name, cand_env.metadata.name
 
     if not diffs:
         verdict = Text("\n✓ identical on both sides", style=f"bold {_SAME}")
@@ -1804,18 +1803,14 @@ def _outbound_diff_view(
             style=_DIM,
         )
         parts.append(verdict)
-    collapse = Text("\npress ", style=_DIM)
-    collapse.append("o", style=f"bold {_ACCENT}")
-    collapse.append(" to collapse", style=_DIM)
-    parts.append(collapse)
     return Group(*parts)
 
 
 def _outbound_header(
     baseline: ResolvedRequest,
     candidate: ResolvedRequest,
-    base_env: Environment,
-    cand_env: Environment,
+    base_name: str,
+    cand_name: str,
     *,
     expanded: bool,
     redact: Callable[[str], str] = str,
@@ -1831,7 +1826,11 @@ def _outbound_header(
     surfaces as a false drift.
     """
     if expanded:
-        return _outbound_diff_view(baseline, candidate, base_env, cand_env, redact=redact)
+        view = _outbound_diff_view(baseline, candidate, base_name, cand_name, redact=redact)
+        collapse = Text("\npress ", style=_DIM)
+        collapse.append("o", style=f"bold {_ACCENT}")
+        collapse.append(" to collapse", style=_DIM)
+        return Group(view, collapse)
     diffs = _outbound_diffs(baseline, candidate, redact=redact)
     line = Text(no_wrap=True)
     line.append("OUTBOUND  ", style=f"bold {_LABEL}")
@@ -2329,11 +2328,17 @@ def _exec_stacked_diff(
     head.append(" ● ⇄ ", style=_SAME)
     head.append(candidate or "—", style=f"bold {_TEXT_HI}")
     head.append(
-        f"    {len(drifted)} drifted cell(s) · one field, grouped across the matrix",
+        f"    {len(drifted)} drifted cell(s) · the same compare engine as the Diff tab",
         style=_DIM,
     )
-    parts: list[RenderableType] = [head, Text()]
+    hint = Text(
+        "each cell shows its call ledger, the outbound we sent (is the drift ours?), "
+        "then the response body diff — esc returns to where you came from.",
+        style=_DIM,
+    )
+    parts: list[RenderableType] = [head, hint, Text()]
     names = (baseline, candidate or "candidate")
+    cand_name = candidate or "candidate"
     for outcome in drifted:
         crumb = Text("▸ ", style=_DRIFT)
         crumb.append(_req_short(outcome.request_id), style=f"bold {_TEXT_HI}")
@@ -2341,11 +2346,22 @@ def _exec_stacked_diff(
             crumb.append(f" · {redact(outcome.cell_key)}", style=_AXIS)
         request = outcome.diff.request if outcome.diff is not None else None
         if request is not None:
-            crumb.append(
-                f"    {request.spec.request.method} {redact(request.spec.request.endpoint)}",
-                style=_DIM,
-            )
+            crumb.append("    ", style=_DIM)
+            crumb.append_text(_method_badge(request.spec.request.method))
+            crumb.append(f" {redact(request.spec.request.endpoint)}", style=_DIM)
         parts.append(crumb)
+        # Layer 1 — the call ledger (a latency/size regression even when bodies match).
+        ledger = _executions_ledger(outcome.baseline, outcome.candidate)
+        if ledger is not None:
+            parts.append(ledger)
+        # Layer 2 — the outbound we sent, so the drift traces to us or the service.
+        base_req = outcome.baseline.resolved if outcome.baseline is not None else None
+        cand_req = outcome.candidate.resolved if outcome.candidate is not None else None
+        if base_req is not None and cand_req is not None:
+            parts.append(
+                _outbound_diff_view(base_req, cand_req, baseline, cand_name, redact=redact)
+            )
+        # Layer 3 — the response body diff.
         if outcome.error is not None and outcome.diff is not None:
             parts.append(_diff_error_view(outcome.diff, None, names=names, redact=redact))
         elif outcome.diff is not None:
@@ -2365,7 +2381,7 @@ def _exec_stacked_diff(
             parts.append(Text("no diff computed for this cell", style=_DIM))
         parts.append(Text())
     # One shared git legend at the bottom of the stack — not repeated per cell.
-    parts.append(_git_legend(baseline, candidate or "candidate"))
+    parts.append(_git_legend(baseline, cand_name))
     return Group(*parts)
 
 

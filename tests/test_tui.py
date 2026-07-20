@@ -1619,7 +1619,7 @@ def test_outbound_diff_flags_url_drift_and_never_leaks_a_secret() -> None:
     from comparo.tui.render import _outbound_diff_view
 
     loaded = load_project(SAMPLE)
-    env_a, env_b = _environments(loaded)[:2]
+    env_a, env_b = (env.metadata.name for env in _environments(loaded)[:2])
 
     def render(view: object) -> str:
         console = Console(record=True, width=100, file=io.StringIO())
