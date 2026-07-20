@@ -155,7 +155,6 @@ __all__ = [
     "_diff_slug",
     "_diff_unified",
     "_diffprofile_detail",
-    "_drift_change",
     "_edges",
     "_environment_detail",
     "_environments",
@@ -1885,21 +1884,6 @@ def _exec_assert_body(
         text.append(f"{_req_short(request_id):<11}", style=f"bold {_TEXT_HI}")
         text.append(redact(result.label), style=style if not result.ok else _TEXT)
         text.append(f"   {_clip(redact(result.detail))}", style=_DIM)
-    return text
-
-
-def _drift_change(outcome: CellOutcome, redact: Callable[[str], str] = str) -> Text:
-    diff = outcome.diff
-    if diff is None or not diff.drifts:
-        return Text("drift", style=_DRIFT)
-    field = diff.drifts[0]
-    text = Text(redact(field.path), style=_DRIFT)
-    text.append(f"  {field.mode}", style=_DIM)
-    detail = _clip(redact(field.detail))
-    if detail:
-        text.append(f"  {detail}", style=_DIM)
-    if len(diff.drifts) > 1:
-        text.append(f"  +{len(diff.drifts) - 1}", style=_DIM)
     return text
 
 

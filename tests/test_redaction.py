@@ -297,7 +297,6 @@ def test_execution_screen_renders_mask_a_secret_echoed_as_a_key_or_path() -> Non
     from comparo.tui.render import _cell_verdict
     from comparo.tui.render import _diff_body_view
     from comparo.tui.render import _diff_skip_view
-    from comparo.tui.render import _drift_change
     from comparo.tui.render import _exec_diff_legend
 
     loaded = load_project(SAMPLE)
@@ -325,7 +324,6 @@ def test_execution_screen_renders_mask_a_secret_echoed_as_a_key_or_path() -> Non
     console = Console(width=200)
 
     renders = [
-        _drift_change(drift_outcome, redact),  # drift-table change column
         _cell_verdict(drift_outcome, redact),  # verdict path branch
         _cell_verdict(err_outcome, redact),  # verdict error branch
         _exec_diff_legend(skip_result, redact),  # skip legend
