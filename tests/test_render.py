@@ -254,6 +254,21 @@ def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
     assert "event sequence" in rendered
 
 
+def test_rule_detail_names_the_rule_and_every_field_it_silenced() -> None:
+    # d-rules: selecting a silencing rule shows its mode, why, and the exact field
+    # paths it hid — so a skip is auditable, never a silent pass.
+    from comparo.tui.render import _rule_detail
+
+    silenced = [("$.headers.X-Amzn-Trace-Id", ["Price quote"]), ("$.headers.Host", ["Checkout"])]
+    out = _plain(_rule_detail("$.headers.*", "ignore", silenced))
+    assert "RULE" in out
+    assert "$.headers.*" in out
+    assert "ignore" in out
+    assert "Fields it silenced" in out
+    assert "$.headers.X-Amzn-Trace-Id" in out
+    assert "chose not to check" in out  # green never means full coverage
+
+
 def test_stream_body_view_renders_a_numbered_event_sequence_not_a_blob() -> None:
     # d-stream: a streamed response diffs its event SEQUENCE (per-event ✓/✗), never
     # one assembled blob — the eye lands on exactly which event diverged.

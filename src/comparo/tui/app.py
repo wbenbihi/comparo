@@ -169,6 +169,7 @@ from comparo.tui.render import _req_short
 from comparo.tui.render import _request_detail
 from comparo.tui.render import _request_latencies
 from comparo.tui.render import _requests
+from comparo.tui.render import _rule_detail
 from comparo.tui.render import _run_key
 from comparo.tui.render import _run_label
 from comparo.tui.render import _running_row_from_progress
@@ -2095,7 +2096,10 @@ class DiffView(Vertical):
         self._render_drift_legend(errors)
         # Select the first drift if any, else the first error; skips are visible but
         # never a failure, so a skip-only run still reads its clean PASS on the right.
-        if self._groups:
+        rules = self._rule_order()
+        if self._index_mode == "rules" and rules:
+            self._show_rule(rules[0])
+        elif self._groups:
             self._show_field(self._groups[0][0])
         elif errors:
             self._show_error(errors[0])
@@ -2173,21 +2177,58 @@ class DiffView(Vertical):
             table.add_row(Text(""), sub, Text(""), key=f"skipsub::{path}")
 
     def _populate_rules(self, table: DataTable[Text]) -> None:
-        # One row per fired rule: which mode flagged which field, and the change.
+        # The "broken rules" view: one row per SILENCING rule that fired (ignore /
+        # tolerance), with how many fields and requests it silenced — not the drifted
+        # fields (that is the "grouped by field" view). Selecting a rule shows its
+        # detail, so a skip is auditable, never a silent pass.
         redact = _app_redact(self)
         table.add_column("", key="st", width=3)
-        table.add_column("FIELD", key="field")
-        table.add_column("RULE · CHANGE", key="meta")
-        for path, entries in self._groups:
-            field = entries[0][1]
-            meta = Text(field.mode, style=_MODE.get(field.mode, _DIM))
-            meta.append(f" · {_clip(redact(field.detail)) or 'differs'}", style=_DRIFT)
+        table.add_column("RULE", key="rule")
+        table.add_column("SILENCED", key="meta", width=18)
+        for rule in self._rule_order():
+            groups = self._rule_groups(rule)
+            mode = groups[0][1][0][1].mode
+            requests = {cell.request.metadata.name for _, ents in groups for cell, _ in ents}
+            rule_text = Text(redact(rule), style=_SKIP)
+            rule_text.append(f"  {mode}", style=_DIM)
+            count = len(groups)
+            plural = "" if count == 1 else "s"
+            meta = Text(f"{count} field{plural} · {len(requests)} req", style=_DIM)
+            table.add_row(Text("◐", style=_SKIP), rule_text, meta, key=f"rule::{rule}")
+        if not self._skip_groups:
             table.add_row(
-                Text("✗", style=_DRIFT),
-                Text(redact(path), style=_DRIFT),
-                meta,
-                key=f"drift::{path}",
+                Text("✓", style=_SAME), Text("no silencing rules fired", style=_DIM), Text("")
             )
+
+    def _rule_order(self) -> list[str]:
+        """The silencing rules that fired, in first-seen order."""
+        order: list[str] = []
+        for path, entries in self._skip_groups:
+            rule = entries[0][1].rule or path
+            if rule not in order:
+                order.append(rule)
+        return order
+
+    def _rule_groups(self, rule: str) -> list[tuple[str, list[tuple[CellDiff, FieldDiff]]]]:
+        """The skipped-field groups a given silencing *rule* carved out."""
+        return [(p, e) for p, e in self._skip_groups if (e[0][1].rule or p) == rule]
+
+    def _show_rule(self, rule: str) -> None:
+        """Render a silencing rule's detail — its mode, why, and every field it hid."""
+        redact = _app_redact(self)
+        groups = self._rule_groups(rule)
+        if not groups:
+            return
+        mode = groups[0][1][0][1].mode
+        wrap = self.query_one("#col-compare")
+        wrap.border_title = Text.from_markup(f"RULE [{_DIM}]· {redact(rule)}[/]")
+        wrap.border_subtitle = f"{mode} · {len(groups)} silenced field(s)"
+        silenced = [
+            (redact(path), sorted({cell.request.metadata.name for cell, _ in entries}))
+            for path, entries in groups
+        ]
+        detail = _rule_detail(redact(rule), mode, silenced)
+        self.query_one("#compare-content", Static).update(detail)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Show the comparison (or error) for the highlighted row.
@@ -2201,7 +2242,9 @@ class DiffView(Vertical):
         """Render the compare panel for a drift-table row key."""
         if key is None:
             return
-        if key.startswith("drift::"):
+        if key.startswith("rule::"):
+            self._show_rule(key.removeprefix("rule::"))
+        elif key.startswith("drift::"):
             self._show_field(key.removeprefix("drift::"))
         elif key.startswith("cell::"):
             cell = self._row_cells.get(key)
