@@ -228,9 +228,9 @@ __all__ = [
     "_requests",
     "_run_key",
     "_run_label",
-    "_running_body",
     "_running_cell_name",
     "_running_row_from_progress",
+    "_running_table",
     "_save_run",
     "_scalar",
     "_seg_toggle",
@@ -2138,18 +2138,24 @@ def _exec_setup(
 
 
 class _RunningRow(NamedTuple):
-    """One cell in the live running transition — the in-flight cell or a finished one.
+    """One cell of the live plan — its state and, once finished, both sides' metrics.
 
     ``variant``/``method_path``/``drift`` are already redacted by the view before the
-    row is built, so ``_running_body`` never handles a raw declared secret.
+    row is built, so the running table never handles a raw declared secret.
     """
 
     request: str
     variant: str = ""
     method_path: str = ""
-    status: int | None = None
+    state: str = "queued"  # queued | running | done
+    baseline_status: int | None = None
+    candidate_status: int | None = None
     baseline_ms: int | None = None
     candidate_ms: int | None = None
+    base_pass: int = 0
+    base_fail: int = 0
+    cand_pass: int = 0
+    cand_fail: int = 0
     drift: str = ""
     #: The cell's overall verdict — an error or a failed assertion fails it too,
     #: not only a drift (so an errored-but-undrifted cell is not painted green).
@@ -2174,42 +2180,97 @@ def _running_row_from_progress(
     """Build a redacted live row from an engine tick — no raw secret is stored."""
     method_path = f"{event.method} {redact(event.path)}" if event.method else ""
     drift_leaf = redact(event.drift).rsplit(".", 1)[-1] if event.drift else ""
+    state = "done" if event.done else ("running" if event.started else "queued")
     return _RunningRow(
         request=_req_short(event.request_id),
         variant=redact(event.cell_key) if event.cell_key else "",
         method_path=method_path,
-        status=event.status,
+        state=state,
+        baseline_status=event.status,
+        candidate_status=event.candidate_status,
         baseline_ms=event.baseline_ms,
         candidate_ms=event.candidate_ms,
+        base_pass=event.baseline_pass,
+        base_fail=event.baseline_fail,
+        cand_pass=event.candidate_pass,
+        cand_fail=event.candidate_fail,
         drift=drift_leaf,
         failed=not event.ok,
     )
 
 
-def _running_body(
+def _run_glyph(row: _RunningRow) -> Text:
+    """The per-row status glyph: ○ queued · ◐ in flight · ✓/✗ finished."""
+    if row.state == "queued":
+        return Text("○", style=_DIM)
+    if row.state == "running":
+        return Text("◐", style=_WARN)
+    return Text("✗" if row.failed else "✓", style=_DRIFT if row.failed else _SAME)
+
+
+def _running_side(
+    status: int | None, ms: int | None, passed: int, failed: int, *, exec_mode: bool, state: str
+) -> Text:
+    """One side of a running row — status · latency, plus the assert tally for exec."""
+    if state == "running":
+        return Text("…", style=_DIM)  # in flight
+    if state == "queued" or (status is None and ms is None):
+        return Text("—", style=_DIM)
+    text = Text()
+    if status is not None:
+        text.append(str(status), style=_SAME if 200 <= status < 400 else _DRIFT)
+    if ms is not None:
+        text.append(f" {ms}ms", style=_DIM)
+    if exec_mode and (passed or failed):
+        text.append(f" {passed}/{failed}", style=_DRIFT if failed else _SAME)
+    return text
+
+
+def _running_state(row: _RunningRow, exec_mode: bool) -> Text:
+    """The row's STATE cell — queued/running, or the finished verdict + reason."""
+    if row.state == "queued":
+        return Text("queued", style=_DIM)
+    if row.state == "running":
+        return Text("running", style=_WARN)
+    if not row.failed:
+        return Text("pass" if exec_mode else "same", style=_SAME)
+    if not exec_mode:
+        return Text("drift" if row.drift else "error", style=_DRIFT)
+    reasons = []
+    if row.base_fail or row.cand_fail:
+        reasons.append("assert")
+    if row.drift:
+        reasons.append("diff")
+    label = " + ".join(reasons) if reasons else "error"
+    return Text(f"{label} ✗", style=_DRIFT)
+
+
+def _running_table(
     label: str,
     done: int,
     total: int,
-    current: _RunningRow | None,
-    recent: list[_RunningRow],
-    glyphs: list[str],
+    rows: list[_RunningRow],
+    *,
+    base_name: str = "baseline",
+    cand_name: str = "candidate",
+    exec_mode: bool = False,
 ) -> Group:
-    """The live running transition — progress bar, cell in flight, finished cells.
+    """The live run as a per-plan table — every cell a row, filling in per side.
 
     Shared by the Execution running sub-view and the Diff RUNNING state so both
-    speak the same visual language.
+    render progress *over the plan* (queued → in flight → finished), not a
+    spinner. For an execution each side also carries its live assert tally, so a
+    dimension can be watched failing before the gate is computed.
     """
     parts: list[RenderableType] = []
     head = Text()
     head.append(label or "run", style=f"bold {_TEXT_HI}")
-    head.append("   executing the plan…", style=_DIM)
+    head.append("   replaying each cell against both sides…", style=_DIM)
     parts.append(head)
+    passed = sum(1 for row in rows if row.state == "done" and not row.failed)
+    failed = sum(1 for row in rows if row.state == "done" and row.failed)
     width = 24
     filled = round(width * done / total) if total else 0
-    # Real tallies from the per-cell glyphs the caller maintains (✓ pass, ✗ fail),
-    # never a hardcoded count.
-    passed = sum(1 for glyph in glyphs if glyph == "✓")
-    failed = sum(1 for glyph in glyphs if glyph == "✗")
     bar = Text("\n")
     bar.append("█" * filled, style=_ACCENT)
     bar.append("░" * (width - filled), style=_DIM)
@@ -2219,58 +2280,38 @@ def _running_body(
     bar.append("  ", style=_DIM)
     bar.append(f"{failed} ✗", style=_DRIFT if failed else _DIM)
     parts.append(bar)
-    cur = Text("\n▸ ", style=_ACCENT)
-    if (done < total or not total) and current is not None:
-        cur.append("running ", style=_DIM)
-        cur.append_text(_running_cell_name(current))
-        if current.method_path:
-            cur.append(f"     {current.method_path}", style=_DIM)
-        cur.append("     baseline ", style=_DIM)
-        cur.append("◐", style=_WARN)
-        cur.append("  candidate ", style=_DIM)
-        cur.append("◐", style=_WARN)
-    elif done < total or not total:
-        cur.append("running …", style=_DIM)
-    else:
-        cur.append("finishing…", style=_DIM)
-    parts.append(cur)
-    if recent:
-        parts.append(Text("\nrecently finished", style=f"bold {_DIM}"))
-        log = Text()
-        for index, row in enumerate(recent[-6:]):
-            if index:
-                log.append("\n")
-            # A finished row that failed — a drift, a failed assertion, or an
-            # error — is red; only a clean pass is painted green.
-            if row.failed:
-                log.append("✗ ", style=_DRIFT)
-            else:
-                log.append("✓ ", style=_SAME)
-            log.append_text(_running_cell_name(row, hi=False))
-            if row.method_path:
-                log.append(f"    {row.method_path}", style=_DIM)
-            if row.status is not None:
-                log.append(f"    {row.status}", style=_SAME)
-            if row.baseline_ms is not None:
-                log.append(f"  {row.baseline_ms}ms base", style=_DIM)
-            if row.candidate_ms is not None:
-                log.append(f"  {row.candidate_ms}ms cand", style=_DIM)
-            if row.drift:
-                log.append(f"   ✗ {row.drift} drift", style=_DRIFT)
-        parts.append(log)
-    plan = Text("\nlive plan   ", style=f"bold {_DIM}")
-    for glyph in glyphs:
-        if glyph == "✓":
-            colour = _SAME
-        elif glyph == "✗":
-            colour = _DRIFT
-        elif glyph == "◐":
-            colour = _WARN
-        else:
-            colour = _DIM
-        plan.append(glyph, style=colour)
-    plan.append("   each glyph = one cell, updating as the engine ticks", style=_DIM)
-    parts.append(plan)
+    parts.append(Text())
+    table = _table()
+    table.add_column("", width=2, no_wrap=True)
+    table.add_column("CELL", no_wrap=True)
+    table.add_column(base_name, justify="right", no_wrap=True)
+    table.add_column(cand_name, justify="right", no_wrap=True)
+    table.add_column("STATE", no_wrap=True)
+    for row in rows:
+        table.add_row(
+            _run_glyph(row),
+            _running_cell_name(row, hi=(row.state == "running")),
+            _running_side(
+                row.baseline_status,
+                row.baseline_ms,
+                row.base_pass,
+                row.base_fail,
+                exec_mode=exec_mode,
+                state=row.state,
+            ),
+            _running_side(
+                row.candidate_status,
+                row.candidate_ms,
+                row.cand_pass,
+                row.cand_fail,
+                exec_mode=exec_mode,
+                state=row.state,
+            ),
+            _running_state(row, exec_mode),
+        )
+    parts.append(table)
+    legend = Text("\n○ queued  ◐ in flight  ✓/✗ finished", style=_DIM)
+    parts.append(legend)
     return Group(*parts)
 
 

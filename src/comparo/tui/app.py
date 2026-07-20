@@ -170,8 +170,8 @@ from comparo.tui.render import _request_latencies
 from comparo.tui.render import _requests
 from comparo.tui.render import _run_key
 from comparo.tui.render import _run_label
-from comparo.tui.render import _running_body
 from comparo.tui.render import _running_row_from_progress
+from comparo.tui.render import _running_table
 from comparo.tui.render import _RunningRow
 from comparo.tui.render import _save_run
 from comparo.tui.render import _seg_toggle
@@ -1470,9 +1470,7 @@ class DiffView(Vertical):
         #: live-progress state for the RUNNING sub-view (mirrors the Execution one)
         self._run_done = 0
         self._run_total = 0
-        self._run_current: _RunningRow | None = None
-        self._run_recent: list[_RunningRow] = []
-        self._run_glyphs: list[str] = []
+        self._run_rows: list[_RunningRow] = []
         self._unified = True
         self._index_mode = "fields"
         #: Whether the compare panel is showing the outbound-request diff (DIFF-27).
@@ -1628,9 +1626,20 @@ class DiffView(Vertical):
         # so mirror the Execution running screen instead of a blank/stale results pane.
         self._run_done = 0
         self._run_total = len(plan)
-        self._run_current = None
-        self._run_recent = []
-        self._run_glyphs = ["○"] * len(plan)
+        redact = _app_redact(self)
+        # Seed a queued row per plan cell so the running table shows the whole plan
+        # up front (names known here), filling in per side as each cell finishes.
+        self._run_rows = []
+        for request, cell in plan:
+            outbound = request.spec.request
+            self._run_rows.append(
+                _RunningRow(
+                    request=request.metadata.name,
+                    variant=redact(cell.key) if cell.key else "",
+                    method_path=f"{outbound.method} {redact(outbound.endpoint)}",
+                    state="queued",
+                )
+            )
         self.query_one("#diff-mode", ContentSwitcher).current = "diff-running"
         baseline, candidate = self._pair
         self.query_one("#diff-running").border_title = Text.from_markup(
@@ -1943,10 +1952,7 @@ class DiffView(Vertical):
         limit = asyncio.Semaphore(concurrency)
 
         async def one(index: int, request: Request, cell: MatrixCell) -> CellDiff:
-            method_path = f"{request.spec.request.method} {redact(request.spec.request.endpoint)}"
-            variant = redact(cell.key) if cell.key else ""
-            self._run_current = _RunningRow(request.metadata.name, variant, method_path)
-            self._run_glyphs[index] = "◐"
+            self._run_rows[index] = self._run_rows[index]._replace(state="running")
             self._render_diff_running()
             async with limit:
                 base, cand = await asyncio.gather(
@@ -1958,23 +1964,15 @@ class DiffView(Vertical):
             result = compare_cell(self.project, base, cand)
             self._run_done += 1
             failed = result.drifted or result.error is not None
-            self._run_glyphs[index] = "✗" if failed else "✓"
             drift = redact(result.drifts[0].path).rsplit(".", 1)[-1] if result.drifts else ""
-            self._run_recent.append(
-                _RunningRow(
-                    request.metadata.name,
-                    variant,
-                    method_path,
-                    status=base.response.status if base.response is not None else None,
-                    baseline_ms=(
-                        round(base.response.elapsed_ms) if base.response is not None else None
-                    ),
-                    candidate_ms=(
-                        round(cand.response.elapsed_ms) if cand.response is not None else None
-                    ),
-                    drift=drift,
-                    failed=failed,
-                )
+            self._run_rows[index] = self._run_rows[index]._replace(
+                state="done",
+                baseline_status=base.response.status if base.response is not None else None,
+                candidate_status=cand.response.status if cand.response is not None else None,
+                baseline_ms=round(base.response.elapsed_ms) if base.response is not None else None,
+                candidate_ms=round(cand.response.elapsed_ms) if cand.response is not None else None,
+                drift=drift,
+                failed=failed,
             )
             self._render_diff_running()
             return result
@@ -1992,16 +1990,18 @@ class DiffView(Vertical):
         if not self.is_mounted:
             return
         label = "diff"
+        base_name, cand_name = "baseline", "candidate"
         if self._pair is not None:
-            label = f"{self._pair[0].metadata.name} ⇄ {self._pair[1].metadata.name}"
+            base_name, cand_name = self._pair[0].metadata.name, self._pair[1].metadata.name
+            label = f"{base_name} ⇄ {cand_name}"
         self.query_one("#diff-running-content", Static).update(
-            _running_body(
+            _running_table(
                 label,
                 self._run_done,
                 self._run_total,
-                self._run_current,
-                self._run_recent,
-                self._run_glyphs,
+                self._run_rows,
+                base_name=base_name,
+                cand_name=cand_name,
             )
         )
 
@@ -3590,9 +3590,7 @@ class ExecutionView(Vertical):
         # live-progress state for the running sub-view
         self._done = 0
         self._total = 0
-        self._current: _RunningRow | None = None
-        self._recent: list[_RunningRow] = []
-        self._plan_glyphs: list[str] = []
+        self._run_rows: list[_RunningRow] = []
         self._worker: Worker[None] | None = None
 
     def compose(self) -> ComposeResult:
@@ -3843,9 +3841,7 @@ class ExecutionView(Vertical):
         self._run_id = uuid4().hex[:4]
         self._done = 0
         self._total = 0
-        self._current = None
-        self._recent = []
-        self._plan_glyphs = []
+        self._run_rows = []
         self.query_one("#exec-running").border_title = Text.from_markup(
             f"RUNNING [{_DIM}]· {profile.metadata.name}[/]"
         )
@@ -3859,34 +3855,32 @@ class ExecutionView(Vertical):
         )
 
     def update_progress(self, event: ExecutionProgress) -> None:
-        """Advance the running display for one start/finish tick from the engine."""
+        """Advance the running table for one queued/start/finish tick from the engine."""
         redact = _app_redact(self)
         self._total = event.total
-        while len(self._plan_glyphs) < event.total:
-            self._plan_glyphs.append("○")
-        row = _running_row_from_progress(event, redact)
-        if event.done:
-            self._done += 1
-            if event.index < len(self._plan_glyphs):
-                self._plan_glyphs[event.index] = "✓" if event.ok else "✗"
-            self._recent.append(row)
-        else:
-            if event.index < len(self._plan_glyphs):
-                self._plan_glyphs[event.index] = "◐"
-            self._current = row
+        while len(self._run_rows) < event.total:
+            self._run_rows.append(_RunningRow(request=""))
+        if 0 <= event.index < len(self._run_rows):
+            self._run_rows[event.index] = _running_row_from_progress(event, redact)
+        self._done = sum(1 for row in self._run_rows if row.state == "done")
         if self.is_mounted:
             self._render_running()
 
     def _render_running(self) -> None:
         label = self._profile.metadata.name if self._profile is not None else "execution"
+        base, cand = "baseline", "candidate"
+        if self._profile is not None:
+            names = _exec_env_names(self.project, self._profile)
+            base, cand = names[0], names[1] or "candidate"
         self.query_one("#exec-running-content", Static).update(
-            _running_body(
+            _running_table(
                 label,
                 self._done,
                 self._total,
-                self._current,
-                self._recent,
-                self._plan_glyphs,
+                self._run_rows,
+                base_name=base,
+                cand_name=cand,
+                exec_mode=True,
             )
         )
 
