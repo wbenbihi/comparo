@@ -1676,6 +1676,48 @@ def _diff_error_view(
     return Group(*parts)
 
 
+def _rule_detail(rule: str, mode: str, silenced: list[tuple[str, list[str]]]) -> Group:
+    """The rule-detail panel (d-rules) — what a silencing rule is and every field it hid.
+
+    Selecting a rule in the "broken rules" index shows this instead of a body diff:
+    the rule's mode and why it exists, then the exact field paths it silenced with
+    their source request — so a skip is auditable, never a silent pass.
+    """
+    parts: list[RenderableType] = []
+    head = Text("RULE  ", style=f"bold {_LABEL}")
+    head.append(rule, style=_SKIP)
+    head.append(f"   {mode}", style=_DIM)
+    parts.append(head)
+    why = Text("\nwhy  ", style=f"bold {_DIM}")
+    if mode == "ignore":
+        why.append(
+            "volatile — the DiffProfile deliberately ignores this path; a diff here "
+            "would be noise, not a regression.",
+            style=_DIM,
+        )
+    else:
+        why.append(
+            "within tolerance — a small numeric drift on this path is absorbed by design.",
+            style=_DIM,
+        )
+    parts.append(why)
+    total_requests = len({request for _, requests in silenced for request in requests})
+    heading = Text("\nFields it silenced  ", style=f"bold {_TEXT_HI}")
+    heading.append(f"{len(silenced)} · across {total_requests} request(s)", style=_DIM)
+    parts.append(heading)
+    for path, requests in silenced:
+        line = Text("◌ ", style=_SKIP)
+        line.append(path, style=_SKIP)
+        who = "all requests" if len(requests) > 1 else (requests[0] if requests else "—")
+        line.append(f"   · {who}", style=_DIM)
+        parts.append(line)
+    footer = Text("\ngreen never means full coverage — this is ", style=_DIM)
+    footer.append("what the tool chose not to check", style=f"bold {_TEXT_HI}")
+    footer.append(", and why.", style=_DIM)
+    parts.append(footer)
+    return Group(*parts)
+
+
 def _outbound_source(label: str) -> str:
     """Attribute an outbound difference to the config surface that produced it.
 
