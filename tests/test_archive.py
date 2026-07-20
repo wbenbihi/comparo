@@ -121,6 +121,44 @@ def test_run_record_is_an_assertions_only_report() -> None:
     assert replay.baseline_assertions.failed == 1
 
 
+def test_run_replay_scopes_checks_to_each_request_not_the_whole_record() -> None:
+    # Regression: the Run detail's "checks" section must show only the SELECTED
+    # request's assertions. The record-wide roll-up leaked every request's checks
+    # into every request's detail (hundreds of "status equals 200").
+    loaded = load_project(SAMPLE)
+    env = select_environment(loaded, "local")
+    req_a = loaded.objects["request.get-json"]
+    req_b = loaded.objects["request.echo-anything"]
+    assert isinstance(req_a, Request)
+    assert isinstance(req_b, Request)
+    ok = AssertionResult("status", "equals", True, "error", "200 == 200", "status")
+    latency = AssertionResult("latency", "lte", True, "error", "5 < 100", "latency")
+    cells = [
+        (_execution(req_a, env, {"a": 1}), [ok]),
+        (_execution(req_b, env, {"b": 2}), [ok, latency]),
+    ]
+    record = record_from_run(
+        env,
+        cells,
+        record_id="run",
+        created="now",
+        tool="c",
+        project=None,
+        concurrency=1,
+        redact=str,
+    )
+    replay = project(record)
+    by_request = {cell.request: cell for cell in replay.cells}
+    # Each cell carries only its own request's checks, not the record-wide three.
+    assert [line.label for line in by_request["request.get-json"].assertions] == ["status equals"]
+    assert sorted(line.label for line in by_request["request.echo-anything"].assertions) == [
+        "latency lte",
+        "status equals",
+    ]
+    # The record-wide roll-up still holds all three (it feeds the summary counts only).
+    assert len(replay.baseline_assertions.lines) == 3
+
+
 def test_no_drift_leaves_paths_empty() -> None:
     loaded, env, request = _bits()
     cell = compare_cell(
