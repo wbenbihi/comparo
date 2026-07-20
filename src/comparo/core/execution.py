@@ -98,8 +98,10 @@ class ExecutionResult:
 class ExecutionProgress:
     """A live progress tick emitted as an execution works through its plan.
 
-    ``done`` is ``False`` when a cell starts executing and ``True`` when it
-    finishes, so a UI can show which request is in flight and how far along.
+    Three phases per cell so a UI can render progress *over the whole plan* as a
+    table: a ``started=False`` seed tick for every cell before the run (queued),
+    a ``started=True, done=False`` tick when the cell goes in flight, and a
+    ``done=True`` tick when it finishes with both sides' metrics.
     """
 
     request_id: str
@@ -107,13 +109,32 @@ class ExecutionProgress:
     index: int  # 0-based position of this cell in the plan
     total: int  # total cells in the plan (known before the run starts)
     done: bool
+    started: bool = True  # False = a queued seed tick (cell not yet in flight)
     method: str = ""  # the cell's HTTP method (e.g. GET), for the live row
     path: str = ""  # the cell's endpoint path, for the live row
     status: int | None = None  # baseline response status, once finished
+    candidate_status: int | None = None  # candidate response status, once finished
     baseline_ms: int | None = None  # baseline latency, once finished
     candidate_ms: int | None = None  # candidate latency, once finished
+    baseline_pass: int = 0  # baseline assertions passed, once finished
+    baseline_fail: int = 0  # baseline assertions failed, once finished
+    candidate_pass: int = 0  # candidate assertions passed, once finished
+    candidate_fail: int = 0  # candidate assertions failed, once finished
     drift: str = ""  # the first drifted field path, once finished (else "")
     ok: bool = True  # the cell's verdict once finished — no error, assertions hold, no drift
+
+
+def _tally(results: list[AssertionResult]) -> tuple[int, int, int]:
+    """Count (passed, failed, warned) over a side's assertion results."""
+    passed = failed = warned = 0
+    for result in results:
+        if result.ok:
+            passed += 1
+        elif result.severity == "warn":
+            warned += 1
+        else:
+            failed += 1
+    return passed, failed, warned
 
 
 def _build_plan(
@@ -190,6 +211,22 @@ async def run_execution(
     ]
     concurrency, retry = run_settings(project)
     limit = asyncio.Semaphore(concurrency)
+    # Seed a queued tick for every plan cell before any request goes out, so a UI
+    # can render the whole plan as a table up front (queued → running → done).
+    if on_progress is not None:
+        for index, (request, cell, _rules) in enumerate(plan):
+            on_progress(
+                ExecutionProgress(
+                    request.metadata.id or request.metadata.name,
+                    cell.key,
+                    index,
+                    total,
+                    done=False,
+                    started=False,
+                    method=request.spec.request.method,
+                    path=request.spec.request.endpoint,
+                )
+            )
 
     async def _run_cell(
         index: int, request: Request, cell: MatrixCell, rules: list[AssertionRule]
@@ -224,6 +261,8 @@ async def run_execution(
                 candidate=cand,
             )
             if on_progress is not None:
+                base_pass, base_fail, _ = _tally(outcome.baseline_assertions)
+                cand_pass, cand_fail, _ = _tally(outcome.candidate_assertions)
                 on_progress(
                     ExecutionProgress(
                         request_id,
@@ -234,6 +273,11 @@ async def run_execution(
                         method=method,
                         path=path,
                         status=base.response.status if base.response is not None else None,
+                        candidate_status=(
+                            cand.response.status
+                            if cand is not None and cand.response is not None
+                            else None
+                        ),
                         baseline_ms=(
                             round(base.response.elapsed_ms) if base.response is not None else None
                         ),
@@ -242,6 +286,10 @@ async def run_execution(
                             if cand is not None and cand.response is not None
                             else None
                         ),
+                        baseline_pass=base_pass,
+                        baseline_fail=base_fail,
+                        candidate_pass=cand_pass,
+                        candidate_fail=cand_fail,
                         drift=diff.drifts[0].path if diff is not None and diff.drifts else "",
                         ok=outcome.ok,
                     )

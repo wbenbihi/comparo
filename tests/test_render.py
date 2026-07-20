@@ -254,6 +254,57 @@ def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
     assert "event sequence" in rendered
 
 
+def test_running_table_shows_the_plan_per_side_with_assert_tally_and_state() -> None:
+    # d-running/e-running: the live run renders as a per-plan table — each cell a
+    # row, per-side status/latency (+ assert tally for exec), and a STATE column
+    # that names the failing dimension. Queued rows show —, in-flight rows show ….
+    from comparo.tui.render import _running_table
+    from comparo.tui.render import _RunningRow
+
+    rows = [
+        _RunningRow(
+            "Price quote",
+            "pro",
+            "GET /get",
+            "done",
+            baseline_status=200,
+            candidate_status=200,
+            baseline_ms=39,
+            candidate_ms=92,
+            base_pass=4,
+            base_fail=0,
+            cand_pass=4,
+            cand_fail=0,
+            drift="taxRate",
+            failed=True,
+        ),
+        _RunningRow(
+            "Checkout",
+            "",
+            "POST /post",
+            "done",
+            baseline_status=200,
+            candidate_status=200,
+            baseline_ms=58,
+            candidate_ms=280,
+            base_pass=2,
+            base_fail=0,
+            cand_pass=1,
+            cand_fail=1,
+            failed=True,
+        ),
+        _RunningRow("Price feed", "", "GET /feed", "queued"),
+    ]
+    out = _plain(
+        _running_table("r", 2, 3, rows, base_name="stable", cand_name="canary", exec_mode=True)
+    )
+    assert "200 39ms 4/0" in out  # per-side status · latency · assert tally
+    assert "200 280ms 1/1" in out  # the slow candidate with a failed assertion
+    assert "diff ✗" in out  # a drift-only cell names the diff dimension
+    assert "assert ✗" in out  # an assert-failing cell names the assert dimension
+    assert "queued" in out  # the not-yet-run cell is a visible row
+
+
 def test_outbound_header_collapses_to_a_summary_and_expands_to_the_full_diff() -> None:
     # The two-layer compare panel: `o` toggles the OUTBOUND layer between a
     # one-line summary and the full request diff, and a masked secret never leaks.

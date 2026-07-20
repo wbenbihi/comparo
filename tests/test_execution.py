@@ -148,9 +148,10 @@ def test_a_request_whose_matrix_expands_to_zero_cells_fails_closed(tmp_path: Pat
 
 
 def test_execution_reports_live_progress(tmp_path: Path) -> None:
-    # EXE-04: run_execution emits a start (done=False) then a done (done=True)
-    # tick per cell, with the total known from the first tick, so a UI can show
-    # a live transition.
+    # EXE-04: run_execution emits three phases per cell — a queued seed tick
+    # (started=False) for the whole plan up front, then a start (started=True,
+    # done=False) and a done (done=True) tick per cell — so a UI can render
+    # progress over the plan as a table. The total is known from the first tick.
     from comparo.core.execution import ExecutionProgress
 
     _project(tmp_path, matrix=True)  # 2 matrix cells (tier free / pro)
@@ -159,9 +160,16 @@ def test_execution_reports_live_progress(tmp_path: Path) -> None:
     assert isinstance(profile, ExecutionProfile)
     events: list[ExecutionProgress] = []
     asyncio.run(run_execution(loaded, profile, _EnvEchoClient(), on_progress=events.append))
-    assert [e.total for e in events] == [2, 2, 2, 2]  # total known from the first tick
-    assert [e.done for e in events] == [False, True, False, True]  # start/done per cell
-    assert [e.index for e in events] == [0, 0, 1, 1]
+    assert all(e.total == 2 for e in events)  # total known from the first tick
+    queued = [e for e in events if not e.started]
+    started = [e for e in events if e.started and not e.done]
+    finished = [e for e in events if e.done]
+    assert sorted(e.index for e in queued) == [0, 1]  # a queued seed per plan cell
+    assert sorted(e.index for e in started) == [0, 1]  # each cell goes in flight
+    assert sorted(e.index for e in finished) == [0, 1]  # each cell finishes
+    # The queued seed ticks precede any start/done tick (the whole plan is seeded first).
+    assert events[0].started is False
+    assert events[1].started is False
     assert {e.request_id for e in events} == {"request.probe"}
 
 

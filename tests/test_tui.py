@@ -959,8 +959,8 @@ def test_execution_transition_screen_shows_live_progress() -> None:
             await pilot.pause()
             assert view._total == 3
             assert view._done == 1  # one cell finished
-            assert view._current  # a cell is in flight
-            assert view._recent  # the finished cell is logged
+            assert view._run_rows[1].state == "running"  # a cell is in flight
+            assert view._run_rows[0].state == "done"  # the finished cell is recorded
             # The running content widget was populated without error.
             assert view.query_one("#exec-running-content", Static) is not None
 
@@ -1680,24 +1680,22 @@ def test_running_counter_reflects_real_verdicts_from_engine_ticks() -> None:
             view.update_progress(
                 ExecutionProgress("request.echo-anything", "", 2, 4, done=True, ok=False)
             )
-            view.update_progress(ExecutionProgress("request.get-json", "", 3, 4, done=False))
+            view.update_progress(
+                ExecutionProgress("request.get-json", "", 3, 4, done=False, started=True)
+            )
             await pilot.pause()
 
-            # The app recorded real verdict glyphs, not a verdict-less "●".
-            assert view._plan_glyphs.count("✓") == 2
-            assert view._plan_glyphs.count("✗") == 1
-            assert "●" not in view._plan_glyphs
+            # The app recorded real per-cell verdicts from the ticks, not a stuck 0/0.
+            done = [row for row in view._run_rows if row.state == "done"]
+            assert sum(1 for row in done if not row.failed) == 2
+            assert sum(1 for row in done if row.failed) == 1  # the ok=False cell fails
+            assert view._run_rows[3].state == "running"  # the in-flight cell
 
-            # Those real glyphs drive the live counter (rendered from the same state).
-            from comparo.tui.render import _running_body
+            # Those real verdicts drive the live counter (rendered from the same state).
+            from comparo.tui.render import _running_table
 
-            body = _running_body(
-                "release-gate",
-                view._done,
-                view._total,
-                view._current,
-                view._recent,
-                view._plan_glyphs,
+            body = _running_table(
+                "release-gate", view._done, view._total, view._run_rows, exec_mode=True
             )
             console = Console(width=120)
             with console.capture() as capture:
