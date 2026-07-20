@@ -2115,12 +2115,31 @@ def _exec_plan_line(
     return row, len(cells)
 
 
+def _ref_ids(value: object) -> list[str]:
+    """Extract the referenced ids from a free-form ``$ref``/id/list profile value."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        ref = value.get("$ref")
+        return [ref] if isinstance(ref, str) else []
+    if isinstance(value, list):
+        return [rid for item in value for rid in _ref_ids(item)]
+    return []
+
+
 def _exec_setup(
     project: LoadedProject, profile: ExecutionProfile, redact: Callable[[str], str] = str
 ) -> Group:
-    """The launch SETUP panel — pair, mode, selection, and the counted plan preview."""
+    """The launch SETUP panel — a read-only spec sheet for the profile.
+
+    What it asserts, what it diffs, the selection math, and the gate formula, so
+    the verdict's composition is legible before you run.
+    """
     baseline, candidate = _exec_env_names(project, profile)
     mode = _exec_mode(profile)
+    profiles = profile.spec.profiles
+    assert_ids = _ref_ids(profiles.assert_) if profiles is not None else []
+    diff_ids = _ref_ids(profiles.diff) if profiles is not None else []
     parts: list[RenderableType] = []
     head = Text()
     head.append(redact(profile.metadata.name), style=f"bold {_TEXT_HI}")
@@ -2135,15 +2154,21 @@ def _exec_setup(
         f" {redact(candidate) if candidate else '—'} ", style=f"bold {_TEXT_HI} on {_SYNTAX_BG}"
     )
     parts.append(pair)
-    mode_line = Text("\nmode       ", style=_DIM)
-    for option in ("assert", "diff", "both"):
-        on = option == mode
-        mode_line.append(
-            f" {option} ", style=f"bold {_INK} on {_ACCENT}" if on else f"{_DIM} on {_SYNTAX_BG}"
-        )
-        mode_line.append(" ", style=_DIM)
-    mode_line.append("  both = assert ∧ diff", style=_DIM)
-    parts.append(mode_line)
+    if mode in ("assert", "both"):
+        asserts = Text("\nasserts    ", style=_DIM)
+        asserts.append("on both environments", style=_DIM)
+        asserts.append("   status · schema sugar per request", style=_DIM)
+        if assert_ids:
+            asserts.append("   + ", style=_DIM)
+            asserts.append(", ".join(redact(rid) for rid in assert_ids), style=f"bold {_AXIS}")
+        parts.append(asserts)
+    if mode in ("diff", "both") and candidate is not None:
+        diffs = Text("\ndiffs      ", style=_DIM)
+        diffs.append(f"{redact(baseline)} ⇄ {redact(candidate)}", style=_TEXT)
+        if diff_ids:
+            diffs.append("   · profiles ", style=_DIM)
+            diffs.append(", ".join(redact(rid) for rid in diff_ids), style=f"bold {_AXIS}")
+        parts.append(diffs)
     select = profile.spec.select
     sel = Text("\nselect     ", style=_DIM)
     if select is not None and select.tags:
@@ -2166,15 +2191,27 @@ def _exec_setup(
         line, count = _exec_plan_line(project, profile, request, redact)
         parts.append(line)
         total += count
+    envs = 2 if candidate is not None else 1
     summary = Text("\n  will run ", style=_DIM)
     summary.append(f"{total} cell{'' if total == 1 else 's'}", style=f"bold {_TEXT_HI}")
-    if mode == "both":
-        summary.append(" · assertions on both sides · diff the pair", style=_DIM)
-    elif mode == "assert":
-        summary.append(" · assertions on both sides", style=_DIM)
-    else:
-        summary.append(" · diff the pair", style=_DIM)
+    summary.append(" × ", style=_DIM)
+    summary.append(f"{envs} env{'' if envs == 1 else 's'}", style=f"bold {_TEXT_HI}")
+    summary.append(" = ", style=_DIM)
+    summary.append(f"{total * envs} calls", style=f"bold {_TEXT_HI}")
     parts.append(summary)
+    # The gate formula, stated up front, so the verdict's composition is legible
+    # before the run — the same ∧ shown post-run in the gate ledger.
+    gate = Text("\ngate = ", style=_DIM)
+    factors = []
+    if mode in ("assert", "both"):
+        factors += ["baseline asserts", "candidate asserts"]
+    if mode in ("both", "diff") and candidate is not None:
+        factors.append("diff")
+    gate.append(" ∧ ".join(factors) or "—", style=_SAME)
+    gate.append("   — press ", style=_DIM)
+    gate.append("enter", style=f"bold {_ACCENT}")
+    gate.append(" to run", style=_DIM)
+    parts.append(gate)
     return Group(*parts)
 
 
