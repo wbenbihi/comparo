@@ -110,6 +110,7 @@ from comparo.tui.render import _assert_tally
 from comparo.tui.render import _bash
 from comparo.tui.render import _branch
 from comparo.tui.render import _build_report_tree
+from comparo.tui.render import _cell_events
 from comparo.tui.render import _cell_verdict
 from comparo.tui.render import _clip
 from comparo.tui.render import _crash_report
@@ -176,6 +177,7 @@ from comparo.tui.render import _RunningRow
 from comparo.tui.render import _save_run
 from comparo.tui.render import _seg_toggle
 from comparo.tui.render import _settings_body
+from comparo.tui.render import _stream_body_view
 from comparo.tui.render import _title
 from comparo.tui.replay import ReplayRecord
 from comparo.tui.replay import project
@@ -2266,9 +2268,18 @@ class DiffView(Vertical):
         wrap.border_title = Text.from_markup(
             f"COMPARE [{_DIM}]·[/] {redact(path)} [{_DIM}]· {request}{envs}[/]"
         )
-        wrap.border_subtitle = _seg_toggle(("unified", "side-by-side"), mode)
-        body = _diff_body_view((path, entries), self._pair, unified=self._unified, redact=redact)
         cell = entries[0][0] if entries else None
+        # A streamed response diffs its event SEQUENCE (numbered ✓/✗), never one
+        # assembled blob; a normal response gets the git-style body diff.
+        base_events, cand_events = _cell_events(cell) if cell is not None else (None, None)
+        if base_events is not None or cand_events is not None:
+            wrap.border_subtitle = "streaming · per-event diff"
+            body: RenderableType = _stream_body_view(base_events or [], cand_events or [], redact)
+        else:
+            wrap.border_subtitle = _seg_toggle(("unified", "side-by-side"), mode)
+            body = _diff_body_view(
+                (path, entries), self._pair, unified=self._unified, redact=redact
+            )
         # The compare panel is three stacked layers: call ledger → outbound → body,
         # so a latency/size regression and the "did we send the same request" answer
         # sit above the response diff (mockup d-results).
