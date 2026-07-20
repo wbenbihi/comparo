@@ -1718,6 +1718,89 @@ def _rule_detail(rule: str, mode: str, silenced: list[tuple[str, list[str]]]) ->
     return Group(*parts)
 
 
+def _mode_prose(mode: str) -> str:
+    """A one-line explanation of what a diff mode allows — for the field drill."""
+    return {
+        "exact": "values must match exactly; no tolerance, no shape allowance",
+        "shape": "only the structure and types must match, not the values",
+        "tolerance": "a small numeric drift on this path is absorbed",
+        "ignore": "this path is deliberately not compared",
+    }.get(mode, "")
+
+
+def _field_drill_card(
+    path: str, entries: list[tuple[CellDiff, FieldDiff]], redact: Callable[[str], str] = str
+) -> Group:
+    """The field-drill card (d-drill) — the whole story of one drift on one screen.
+
+    Reached by ``enter`` on a drifted field: its state and the mode that made it a
+    drift, baseline→candidate value AND type, and the EXACT ignore-rule ``i`` would
+    write — so silencing a diff is never a hidden act.
+    """
+    field = entries[0][1]
+    count = len(entries)
+    plural = "" if count == 1 else "s"
+    parts: list[RenderableType] = []
+    head = Text("field drill  ", style=f"bold {_LABEL}")
+    head.append(redact(path), style=f"bold {_DRIFT}")
+    head.append("   drift · fails the gate", style=_DRIFT)
+    parts.append(head)
+
+    status = Text("\nstate   ", style=_DIM)
+    status.append("drift", style=f"bold {_DRIFT}")
+    status.append("\nmode    ", style=_DIM)
+    status.append(field.mode, style=_MODE.get(field.mode, _AXIS))
+    prose = _mode_prose(field.mode)
+    if prose:
+        status.append(f"   {prose}", style=_DIM)
+    status.append("\ndrifts  ", style=_DIM)
+    status.append(f"{count} cell{plural}", style=f"bold {_TEXT_HI}")
+    variants = ", ".join(redact(cell.cell_key) for cell, _ in entries if cell.cell_key)
+    if variants:
+        status.append(f"   {variants}", style=_AXIS)
+    status.append("\nrule    ", style=_DIM)
+    if field.rule:
+        status.append(redact(field.rule), style=_SKIP)
+    else:
+        status.append("none", style=_SKIP)
+        status.append("   not silenced by any DiffProfile rule", style=_DIM)
+    parts.append(status)
+
+    parts.append(Text("\nBaseline → candidate", style=f"bold {_TEXT_HI}"))
+    table = _table()
+    table.add_column("", style=_LABEL, no_wrap=True)
+    table.add_column("baseline")
+    table.add_column("candidate")
+    table.add_row(
+        Text("value", style=_DIM),
+        Text(redact(_sv(field.baseline)), style=_TEXT),
+        Text(redact(_sv(field.candidate)), style=f"bold {_TEXT_HI}"),
+    )
+    table.add_row(
+        Text("type", style=_DIM),
+        Text(type(field.baseline).__name__, style=_DIM),
+        Text(type(field.candidate).__name__, style=_DIM),
+    )
+    parts.append(table)
+
+    triage = Text(
+        "\nTriage — i writes the rule below into the committed DiffProfile",
+        style=f"bold {_TEXT_HI}",
+    )
+    parts.append(triage)
+    yaml = Text("\nignore:\n", style=_DIM)
+    yaml.append(f"  - {redact(path)}", style=_SKIP)
+    yaml.append(f"   # silences all {count} cell{plural} at once", style=_DIM)
+    parts.append(yaml)
+    foot = Text("\npress ", style=_DIM)
+    foot.append("i", style=f"bold {_ACCENT}")
+    foot.append(" to ignore    ", style=_DIM)
+    foot.append("esc", style=f"bold {_ACCENT}")
+    foot.append(" back", style=_DIM)
+    parts.append(foot)
+    return Group(*parts)
+
+
 def _outbound_source(label: str) -> str:
     """Attribute an outbound difference to the config surface that produced it.
 

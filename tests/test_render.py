@@ -254,6 +254,34 @@ def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
     assert "event sequence" in rendered
 
 
+def test_field_drill_card_shows_value_type_and_the_exact_ignore_rule() -> None:
+    # d-drill: the field-drill card tells the whole story of one drift — its mode
+    # with prose, baseline→candidate value AND type, and the exact ignore-rule YAML
+    # that `i` would write (so silencing is never a hidden act).
+    from pathlib import Path
+
+    from comparo.core.compare import CellDiff
+    from comparo.core.diff import FieldDiff
+    from comparo.core.diff import State
+    from comparo.core.loader import load_project
+    from comparo.core.models import Request
+    from comparo.tui.render import _field_drill_card
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    field = FieldDiff("$.args.taxRate", State.DRIFT, "exact", baseline="0.20", candidate="0.25")
+    entries = [(CellDiff(request, v, [field]), field) for v in ("basic", "pro", "scale")]
+    out = _plain(_field_drill_card("$.args.taxRate", entries, str))
+    assert "field drill" in out
+    assert "exact" in out
+    assert "values must match exactly" in out  # the mode prose
+    assert "3 cells" in out  # one field on three cells
+    assert '"0.20"' in out  # baseline value row
+    assert '"0.25"' in out  # candidate value row
+    assert "ignore:" in out  # the exact rule preview
+    assert "silences all 3 cells" in out
+
+
 def test_rule_detail_names_the_rule_and_every_field_it_silenced() -> None:
     # d-rules: selecting a silencing rule shows its mode, why, and the exact field
     # paths it hid — so a skip is auditable, never a silent pass.

@@ -452,7 +452,7 @@ Screen {
 }
 
 /* ── Diff ────────────────────────────────────────────────────────────────── */
-#diff-mode, #diff-prepare, #diff-results, #diff-running {
+#diff-mode, #diff-prepare, #diff-results, #diff-running, #diff-drill {
     height: 1fr;
 }
 

@@ -570,6 +570,37 @@ def test_diff_toggles_flip_view_and_index() -> None:
     asyncio.run(go())
 
 
+def test_diff_enter_opens_the_field_drill_card_and_esc_returns() -> None:
+    # d-drill: enter on a drifted field opens the focused triage card; esc returns
+    # to the results index. Before, DiffView had no drill state and enter did nothing.
+    loaded = load_project(SAMPLE)
+    request = loaded.objects["request.get-json"]
+    assert isinstance(request, Request)
+    field = FieldDiff("$.args.taxRate", State.DRIFT, "exact", baseline="0.20", candidate="0.25")
+    cell = CellDiff(
+        request, "", [field], None, {"args": {"taxRate": "0.20"}}, {"args": {"taxRate": "0.25"}}
+    )
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")  # Diff
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            diff._finish([cell])
+            await pilot.pause()
+            assert diff.query_one("#diff-mode", ContentSwitcher).current == "diff-results"
+            await pilot.press("enter")  # drill into the highlighted drift
+            await pilot.pause()
+            assert diff.query_one("#diff-mode", ContentSwitcher).current == "diff-drill"
+            await pilot.press("escape")  # back to the results index
+            await pilot.pause()
+            assert diff.query_one("#diff-mode", ContentSwitcher).current == "diff-results"
+
+    asyncio.run(go())
+
+
 def test_diff_starts_in_prepare_with_a_selectable_plan() -> None:
     loaded = load_project(SAMPLE)
 
