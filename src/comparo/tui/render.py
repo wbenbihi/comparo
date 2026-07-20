@@ -2834,13 +2834,21 @@ def _replay_diff_cell(record: ReportRecord) -> "CellRecord | None":
     return None
 
 
-def _call_ledger(cell: CellRecord) -> Table | None:
-    """The per-cell CALL LEDGER — baseline vs candidate status / latency / size, and Δ.
+def _ledger_table(
+    base_status: int | None,
+    cand_status: int | None,
+    base_ms: int | None,
+    cand_ms: int | None,
+    base_size: int | None,
+    cand_size: int | None,
+) -> Table | None:
+    """The CALL LEDGER — baseline vs candidate status / latency / size, and Δ.
 
-    Both sides' call metrics come straight from the saved record; ``None`` when the
-    cell has no candidate side (a run), where a two-column ledger has nothing to say.
+    A latency or size regression stays visible even when the two bodies match.
+    ``None`` when there is no candidate side (a run), where a two-column ledger
+    has nothing to say.
     """
-    if cell.candidate_status is None and cell.candidate_latency_ms is None:
+    if cand_status is None and cand_ms is None:
         return None
 
     def ms(value: int | None) -> str:
@@ -2855,41 +2863,76 @@ def _call_ledger(cell: CellRecord) -> Table | None:
     table.add_column("candidate", justify="right")
     table.add_column("Δ", justify="right")
 
-    base_ok = cell.status is not None and 200 <= cell.status < 400
-    cand_ok = cell.candidate_status is not None and 200 <= cell.candidate_status < 400
-    same_status = cell.status == cell.candidate_status
+    base_ok = base_status is not None and 200 <= base_status < 400
+    cand_ok = cand_status is not None and 200 <= cand_status < 400
+    same_status = base_status == cand_status
     table.add_row(
         Text("status", style=_DIM),
-        Text("—" if cell.status is None else str(cell.status), style=_SAME if base_ok else _DRIFT),
+        Text("—" if base_status is None else str(base_status), style=_SAME if base_ok else _DRIFT),
         Text(
-            "—" if cell.candidate_status is None else str(cell.candidate_status),
+            "—" if cand_status is None else str(cand_status),
             style=_SAME if cand_ok else _DRIFT,
         ),
         Text("=" if same_status else "≠", style=_DIM if same_status else _DRIFT),
     )
     latency_delta = (
-        signed(cell.candidate_latency_ms - cell.latency_ms) + "ms"
-        if cell.latency_ms is not None and cell.candidate_latency_ms is not None
-        else ""
+        signed(cand_ms - base_ms) + "ms" if base_ms is not None and cand_ms is not None else ""
     )
+    slow = base_ms is not None and cand_ms is not None and cand_ms > base_ms
     table.add_row(
         Text("latency", style=_DIM),
-        Text(ms(cell.latency_ms), style=_TEXT),
-        Text(ms(cell.candidate_latency_ms), style=_TEXT),
-        Text(latency_delta, style=_DIM),
+        Text(ms(base_ms), style=_TEXT),
+        Text(ms(cand_ms), style=_TEXT),
+        Text(latency_delta, style=_WARN if slow else _DIM),
     )
     size_delta = (
-        signed(cell.candidate_size_bytes - cell.size_bytes) + " B"
-        if cell.size_bytes is not None and cell.candidate_size_bytes is not None
+        signed(cand_size - base_size) + " B"
+        if base_size is not None and cand_size is not None
         else ""
     )
     table.add_row(
         Text("size", style=_DIM),
-        Text(_fmt_bytes(cell.size_bytes), style=_TEXT),
-        Text(_fmt_bytes(cell.candidate_size_bytes), style=_TEXT),
+        Text(_fmt_bytes(base_size), style=_TEXT),
+        Text(_fmt_bytes(cand_size), style=_TEXT),
         Text(size_delta, style=_DIM),
     )
     return table
+
+
+def _call_ledger(cell: CellRecord) -> Table | None:
+    """The CALL LEDGER for a saved record cell — metrics come straight off the record."""
+    return _ledger_table(
+        cell.status,
+        cell.candidate_status,
+        cell.latency_ms,
+        cell.candidate_latency_ms,
+        cell.size_bytes,
+        cell.candidate_size_bytes,
+    )
+
+
+def _executions_ledger(base: Execution | None, cand: Execution | None) -> Table | None:
+    """The CALL LEDGER for a live pair of executions — metrics read off each response.
+
+    This is the same ledger the saved-report replay shows, wired into the live
+    compare and cell-detail panels so a latency/size regression is visible the
+    moment a run finishes, not only when the report is reopened.
+    """
+    b = base.response if base is not None else None
+    c = cand.response if cand is not None else None
+    return _ledger_table(
+        b.status if b is not None else None,
+        c.status if c is not None else None,
+        round(b.elapsed_ms) if b is not None else None,
+        round(c.elapsed_ms) if c is not None else None,
+        len(b.body) if b is not None else None,
+        len(c.body) if c is not None else None,
+    )
+
+
+def _live_call_ledger(cell: CellDiff) -> Table | None:
+    """The CALL LEDGER for a live diff cell — reads the executions carried on the cell."""
+    return _executions_ledger(cell.baseline, cell.candidate)
 
 
 def _event_sequence(

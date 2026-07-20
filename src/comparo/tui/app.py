@@ -135,12 +135,14 @@ from comparo.tui.render import _exec_profiles_hint
 from comparo.tui.render import _exec_setup
 from comparo.tui.render import _exec_stacked_diff
 from comparo.tui.render import _exec_triplet
+from comparo.tui.render import _executions_ledger
 from comparo.tui.render import _gate_composition
 from comparo.tui.render import _graph
 from comparo.tui.render import _help_body
 from comparo.tui.render import _json
 from comparo.tui.render import _keys_bar
 from comparo.tui.render import _leaf
+from comparo.tui.render import _live_call_ledger
 from comparo.tui.render import _matches
 from comparo.tui.render import _object_detail
 from comparo.tui.render import _ok_report
@@ -2266,8 +2268,18 @@ class DiffView(Vertical):
         )
         wrap.border_subtitle = _seg_toggle(("unified", "side-by-side"), mode)
         body = _diff_body_view((path, entries), self._pair, unified=self._unified, redact=redact)
-        header = self._outbound_layer(entries[0][0] if entries else None, redact)
-        content = Group(header, Text(), body) if header is not None else body
+        cell = entries[0][0] if entries else None
+        # The compare panel is three stacked layers: call ledger → outbound → body,
+        # so a latency/size regression and the "did we send the same request" answer
+        # sit above the response diff (mockup d-results).
+        ledger = _live_call_ledger(cell) if cell is not None else None
+        header = self._outbound_layer(cell, redact)
+        layers: list[RenderableType] = []
+        for part in (ledger, header):
+            if part is not None:
+                layers.extend((part, Text()))
+        layers.append(body)
+        content = Group(*layers) if len(layers) > 1 else body
         self.query_one("#compare-content", Static).update(content)
 
     def _outbound_layer(
@@ -3605,6 +3617,7 @@ class ExecutionView(Vertical):
                 yield Static(id="cell-header", classes="panel")
                 with Horizontal(id="cell-cols"):
                     with Vertical(id="cell-assert"):
+                        yield Static(id="cell-ledger", classes="panel")
                         yield Static(id="cell-assert-base", classes="panel")
                         yield Static(id="cell-assert-cand", classes="panel")
                         yield Static(id="cell-verdict", classes="panel")
@@ -4080,6 +4093,11 @@ class ExecutionView(Vertical):
         crumb.append("    ✗ drift" if drifted else "    ✓ same", style=_DRIFT if drifted else _SAME)
         self.query_one("#cell-header", Static).update(crumb)
         self.query_one("#cell-header").border_title = "CELL"
+        ledger = _executions_ledger(outcome.baseline, outcome.candidate)
+        ledger_panel = self.query_one("#cell-ledger", Static)
+        ledger_panel.border_title = Text.from_markup(f"CALL LEDGER [{_DIM}]· per side[/]")
+        ledger_panel.display = ledger is not None
+        ledger_panel.update(ledger or Text())
         for ident, env, results in (
             ("#cell-assert-base", result.baseline, outcome.baseline_assertions),
             ("#cell-assert-cand", result.candidate or "—", outcome.candidate_assertions),

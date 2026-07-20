@@ -150,6 +150,36 @@ def test_call_ledger_shows_both_sides_and_the_delta() -> None:
     assert "+46ms" in rendered  # the latency delta
 
 
+def test_live_call_ledger_reads_both_executions_and_flags_a_slow_candidate() -> None:
+    # The LIVE compare panel's ledger must read metrics off the two executions
+    # carried on the cell — not only off a saved record — so a latency regression
+    # is visible the moment a diff runs (guards against a replay-only regression).
+    from pathlib import Path
+
+    from comparo.core.compare import CellDiff
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.loader import load_project
+    from comparo.core.models import Environment
+    from comparo.core.models import Request
+    from comparo.tui.render import _live_call_ledger
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    base_resp = HttpResponse(200, [], b'{"ok":true}', 40.0)
+    cand_resp = HttpResponse(200, [], b'{"ok":true,"x":1}', 210.0)
+    base = Execution(request, env, "", base_resp)
+    cand = Execution(request, env, "", cand_resp)
+    cell = CellDiff(request, "", [], baseline=base, candidate=cand)
+    ledger = _live_call_ledger(cell)
+    assert ledger is not None
+    rendered = _plain(ledger)
+    assert "40ms" in rendered  # baseline latency, off the execution
+    assert "210ms" in rendered  # candidate latency, off the execution
+    assert "+170ms" in rendered  # the regression delta
+
+
 def test_call_ledger_is_none_without_a_candidate_side() -> None:
     # A run has no candidate side, so a baseline-vs-candidate ledger has nothing to show.
     from comparo.tui.render import _call_ledger
