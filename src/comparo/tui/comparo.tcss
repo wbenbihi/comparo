@@ -740,6 +740,11 @@ ConfirmModal, EnvPickerModal {
     margin-right: 1;
 }
 
+#cell-ledger {
+    height: auto;
+    margin-bottom: 1;
+}
+
 #cell-assert-base, #cell-assert-cand {
     height: 1fr;
     margin-bottom: 1;
