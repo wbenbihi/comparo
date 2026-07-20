@@ -3211,6 +3211,11 @@ def _cell_for_request(record: ReportRecord, request: str) -> "CellRecord | None"
     return next((cell for cell in record.cells if cell.request == request), None)
 
 
+def _method_badge(method: str) -> Text:
+    """The HTTP method as a coloured badge, per the shared method palette."""
+    return Text(f" {method} ", style=f"bold {_INK} on {_METHOD.get(method, _ACCENT)}")
+
+
 def _fmt_bytes(size: int | None) -> str:
     """A compact byte count — ``1.2 kB`` / ``840 B`` / ``—``."""
     if size is None:
@@ -3247,7 +3252,8 @@ def _replay_detail_tree(
     head.append(row.request, style=f"bold {_TEXT_HI}")
     head.append("  ·  base  ·  ", style=_DIM)
     if cell is not None and cell.method:
-        head.append(f"{cell.method} {cell.path}", style=_SAME)
+        head.append_text(_method_badge(cell.method))
+        head.append(f" {cell.path}", style=_TEXT)
         if cell.status is not None:
             ok = 200 <= cell.status < 400
             head.append(f"  {cell.status}", style=_SAME if ok else _DRIFT)
@@ -3281,7 +3287,20 @@ def _replay_detail_tree(
         )
     if cell is not None and cell.method:
         request_node = root.add(Text("request", style=f"bold {_AXIS}"), expand=True)
-        request_node.add_leaf(Text.assemble((f"{cell.method} ", _SAME), (cell.path, _TEXT)))
+        req_line = _method_badge(cell.method)
+        req_line.append(f" {cell.path}", style=_TEXT)
+        request_node.add_leaf(req_line)
+        if cell.request_headers:
+            headers_node = request_node.add(
+                Text.assemble(("headers ", _DIM), (f"({len(cell.request_headers)})", _DIM)),
+                expand=True,
+            )
+            for name, value in list(cell.request_headers.items())[:4]:
+                headers_node.add_leaf(Text.assemble((f"{name}: ", _DIM), (value, _TEXT)))
+        if cell.request_body is not None:
+            request_node.add_leaf(
+                Text.assemble(("body ", _DIM), (_body_summary(cell.request_body), _TEXT))
+            )
     if cell is not None and (cell.response_headers or cell.baseline_body is not None):
         response_node = root.add(Text("response", style=f"bold {_AXIS}"), expand=True)
         if cell.response_headers:
@@ -3296,7 +3315,9 @@ def _replay_detail_tree(
                 Text.assemble(("body ", _DIM), (_body_summary(cell.baseline_body), _TEXT))
             )
     checks = root.add(Text("checks", style=f"bold {_AXIS}"), expand=True)
-    lines = record.baseline_assertions.lines
+    # Scope the checks to THIS request's cell — the record-wide roll-up would leak
+    # every other request's assertions into this request's detail.
+    lines = cell.assertions if cell is not None else []
     if lines:
         for line in lines:
             glyph, colour = _ASSERT_GLYPH.get(line.state, ("·", _DIM))

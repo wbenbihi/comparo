@@ -77,6 +77,13 @@ class ReplayCell:
     #: The real per-field diffs (state/mode/baseline/candidate) so the body well
     #: renders the true profile decision instead of fabricating ``exact``.
     fields: list[FieldDiffRecord]
+    #: The baseline outbound request's headers/body, so the detail tree can show
+    #: the request object — not just its method and path.
+    request_headers: dict[str, str] = dataclasses.field(default_factory=dict)
+    request_body: object = None
+    #: This cell's own baseline assertions, so the Run detail tree scopes the
+    #: "checks" section to the selected request instead of leaking every request's.
+    assertions: list[AssertionLine] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -101,22 +108,31 @@ class ReplayRecord:
     cells: list[ReplayCell]
 
 
+def _assertion_line(result: AssertionRecord) -> AssertionLine:
+    """Project one saved assertion into a display line (label · state · detail)."""
+    if result.ok:
+        state = "pass"
+    elif result.severity == "warn":
+        state = "warn"
+    else:
+        state = "fail"
+    label = f"{result.target} {result.op}".strip()
+    return AssertionLine(label, state, result.detail or "")
+
+
 def _assertion_summary(rows: list[list[AssertionRecord]]) -> AssertionSummary:
     passed = failed = warned = 0
     lines: list[AssertionLine] = []
     for row in rows:
         for result in row:
-            if result.ok:
-                state = "pass"
+            line = _assertion_line(result)
+            if line.state == "pass":
                 passed += 1
-            elif result.severity == "warn":
-                state = "warn"
+            elif line.state == "warn":
                 warned += 1
             else:
-                state = "fail"
                 failed += 1
-            label = f"{result.target} {result.op}".strip()
-            lines.append(AssertionLine(label, state, result.detail or ""))
+            lines.append(line)
     return AssertionSummary(passed, failed, warned, lines)
 
 
@@ -155,6 +171,9 @@ def _replay_cell(cell: Cell) -> ReplayCell:
         baseline_events=response.events if response is not None else None,
         candidate_events=candidate.events if candidate is not None else None,
         fields=list(fields),
+        request_headers=dict(request.headers),
+        request_body=request.body,
+        assertions=[_assertion_line(a) for a in (cell.sides.baseline.assertions or [])],
     )
 
 
