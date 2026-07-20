@@ -1770,6 +1770,9 @@ class DiffView(Vertical):
         row.append(request.metadata.name, style=f"bold {_TEXT_HI}" if will_run else _DIM)
         method = request.spec.request.method
         row.append(f"  {method}", style=_METHOD.get(method, _DIM))
+        response = request.spec.response
+        if response is not None and response.streaming:
+            row.append("  streaming", style=_SKIP)
         row.append(f"  {will_run}/{len(cells)} will diff", style=_AXIS if will_run else _DIM)
         return row
 
@@ -1804,7 +1807,7 @@ class DiffView(Vertical):
         cta.append("2 envs", style=_TEXT)
         cta.append(" = ", style=_DIM)
         cta.append(f"{calls} call{'' if calls == 1 else 's'}", style=f"bold {_AXIS}")
-        cta.append("  ·  up to 4 in parallel", style=_DIM)
+        cta.append("  ·  0 writes — nothing is written until you run", style=_DIM)
         cta.append("\npress ", style=_DIM)
         cta.append("x", style=f"bold {_ACCENT}")
         cta.append(" to diff", style=_DIM)
