@@ -655,25 +655,22 @@ ConfirmModal, EnvPickerModal {
 }
 
 #exec-header {
-    height: 4;
+    height: auto;
     padding: 0 1;
     margin-bottom: 1;
+    border: round $error;
+    border-title-color: $error;
+    border-subtitle-color: $text-muted;
 }
 
-#exec-assert {
-    height: auto;
-    margin-bottom: 1;
+#exec-header.pass {
+    border: round $success;
+    border-title-color: $success;
 }
 
-#exec-assert-base {
-    width: 1fr;
-    height: auto;
-    margin-right: 1;
-}
-
-#exec-assert-cand {
-    width: 1fr;
-    height: auto;
+#exec-header.fail {
+    border: round $error;
+    border-title-color: $error;
 }
 
 #exec-diff {

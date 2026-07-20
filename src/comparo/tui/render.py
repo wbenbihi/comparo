@@ -167,7 +167,6 @@ __all__ = [
     "_exec_drift_fields",
     "_exec_env_names",
     "_exec_foot",
-    "_exec_gate_body",
     "_exec_header",
     "_exec_mode",
     "_exec_plan_line",
@@ -2294,35 +2293,52 @@ def _exec_stacked_diff(
     return Group(*parts)
 
 
+def _gate_dimensions(result: ExecutionResult) -> list[tuple[str, bool]]:
+    """The three gate dimensions and whether each holds — the AND factors."""
+    base_fail = sum(_assert_tally(o.baseline_assertions)[1] for o in result.outcomes)
+    cand_fail = sum(_assert_tally(o.candidate_assertions)[1] for o in result.outcomes)
+    return [
+        ("baseline assertion", base_fail == 0),
+        ("candidate assertion", cand_fail == 0),
+        ("diff", result.drift == 0 and result.errors == 0),
+    ]
+
+
 def _exec_header(
     profile: ExecutionProfile, result: ExecutionResult, redact: Callable[[str], str] = str
 ) -> Group:
-    """The results EXECUTION panel — two rows so nothing clips at 104 cols.
+    """The results banner — the gate verdict up front, profile/pair/select beneath.
 
-    Row 1: the profile + its id + the baseline/candidate pair.
-    Row 2: the mode, the select clause, and the counted plan (``req x2 · req x1``).
+    The verdict is the headline (``✗ GATE FAIL · exit 1 · which dimensions are
+    red``); the dim context line names the profile, the pair, and the select
+    clause so a leaked secret in a tag/request-id is still masked here.
     """
-    line1 = Text()
-    line1.append("ExecutionProfile ", style=_DIM)
-    line1.append(profile.metadata.name, style=f"bold {_TEXT_HI}")
-    line1.append(f"  {profile.metadata.id or ''}", style=_DIM)
-    line1.append("    baseline ", style=_DIM)
-    line1.append(redact(result.baseline), style=_TEXT_HI)
-    line1.append(" ●", style=_SAME)
-    if result.candidate is not None:
-        line1.append(" · candidate ", style=_DIM)
-        line1.append(redact(result.candidate), style=_TEXT_HI)
-        line1.append(" ●", style=_SAME)
-    if result.checked_assertions and result.checked_diff:
-        mode, detail = "both", " assertions + diff"
-    elif result.checked_assertions:
-        mode, detail = "assert", ""
+    passed = result.passed
+    dims = _gate_dimensions(result)
+    red = [name for name, ok in dims if not ok]
+    exit_code = 0 if passed else 1
+    verdict_style = f"bold {_SAME if passed else _DANGER}"
+    hero = Text()
+    hero.append("✓ GATE PASS" if passed else "✗ GATE FAIL", style=verdict_style)
+    hero.append(f"   · exit {exit_code} · ", style=_DIM)
+    if red:
+        noun = "dimension" if len(red) == 1 else "dimensions"
+        hero.append(f"{len(red)} of 3 {noun} red", style=_DRIFT)
+        hero.append(f" — {' · '.join(red)}", style=_DIM)
     else:
-        mode, detail = "diff", ""
-    line2 = Text()
-    line2.append("mode ", style=_DIM)
-    line2.append(mode, style=f"bold {_ACCENT}")
-    line2.append(detail, style=_DIM)
+        hero.append("all 3 dimensions green", style=_SAME)
+
+    context = Text("\n")
+    context.append("ExecutionProfile ", style=_DIM)
+    context.append(redact(profile.metadata.name), style=f"bold {_TEXT_HI}")
+    context.append("   baseline ", style=_DIM)
+    context.append(redact(result.baseline), style=_TEXT_HI)
+    context.append(" ●", style=_SAME)
+    if result.candidate is not None:
+        context.append(" ⇄ candidate ", style=_DIM)
+        context.append(redact(result.candidate), style=_TEXT_HI)
+        context.append(" ●", style=_SAME)
+    context.append(f"   {len(result.outcomes)} cells", style=_DIM)
     select = profile.spec.select
     if select is not None and (select.tags or select.requests):
         clauses = []
@@ -2330,21 +2346,9 @@ def _exec_header(
             clauses.append("tags " + ", ".join(redact(tag) for tag in select.tags))
         if select.requests:
             clauses.append("requests " + ", ".join(redact(_req_short(r)) for r in select.requests))
-        line2.append("    select ", style=_DIM)
-        line2.append(" · ".join(clauses), style=_TEXT_HI)
-    # plan — per-request cell counts, in first-seen order (Price quote x2 · Checkout x1)
-    order: list[str] = []
-    counts: dict[str, int] = {}
-    for outcome in result.outcomes:
-        name = _req_short(outcome.request_id)
-        if name not in counts:
-            order.append(name)
-            counts[name] = 0
-        counts[name] += 1
-    if order:
-        line2.append("    plan ", style=_DIM)
-        line2.append(" · ".join(f"{redact(name)} ×{counts[name]}" for name in order), style=_TEXT)
-    return Group(line1, line2)
+        context.append("   select ", style=_DIM)
+        context.append(" · ".join(clauses), style=_TEXT_HI)
+    return Group(hero, context)
 
 
 def _exec_diff_summary(result: ExecutionResult, redact: Callable[[str], str] = str) -> Text:
@@ -2388,18 +2392,13 @@ def _exec_diff_legend(result: ExecutionResult, redact: Callable[[str], str] = st
     return text
 
 
-def _exec_triplet(outcome: CellOutcome, label: Text) -> tuple[Text, Text, Text, Text]:
-    """One execution cell as a triplet row: verdict glyph · label · B·C asserts · diff.
+def _exec_triplet(outcome: CellOutcome, label: Text) -> tuple[Text, Text, Text, Text, Text]:
+    """One execution cell as a per-cell row: cell · baseline · candidate · diff · verdict.
 
     Shown for EVERY cell (not just the drifted ones), so the results table is a full
-    per-cell overview — a passing cell is as visible as a failing one.
+    per-cell overview — a passing cell is as visible as a failing one, and the
+    verdict column names the failing dimension so no drilldown is needed.
     """
-    if outcome.error is not None:
-        glyph = Text("!", style=_WARN)
-    elif outcome.ok:
-        glyph = Text("✓", style=_SAME)
-    else:
-        glyph = Text("✗", style=_DRIFT)
 
     def side(results: list[AssertionResult]) -> Text:
         passed, failed, _ = _assert_tally(results)
@@ -2408,118 +2407,109 @@ def _exec_triplet(outcome: CellOutcome, label: Text) -> tuple[Text, Text, Text, 
             text.append(f" {failed}✗", style=_DRIFT)
         return text
 
-    asserts = Text()
-    asserts.append_text(side(outcome.baseline_assertions))
-    asserts.append(" · ", style=_DIM)
-    asserts.append_text(side(outcome.candidate_assertions))
+    base_assert = side(outcome.baseline_assertions)
+    cand_assert = side(outcome.candidate_assertions)
 
+    drifted = outcome.diff is not None and outcome.diff.drifted
     if outcome.error is not None:
         diff = Text("error", style=_WARN)
-    elif outcome.diff is not None and outcome.diff.drifted:
-        count = len(outcome.diff.drifts)
-        diff = Text(f"{count} drift", style=_DRIFT)
+    elif drifted:
+        diff = Text(f"{len(outcome.diff.drifts)} drift", style=_DRIFT)  # type: ignore[union-attr]
     elif outcome.diff is not None:
         diff = Text("same", style=_SAME)
     else:
         diff = Text("—", style=_DIM)
-    return glyph, label, asserts, diff
+
+    if outcome.error is not None:
+        verdict = Text("✗ FAIL", style=_DRIFT)
+        verdict.append(" (error)", style=_DIM)
+    elif outcome.ok:
+        verdict = Text("✓ pass", style=_SAME)
+    else:
+        assert_fail = (
+            _assert_tally(outcome.baseline_assertions)[1] > 0
+            or _assert_tally(outcome.candidate_assertions)[1] > 0
+        )
+        reasons = [r for r, on in (("assert", assert_fail), ("diff", drifted)) if on]
+        verdict = Text("✗ FAIL", style=_DRIFT)
+        verdict.append(f" ({' + '.join(reasons)})", style=_DIM)
+    return label, base_assert, cand_assert, diff, verdict
 
 
-def _gate_composition(result: ExecutionResult) -> Table:
-    """The gate as an explicit AND: baseline ∧ candidate assertions ∧ diff → gate.
+def _gate_dim_panel(label: str, env: str, ok: bool, tally: str, detail: str) -> Panel:
+    """One dimension of the gate ledger — a bordered panel with its tally + verdict."""
+    header = Text(label, style=_LABEL)
+    header.append(f" · {env}", style=_DIM)
+    body = Text()
+    body.append(f"{'✓' if ok else '✗'} {tally}", style=f"bold {_SAME if ok else _DRIFT}")
+    body.append(f"\n{detail}", style=_DIM)
+    body.append(f"\n{'PASS' if ok else 'FAIL'}", style=f"bold {_SAME if ok else _DRIFT}")
+    return Panel(
+        Group(header, Text(), body),
+        box=ROUNDED,
+        padding=(0, 1),
+        border_style=_SAME if ok else _DANGER,
+    )
 
-    One aligned table so it reads at a glance which factor blocks the run — a run
-    can fail on an assertion with no drift at all, which a single gate glyph hides.
+
+def _gate_composition(result: ExecutionResult, redact: Callable[[str], str] = str) -> Group:
+    """The gate as three side-by-side dimensions rolled up with ∧ → one verdict.
+
+    baseline assertions ∧ candidate assertions ∧ diff. Shown at a glance so it
+    reads which factor blocks the run — a run can fail on an assertion with no
+    drift at all, which a single gate glyph hides.
     """
 
-    def side_tally(getter: Callable[[CellOutcome], list[AssertionResult]]) -> tuple[int, int, int]:
-        passed = failed = warned = 0
+    def side_tally(getter: Callable[[CellOutcome], list[AssertionResult]]) -> tuple[int, int]:
+        passed = failed = 0
         for outcome in result.outcomes:
-            p, f, w = _assert_tally(getter(outcome))
-            passed, failed, warned = passed + p, failed + f, warned + w
-        return passed, failed, warned
+            p, f, _ = _assert_tally(getter(outcome))
+            passed, failed = passed + p, failed + f
+        return passed, failed
 
-    table = _table()
-    table.add_column("", width=2, no_wrap=True)
-    table.add_column("FACTOR", style=_LABEL, no_wrap=True)
-    table.add_column("", justify="right")
+    base_pass, base_fail = side_tally(lambda o: o.baseline_assertions)
+    cand_pass, cand_fail = side_tally(lambda o: o.candidate_assertions)
+    same = len(result.outcomes) - result.drift - result.errors
+    diff_detail = f"{same} same · {result.drift} drift"
+    if result.errors:
+        diff_detail += f" · {result.errors} error"
+    base_env = redact(result.baseline)
+    cand_env = redact(result.candidate) if result.candidate is not None else "—"
 
-    def factor(label: str, ok: bool, detail: Text) -> None:
-        table.add_row(
-            Text("✓" if ok else "✗", style=_SAME if ok else _DRIFT),
-            Text(label, style=_TEXT),
-            detail,
-        )
-
-    for label, (passed, failed, warned) in (
-        ("baseline assertions", side_tally(lambda o: o.baseline_assertions)),
-        ("candidate assertions", side_tally(lambda o: o.candidate_assertions)),
-    ):
-        note = Text(f"{passed} ✓ · {failed} ✗", style=_DIM)
-        if warned:
-            note.append(f" · {warned} !", style=_WARN)
-        factor(label, failed == 0, note)
-    factor(
-        "diff",
-        result.drift == 0 and result.errors == 0,
-        Text(f"{result.drift} drift · {result.errors} error", style=_DIM),
+    panels = (
+        _gate_dim_panel(
+            "baseline assertions",
+            base_env,
+            base_fail == 0,
+            f"{base_pass}/{base_fail}",
+            f"{base_pass} pass · {base_fail} fail",
+        ),
+        _gate_dim_panel(
+            "candidate assertions",
+            cand_env,
+            cand_fail == 0,
+            f"{cand_pass}/{cand_fail}",
+            f"{cand_pass} pass · {cand_fail} fail",
+        ),
+        _gate_dim_panel(
+            "diff",
+            f"{base_env} ⇄ {cand_env}",
+            result.drift == 0 and result.errors == 0,
+            f"{same} · {result.drift}",
+            diff_detail,
+        ),
     )
+    row = Table(box=None, expand=True, show_header=False, padding=0)
+    for _ in panels:
+        row.add_column(ratio=1)
+    row.add_row(*panels)
+
     passed = result.passed
-    table.add_row(
-        Text("✓" if passed else "✗", style=f"bold {_SAME if passed else _DANGER}"),
-        Text("∧ gate", style=f"bold {_TEXT_HI}"),
-        Text("PASS" if passed else "FAIL", style=f"bold {_SAME if passed else _DANGER}"),
+    rollup = Text("∧ gate  ", style=_DIM)
+    rollup.append(
+        "GATE PASS" if passed else "GATE FAIL", style=f"bold {_SAME if passed else _DANGER}"
     )
-    return table
-
-
-def _exec_gate_body(result: ExecutionResult) -> Group:
-    parts: list[RenderableType] = [_gate_composition(result), Text()]
-    if result.passed:
-        parts.append(Text("✓ gate: PASS", style=f"bold {_SAME}"))
-    else:
-        parts.append(Text("✗ gate: FAIL", style=f"bold {_DANGER}"))
-    base_fail = sum(_assert_tally(o.baseline_assertions)[1] for o in result.outcomes)
-    cand_fail = sum(_assert_tally(o.candidate_assertions)[1] for o in result.outcomes)
-    warns = sum(
-        _assert_tally(o.baseline_assertions)[2] + _assert_tally(o.candidate_assertions)[2]
-        for o in result.outcomes
-    )
-    untriaged = result.drift + result.errors
-    assert_failed = base_fail + cand_fail
-    narrative = Text("\n")
-    if result.passed:
-        narrative.append("assertions hold on both sides and nothing drifted.", style=_DIM)
-    elif assert_failed > 0:
-        # Do not paint a red run green: name the failing assertions as a blocker.
-        narrative.append("assertions ", style=_DIM)
-        narrative.append("FAIL", style=_DRIFT)
-        narrative.append(
-            f" (baseline {base_fail} ✗ · candidate {cand_fail} ✗ · {warns} warn)", style=_DIM
-        )
-        if untriaged:
-            noun = "drift" if untriaged == 1 else "drifts"
-            narrative.append(" and ", style=_DIM)
-            narrative.append(f"{untriaged} untriaged {noun}", style=_DRIFT)
-        narrative.append(" block the run.", style=_DIM)
-    else:
-        narrative.append("assertions ", style=_DIM)
-        narrative.append("pass", style=_SAME)
-        narrative.append(f" on both sides ({warns} warn) — but ", style=_DIM)
-        noun = "drift" if untriaged == 1 else "drifts"
-        narrative.append(f"{untriaged} untriaged {noun}", style=_DRIFT)
-        narrative.append(" block the run. Triage (", style=_DIM)
-        narrative.append("i", style=f"bold {_ACCENT}")
-        narrative.append("/", style=_DIM)
-        narrative.append("x", style=f"bold {_ACCENT}")
-        narrative.append(").", style=_DIM)
-    parts.append(narrative)
-    exit_code = 0 if result.passed else 1
-    parity = Text(f"\nexit code {exit_code}", style=_SAME if result.passed else _DRIFT)
-    parity.append(" — matches headless ", style=_DIM)
-    parity.append(f"comparo exec {result.profile_id}", style=_ACCENT)
-    parts.append(parity)
-    return Group(*parts)
+    return Group(row, Text(), rollup)
 
 
 def _exec_foot(result: ExecutionResult) -> Table:

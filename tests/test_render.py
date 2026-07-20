@@ -274,8 +274,9 @@ def test_exec_triplet_summarizes_a_cell() -> None:
     # A drifted cell: verdict ✗, both sides assert, "1 drift" in the diff column.
     diff_cell = CellDiff(request, "", [FieldDiff("$.total", State.DRIFT, "exact")])
     outcome = CellOutcome("request.r", "", [ok], [ok], diff_cell)
-    glyph, _label, asserts, diff = _exec_triplet(outcome, Text("r"))
-    rendered = " ".join(_plain(part) for part in (glyph, asserts, diff))
-    assert "✗" in rendered  # the drift fails the cell
+    _label, base_assert, cand_assert, diff, verdict = _exec_triplet(outcome, Text("r"))
+    rendered = " ".join(_plain(part) for part in (base_assert, cand_assert, diff, verdict))
     assert "1✓" in rendered  # each side's assertion held
     assert "1 drift" in rendered
+    assert "✗ FAIL" in rendered  # the drift fails the cell
+    assert "(diff)" in rendered  # ...and the verdict names the failing dimension

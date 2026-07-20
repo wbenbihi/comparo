@@ -126,17 +126,16 @@ from comparo.tui.render import _environments
 from comparo.tui.render import _envs_label
 from comparo.tui.render import _error_report
 from comparo.tui.render import _exec_assert_body
-from comparo.tui.render import _exec_assert_rows
 from comparo.tui.render import _exec_diff_legend
 from comparo.tui.render import _exec_diff_summary
 from comparo.tui.render import _exec_env_names
-from comparo.tui.render import _exec_gate_body
 from comparo.tui.render import _exec_header
 from comparo.tui.render import _exec_profile_card
 from comparo.tui.render import _exec_profiles_hint
 from comparo.tui.render import _exec_setup
 from comparo.tui.render import _exec_stacked_diff
 from comparo.tui.render import _exec_triplet
+from comparo.tui.render import _gate_composition
 from comparo.tui.render import _graph
 from comparo.tui.render import _help_body
 from comparo.tui.render import _json
@@ -3597,14 +3596,11 @@ class ExecutionView(Vertical):
                 yield Static(id="exec-running-content")
             with VerticalScroll(id="exec-results"):
                 yield Static(id="exec-header", classes="panel")
-                with Horizontal(id="exec-assert"):
-                    yield Static(id="exec-assert-base", classes="panel")
-                    yield Static(id="exec-assert-cand", classes="panel")
+                yield Static(id="exec-gate", classes="panel")
                 with Vertical(id="exec-diff", classes="panel"):
                     yield Static(id="exec-diff-summary")
-                    yield DataTable(id="exec-drift-table", cursor_type="row", show_header=False)
+                    yield DataTable(id="exec-drift-table", cursor_type="row", show_header=True)
                     yield Static(id="exec-diff-legend")
-                yield Static(id="exec-gate", classes="panel")
             with Vertical(id="exec-cell"):
                 yield Static(id="cell-header", classes="panel")
                 with Horizontal(id="cell-cols"):
@@ -3932,39 +3928,18 @@ class ExecutionView(Vertical):
             if outcome.error is not None or (outcome.diff is not None and outcome.diff.drifted)
         ]
         redact = _app_redact(self)
+        # The banner leads with the gate verdict; its border echoes pass/fail.
+        banner = self.query_one("#exec-header")
+        banner.set_class(result.passed, "pass")
+        banner.set_class(not result.passed, "fail")
+        banner.border_title = Text.from_markup(f"GATE [{_DIM}]· assertions ∧ diff[/]")
+        banner.border_subtitle = f"{self._profile.metadata.id or self._profile.metadata.name}"
         self.query_one("#exec-header", Static).update(_exec_header(self._profile, result, redact))
-        self.query_one("#exec-header").border_title = "EXECUTION"
-        self.query_one(
-            "#exec-header"
-        ).border_subtitle = (
-            f"{len(result.outcomes)} cells · {result.baseline} ⇄ {result.candidate or '—'}"
-        )
-        self._render_results_assertions()
-        self._render_results_diff()
         self._render_results_gate()
+        self._render_results_diff()
         self._show("exec-results")
         if result.outcomes:  # focus the per-cell table so ↑↓/⏎ work immediately
             self.query_one("#exec-drift-table", DataTable).focus()
-
-    def _render_results_assertions(self) -> None:
-        result = self._result
-        if result is None:
-            return
-        redact = _app_redact(self)
-        blocks = (
-            ("#exec-assert-base", "baseline", result.baseline),
-            ("#exec-assert-cand", "candidate", result.candidate or "—"),
-        )
-        for ident, side, env in blocks:
-            tally, rows = _exec_assert_rows(result.outcomes, side)
-            panel = self.query_one(ident, Static)
-            panel.border_title = Text.from_markup(f"ASSERTIONS [{_DIM}]· {env}[/]")
-            panel.border_subtitle = _assert_count_text(tally)
-            kind = "BASELINE" if side == "baseline" else "CANDIDATE"
-            header = Text(f"{kind} ASSERTIONS ", style=_DIM)
-            header.append("· ", style=_DIM)
-            header.append(env, style=f"bold {_TEXT_HI}")
-            panel.update(Group(header, Text(), _exec_assert_body(rows, redact)))
 
     def _render_results_diff(self) -> None:
         result = self._result
@@ -3980,12 +3955,13 @@ class ExecutionView(Vertical):
         self.query_one("#exec-diff-summary", Static).update(_exec_diff_summary(result, redact))
         table = self.query_one("#exec-drift-table", DataTable)
         table.clear(columns=True)
-        table.add_column("", key="st", width=3)
         table.add_column("CELL", key="cell")
-        table.add_column("B·C ASSERT", key="assert", width=14)
-        table.add_column("DIFF", key="diff", width=12)
-        # Every cell, not just the drifted ones — a per-cell triplet (verdict · both
-        # sides' assertions · diff) so the whole run reads at a glance; Enter drills in.
+        table.add_column("BASELINE", key="b", width=10)
+        table.add_column("CANDIDATE", key="c", width=10)
+        table.add_column("DIFF", key="diff", width=10)
+        table.add_column("VERDICT", key="verdict")
+        # Every cell, not just the drifted ones — a per-cell row (both sides' asserts ·
+        # diff · verdict-with-reason) so the whole run reads at a glance; Enter drills in.
         for index, outcome in enumerate(result.outcomes):
             label = Text(_req_short(outcome.request_id), style=f"bold {_TEXT_HI}")
             if outcome.cell_key:
@@ -3997,11 +3973,14 @@ class ExecutionView(Vertical):
         result = self._result
         if result is None:
             return
+        redact = _app_redact(self)
         gate = self.query_one("#exec-gate")
         gate.set_class(result.passed, "pass")
         gate.set_class(not result.passed, "fail")
-        gate.border_title = Text.from_markup(f"GATE [{_DIM}]· assertions ∧ diff[/]")
-        self.query_one("#exec-gate", Static).update(_exec_gate_body(result))
+        gate.border_title = Text.from_markup(
+            f"GATE COMPOSITION [{_DIM}]· baseline ∧ candidate ∧ diff[/]"
+        )
+        self.query_one("#exec-gate", Static).update(_gate_composition(result, redact))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Enter on a drifted cell drills in (the table eats enter first)."""
