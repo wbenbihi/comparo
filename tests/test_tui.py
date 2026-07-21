@@ -1881,3 +1881,66 @@ def test_report_retention_prunes_the_archive_on_save(tmp_path: Path) -> None:
             assert len(archive.list_records(app_archive_dir(loaded))) == 2
 
     asyncio.run(go())
+
+
+def test_run_save_never_re_evaluates_assertions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Evaluate-once: the screen, the saved run file, and the archived report all
+    # consume the ONE evaluation made when the cell ran. A save that re-evaluates
+    # can disagree with what the user saw — so re-evaluation must be impossible.
+    from comparo.core.archive import list_records
+    from comparo.core.assertions import AssertionResult
+    from comparo.core.matrix import MatrixCell
+    from comparo.core.resolve import select_environment
+    from comparo.tui import app as app_module
+    from comparo.tui.app import RunView
+    from comparo.tui.render import _run_key
+
+    root = tmp_path / "proj"
+    shutil.copytree(SAMPLE, root)
+    loaded = load_project(root)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("2")
+            await pilot.pause()
+            view = app.query_one(RunView)
+            request = loaded.objects["request.get-json"]
+            assert isinstance(request, Request)
+            cell = MatrixCell("", ())
+            key = _run_key(request, cell)
+            execution = _tui_execution(loaded, "request.get-json", {"ok": True})
+            screen_result = AssertionResult(
+                "status", "equals", True, "error", "200 == 200", "status == 200", expected=200
+            )
+            view._selected.add(key)
+            view._exec[key] = execution
+            view._results[key] = [screen_result]
+            view._state[key] = "ok"
+            view._done = True
+            view._run_id = "t3st01"
+            view._run_env = select_environment(loaded, "local")
+            view.query_one("#run-mode", ContentSwitcher).current = "running"
+
+            def boom(*args: object, **kwargs: object) -> object:
+                raise AssertionError("action_save re-evaluated assertions")
+
+            monkeypatch.setattr(app_module, "evaluate_rules", boom)
+            view.action_save()
+            await pilot.pause()
+            records = list_records(app_archive_dir(loaded))
+            assert records, "the save archived no report"
+            saved = records[0]
+            assertion_rows = [
+                assertion
+                for record_cell in saved.cells
+                if record_cell.sides.baseline.assertions
+                for assertion in record_cell.sides.baseline.assertions
+            ]
+            assert len(assertion_rows) == 1
+            assert assertion_rows[0].expected == 200  # the screen's evaluation, serialized
+
+    asyncio.run(go())

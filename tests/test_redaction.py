@@ -155,7 +155,7 @@ def test_run_detail_tree_masks_a_secret_echoed_into_the_response() -> None:
 
     from textual.widgets import Tree
 
-    from comparo.core.checks import Check
+    from comparo.core.assertions import AssertionResult
     from comparo.core.execute import Execution
     from comparo.core.http import HttpResponse
     from comparo.core.matrix import MatrixCell
@@ -177,7 +177,18 @@ def test_run_detail_tree_masks_a_secret_echoed_into_the_response() -> None:
         MatrixCell("", ()),
         execution,
         "ok",
-        [Check("auth", ok=False, detail=f"got {SECRET}")],
+        [
+            AssertionResult(
+                "body:$.tok",
+                "equals",
+                False,
+                "error",
+                f"got {SECRET}",
+                label=f"tok == {SECRET}",
+                expected=SECRET,
+                actual=SECRET,
+            )
+        ],
         redact,
     )
 

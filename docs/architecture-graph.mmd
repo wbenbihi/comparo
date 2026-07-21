@@ -48,7 +48,6 @@ graph TD
         compare
         diff
         assertions
-        checks["checks<br/>(2nd validation engine)"]
         report
         archive
         export
@@ -76,12 +75,12 @@ graph TD
         execution --> assertions
         execution --> execute
         assertions --> execute
-        checks --> execute
         report --> compare
         archive --> execution
         archive --> report
         archive --> redaction
         export --> resolve
+        export --> assertions
         export --> redaction
         curl --> resolve
         health --> http

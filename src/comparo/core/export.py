@@ -11,7 +11,7 @@ import dataclasses
 import json
 from collections.abc import Callable
 
-from comparo.core.checks import Check
+from comparo.core.assertions import AssertionResult
 from comparo.core.execute import Execution
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import MatrixCell
@@ -28,12 +28,12 @@ from comparo.core.resolve import Sink
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RunEntry:
-    """One executed cell paired with its checks, ready to serialize."""
+    """One executed cell paired with its assertion results, ready to serialize."""
 
     request: Request
     cell: MatrixCell
     execution: Execution
-    checks: list[Check]
+    results: list[AssertionResult]
 
 
 def export_run(project: LoadedProject, environment: Environment, entries: list[RunEntry]) -> str:
@@ -42,7 +42,7 @@ def export_run(project: LoadedProject, environment: Environment, entries: list[R
     Args:
         project: The loaded project.
         environment: The environment the run executed against.
-        entries: The executed cells and their checks.
+        entries: The executed cells and their assertion results.
 
     Returns:
         A JSON document safe to write to disk — no real secret value survives.
@@ -80,9 +80,21 @@ def _entry(
         "status": response.status if response else None,
         "durationMs": round(response.elapsed_ms, 1) if response else None,
         "error": redact(entry.execution.error) if entry.execution.error else None,
-        "checks": [
-            {"name": check.name, "ok": check.ok, "detail": redact(check.detail)}
-            for check in entry.checks
+        # Full-fidelity assertion results — target/op/severity/expected/actual all
+        # survive (the old Check rows dropped warn rules and every value). Any of
+        # these can carry an echoed secret, so each passes the redactor.
+        "results": [
+            {
+                "label": redact(result.label or f"{result.target} {result.op}"),
+                "target": redact(result.target),
+                "op": result.op,
+                "ok": result.ok,
+                "severity": result.severity,
+                "expected": redact_tree(result.expected, redact),
+                "actual": redact_tree(result.actual, redact),
+                "detail": redact(result.detail),
+            }
+            for result in entry.results
         ],
         "responseHeaders": (
             {

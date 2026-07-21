@@ -28,7 +28,6 @@ from comparo.adapters.reporters import MarkdownReporter
 from comparo.adapters.reporters import SarifReporter
 from comparo.core.archive import save_record
 from comparo.core.assertions import AssertionResult
-from comparo.core.checks import Check
 from comparo.core.compare import CellDiff
 from comparo.core.curl import to_curl
 from comparo.core.diff import FieldDiff
@@ -212,7 +211,18 @@ def _saved_runs(scenario: _Scenario) -> str:
         scenario.request,
         MatrixCell("", ()),
         execution,
-        [Check("auth", ok=False, detail=f"server returned {CANARY}")],
+        [
+            AssertionResult(
+                f"body:$.{CANARY}",
+                "equals",
+                False,
+                "error",
+                f"server returned {CANARY}",
+                label=f"token == {CANARY}",
+                expected=CANARY,
+                actual=CANARY_SPECIAL,
+            )
+        ],
     )
     return export_run(scenario.project, scenario.environment, [entry])
 
