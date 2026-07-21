@@ -168,32 +168,48 @@ rather than a blank or stale panel. It gives way to **Results** as soon as the d
 
 ### Results
 
-A bordered **summary bar** — tri-state counts (`22 same · 2 drift · 0 error`), the **gate
-verdict** (`gate FAIL · 2 untriaged drifts`), and an inline `baseline Stable ● ⇄ candidate
-Canary ●` selector — over two panels:
+A bordered **summary bar** — cell counts, the **gate verdict** with the locked precedence
+(`✗ FAIL` when any rule broke; `! ERROR` only when errors are the only failure; `✓ PASS`
+otherwise), and an inline `baseline Stable ● ⇄ candidate Canary ●` selector — over **one
+result set seen through three indexes**, cycled with `r` (the pill in the panel header shows
+which is active):
 
-- **Drift index** — drifts collapse to **one row per field** (a field that drifts across three
-  cells is one bug, not three), each naming its request(s); the **skipped `◐` fields** are listed
-  too, because skip stays visible. A pill toggle (`r`) flips between grouped-by-field and the
-  broken-rules view.
-- **Compare** — a **git-style unified diff**: `diff a/<baseline>/<req>.json b/<candidate>/<req>.json`,
-  an `@@ request · $.path @@` hunk header, `−`/`+` lines (baseline red / candidate green), and
-  `⋯` skipped lines annotated with the rule that skipped them. A pill toggle (`v`) flips
-  unified ⇄ side-by-side. `o` swaps in the **outbound-request diff** — the *request sent* to each
-  side (method, URL, headers, body), resolved per environment. Since comparo replays the same
-  request, it only differs where env config does (a different base URL, a per-env token), so this
-  answers the first triage question: is the drift the service's, or did you send two different
-  requests? An errored cell shows the request, environment, and the real error.
+- **requests** — every request with its matrix variants nested under it, one glyph each
+  (`✓` clean · `✗` a rule broke · `!` error · `⊘` not run — deselected at prepare). Selecting
+  a cell shows the whole-request inspect: the **call ledger**, the **verdict box** naming
+  exactly which rules broke (`✗ 1 of 9 rules broke on this cell`, with the evidence line),
+  the **response-headers well** (drifts as −/+, silenced names annotated with their rule),
+  and the **body** — the git-style well for JSON (`v` flips unified ⇄ side-by-side), the
+  event sequence for a stream, or the error panel (verbatim engine error, attempts, retry
+  policy, the kept single-sided baseline) for a dead cell.
+- **rules** — every effective rule with its record: **broken** in red on top, then **passed**
+  (green — a held rule is auditable too), **ignored** (grey — what the profile chose not to
+  check), and **unused** (matched nothing anywhere: a typo'd path never fails a gate).
+  Selecting a rule shows its spec, stat chips, and every cell it touched with a color-coded
+  outcome.
+- **fields** — only the broken paths, one row per field however many cells it hit, each
+  naming its governing rule. Selecting one shows the full triage card, including the exact
+  ignore rule `i` would write.
+
+**The traceability loop:** `enter` jumps across indexes — a broken cell lands on its broken
+rule in the rules index, a rule lands on the cell it broke, a field lands on its cell — with
+a `from X — esc returns` crumb; `esc` pops the jump before it ever means "back to Prepare".
+`/` filters the active index, `f` collapses it to broken rows only, and `n`/`p` hop between
+red rows.
 
 | Key   | Action |
 | ----- | ------ |
-| `↑ ↓` | move through the drift index (fields, cells, skips, errors) |
-| `r`   | toggle grouped ⇄ broken-rules index |
+| `↑ ↓` | move the active index — the right panel inspects the selection |
+| `enter` | jump across indexes (cell ↔ rule, field → cell) with a return crumb |
+| `r`   | cycle the index: requests → rules → fields |
+| `/`   | filter the active index |
+| `f`   | show only broken / failing rows |
+| `n / p` | hop to the next / previous red row |
 | `v`   | toggle unified ⇄ side-by-side |
-| `o`   | toggle the **outbound-request diff** (what was sent to each side) |
-| `i`   | **silence** the selected field — writes an ignore rule into its committed DiffProfile |
+| `o`   | toggle the **outbound-request layer** (what was sent to each side) |
+| `i`   | **silence** the selected drift — writes an ignore rule into its committed DiffProfile |
 | `s`   | **save** the diff to the archive as a report (redacted; re-openable in the Report tab) |
-| `esc` | return to **Prepare** to change the selection |
+| `esc` | pop a cross-index jump, else return to **Prepare** |
 
 Silencing is a reviewable act: `i` opens a confirmation naming the exact file, then appends a
 `{path, mode: ignore}` rule to the profile's YAML (comments preserved), so quieting a diff shows

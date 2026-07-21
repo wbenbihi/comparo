@@ -211,9 +211,14 @@ _ROW_MARKS: dict[str, tuple[str, str]] = {
 }
 
 
-def verdict_box_header(rows: list[CheckRow]) -> Text:
-    """The box's first line — always the ``N of M`` auditable form."""
-    total = len(rows)
+def verdict_box_header(rows: list[CheckRow], total: int | None = None) -> Text:
+    """The box's first line — always the ``N of M`` auditable form.
+
+    *total* names the full effective rule count when the rows list only the
+    interesting ones (the diff verdict box lists broken rules, not every
+    volatile ignore).
+    """
+    total = total if total is not None else len(rows)
     broke = sum(1 for row in rows if row.state == "broke")
     advisory = sum(1 for row in rows if row.state == "warn_broke")
     if broke:
@@ -225,14 +230,16 @@ def verdict_box_header(rows: list[CheckRow]) -> Text:
     return head
 
 
-def verdict_box(rows: list[CheckRow], *, focused: int | None = None) -> Group:
+def verdict_box(
+    rows: list[CheckRow], *, total: int | None = None, focused: int | None = None
+) -> Group:
     """The one verdict box: header, then one (or two) lines per rule.
 
     Broken rules render two lines — label + provenance, then the evidence —
     per the Run Results spec §4; held rules render one auditable line. The
     ``focused`` row carries the selection style for the tab-focus model.
     """
-    parts: list[RenderableType] = [verdict_box_header(rows)]
+    parts: list[RenderableType] = [verdict_box_header(rows, total)]
     for index, row in enumerate(rows):
         glyph, color = _ROW_MARKS.get(row.state, ("·", _DIM))
         line = Text("  ")

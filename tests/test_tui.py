@@ -133,7 +133,8 @@ def test_diff_footer_swaps_between_prepare_and_results_keys() -> None:
     # KEY-05: the persistent footer must match the active diff state, not mix them.
     from comparo.tui.app import DiffView
     from comparo.tui.tokens import _DIFF_PREPARE_KEYS
-    from comparo.tui.tokens import _DIFF_RESULTS_KEYS
+    from comparo.tui.tokens import _DIFF_REQ_KEYS
+    from comparo.tui.tokens import _DIFF_RULES_KEYS
 
     loaded = load_project(SAMPLE)
 
@@ -146,7 +147,9 @@ def test_diff_footer_swaps_between_prepare_and_results_keys() -> None:
             diff = app.query_one(DiffView)
             assert diff.footer_keys() == _DIFF_PREPARE_KEYS
             diff.query_one("#diff-mode", ContentSwitcher).current = "diff-results"
-            assert diff.footer_keys() == _DIFF_RESULTS_KEYS
+            assert diff.footer_keys() == _DIFF_REQ_KEYS  # the requests pivot leads
+            diff._index_mode = "rules"
+            assert diff.footer_keys() == _DIFF_RULES_KEYS
             # PREPARE keys must not advertise the RESULTS-only toggles.
             prepare = {k for k, _ in _DIFF_PREPARE_KEYS}
             assert not ({"r", "v", "i"} & prepare)  # no RESULTS-only keys
@@ -202,7 +205,7 @@ def test_diff_toggles_and_silence_are_inert_in_prepare() -> None:
             await pilot.pause()
             diff = app.query_one(DiffView)
             mode, unified = diff._index_mode, diff._unified
-            diff.action_toggle_index()  # r
+            diff.action_cycle_index()  # r
             diff.action_toggle_view()  # v
             await pilot.pause()
             assert diff._index_mode == mode  # unchanged in PREPARE
@@ -563,23 +566,32 @@ def test_diff_toggles_flip_view_and_index() -> None:
             unified = diff._unified
             diff.action_toggle_view()
             assert diff._unified != unified
-            assert diff._index_mode == "fields"
-            diff.action_toggle_index()
+            assert diff._index_mode == "requests"  # the default pivot
+            diff.action_cycle_index()
             assert diff._index_mode == "rules"
+            diff.action_cycle_index()
+            assert diff._index_mode == "fields"
+            diff.action_cycle_index()
+            assert diff._index_mode == "requests"
 
     asyncio.run(go())
 
 
-def test_diff_enter_opens_the_field_drill_card_and_esc_returns() -> None:
-    # d-drill: enter on a drifted field opens the focused triage card; esc returns
-    # to the results index. Before, DiffView had no drill state and enter did nothing.
+def test_diff_enter_jumps_cell_to_rules_and_esc_returns() -> None:
+    # The traceability loop: enter on a broken cell lands on its broken rule in
+    # the rules pivot (with a return crumb); esc pops back to the requests pivot.
+    from comparo.core.compare import compare_cell
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+
     loaded = load_project(SAMPLE)
     request = loaded.objects["request.get-json"]
     assert isinstance(request, Request)
-    field = FieldDiff("$.args.taxRate", State.DRIFT, "exact", baseline="0.20", candidate="0.25")
-    cell = CellDiff(
-        request, "", [field], None, {"args": {"taxRate": "0.20"}}, {"args": {"taxRate": "0.25"}}
-    )
+    env = next(e for e in _environments(loaded))
+    base = Execution(request, env, "", HttpResponse(200, [], b'{"taxRate": "0.20"}', 5.0))
+    cand = Execution(request, env, "", HttpResponse(200, [], b'{"taxRate": "0.25"}', 5.0))
+    cell = compare_cell(loaded, base, cand)
+    assert cell.drifted
 
     async def go() -> None:
         app = ComparoApp(loaded)
@@ -591,12 +603,22 @@ def test_diff_enter_opens_the_field_drill_card_and_esc_returns() -> None:
             diff._finish([cell])
             await pilot.pause()
             assert diff.query_one("#diff-mode", ContentSwitcher).current == "diff-results"
-            await pilot.press("enter")  # drill into the highlighted drift
+            assert diff._index_mode == "requests"
+            key = diff._current_row_key()
+            assert key is not None
+            assert key.startswith("cell::")  # the broken cell is pre-selected
+            await pilot.press("enter")  # jump: cell → its broken rule
             await pilot.pause()
-            assert diff.query_one("#diff-mode", ContentSwitcher).current == "diff-drill"
-            await pilot.press("escape")  # back to the results index
+            assert diff._index_mode == "rules"
+            rules_key = diff._current_row_key()
+            assert rules_key is not None
+            assert rules_key.startswith("rrule::")
+            assert diff._nav  # a return crumb is armed
+            await pilot.press("escape")  # pop the jump, not back to PREPARE
             await pilot.pause()
+            assert diff._index_mode == "requests"
             assert diff.query_one("#diff-mode", ContentSwitcher).current == "diff-results"
+            assert not diff._nav
 
     asyncio.run(go())
 
