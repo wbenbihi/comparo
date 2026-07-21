@@ -52,6 +52,33 @@ def mask_credential_header(name: str, value: str) -> str:
 _MAX_REDACT_DEPTH = 200
 
 
+def decoded_text(body: bytes) -> str | None:
+    """The body as text when it IS text — strict decode, no NULs — else ``None``."""
+    if b"\x00" in body:
+        return None
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def binary_is_clean(body: bytes, redact: Callable[[str], str]) -> bool:
+    """Whether NO text view of the whole body trips the redactor.
+
+    Checked over the FULL body (a secret straddling any display cut must still
+    be seen whole) and over both decodings — latin-1 exposes raw bytes, lossy
+    UTF-8 exposes a valid-UTF-8 secret the latin-1 view would garble past
+    matching. Gates every raw-bytes display or digest of a binary body: hex must
+    never become a side channel around the mask, and a digest of secret-bearing
+    bytes would be an offline verification oracle.
+    """
+    latin = body.decode("latin-1")
+    if redact(latin) != latin:
+        return False
+    lossy = body.decode("utf-8", errors="replace")
+    return redact(lossy) == lossy
+
+
 def redact_tree(value: object, redact: Callable[[str], str], _depth: int = 0) -> object:
     """Recursively mask secrets in a parsed value — object keys and strings alike.
 
