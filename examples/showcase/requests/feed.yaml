@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Price feed
+  id: request.feed
+  description: >-
+    A chunked-JSON stream diffed as an event SEQUENCE — event 3 drifts on
+    $[2].price; every event's ts is silenced by the profile.
+  tags:
+    - pricing
+spec:
+  request:
+    method: GET
+    endpoint: /feed
+  response:
+    status: 200
+    streaming: true

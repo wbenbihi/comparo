@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Quote history
+  id: request.history
+  description: Deselect this one at Prepare to see the ⊘ not-run roster.
+  tags:
+    - pricing
+spec:
+  request:
+    method: GET
+    endpoint: /history
+  response:
+    status: 200

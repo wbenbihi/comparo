@@ -1,0 +1,27 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Price quote
+  id: request.quote
+  description: >-
+    The flagship drift: taxRate differs on every plan, the total is absorbed by
+    the tolerance band on plan=basic, and x-api-version drifts in the HEADERS.
+  tags:
+    - pricing
+spec:
+  matrix:
+    - $ref: matrix.plans
+  request:
+    method: GET
+    endpoint: /quote
+  response:
+    status: 200
+    assert:
+      rules:
+        - target: body:$.quote.currency
+          op: equals
+          value: USD
+        - target: latency
+          op: lte
+          value: 5ms
+          severity: warn    # the ~ advisory — almost always "breaks", never gates

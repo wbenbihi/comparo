@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Legacy quote
+  id: request.legacy
+  description: >-
+    The candidate server drops the connection — the transport-error cell
+    (attempts, retry policy, the kept single-sided baseline).
+  tags:
+    - pricing
+spec:
+  request:
+    method: GET
+    endpoint: /legacy
+  response:
+    status: 200

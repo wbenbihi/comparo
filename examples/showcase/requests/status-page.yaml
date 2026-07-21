@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status page
+  id: request.status-page
+  description: Identical HTML — the outline renderer (Run detail); contains "operational".
+  tags:
+    - pages
+spec:
+  request:
+    method: GET
+    endpoint: /status
+  response:
+    status: 200
+    assert:
+      rules:
+        - target: body
+          op: contains
+          value: operational

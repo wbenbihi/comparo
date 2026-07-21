@@ -1,0 +1,12 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Unstable endpoint
+  id: request.unstable
+  description: Candidate answers 503 — the synthetic $status drift.
+  tags:
+    - pricing
+spec:
+  request:
+    method: GET
+    endpoint: /unstable
