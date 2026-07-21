@@ -32,6 +32,7 @@ from comparo.core.checks import Check
 from comparo.core.compare import CellDiff
 from comparo.core.curl import to_curl
 from comparo.core.diff import FieldDiff
+from comparo.core.diff import RuleRef
 from comparo.core.diff import State
 from comparo.core.execute import Execution
 from comparo.core.export import RunEntry
@@ -71,11 +72,14 @@ CANARY_OVERLAP_LONG = "s3cr3t-CANARY-overlap-then-CANARY-tail"
 #: masks it, so a missing policy leaks it into saved runs and reports.
 CANARY_COOKIE = "session=srv-CANARY-issued-token"
 
+# Scenario object names must never embed the marker in ANY casing — the leak
+# check is case-insensitive (a case-folding sink lowercases the secret with it),
+# so a legit name containing "canary" would read as a leak.
 _PROJECT_YAML = """\
 apiVersion: comparo/v1
 kind: Project
 metadata:
-  name: comparo-doctor-canary
+  name: comparo-doctor-probe
 spec:
   data: .
 """
@@ -94,10 +98,10 @@ _ENVIRONMENT_YAML = (
     "apiVersion: comparo/v1\n"
     "kind: Environment\n"
     "metadata:\n"
-    "  name: Canary\n"
-    "  id: environment.canary\n"
+    "  name: Sentinel\n"
+    "  id: environment.sentinel\n"
     "spec:\n"
-    "  baseUrl: https://canary.invalid\n"
+    "  baseUrl: https://sentinel.invalid\n"
     "  secrets:\n"
     + "".join(
         f"    {name}:\n      from:\n        - $literal: {json.dumps(value)}\n"
@@ -109,8 +113,8 @@ _REQUEST_YAML = """\
 apiVersion: comparo/v1
 kind: Request
 metadata:
-  name: Canary probe
-  id: request.canary
+  name: Doctor probe
+  id: request.probe
 spec:
   request:
     method: GET
@@ -168,9 +172,9 @@ def _first_environment(project: LoadedProject) -> Environment:
 
 def _canary_request(project: LoadedProject) -> Request:
     """Return the canary probe request, whose header references the secret."""
-    request = project.objects.get("request.canary")
+    request = project.objects.get("request.probe")
     if not isinstance(request, Request):
-        message = "canary project declares no request.canary"
+        message = "canary project declares no request.probe"
         raise RuntimeError(message)
     return request
 
@@ -301,7 +305,7 @@ def _tainted_cell_v1(scenario: _Scenario, baseline: Execution, candidate: Execut
             f"{json.dumps(CANARY)} → x",
             baseline=CANARY,
             candidate=CANARY_SPECIAL,
-            rule=f"$.{CANARY}",
+            rule=RuleRef(f"$.{CANARY}", "exact", "profile"),
         ),
         FieldDiff(
             "$.special",
@@ -312,7 +316,23 @@ def _tainted_cell_v1(scenario: _Scenario, baseline: Execution, candidate: Execut
             candidate=CANARY_OVERLAP_LONG,
         ),
         FieldDiff(
-            f"$.headers.{CANARY}", State.SKIP, "ignore", "volatile", rule=f"$.headers.{CANARY}"
+            f"$.headers.{CANARY}",
+            State.SKIP,
+            "ignore",
+            "volatile",
+            rule=RuleRef(f"$.headers.{CANARY}", "ignore", "profile"),
+        ),
+        # The $headers diff namespace case-folds header NAMES before rendering
+        # paths, so a reflected secret reaches this sink lowercased — the canary
+        # must prove the case-folded form is masked too.
+        FieldDiff(
+            f"$headers.{CANARY.lower()}",
+            State.DRIFT,
+            "exact",
+            f"{json.dumps(CANARY.lower())} → x",
+            baseline=CANARY.lower(),
+            candidate="x",
+            rule=RuleRef(f"$headers.{CANARY.lower()}", "exact", "synthetic"),
         ),
     ]
     return CellDiff(
@@ -457,10 +477,12 @@ def _run_sink(
         output = produce(scenario)
     except Exception as error:  # defence in depth — a broken sink is a failed check
         return SinkCheck(name, f"{detail} — {type(error).__name__}: {error}", ok=False)
-    # Every canary embeds _MARKER, so any leak — raw, JSON-escaped, or overlap tail
-    # — surfaces it. _MARKER never appears in legitimate output (secret names and
-    # object names deliberately avoid it), so its presence is unambiguously a leak.
-    return SinkCheck(name, detail, ok=_MARKER not in output)
+    # Every canary embeds _MARKER, so any leak — raw, JSON-escaped, overlap tail,
+    # or CASE-FOLDED (a sink that normalizes header names lowercases the secret
+    # with it) — surfaces it. _MARKER never appears in legitimate output in any
+    # casing (secret names and object names deliberately avoid it), so a
+    # case-insensitive hit is unambiguously a leak.
+    return SinkCheck(name, detail, ok=_MARKER.lower() not in output.lower())
 
 
 def run_selfcheck() -> list[SinkCheck]:

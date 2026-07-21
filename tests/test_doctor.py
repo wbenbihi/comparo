@@ -46,7 +46,7 @@ def _canary_request() -> Request:
         {
             "apiVersion": "comparo/v1",
             "kind": "Request",
-            "metadata": {"name": "Canary probe", "id": "request.canary"},
+            "metadata": {"name": "Doctor probe", "id": "request.probe"},
             "spec": {"request": {"method": "GET", "endpoint": "/probe"}},
         },
         type=Request,
