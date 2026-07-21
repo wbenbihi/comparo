@@ -113,15 +113,19 @@ def _encoded_forms(value: str) -> set[str]:
     A detail or body is ``json.dumps``-ed *before* a sink redacts it, so a secret
     containing ``"``/``\``/newline appears escaped (``p@ss\"w0rd``) and a raw
     substring match would miss it. A secret sent in a URL is percent-encoded, and
-    a server can echo the request URL back into an error/Location. Registering the
-    JSON-escaped and percent-encoded forms closes both leaks.
+    a server can echo the request URL back into an error/Location. Some sinks also
+    case-fold what they normalize — a secret reflected as a response header NAME
+    reaches the ``$headers`` diff namespace lowercased — so the case-folded form
+    (and its encodings) registers too. Registering every form closes each leak.
     """
-    forms = {value}
-    for ensure_ascii in (False, True):
-        forms.add(json.dumps(value, ensure_ascii=ensure_ascii)[1:-1])
-    forms.add(urllib.parse.quote(value))  # path-encoded (leaves "/" as-is)
-    forms.add(urllib.parse.quote(value, safe=""))  # fully encoded ("/" -> %2F)
-    forms.add(urllib.parse.quote_plus(value))  # form-encoded (" " -> "+")
+    forms: set[str] = set()
+    for variant in {value, value.lower()}:
+        forms.add(variant)
+        for ensure_ascii in (False, True):
+            forms.add(json.dumps(variant, ensure_ascii=ensure_ascii)[1:-1])
+        forms.add(urllib.parse.quote(variant))  # path-encoded (leaves "/" as-is)
+        forms.add(urllib.parse.quote(variant, safe=""))  # fully encoded ("/" -> %2F)
+        forms.add(urllib.parse.quote_plus(variant))  # form-encoded (" " -> "+")
     return forms
 
 

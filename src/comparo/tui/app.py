@@ -119,6 +119,7 @@ from comparo.tui.render import _default_pair
 from comparo.tui.render import _description
 from comparo.tui.render import _diff_body_view
 from comparo.tui.render import _diff_error_view
+from comparo.tui.render import _diff_field
 from comparo.tui.render import _diff_legend
 from comparo.tui.render import _diff_ready
 from comparo.tui.render import _diff_skip_view
@@ -139,6 +140,7 @@ from comparo.tui.render import _exec_triplet
 from comparo.tui.render import _executions_ledger
 from comparo.tui.render import _field_drill_card
 from comparo.tui.render import _gate_composition
+from comparo.tui.render import _governing_path
 from comparo.tui.render import _graph
 from comparo.tui.render import _help_body
 from comparo.tui.render import _json
@@ -2181,7 +2183,7 @@ class DiffView(Vertical):
             sub = Text(f"  ↳ {who}", style=_DIM)
             # Name the exact ignore rule that carved this hole, so a green cell says
             # out loud *which* rule chose not to check the field — not just "skipped".
-            rule = entries[0][1].rule
+            rule = _governing_path(entries[0][1])
             if rule:
                 sub.append(" · ignored by ", style=_DIM)
                 sub.append(redact(rule), style=_SKIP)
@@ -2217,14 +2219,14 @@ class DiffView(Vertical):
         """The silencing rules that fired, in first-seen order."""
         order: list[str] = []
         for path, entries in self._skip_groups:
-            rule = entries[0][1].rule or path
+            rule = _governing_path(entries[0][1]) or path
             if rule not in order:
                 order.append(rule)
         return order
 
     def _rule_groups(self, rule: str) -> list[tuple[str, list[tuple[CellDiff, FieldDiff]]]]:
         """The skipped-field groups a given silencing *rule* carved out."""
-        return [(p, e) for p, e in self._skip_groups if (e[0][1].rule or p) == rule]
+        return [(p, e) for p, e in self._skip_groups if (_governing_path(e[0][1]) or p) == rule]
 
     def _show_rule(self, rule: str) -> None:
         """Render a silencing rule's detail — its mode, why, and every field it hid."""
@@ -2354,9 +2356,16 @@ class DiffView(Vertical):
         # A streamed response diffs its event SEQUENCE (numbered ✓/✗), never one
         # assembled blob; a normal response gets the git-style body diff.
         base_events, cand_events = _cell_events(cell) if cell is not None else (None, None)
-        if base_events is not None or cand_events is not None:
+        if path == "$status" or path.startswith("$headers"):
+            # Status and header drifts have no home in the body tree — render the
+            # per-cell before/after card so the evidence is on screen, not hidden
+            # behind an empty body well. (The dedicated headers diff well is the
+            # Results-rework's job; this keeps the live view honest until then.)
+            wrap.border_subtitle = "response envelope · before/after"
+            body: RenderableType = _diff_field((path, entries), self._pair, redact)
+        elif base_events is not None or cand_events is not None:
             wrap.border_subtitle = "streaming · per-event diff"
-            body: RenderableType = _stream_body_view(base_events or [], cand_events or [], redact)
+            body = _stream_body_view(base_events or [], cand_events or [], redact)
         else:
             wrap.border_subtitle = _seg_toggle(("unified", "side-by-side"), mode)
             body = _diff_body_view(

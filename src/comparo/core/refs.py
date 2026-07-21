@@ -56,8 +56,28 @@ def resolve_specs[Spec](project: LoadedProject, value: object, spec_type: type[S
     Raises:
         SpecResolutionError: If any element is not a valid ``$ref`` or inline spec.
     """
+    return [spec for _, spec in resolve_sources(project, value, spec_type)]
+
+
+def resolve_sources[Spec](
+    project: LoadedProject, value: object, spec_type: type[Spec]
+) -> list[tuple[str | None, Spec]]:
+    """Like :func:`resolve_specs`, but keeping each spec's source identity.
+
+    Args:
+        project: The loaded project, used to resolve ``$ref`` ids.
+        value: A ``$ref`` mapping, an inline mapping, or a list of either.
+        spec_type: The spec struct the slot expects (e.g. ``DiffProfileSpec``).
+
+    Returns:
+        ``(source_id, spec)`` pairs in order — the referenced object's id for a
+        ``$ref``, or ``None`` for an inline spec (it has no identity of its own).
+
+    Raises:
+        SpecResolutionError: If any element is not a valid ``$ref`` or inline spec.
+    """
     kind = spec_type.__name__
-    specs: list[Spec] = []
+    sources: list[tuple[str | None, Spec]] = []
     for item in _items(value):
         if not isinstance(item, dict):
             message = f"expected a {{$ref: id}} pointer or an inline {kind}, got {item!r}"
@@ -71,13 +91,13 @@ def resolve_specs[Spec](project: LoadedProject, value: object, spec_type: type[S
             if not isinstance(spec, spec_type):
                 found = type(obj).__name__
                 raise SpecResolutionError(f"$ref '{reference}' is a {found}, not a {kind}")
-            specs.append(spec)
+            sources.append((reference, spec))
         else:
             try:
-                specs.append(msgspec.convert(item, type=spec_type, strict=True))
+                sources.append((None, msgspec.convert(item, type=spec_type, strict=True)))
             except msgspec.ValidationError as error:
                 raise SpecResolutionError(f"inline {kind} is invalid: {error}") from error
-    return specs
+    return sources
 
 
 def _items(value: object) -> list[object]:

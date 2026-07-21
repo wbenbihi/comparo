@@ -36,10 +36,12 @@ from comparo.adapters import updates as updates_adapter
 from comparo.adapters.userconfig import UserConfig
 from comparo.core.assertions import AssertionResult
 from comparo.core.checks import Check
+from comparo.core.compare import VOLATILE_HEADER_PATHS
 from comparo.core.compare import CellDiff
 from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
 from comparo.core.diff import FieldDiff
+from comparo.core.diff import RuleRef
 from comparo.core.diff import State
 from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
@@ -1336,6 +1338,20 @@ def _app_redact(node: DOMNode) -> Callable[[str], str]:
     return app.redactor.text if app.project is not None else str
 
 
+def _governing_path(field: FieldDiff) -> str | None:
+    """The declared path of the USER rule that governed *field*.
+
+    ``None`` for the default catch-all and for synthetic built-ins (the ``$status``
+    check, volatile-header ignores) — showing those as rule paths would send the
+    user hunting their profiles for a rule that exists nowhere. The skip-group
+    fallback label ("volatile") covers the built-ins.
+    """
+    ref = field.rule
+    if ref is None or ref.origin in ("default", "synthetic"):
+        return None
+    return ref.path
+
+
 def _body_diff_lines(
     base: object,
     cand: object,
@@ -1759,8 +1775,9 @@ def _field_drill_card(
     if variants:
         status.append(f"   {variants}", style=_AXIS)
     status.append("\nrule    ", style=_DIM)
-    if field.rule:
-        status.append(redact(field.rule), style=_SKIP)
+    governing = _governing_path(field)
+    if governing is not None:
+        status.append(redact(governing), style=_SKIP)
     else:
         status.append("none", style=_SKIP)
         status.append("   not silenced by any DiffProfile rule", style=_DIM)
@@ -3264,13 +3281,21 @@ def _cell_events(cell: CellDiff) -> tuple[list[object] | None, list[object] | No
 def _field_from_record(field: FieldDiffRecord) -> FieldDiff:
     """Reconstruct a live FieldDiff from a saved record's field — real state and mode."""
     state = State.DRIFT if field.state == "drift" else State.SKIP
+    # The record keeps only the governing rule's path string; origin/profile are
+    # not serialized yet. Known synthetic paths ($status, built-in volatile header
+    # ignores) classify as synthetic so replay display matches live display; any
+    # other recorded path reads as a profile rule.
+    rule: RuleRef | None = None
+    if field.rule:
+        synthetic = field.rule == "$status" or field.rule in VOLATILE_HEADER_PATHS
+        rule = RuleRef(field.rule, field.mode, "synthetic" if synthetic else "profile")
     return FieldDiff(
         field.path,
         state,
         field.mode,
         baseline=field.baseline,
         candidate=field.candidate,
-        rule=field.rule,
+        rule=rule,
     )
 
 

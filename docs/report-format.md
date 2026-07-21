@@ -123,8 +123,13 @@ Present for `diff` and `execution`.
 
 **`FieldDiff`** — `path` (redacted), `state` (`drift`/`skip`), `mode`
 (`exact`/`ignore`/`shape`/`type`/`tolerance`), `baseline` / `candidate` (redacted
-values, present for a drift), `rule` (the `DiffProfile` rule path that governed it,
-e.g. why a `skip` was skipped).
+values, present for a drift), `rule` (the declared path of the rule that governed
+it, e.g. why a `skip` was skipped). `rule` may be a **synthetic built-in** path —
+`$status` (the always-on status check) or a `$headers.<name>` volatile-header
+ignore — as well as a `DiffProfile` rule path; `null` still means the profile's
+default mode governed. Paths under `$headers.<name>` compare the response headers
+(names case-folded; duplicates joined per RFC 9110, `set-cookie` kept as a list;
+credential values masked before comparison).
 
 **`AssertionResult`** — `target` (redacted), `op`, `expected` / `actual`
 (redacted), `ok`, `severity` (`error`/`warn`), `detail` (redacted).

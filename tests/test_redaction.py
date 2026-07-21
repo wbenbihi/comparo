@@ -9,6 +9,7 @@ import pytest
 from comparo.core.assertions import AssertionResult
 from comparo.core.compare import CellDiff
 from comparo.core.diff import FieldDiff
+from comparo.core.diff import RuleRef
 from comparo.core.diff import State
 from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
@@ -799,10 +800,14 @@ def _tainted_cell() -> CellDiff:
             "",
             baseline=SECRET,
             candidate="x",
-            rule=f"$.{SECRET}",
+            rule=RuleRef(f"$.{SECRET}", "exact", "profile"),
         ),
         FieldDiff(
-            f"$.headers.{SECRET}", State.SKIP, "ignore", "volatile", rule=f"$.headers.{SECRET}"
+            f"$.headers.{SECRET}",
+            State.SKIP,
+            "ignore",
+            "volatile",
+            rule=RuleRef(f"$.headers.{SECRET}", "ignore", "profile"),
         ),
     ]
     return CellDiff(
@@ -981,3 +986,15 @@ def test_redact_tree_caps_recursion_on_a_pathologically_deep_body() -> None:
         deep = {"n": deep}
     result = redact_tree(deep, redact)  # must not RecursionError
     assert "s3cr3t" not in json.dumps(result)
+
+
+def test_redactor_masks_the_case_folded_form_of_a_secret() -> None:
+    # The $headers namespace lowercases header names before rendering paths, so a
+    # secret reflected as a header NAME reaches sinks case-folded — the redactor
+    # must catch the lowered form (and its encodings), not just the declared one.
+    from comparo.core.redaction import MASK
+    from comparo.core.redaction import Redactor
+
+    redactor = Redactor.from_values({"Tok-SeCrEt-AbC123"})
+    assert redactor.text("$headers.tok-secret-abc123") == f"$headers.{MASK}"
+    assert "tok-secret" not in redactor.text('{"tok-secret-abc123": 1}')

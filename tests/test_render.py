@@ -76,7 +76,8 @@ def test_field_from_record_maps_the_real_state_and_mode() -> None:
     assert drift.mode == "shape"  # the true mode, not "exact"
     assert drift.baseline == 1
     assert drift.candidate == 2
-    assert drift.rule == "$.total"
+    assert drift.rule is not None
+    assert drift.rule.path == "$.total"
     skip = _field_from_record(FieldDiffRecord("$.ts", "skip", "ignore"))
     assert skip.state is State.SKIP
     assert skip.mode == "ignore"

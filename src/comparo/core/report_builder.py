@@ -228,7 +228,14 @@ def _field(field: FieldDiff, redact: Redact) -> FieldDiffRecord | None:
         mode=_mode(field.mode),
         baseline=redact_tree(field.baseline, redact),
         candidate=redact_tree(field.candidate, redact),
-        rule=redact(field.rule) if field.rule else None,
+        # The governing rule's declared path. The catch-all serializes as null —
+        # the wire meaning of "no rule: the default mode governed" — while profile,
+        # inline, and synthetic (e.g. built-in volatile-header ignores) rules keep
+        # their path so a skip stays attributable. The full RuleRef (origin,
+        # profile id, tallies) lands with the rule-inventory schema pass.
+        rule=redact(field.rule.path)
+        if field.rule is not None and field.rule.origin != "default"
+        else None,
     )
 
 
