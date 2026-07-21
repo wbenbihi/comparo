@@ -52,22 +52,33 @@ async def _send_with_retry(
     resolved: object,
     timeout: TimeoutBudget,
     retry: RetryConfig | None,
-) -> HttpResponse:
+) -> tuple[HttpResponse, int]:
     attempts = max(retry.attempts, 1) if retry is not None and retry.attempts else 1
     last: HttpError | None = None
+    made = 0
     for attempt in range(attempts):
+        made = attempt + 1
         try:
-            return await client.send(resolved, timeout)  # type: ignore[arg-type]
-        except HttpTimeoutError:
+            return await client.send(resolved, timeout), made  # type: ignore[arg-type]
+        except HttpTimeoutError as error:
             # A deadline timeout is never retried — retrying would multiply the
             # wall-clock bound the deadline exists to give.
+            error.attempts = made  # type: ignore[attr-defined]
             raise
         except HttpError as error:
             last = error
             if attempt + 1 < attempts and retry is not None:
                 await asyncio.sleep(_backoff_delay(retry, attempt))
     assert last is not None  # a failed loop always recorded the last error
+    last.attempts = made  # type: ignore[attr-defined]
     raise last
+
+
+def _policy_label(retry: RetryConfig | None) -> str | None:
+    """A compact human label for the retry policy — ``exponential x3`` — or None."""
+    if retry is None or not retry.attempts or retry.attempts <= 1:
+        return None
+    return f"{retry.backoff or 'constant'} x{retry.attempts}"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -86,6 +97,10 @@ class Execution:
     response: HttpResponse | None
     error: str | None = None
     resolved: ResolvedRequest | None = None
+    #: How many transport attempts were made (1 = no retry fired) and the policy
+    #: they followed — so an error panel can say "gave up after 3 (exponential)".
+    attempts: int = 1
+    retry_policy: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -122,11 +137,31 @@ async def execute_request(
         timeout = TimeoutBudget.resolve(request.spec.timeout, environment.spec.timeout)
     except (SecretError, InterpolationError) as error:
         return Execution(request, environment, key, None, str(error))
+    policy = _policy_label(retry)
     try:
-        response = await _send_with_retry(client, resolved, timeout, retry)
+        response, made = await _send_with_retry(client, resolved, timeout, retry)
     except HttpError as error:
-        return Execution(request, environment, key, None, str(error), resolved=resolved)
-    return Execution(request, environment, key, response, None, resolved=resolved)
+        made = getattr(error, "attempts", 1)
+        return Execution(
+            request,
+            environment,
+            key,
+            None,
+            str(error),
+            resolved=resolved,
+            attempts=made,
+            retry_policy=policy,
+        )
+    return Execution(
+        request,
+        environment,
+        key,
+        response,
+        None,
+        resolved=resolved,
+        attempts=made,
+        retry_policy=policy,
+    )
 
 
 async def execute_all(

@@ -45,6 +45,10 @@ class HttpResponse:
     body: bytes
     elapsed_ms: float
     events: list[object] | None = None
+    #: Wire metadata for a faithful raw-exchange rendering (``HTTP/1.1 200 OK``).
+    #: Defaults keep hand-built responses (tests, fabricated scenarios) valid.
+    http_version: str = ""
+    reason_phrase: str = ""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
