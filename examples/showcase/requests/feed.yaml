@@ -4,14 +4,16 @@ metadata:
   name: Price feed
   id: request.feed
   description: >-
-    A chunked-JSON stream diffed as an event SEQUENCE — event 3 drifts on
-    $[2].price; every event's ts is silenced by the profile.
+    /stream/5 is five chunked-JSON events; each echoes the injected taxRate, so
+    $[N].args.taxRate drifts per event — the sequence view, never one blob.
   tags:
     - pricing
 spec:
   request:
     method: GET
-    endpoint: /feed
+    endpoint: /stream/5
+    query:
+      taxRate: ${TAX_RATE}
   response:
     status: 200
     streaming: true

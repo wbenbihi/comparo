@@ -1,0 +1,14 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: HTML page
+  id: request.html
+  description: /html is static — a clean cell, and the outline renderer on the Run tab.
+  tags:
+    - pages
+spec:
+  request:
+    method: GET
+    endpoint: /html
+  response:
+    status: 200

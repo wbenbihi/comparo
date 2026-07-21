@@ -3,16 +3,19 @@ kind: Request
 metadata:
   name: Checkout
   id: request.checkout
-  description: Identical on both sides — the clean cell with collapsed sections.
+  description: >-
+    A fixed order posted to the echo — identical on both sides: the clean cell,
+    with the tolerance rule on $.json.order.total held.
   tags:
     - pricing
 spec:
   request:
     method: POST
-    endpoint: /checkout
+    endpoint: /anything
     body:
       order:
         sku: WIDGET-1
         quantity: 3
+        total: 240.0
   response:
     status: 200

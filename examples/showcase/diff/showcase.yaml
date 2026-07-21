@@ -4,21 +4,27 @@ metadata:
   name: Showcase
   id: diff.showcase
   description: >-
-    Exact by default; volatile metadata ignored; a tolerance band on the total;
-    one deliberately unused rule so the "unused" section has a face.
+    Exact by default; httpbin's echo noise ignored; a tolerance band on the
+    order total; one deliberately unused rule so the "unused" section has a face.
 spec:
   default: exact
   rules:
-    - path: $.meta.requestId
-      mode: ignore          # a fresh uuid per response
-    - path: $.meta.generatedAt
-      mode: ignore          # a timestamp per response
-    - path: $.quote.total
-      mode: tolerance       # float rounding across replicas is not a regression
+    - path: $.headers
+      mode: ignore          # httpbin echoes request headers — host/trace ids vary
+    - path: $.origin
+      mode: ignore          # the caller IP
+    - path: $.url
+      mode: ignore          # embeds the query, which the envs deliberately vary
+    - path: $[*].headers
+      mode: ignore          # the same echo noise, per stream event
+    - path: $[*].origin
+      mode: ignore
+    - path: $[*].url
+      mode: ignore
+    - path: $.json.order.total
+      mode: tolerance       # float rounding is not a regression
       tolerance: 0.01
-    - path: $[*].ts
-      mode: ignore          # per-event timestamps in the feed stream
-    - path: $headers.server
-      mode: ignore          # the two showcase servers name themselves differently
+    - path: $headers.access-control-allow-origin
+      mode: ignore          # a user-written header rule — shows grey in the rules pivot
     - path: $.tpyo.field
       mode: ignore          # deliberately matches nothing → the "unused" section

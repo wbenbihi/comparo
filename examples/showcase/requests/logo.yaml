@@ -1,14 +1,14 @@
 apiVersion: comparo/v1
 kind: Request
 metadata:
-  name: Logo
+  name: PNG image
   id: request.logo
-  description: Identical binary — honest bytes (magic · sha256 · hex) in the Run detail.
+  description: /image/png is static binary — magic · sha256 · hex on the Run tab.
   tags:
     - pages
 spec:
   request:
     method: GET
-    endpoint: /logo
+    endpoint: /image/png
   response:
     status: 200

@@ -1,0 +1,12 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Status probe
+  id: request.status
+  description: /status/${STATUS} — 200 vs 503, the synthetic $status drift.
+  tags:
+    - pricing
+spec:
+  request:
+    method: GET
+    endpoint: /status/${STATUS}

@@ -1,0 +1,13 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: sse-dev
+  id: environment.sse-dev
+  description: The public SSE test stream — pick this env on the RUN tab for /test.
+spec:
+  baseUrl: https://sse.dev
+  timeout:
+    connect: 5s
+    read: 10s
+    streamIdle: 3s
+    streamMax: 8s

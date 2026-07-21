@@ -3,12 +3,12 @@ kind: Request
 metadata:
   name: Quote history
   id: request.history
-  description: Deselect this one at Prepare to see the ⊘ not-run roster.
+  description: /json is static — deselect this one at Prepare to see the ⊘ roster.
   tags:
     - pricing
 spec:
   request:
     method: GET
-    endpoint: /history
+    endpoint: /json
   response:
     status: 200

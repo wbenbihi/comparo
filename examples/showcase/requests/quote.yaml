@@ -4,8 +4,9 @@ metadata:
   name: Price quote
   id: request.quote
   description: >-
-    The flagship drift: taxRate differs on every plan, the total is absorbed by
-    the tolerance band on plan=basic, and x-api-version drifts in the HEADERS.
+    The flagship drift: each environment injects its own TAX_RATE into the
+    query, httpbin echoes it back, and $.args.taxRate drifts on every plan —
+    one bug across three cells. The outbound band says the drift is OURS.
   tags:
     - pricing
 spec:
@@ -13,15 +14,16 @@ spec:
     - $ref: matrix.plans
   request:
     method: GET
-    endpoint: /quote
+    endpoint: /get
+    query:
+      taxRate: ${TAX_RATE}
   response:
     status: 200
     assert:
       rules:
-        - target: body:$.quote.currency
-          op: equals
-          value: USD
+        - target: body:$.args.plan
+          op: exists
         - target: latency
           op: lte
           value: 5ms
-          severity: warn    # the ~ advisory — almost always "breaks", never gates
+          severity: warn    # the ~ advisory — breaks almost always, never gates
