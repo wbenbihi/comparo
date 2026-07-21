@@ -109,14 +109,21 @@ class ReplayRecord:
 
 
 def _assertion_line(result: AssertionRecord) -> AssertionLine:
-    """Project one saved assertion into a display line (label · state · detail)."""
-    if result.ok:
+    """Project one saved assertion into a display line (label · state · detail).
+
+    The stored ``label`` is what the live screen showed — replay repeats it
+    verbatim. An unjudged row (``outcome == "error"``: the side never responded)
+    gets its own state; it must never read as a failed or warned rule.
+    """
+    if result.outcome == "error":
+        state = "error"
+    elif result.ok:
         state = "pass"
     elif result.severity == "warn":
         state = "warn"
     else:
         state = "fail"
-    label = f"{result.target} {result.op}".strip()
+    label = result.label or f"{result.target} {result.op}".strip()
     return AssertionLine(label, state, result.detail or "")
 
 
@@ -130,9 +137,9 @@ def _assertion_summary(rows: list[list[AssertionRecord]]) -> AssertionSummary:
                 passed += 1
             elif line.state == "warn":
                 warned += 1
-            else:
+            elif line.state == "fail":
                 failed += 1
-            lines.append(line)
+            lines.append(line)  # "error" rows list but count toward no bucket
     return AssertionSummary(passed, failed, warned, lines)
 
 
@@ -155,12 +162,14 @@ def _replay_cell(cell: Cell) -> ReplayCell:
         path=request.url,
         drift_paths=drift_paths,
         skip_paths=skip_paths,
-        baseline_body=response.body if response is not None else None,
-        candidate_body=(
-            cell.sides.candidate.response.body
-            if cell.sides.candidate is not None and cell.sides.candidate.response is not None
-            else None
-        ),
+        # A non-JSON text body now lives in bodyText — surface it so a text API
+        # replays with content instead of an empty well.
+        baseline_body=(response.body if response.body is not None else response.body_text)
+        if response is not None
+        else None,
+        candidate_body=(candidate.body if candidate.body is not None else candidate.body_text)
+        if candidate is not None
+        else None,
         status=response.status if response is not None else None,
         latency_ms=round(response.latency_ms) if response is not None else None,
         size_bytes=response.size_bytes if response is not None else None,
@@ -200,7 +209,7 @@ def _breakdown(cells: list[Cell]) -> list[RequestBreakdown]:
         skipped = (
             sum(1 for f in cell.comparison.fields if f.state == "skip") if cell.comparison else 0
         )
-        if cell.verdict in ("drift", "same", "pass"):
+        if cell.verdict in ("pass", "fail"):
             if drifted:
                 drift[name] += 1
             else:
@@ -215,16 +224,15 @@ def _breakdown(cells: list[Cell]) -> list[RequestBreakdown]:
 
 
 def _worse_verdict(current: str, cell: str) -> str:
-    order = {"pass": 0, "same": 0, "skip": 0, "fail": 2, "drift": 2, "error": 3}
-    winner = cell if order.get(cell, 0) >= order.get(current, 0) else current
-    # Normalise the display verdict domain to pass/fail/drift/error.
-    return {"same": "pass", "skip": "pass"}.get(winner, winner)
+    order = {"not_run": 0, "pass": 0, "fail": 2, "error": 3}
+    return cell if order.get(cell, 0) >= order.get(current, 0) else current
 
 
 def project(record: ReportRecord) -> ReplayRecord:
     """Flatten *record* into the Report tab's read-model."""
     summary = record.summary
-    diff = summary.diff
+    fields = summary.fields
+    verdicts = summary.cell_verdicts
     environments = record.invocation.environments
     baseline_rows = [c.sides.baseline.assertions or [] for c in record.cells]
     candidate_rows = [
@@ -237,10 +245,10 @@ def project(record: ReportRecord) -> ReplayRecord:
         kind=record.kind,
         gate=summary.gate,
         calls=summary.calls,
-        same=diff.same if diff is not None else 0,
-        drift=diff.drift if diff is not None else 0,
-        error=diff.error if diff is not None else 0,
-        skipped=diff.skipped if diff is not None else 0,
+        same=fields.same if fields is not None else 0,
+        drift=fields.drift if fields is not None else 0,
+        error=verdicts.errors if verdicts is not None else 0,
+        skipped=fields.skipped if fields is not None else 0,
         baseline=environments.baseline.name,
         candidate=environments.candidate.name if environments.candidate is not None else None,
         execution=record.metadata.title if record.kind == "execution" else None,

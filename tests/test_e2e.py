@@ -156,8 +156,8 @@ def test_identical_environments_pass_the_gate_and_write_valid_reports(
     assert report["schemaVersion"] == 1
     assert report["kind"] == "diff"
     assert report["summary"]["gate"] == "PASS"
-    assert report["summary"]["diff"]["drift"] == 0
-    assert report["cells"][0]["verdict"] == "same"
+    assert report["summary"]["fields"]["drift"] == 0
+    assert report["cells"][0]["verdict"] == "pass"  # a clean diff cell is a passed cell
     markdown = (output / "summary.md").read_text(encoding="utf-8")
     assert "PASS" in markdown
 

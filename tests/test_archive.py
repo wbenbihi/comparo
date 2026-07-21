@@ -62,7 +62,7 @@ def test_breakdown_names_each_drifted_field() -> None:
     )
     replay = project(_diff([cell], env))
     breakdown = replay.requests[0]
-    assert breakdown.verdict == "drift"
+    assert breakdown.verdict == "fail"  # a drifted cell is a failed cell
     assert set(breakdown.drift_paths) == {"$.token", "$.expiry"}
 
 
@@ -150,10 +150,11 @@ def test_run_replay_scopes_checks_to_each_request_not_the_whole_record() -> None
     replay = project(record)
     by_request = {cell.request: cell for cell in replay.cells}
     # Each cell carries only its own request's checks, not the record-wide three.
-    assert [line.label for line in by_request["request.get-json"].assertions] == ["status equals"]
+    # The stored label is what the live screen showed — replay repeats it verbatim.
+    assert [line.label for line in by_request["request.get-json"].assertions] == ["status"]
     assert sorted(line.label for line in by_request["request.echo-anything"].assertions) == [
-        "latency lte",
-        "status equals",
+        "latency",
+        "status",
     ]
     # The record-wide roll-up still holds all three (it feeds the summary counts only).
     assert len(replay.baseline_assertions.lines) == 3

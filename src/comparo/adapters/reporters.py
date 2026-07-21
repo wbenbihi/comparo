@@ -52,7 +52,7 @@ class JUnitReporter:
 
     def render(self, record: ReportRecord) -> str:
         """Render *record* as JUnit XML (a drift/fail is a failure, an error is an error)."""
-        failures = sum(1 for cell in record.cells if cell.verdict in ("drift", "fail"))
+        failures = sum(1 for cell in record.cells if cell.verdict == "fail")
         errors = sum(1 for cell in record.cells if cell.verdict == "error")
         counts = {"tests": str(len(record.cells)), "failures": str(failures), "errors": str(errors)}
         suites = ElementTree.Element("testsuites", counts)
@@ -64,9 +64,9 @@ class JUnitReporter:
                 suite, "testcase", name=_xml_safe(_name(cell)), classname="comparo"
             )
             if cell.verdict == "error":
-                message = cell.sides.baseline.error or "error"
+                message = _cell_error(cell) or "error"
                 ElementTree.SubElement(case, "error", message=_xml_safe(message))
-            elif cell.verdict in ("drift", "fail"):
+            elif cell.verdict == "fail":
                 failure = ElementTree.SubElement(case, "failure", message=cell.verdict)
                 failure.text = _xml_safe(
                     "\n".join(f"{path} {detail}" for path, detail in _findings(cell))
@@ -85,7 +85,7 @@ class SarifReporter:
         for cell in record.cells:
             location = _name(cell)
             if cell.verdict == "error":
-                results.append(_result(f"{location}: {cell.sides.baseline.error}", location))
+                results.append(_result(f"{location}: {_cell_error(cell) or 'error'}", location))
                 continue
             for path, detail in _findings(cell):
                 results.append(_result(f"{location}: {path} {detail}", location))
@@ -122,7 +122,7 @@ class MarkdownReporter:
         lines = [f"## {title}", "", "| request | cell | result | detail |", "|---|---|---|---|"]
         for cell in record.cells:
             if cell.verdict == "error":
-                detail = _md_cell(cell.sides.baseline.error or "")
+                detail = _md_cell(_cell_error(cell) or "")
             else:
                 detail = "<br>".join(
                     f"`{_md_cell(path)}` {_md_cell(text)}" for path, text in _findings(cell)
@@ -172,13 +172,28 @@ def _findings(cell: Cell) -> list[tuple[str, str]]:
     return findings
 
 
+def _cell_error(cell: Cell) -> str | None:
+    """The cell's diagnostic, wherever it lives.
+
+    The cell-level error (pairing, compare, empty matrix) wins; else either
+    side's transport/resolution error.
+    """
+    candidate = cell.sides.candidate
+    return (
+        cell.error
+        or cell.sides.baseline.error
+        or (candidate.error if candidate is not None else None)
+    )
+
+
 def _summary_line(record: ReportRecord) -> str:
     gate = "**PASS** ✅" if record.summary.gate == "PASS" else f"**{record.summary.gate}** ❌"
     parts: list[str] = []
-    if record.summary.diff is not None:
-        diff = record.summary.diff
+    if record.summary.fields is not None:
+        fields = record.summary.fields
+        errors = record.summary.cell_verdicts.errors if record.summary.cell_verdicts else 0
         parts.append(
-            f"{diff.same} same · {diff.drift} drift · {diff.error} error · {diff.skipped} skipped"
+            f"{fields.same} same · {fields.drift} drift · {errors} error · {fields.skipped} skipped"
         )
     if record.summary.assertions is not None:
         asserts = record.summary.assertions

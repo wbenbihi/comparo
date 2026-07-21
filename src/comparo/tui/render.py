@@ -35,7 +35,6 @@ from comparo import __version__
 from comparo.adapters import updates as updates_adapter
 from comparo.adapters.userconfig import UserConfig
 from comparo.core.assertions import AssertionResult
-from comparo.core.compare import VOLATILE_HEADER_PATHS
 from comparo.core.compare import CellDiff
 from comparo.core.diagnostics import Diagnostic
 from comparo.core.diagnostics import LoadError
@@ -3227,15 +3226,16 @@ def _cell_events(cell: CellDiff) -> tuple[list[object] | None, list[object] | No
 
 def _field_from_record(field: FieldDiffRecord) -> FieldDiff:
     """Reconstruct a live FieldDiff from a saved record's field — real state and mode."""
-    state = State.DRIFT if field.state == "drift" else State.SKIP
-    # The record keeps only the governing rule's path string; origin/profile are
-    # not serialized yet. Known synthetic paths ($status, built-in volatile header
-    # ignores) classify as synthetic so replay display matches live display; any
-    # other recorded path reads as a profile rule.
+    if field.state == "drift":
+        state = State.DRIFT
+    elif field.state == "same":
+        state = State.SAME
+    else:
+        state = State.SKIP
+    # The record references the rule inventory by id; reconstructing the full ref
+    # is the replay adapters' job (Results rework). Until then a replayed field
+    # carries no ref — display falls back to "not silenced by any rule".
     rule: RuleRef | None = None
-    if field.rule:
-        synthetic = field.rule == "$status" or field.rule in VOLATILE_HEADER_PATHS
-        rule = RuleRef(field.rule, field.mode, "synthetic" if synthetic else "profile")
     return FieldDiff(
         field.path,
         state,

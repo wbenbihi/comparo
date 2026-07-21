@@ -418,14 +418,20 @@ def _rule_outcomes(effective: list[RuleRef], fields: list[FieldDiff]) -> list[Ru
     return outcomes
 
 
-def _written_identity(ref: RuleRef) -> tuple[str, str | None, str, str]:
+#: A rule's written identity — origin, owner, path, mode, and parameters.
+WrittenRule = tuple[str, str | None, str, str, float | None, str | None]
+
+
+def _written_identity(ref: RuleRef) -> WrittenRule:
     """The identity of a rule *as written* — stable across compositions.
 
     ``RuleRef.index`` is composition-relative (the same profile rule lands at
     different offsets on requests that compose it after different siblings), so
-    cross-cell folds must key on what the user wrote, not where it landed.
+    cross-cell folds must key on what the user wrote, not where it landed. The
+    parameters belong to the identity: two same-path tolerance rules with
+    different bands are two different rules.
     """
-    return (ref.origin, ref.profile, ref.path, ref.mode)
+    return (ref.origin, ref.profile, ref.path, ref.mode, ref.tolerance, ref.array_length)
 
 
 def unused_rules(cells: list[CellDiff]) -> list[RuleRef]:
@@ -435,7 +441,7 @@ def unused_rules(cells: list[CellDiff]) -> list[RuleRef]:
     error cells are inconclusive and count as neither use nor disuse. Synthetic
     and catch-all refs are excluded: only rules someone wrote can be typos.
     """
-    seen: dict[tuple[str, str | None, str, str], tuple[RuleRef, bool]] = {}
+    seen: dict[WrittenRule, tuple[RuleRef, bool]] = {}
     for cell in cells:
         for outcome in cell.rule_outcomes:
             if outcome.ref.origin not in ("profile", "inline"):
