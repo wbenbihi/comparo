@@ -1,0 +1,18 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Checkout
+  id: request.checkout
+  description: Identical on both sides — the clean cell with collapsed sections.
+  tags:
+    - pricing
+spec:
+  request:
+    method: POST
+    endpoint: /checkout
+    body:
+      order:
+        sku: WIDGET-1
+        quantity: 3
+  response:
+    status: 200

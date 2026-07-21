@@ -1,0 +1,23 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  name: results-showcase
+  description: >-
+    Every state of the Diff/Run results on two tiny local servers —
+    run `python examples/showcase/serve.py` first.
+spec:
+  data: .
+  environments:
+    default: baseline
+    diffPairs:
+      - name: baseline-vs-candidate
+        baseline: baseline
+        candidate: candidate
+  run:
+    concurrency: 4
+    retry:
+      attempts: 2
+      backoff: constant
+  diff:
+    default:
+      $ref: diff.showcase

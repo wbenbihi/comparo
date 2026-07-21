@@ -1,0 +1,11 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: candidate
+  id: environment.candidate
+  description: The drifted side (serve.py :8092).
+spec:
+  baseUrl: http://127.0.0.1:8092
+  timeout:
+    connect: 2s
+    read: 5s

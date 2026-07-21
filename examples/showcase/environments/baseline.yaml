@@ -1,0 +1,11 @@
+apiVersion: comparo/v1
+kind: Environment
+metadata:
+  name: baseline
+  id: environment.baseline
+  description: The stable side (serve.py :8091).
+spec:
+  baseUrl: http://127.0.0.1:8091
+  timeout:
+    connect: 2s
+    read: 5s
