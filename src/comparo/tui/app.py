@@ -44,6 +44,7 @@ from textual.widgets import OptionList
 from textual.widgets import SelectionList
 from textual.widgets import Static
 from textual.widgets import Tree
+from textual.widgets.data_table import RowDoesNotExist
 from textual.widgets.tree import TreeNode
 from textual.worker import Worker
 
@@ -55,6 +56,8 @@ from comparo.core.archive import archive_dir
 from comparo.core.archive import list_records
 from comparo.core.archive import save_record
 from comparo.core.assertions import AssertionResult
+from comparo.core.assertions import AssertRef
+from comparo.core.assertions import SourcedAssertion
 from comparo.core.assertions import evaluate_rules
 from comparo.core.assertions import passed as assertions_passed
 from comparo.core.assertions import request_response_rules
@@ -93,6 +96,7 @@ from comparo.core.models import Request
 from comparo.core.provenance import Trail
 from comparo.core.redaction import Redactor
 from comparo.core.report import diff_passed
+from comparo.core.report import run_gate
 from comparo.core.report_builder import record_from_diff
 from comparo.core.report_builder import record_from_execution
 from comparo.core.report_builder import record_from_run
@@ -107,8 +111,16 @@ from comparo.core.triage import profile_path
 from comparo.core.triage import silence
 from comparo.tui.components import NavEntry
 from comparo.tui.components import NavStack
+from comparo.tui.components import StatChip
+from comparo.tui.components import TallySegment
+from comparo.tui.components import cell_glyph
 from comparo.tui.components import cell_mark
 from comparo.tui.components import filter_row
+from comparo.tui.components import provenance_suffix
+from comparo.tui.components import spec_rows
+from comparo.tui.components import stat_chips
+from comparo.tui.components import summary_strip_finished
+from comparo.tui.components import summary_strip_running
 from comparo.tui.components import verdict_pill
 from comparo.tui.render import _app_env
 from comparo.tui.render import _app_redact
@@ -190,6 +202,7 @@ from comparo.tui.render import _save_run
 from comparo.tui.render import _seg_toggle
 from comparo.tui.render import _settings_body
 from comparo.tui.render import _title
+from comparo.tui.render import raw_exchange_text
 from comparo.tui.replay import ReplayRecord
 from comparo.tui.replay import project
 from comparo.tui.theme import COMPARO_INK
@@ -224,14 +237,12 @@ from comparo.tui.tokens import _REPORT_DIFF_KEYS
 from comparo.tui.tokens import _REPORT_LIST_KEYS
 from comparo.tui.tokens import _REPORT_RUN_KEYS
 from comparo.tui.tokens import _RESOLVE_KEYS
-from comparo.tui.tokens import _RUN_GLYPH
 from comparo.tui.tokens import _RUNNING_DONE_KEYS
 from comparo.tui.tokens import _RUNNING_KEYS
 from comparo.tui.tokens import _SAME
 from comparo.tui.tokens import _SETTINGS_KEYS
 from comparo.tui.tokens import _SETTINGS_SUBTITLE
 from comparo.tui.tokens import _SKIP
-from comparo.tui.tokens import _STATUS
 from comparo.tui.tokens import _TAB_NAMES
 from comparo.tui.tokens import _TEXT
 from comparo.tui.tokens import _TEXT_HI
@@ -632,6 +643,10 @@ class ExplorerView(Horizontal):
         self.query_one("#context-content", Static).update(content)
 
 
+#: One cell in a run rule's record — ``None`` result means never evaluated.
+_RuleHit = tuple[Request, MatrixCell, "AssertionResult | None"]
+
+
 class RunView(Vertical):
     """The Run screen: a PREPARE state to pick work, a RUNNING state to watch it.
 
@@ -648,6 +663,11 @@ class RunView(Vertical):
         Binding("backspace", "back", "back"),
         Binding("f", "filter", "failures"),
         Binding("t", "cycle_detail", "views"),
+        Binding("r", "rules", "rules"),
+        Binding("o", "order", "order"),
+        Binding("n", "next_anchor", "next broken"),
+        Binding("p", "prev_anchor", "prev broken"),
+        Binding("y", "copy_raw", "copy raw"),
         Binding("z", "zoom", "maximize"),
         Binding("a", "abort", "abort"),
         Binding("s", "save", "save"),
@@ -703,6 +723,15 @@ class RunView(Vertical):
         self.filter_query = ""
         self._focus: Request | None = None
         self._focus_cell: MatrixCell | None = None
+        #: The left column's pivot: the requests table or the assertion-rules index.
+        self._pivot = "requests"
+        #: Worst-first ordering for the requests table (``o`` flips to plan order).
+        self._order_worst = True
+        #: The rules index as shown — each row is one written rule and its record.
+        self._rule_index: list[tuple[AssertRef, list[_RuleHit]]] = []
+        #: The detail tree's broken-anchor registry — what ``n``/``p`` hop between.
+        self._anchors: list[TreeNode[object]] = []
+        self._anchor_pos = -1
         #: Which facet the per-cell detail shows (RUN-27): all/request/response/headers/raw.
         self._detail_focus = "all"
         self._worker: Worker[None] | None = None
@@ -789,7 +818,16 @@ class RunView(Vertical):
         self._title_prepare()
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[object]) -> None:
-        """Toggle the node in or out of the run on Enter."""
+        """PREPARE: toggle the node in or out of the run. DETAIL: jump to a cell."""
+        if event.control.id == "detail-tree":
+            data = event.node.data
+            if isinstance(data, tuple) and len(data) == 2 and isinstance(data[0], Request):
+                request, cell = data
+                if isinstance(cell, MatrixCell):
+                    self._jump_to_cell(request, cell)
+            return
+        if event.control.id != "prepare-tree":
+            return
         request, cell = _pair(event.node)
         if request is None:
             return
@@ -929,6 +967,9 @@ class RunView(Vertical):
         self._focus = None
         self._focus_cell = None
         self._view = "requests"
+        self._pivot = "requests"
+        self._anchors = []
+        self._anchor_pos = -1
         for request, cell in plan:
             key = _run_key(request, cell)
             self._state[key] = "pending"
@@ -979,6 +1020,8 @@ class RunView(Vertical):
         finally:
             await client.aclose()
         self._done = True
+        # Snap the table to its finished order — worst first unless o flipped it.
+        self._populate_requests()
         self._render_progress()
         ok = sum(1 for request, cell in plan if self._cell_ok(request, cell))
         self.app.notify(
@@ -1039,11 +1082,16 @@ class RunView(Vertical):
             return
         if self._view == "details":
             self._max = False
-            self._view = "variants" if self._has_variants() else "requests"
+            self._view = (
+                "variants" if self._pivot != "rules" and self._has_variants() else "requests"
+            )
             self._layout()
         elif self._view == "variants":
             self._view = "requests"
             self._layout()
+        elif self._pivot == "rules":
+            # Unwind the pivot before leaving RUNNING — esc always steps back once.
+            self.action_rules()
         else:
             self.query_one("#run-mode", ContentSwitcher).current = "prepare"
             self.query_one("#prepare-tree", Tree).focus()
@@ -1060,9 +1108,9 @@ class RunView(Vertical):
         elif self._view == "variants":
             cls, focus = "r-v", "#var-table"
         elif self._view == "details":
-            cls, focus = (
-                ("r-v-d", "#detail-tree") if self._has_variants() else ("r-d", "#detail-tree")
-            )
+            # The rules pivot has no variants column — the record IS the detail.
+            wide = self._pivot != "rules" and self._has_variants()
+            cls, focus = ("r-v-d", "#detail-tree") if wide else ("r-d", "#detail-tree")
         else:
             cls, focus = "only-r", "#req-table"
         self.query_one("#run-columns").set_classes(cls)
@@ -1100,6 +1148,81 @@ class RunView(Vertical):
         self._view = "details"
         self._layout()
 
+    def _running_state(self) -> bool:
+        return self.query_one("#run-mode", ContentSwitcher).current == "running"
+
+    def action_rules(self) -> None:
+        """Pivot the left column: the requests table ⇄ the assertion-rules index."""
+        if not self._running_state():
+            return
+        self._pivot = "rules" if self._pivot == "requests" else "requests"
+        self._max = False
+        self._view = "requests"
+        self._focus = None
+        self._focus_cell = None
+        self._populate_requests()
+        self._layout()
+        self._render_progress()
+
+    def action_order(self) -> None:
+        """Flip the requests table between worst-first and plan order."""
+        if not self._running_state() or self._pivot != "requests":
+            return
+        self._order_worst = not self._order_worst
+        self._populate_requests()
+        self.app.notify(
+            "Worst first" if self._order_worst else "Plan order", severity="information"
+        )
+
+    def action_next_anchor(self) -> None:
+        """Hop to the next broken check pinned in the evidence tree."""
+        self._hop_anchor(1)
+
+    def action_prev_anchor(self) -> None:
+        """Hop to the previous broken check pinned in the evidence tree."""
+        self._hop_anchor(-1)
+
+    def _hop_anchor(self, step: int) -> None:
+        if not self._running_state() or self._view != "details":
+            return
+        if not self._anchors:
+            self.app.notify("No broken checks pinned in this body", severity="information")
+            return
+        self._anchor_pos = (self._anchor_pos + step) % len(self._anchors)
+        node = self._anchors[self._anchor_pos]
+        parent = node.parent
+        while parent is not None:
+            parent.expand()
+            parent = parent.parent
+        tree: Tree[object] = self.query_one("#detail-tree", Tree)
+        # Expanding only invalidates the line cache; a node revealed for the
+        # first time still carries a stale line until the tree rebuilds. Force
+        # the rebuild so the cursor lands ON the anchor, not on line 0.
+        _ = tree.last_line
+        tree.move_cursor(node, animate=False)
+        tree.scroll_to_node(node)
+        tree.focus()
+
+    def action_copy_raw(self) -> None:
+        """Copy the focused cell's raw exchange to the clipboard — masked."""
+        if not self._running_state() or self._view != "details":
+            return
+        if self._focus is None or self._focus_cell is None:
+            return
+        environment = self._run_env or _app_env(self)
+        resolved = (
+            Resolver(self.project, environment).resolve_request(self._focus, self._focus_cell)
+            if environment is not None
+            else None
+        )
+        execution = self._exec.get(_run_key(self._focus, self._focus_cell))
+        text = raw_exchange_text(resolved, execution, _app_redact(self))
+        if not text.strip():
+            self.app.notify("Nothing to copy yet", severity="information")
+            return
+        self.app.copy_to_clipboard(text)
+        self.app.notify("Raw exchange copied — secrets masked", title="Copied")
+
     def action_filter(self) -> None:
         """Toggle the failures-only filter on the run tables."""
         if self.query_one("#run-mode", ContentSwitcher).current != "running":
@@ -1134,6 +1257,8 @@ class RunView(Vertical):
             self._title_prepare()
             return len(self.query_one("#prepare-tree", Tree).root.children)
         self._populate_requests()
+        if self._pivot == "rules":
+            return len(self._rule_index)
         if self._focus is not None and self._view in ("variants", "details"):
             self._populate_variants(self._focus)
         return sum(len(self._shown_cells(r)) for r in self._shown_requests())
@@ -1147,7 +1272,44 @@ class RunView(Vertical):
             requests = [r for r in requests if self._request_status(r) in ("failed", "partial")]
         if self.filter_query:
             requests = [r for r in requests if self._matches_text(r.metadata.name)]
+        if self._order_worst:
+            # Worst first (✗ ! ~ ✓) — a stable sort keeps plan order inside a tier.
+            requests = sorted(requests, key=self._request_severity)
         return requests
+
+    def _request_severity(self, request: Request) -> int:
+        """The request's worst cell on the ✗ ! ~ ✓ precedence (lower = worse)."""
+        return min(
+            (self._cell_severity(request, cell) for cell in self._plan_cells(request)), default=9
+        )
+
+    #: Severity tier → the shared glyph-grammar state — the ONE mapping every
+    #: run surface (strips, rows, rules index) renders cells through.
+    _SEVERITY_STATES: ClassVar[dict[int, str]] = {
+        0: "fail",
+        1: "error",
+        2: "advisory",
+        3: "running",
+        4: "pending",
+        5: "pass",
+    }
+
+    def _cell_severity(self, request: Request, cell: MatrixCell) -> int:
+        key = _run_key(request, cell)
+        state = self._state.get(key, "pending")
+        if state == "failed":
+            return 1  # unreachable — an error, never a red ✗ (nothing was judged)
+        if state == "ok":
+            results = self._results.get(key, [])
+            if not assertions_passed(results):
+                return 0  # a gating rule broke
+            if any(not r.ok and r.severity == "warn" for r in results):
+                return 2  # advisory
+            return 5
+        return 3 if state == "running" else 4
+
+    def _cell_state(self, request: Request, cell: MatrixCell) -> str:
+        return self._SEVERITY_STATES[self._cell_severity(request, cell)]
 
     def _shown_cells(self, request: Request) -> list[MatrixCell]:
         cells = self._plan_cells(request)
@@ -1171,6 +1333,9 @@ class RunView(Vertical):
         return f"  [{_WARN}]· {' · '.join(parts)}[/]" if parts else ""
 
     def _populate_requests(self) -> None:
+        if self._pivot == "rules":
+            self._populate_rules()
+            return
         table = self.query_one("#req-table", DataTable)
         table.clear(columns=True)
         table.add_column("", key="state", width=3)
@@ -1184,6 +1349,167 @@ class RunView(Vertical):
         self.query_one("#col-requests").border_title = Text.from_markup(
             f"REQUESTS{self._filter_suffix()}"
         )
+
+    # ── rules index (the r pivot) ────────────────────────────────────────────
+    #: Rule tier → the shared glyph-grammar state. Tier 3 = attached only to
+    #: cells that never ran — an error, never a break.
+    _RULE_TIER_STATES: ClassVar[dict[int, str]] = {0: "fail", 1: "advisory", 2: "pass", 3: "error"}
+
+    def _rule_rows(self) -> list[tuple[AssertRef, list[_RuleHit]]]:
+        """Every rule the run carried, folded by its written identity, worst first.
+
+        A rule appears once however many cells enforced it. Judged cells carry
+        their result; a DEAD cell's rules were attached but never evaluated, so
+        they record ``None`` — rendered ``! never evaluated``, because an errored
+        cell must never increment a rule's broken count.
+        """
+        folded: dict[AssertRef, list[_RuleHit]] = {}
+        compiled: dict[int, list[SourcedAssertion]] = {}
+        for request, cell in self._plan():
+            key = _run_key(request, cell)
+            if self._state.get(key) == "failed":
+                sourced = compiled.get(id(request))
+                if sourced is None:
+                    sourced = compiled[id(request)] = request_response_rules(self.project, request)
+                for rule in sourced:
+                    folded.setdefault(rule.ref, []).append((request, cell, None))
+                continue
+            for result in self._results.get(key, []):
+                if result.ref is None:
+                    continue
+                folded.setdefault(result.ref, []).append((request, cell, result))
+        rows = list(folded.items())
+        rows.sort(key=lambda item: self._rule_severity(item[1]))
+        return rows
+
+    @staticmethod
+    def _rule_severity(hits: list[_RuleHit]) -> int:
+        """0 broke somewhere · 1 only advisory breaks · 2 held · 3 never evaluated."""
+        results = [result for _, _, result in hits if result is not None]
+        if any(not result.ok and result.severity != "warn" for result in results):
+            return 0
+        if any(not result.ok for result in results):
+            return 1
+        return 2 if results else 3
+
+    @staticmethod
+    def _hit_state(result: AssertionResult | None) -> str:
+        """One judged (or never-run) cell as the shared glyph-grammar state."""
+        if result is None:
+            return "error"
+        if result.ok:
+            return "pass"
+        return "advisory" if result.severity == "warn" else "fail"
+
+    def _rule_label(self, ref: AssertRef) -> str:
+        return _app_redact(self)(ref.label or f"{ref.target} {ref.op}")
+
+    def _populate_rules(self) -> None:
+        table = self.query_one("#req-table", DataTable)
+        table.clear(columns=True)
+        table.add_column("", key="state", width=3)
+        table.add_column("RULE", key="rule")
+        table.add_column("CELLS", key="cells")
+        table.add_column("BROKE", key="broke", width=8)
+        rows = self._rule_rows()
+        if self._failures_only:
+            rows = [row for row in rows if self._rule_severity(row[1]) == 0]
+        if self.filter_query:
+            rows = [
+                (ref, hits)
+                for ref, hits in rows
+                if self._matches_text(self._rule_label(ref)) or self._matches_text(ref.target)
+            ]
+        self._rule_index = rows
+        for index, (ref, hits) in enumerate(rows):
+            severity = self._rule_severity(hits)
+            glyph, tint = cell_glyph(self._RULE_TIER_STATES[severity])
+            label = Text(self._rule_label(ref), style=_TEXT_HI if severity == 0 else _TEXT)
+            label.append(
+                f"  · {provenance_suffix(ref.origin, ref.profile or ref.request)}", style=_DIM
+            )
+            strip = Text()
+            for _, _, result in hits:
+                mark, colour = cell_glyph(self._hit_state(result))
+                strip.append(mark, style=colour)
+            broke = sum(
+                1 for _, _, r in hits if r is not None and not r.ok and r.severity != "warn"
+            )
+            table.add_row(
+                Text(glyph, style=tint),
+                label,
+                strip,
+                Text(f"{broke}/{len(hits)}", style=_DRIFT if broke else _DIM),
+                key=f"arule::{index}",
+            )
+        self.query_one("#col-requests").border_title = Text.from_markup(
+            f"RULES{self._filter_suffix()}"
+        )
+
+    def _populate_rule_detail(self, index: int) -> None:
+        """The rule's record card, in tree costume: spec, tally, every judged cell."""
+        if not 0 <= index < len(self._rule_index):
+            return
+        ref, hits = self._rule_index[index]
+        redact = _app_redact(self)
+        label = self._rule_label(ref)
+        wrap = self.query_one("#col-details")
+        wrap.border_title = Text.assemble(
+            ("RULE ", f"bold {_LABEL}"), ("· ", _DIM), (label, _TEXT_HI)
+        )
+        wrap.border_subtitle = ""
+        tree: Tree[object] = self.query_one("#detail-tree", Tree)
+        tree.clear()
+        tree.show_root = False
+        tree.guide_depth = 2
+        self._anchors = []
+        self._anchor_pos = -1
+        root = tree.root
+        glyph, tint = cell_glyph(self._RULE_TIER_STATES[self._rule_severity(hits)])
+        root.add_leaf(Text.assemble((f"{glyph} ", f"bold {tint}"), (label, f"bold {_TEXT_HI}")))
+        severity_value = Text(ref.severity, style=_WARN if ref.severity == "warn" else _TEXT)
+        for line in spec_rows(
+            [
+                ("target", Text(redact(ref.target), style=_TEXT)),
+                ("op", ref.op),
+                ("severity", severity_value),
+                ("source", provenance_suffix(ref.origin, ref.profile or ref.request)),
+            ]
+        ):
+            root.add_leaf(line)
+        broke = sum(1 for _, _, r in hits if r is not None and not r.ok and r.severity != "warn")
+        advisory = sum(1 for _, _, r in hits if r is not None and not r.ok and r.severity == "warn")
+        held = sum(1 for _, _, r in hits if r is not None and r.ok)
+        errors = sum(1 for _, _, r in hits if r is None)
+        root.add_leaf(
+            stat_chips(
+                [
+                    StatChip("enforced", len(hits), _TEXT_HI),
+                    StatChip("✗ broke", broke, _DRIFT),
+                    StatChip("~ advisory", advisory, _WARN),
+                    StatChip("✓ held", held, _SAME),
+                    StatChip("! error", errors, _WARN),
+                ]
+            )
+        )
+        record = root.add(Text("RECORD — every cell this rule belongs to", style=f"bold {_LABEL}"))
+        record.expand()
+        rank = {"fail": 0, "advisory": 1, "pass": 2, "error": 3}
+        ordered = sorted(hits, key=lambda hit: rank[self._hit_state(hit[2])])
+        for request, cell, result in ordered:
+            state = self._hit_state(result)
+            mark, colour = cell_glyph(state)
+            row = Text(f"{mark} ", style=f"bold {colour}")
+            row.append(request.metadata.name, style=_TEXT_HI if state == "fail" else _TEXT)
+            if cell.key:
+                row.append(f" · {redact(cell.key)}", style=_AXIS)
+            if result is None:
+                # The dead cell: attached, never evaluated — an error, not a break.
+                row.append("  never evaluated", style=_DIM)
+            else:
+                row.append(f"  {redact(result.detail)}", style=_DIM)
+            # Selecting a record row jumps to that cell's detail (cross-pivot nav).
+            record.add_leaf(row, data=(request, cell))
 
     def _populate_variants(self, request: Request) -> None:
         self._focus = request
@@ -1214,7 +1540,7 @@ class RunView(Vertical):
         tree: Tree[object] = self.query_one("#detail-tree", Tree)
         tree.show_root = False
         tree.guide_depth = 2
-        _build_report_tree(
+        self._anchors = _build_report_tree(
             tree,
             self.project,
             self._run_env or _app_env(self),
@@ -1226,13 +1552,25 @@ class RunView(Vertical):
             _app_redact(self),
             focus=self._detail_focus,
         )
+        self._anchor_pos = -1
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        """Preview the child column as the cursor moves."""
+        """Preview the child column as the cursor moves — only when the USER moves it.
+
+        Textual echoes a RowHighlighted for row 0 whenever a table is cleared and
+        refilled (run finish, ``o``, a cross-pivot jump), and for programmatic
+        ``move_cursor`` calls. Those echoes arrive while the table is NOT focused
+        — a real cursor move can only happen with the user's hand on the table —
+        so the focus gate is what keeps a rebuild from clobbering an open detail.
+        """
         key = event.row_key.value
-        if key is None:
+        if key is None or not event.data_table.has_focus:
             return
         if event.data_table.id == "req-table":
+            if self._pivot == "rules":
+                if self._view == "details" and key.startswith("arule::"):
+                    self._populate_rule_detail(int(key.split("::", 1)[1]))
+                return
             request = self._by_id(key)
             if request is not None and self._view == "details":
                 self._focus = request
@@ -1250,6 +1588,14 @@ class RunView(Vertical):
         if key is None:
             return
         if event.data_table.id == "req-table":
+            if self._pivot == "rules":
+                if key.startswith("arule::"):
+                    index = int(key.split("::", 1)[1])
+                    if 0 <= index < len(self._rule_index):
+                        self._view = "details"
+                        self._populate_rule_detail(index)
+                        self._layout()
+                return
             request = self._by_id(key)
             if request is not None:
                 self._open_request(request)
@@ -1257,6 +1603,26 @@ class RunView(Vertical):
             cell = self._cell_by_key(self._focus, key)
             if cell is not None:
                 self._open_variant(cell)
+
+    def _jump_to_cell(self, request: Request, cell: MatrixCell) -> None:
+        """Cross-pivot jump: from a rule's record row to that cell's detail."""
+        self._pivot = "requests"
+        self._populate_requests()
+        table = self.query_one("#req-table", DataTable)
+        request_id = request.metadata.id or request.metadata.name
+        try:
+            row: int | None = table.get_row_index(request_id)
+        except RowDoesNotExist:  # filtered out of the table — land in the detail anyway
+            row = None
+        if row is not None and row != table.cursor_row:
+            # The highlight echo is inert while the table is unfocused (see
+            # on_data_table_row_highlighted) — the jump's exact cell survives.
+            table.move_cursor(row=row)
+        self._focus = request
+        self._focus_cell = cell
+        self._populate_details(request, cell)
+        self._view = "details"
+        self._layout()
 
     def _on_progress(self, request: Request, cell: MatrixCell) -> None:
         request_id = request.metadata.id or request.metadata.name
@@ -1282,41 +1648,74 @@ class RunView(Vertical):
             self._populate_details(request, cell)
         self._render_progress()
 
+    def _cell_tally(self) -> tuple[int, int, int, int, int, int]:
+        """``(total, done, passed, advisory, failed, unreachable)`` over the plan.
+
+        ``advisory`` counts cells that PASS with a broken warn-severity rule —
+        the ``~`` lifecycle state; it never feeds the gate.
+        """
+        plan = self._plan()
+        done = passed = advisory = failed = unreachable = 0
+        for request, cell in plan:
+            key = _run_key(request, cell)
+            state = self._state.get(key)
+            if state == "failed":
+                done += 1
+                unreachable += 1
+            elif state == "ok":
+                done += 1
+                results = self._results.get(key, [])
+                if not assertions_passed(results):
+                    failed += 1
+                elif any(not r.ok and r.severity == "warn" for r in results):
+                    advisory += 1
+                else:
+                    passed += 1
+        return len(plan), done, passed, advisory, failed, unreachable
+
     def _render_progress(self) -> None:
         environment = self._run_env or _app_env(self)
+        index_title = "RULES" if self._pivot == "rules" else "REQUESTS"
         self.query_one("#col-requests").border_title = Text.from_markup(
-            f"REQUESTS{self._filter_suffix()}"
+            f"{index_title}{self._filter_suffix()}"
         )
-        plan = self._plan()
-        total = len(plan)
-        done = sum(1 for r, c in plan if self._state.get(_run_key(r, c)) in ("ok", "failed"))
-        ok = sum(1 for r, c in plan if self._cell_ok(r, c))
-        failed = done - ok
-        text = Text()
-        text.append("run ", style=_DIM)
-        text.append(self._run_id or "—", style=f"bold {_ACCENT}")
-        text.append(f"   {environment.metadata.name if environment else '—'}", style=_TEXT_HI)
-        text.append("   ", style=_DIM)
-        width = 24
-        filled = round(width * done / total) if total else 0
-        fill_tint = _SAME if self._done and not failed else _WARN if self._done else _ACCENT
-        text.append("━" * filled, style=fill_tint)
-        text.append("━" * (width - filled), style=_DIM)
-        text.append(f"   {done}/{total}", style=f"bold {_TEXT_HI}")
-        text.append("  ·  ", style=_DIM)
-        text.append(f"{ok} ✓", style=_SAME)
-        text.append("  ", style=_DIM)
-        text.append(f"{failed} ✗", style=_DRIFT if failed else _DIM)
+        total, done, passed, advisory, failed, unreachable = self._cell_tally()
+        segments = [
+            TallySegment(passed, "✓", _SAME),
+            TallySegment(advisory, "~", _WARN),
+            TallySegment(failed, "✗", _DRIFT),
+            TallySegment(unreachable, "!", _WARN),
+        ]
+        title = Text()
+        title.append("run ", style=_DIM)
+        title.append(self._run_id or "—", style=f"bold {_ACCENT}")
+        title.append(f"  {environment.metadata.name if environment else '—'}", style=_TEXT_HI)
+        panel = self.query_one("#run-progress", Static)
+        gate_class = ""
         if self._done:
-            text.append("    press ", style=_DIM)
-            text.append("s", style=f"bold {_ACCENT}")
-            text.append(" to save", style=_DIM)
-        self.query_one("#run-progress", Static).update(text)
+            # The finished costume: the same slot swaps the bar for the verdict.
+            # ``unreachable`` cells are the run's errors — never counted as failed.
+            gate = run_gate(failed, unreachable, total)
+            right = Text()
+            right.append_text(title)
+            right.append("   press ", style=_DIM)
+            right.append("s", style=f"bold {_ACCENT}")
+            right.append(" to save", style=_DIM)
+            strip = summary_strip_finished(gate.value, segments, right)
+            gate_class = {"PASS": "gate-pass", "FAIL": "gate-fail", "ERROR": "gate-error"}[
+                gate.value
+            ]
+        else:
+            strip = summary_strip_running(title, done, total, segments)
+        for name in ("gate-pass", "gate-fail", "gate-error"):
+            panel.set_class(name == gate_class, name)
+        panel.update(strip)
         self.update_footer()
 
     # ── rows ─────────────────────────────────────────────────────────────────
     def _request_row(self, request: Request) -> list[Text]:
-        glyph, colour = _STATUS[self._request_status(request)]
+        severity = self._request_severity(request)
+        glyph, colour = cell_glyph(self._SEVERITY_STATES.get(severity, "pending"))
         latencies: list[float] = []
         for cell in self._plan_cells(request):
             execution = self._exec.get(_run_key(request, cell))
@@ -1332,8 +1731,7 @@ class RunView(Vertical):
 
     def _variant_row(self, request: Request, cell: MatrixCell) -> list[Text]:
         key = _run_key(request, cell)
-        state = self._state.get(key, "pending")
-        glyph, colour = _RUN_GLYPH[state]
+        glyph, colour = cell_glyph(self._cell_state(request, cell))
         execution = self._exec.get(key)
         response = execution.response if execution else None
         code = str(response.status) if response else "—"
@@ -1353,7 +1751,8 @@ class RunView(Vertical):
         if state in ("pending", "running"):
             return Text("—", style=_DIM)
         if state == "failed":
-            return Text("✗ unreachable", style=_DRIFT)
+            # ! is the error glyph — ✗ stays reserved for rules that actually broke.
+            return Text("! unreachable", style=_WARN)
         redact = _app_redact(self)
         results = self._results.get(key, [])
         failed = [
@@ -1373,15 +1772,7 @@ class RunView(Vertical):
     def _strip(self, request: Request) -> Text:
         strip = Text()
         for cell in self._plan_cells(request):
-            state = self._state.get(_run_key(request, cell), "pending")
-            if state == "ok":
-                mark, tint = ("✓", _SAME) if self._cell_ok(request, cell) else ("✗", _DRIFT)
-            elif state == "failed":
-                mark, tint = "✗", _DRIFT
-            elif state == "running":
-                mark, tint = "◐", _WARN
-            else:
-                mark, tint = "·", _DIM
+            mark, tint = cell_glyph(self._cell_state(request, cell))
             strip.append(mark, style=tint)
         return strip
 

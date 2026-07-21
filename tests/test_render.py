@@ -594,3 +594,141 @@ def test_event_strip_reads_the_shared_glyphs() -> None:
     rendered = capture.get()
     assert "✓ 1" in rendered
     assert "✗ 3" in rendered
+
+
+def test_run_detail_wears_the_verdict_box_and_returns_the_anchor_registry() -> None:
+    # ws9: the CHECKS section speaks the verdict-box grammar (N-of-M header,
+    # reachable LAST) and a JSON body mounts the anchored evidence tree, whose
+    # broken nodes come back as the n/p registry.
+    from textual.widgets import Tree
+
+    from comparo.core.assertions import AssertRef
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.loader import load_project
+    from comparo.core.matrix import MatrixCell
+    from comparo.core.models import Environment
+    from comparo.core.models import Request
+    from comparo.tui.render import _build_report_tree
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    body = b'{"quote": {"currency": "USD", "total": 240}}'
+    response = HttpResponse(200, [("content-type", "application/json")], body, 40.0)
+    execution = Execution(request, env, "", response)
+    ref = AssertRef("body:$.quote.total", "lte", "error", "total <= 100", "profile", "asserts.q")
+    results = [
+        AssertionResult(
+            "body:$.quote.total",
+            "lte",
+            False,
+            "error",
+            "got 240",
+            label="total <= 100",
+            expected=100,
+            actual=240,
+            ref=ref,
+        ),
+        AssertionResult("status", "equals", True, "error", "200", label="status == 200"),
+    ]
+    tree: Tree[object] = Tree("root")
+    registry = _build_report_tree(
+        tree, loaded, env, request, MatrixCell("", ()), execution, "ok", results
+    )
+    labels = _tree_labels(tree.root)
+    joined = "\n".join(labels)
+    assert "1 of 3 rules broke on this cell" in joined  # 2 results + reachable
+    assert "profile asserts.q" in joined  # provenance rides the row
+    idx_rule = next(i for i, label in enumerate(labels) if "total <= 100" in label)
+    idx_reachable = next(i for i, label in enumerate(labels) if "reachable" in label)
+    idx_metrics = next(i for i, label in enumerate(labels) if "METRICS" in label)
+    assert idx_rule < idx_reachable < idx_metrics  # reachable is the checks' LAST row
+    assert "✗ total" in joined  # the evidence tree pinned the break at its site
+    assert registry, "the broken anchor must land in the n/p registry"
+
+
+def test_run_detail_returns_no_anchors_for_a_non_json_body() -> None:
+    from textual.widgets import Tree
+
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.loader import load_project
+    from comparo.core.matrix import MatrixCell
+    from comparo.core.models import Environment
+    from comparo.core.models import Request
+    from comparo.tui.render import _build_report_tree
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    response = HttpResponse(200, [("content-type", "text/plain")], b"plain text", 40.0)
+    execution = Execution(request, env, "", response)
+    results = [AssertionResult("body:$.x", "exists", False, "error", "missing", label="x exists")]
+    tree: Tree[object] = Tree("root")
+    registry = _build_report_tree(
+        tree, loaded, env, request, MatrixCell("", ()), execution, "ok", results
+    )
+    assert registry == []  # nothing to hop between in an unanchored body
+
+
+def test_raw_exchange_text_is_a_masked_complete_exchange() -> None:
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.loader import load_project
+    from comparo.core.models import Environment
+    from comparo.core.models import Request
+    from comparo.core.redaction import MASK
+    from comparo.core.redaction import Redactor
+    from comparo.tui.render import raw_exchange_text
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    secret = "sk-live-1234"
+    redact = Redactor(values=(secret,)).text
+    response = HttpResponse(
+        200,
+        [("set-cookie", "session=abc"), ("x-echo", secret)],
+        f'{{"tok": "{secret}"}}'.encode(),
+        40.0,
+        http_version="HTTP/1.1",
+        reason_phrase="OK",
+    )
+    execution = Execution(request, env, "", response)
+    text = raw_exchange_text(None, execution, redact)
+    assert "HTTP/1.1 200 OK" in text  # the true status line
+    assert secret not in text  # the clipboard is a sink like any other
+    assert MASK in text
+    assert "set-cookie: " + MASK in text  # credential headers masked by NAME
+
+
+def test_dead_cell_detail_shows_the_error_panel_not_a_dishonest_verdict_box() -> None:
+    # An errored cell judged NOTHING — the header must never claim a rule broke.
+    from textual.widgets import Tree
+
+    from comparo.core.execute import Execution
+    from comparo.core.loader import load_project
+    from comparo.core.matrix import MatrixCell
+    from comparo.core.models import Environment
+    from comparo.core.models import Request
+    from comparo.tui.render import _build_report_tree
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    execution = Execution(
+        request, env, "", None, error="connect timeout", attempts=3, retry_policy="exponential x3"
+    )
+    tree: Tree[object] = Tree("root")
+    registry = _build_report_tree(
+        tree, loaded, env, request, MatrixCell("", ()), execution, "failed", []
+    )
+    joined = "\n".join(_tree_labels(tree.root))
+    assert "rules broke on this cell" not in joined  # no fake N-of-M claim
+    assert "! connect timeout" in joined  # the error panel head, verbatim
+    assert "attempts  3" in joined
+    assert "exponential x3" in joined
+    assert "nothing was judged" in joined
+    assert "reachable" in joined  # the transport row still closes the story
+    assert registry == []

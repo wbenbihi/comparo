@@ -230,36 +230,47 @@ def verdict_box_header(rows: list[CheckRow], total: int | None = None) -> Text:
     return head
 
 
+def check_row_lines(row: CheckRow, *, indent: int = 2) -> list[Text]:
+    """One rule row in the verdict-box grammar — the single implementation.
+
+    Broken rules render two lines — label + provenance, then the evidence —
+    per the Run Results spec §4; held rules render one auditable line. Both the
+    Static verdict box and the run detail tree (whose rows must be Tree leaves)
+    consume this, so the grammar can never fork between surfaces.
+    """
+    glyph, color = _ROW_MARKS.get(row.state, ("·", _DIM))
+    line = Text(" " * indent)
+    line.append(f"{glyph} ", style=f"bold {color}")
+    line.append(row.label, style=_TEXT_HI if row.state == "broke" else _TEXT)
+    if row.provenance:
+        line.append(f"  · {row.provenance}", style=_DIM)
+    if row.state == "warn_broke":
+        line.append("  · warn", style=_DIM)
+    if row.state == "warn_held":
+        line.append("  · warn · held", style=_DIM)
+    if row.detail and not row.evidence:
+        line.append(f"  {row.detail}", style=_DIM)
+    lines = [line]
+    if row.evidence:
+        evidence = Text(" " * (indent + 4))
+        evidence.append(row.evidence, style=_DRIFT if row.state == "broke" else _WARN)
+        lines.append(evidence)
+    return lines
+
+
 def verdict_box(
     rows: list[CheckRow], *, total: int | None = None, focused: int | None = None
 ) -> Group:
     """The one verdict box: header, then one (or two) lines per rule.
 
-    Broken rules render two lines — label + provenance, then the evidence —
-    per the Run Results spec §4; held rules render one auditable line. The
-    ``focused`` row carries the selection style for the tab-focus model.
+    The ``focused`` row carries the selection style for the tab-focus model.
     """
     parts: list[RenderableType] = [verdict_box_header(rows, total)]
     for index, row in enumerate(rows):
-        glyph, color = _ROW_MARKS.get(row.state, ("·", _DIM))
-        line = Text("  ")
-        line.append(f"{glyph} ", style=f"bold {color}")
-        line.append(row.label, style=_TEXT_HI if row.state == "broke" else _TEXT)
-        if row.provenance:
-            line.append(f"  · {row.provenance}", style=_DIM)
-        if row.state == "warn_broke":
-            line.append("  · warn", style=_DIM)
-        if row.state == "warn_held":
-            line.append("  · warn · held", style=_DIM)
-        if row.detail and not row.evidence:
-            line.append(f"  {row.detail}", style=_DIM)
+        lines = check_row_lines(row)
         if focused is not None and index == focused:
-            line.stylize(f"on {_INK}")
-        parts.append(line)
-        if row.evidence:
-            evidence = Text("      ")
-            evidence.append(row.evidence, style=_DRIFT if row.state == "broke" else _WARN)
-            parts.append(evidence)
+            lines[0].stylize(f"on {_INK}")
+        parts.extend(lines)
     return Group(*parts)
 
 
@@ -286,15 +297,24 @@ def stat_chips(chips: list[StatChip]) -> Text:
     return text
 
 
-def spec_table(rows: list[tuple[str, Text | str]]) -> Group:
-    """The record card's spec block — dim labels, one value per line."""
-    parts: list[RenderableType] = []
+def spec_rows(rows: list[tuple[str, Text | str]]) -> list[Text]:
+    """The record card's spec block as lines — dim labels, one value per line.
+
+    The Static record card groups these; the run rule-record tree mounts them as
+    leaves. One implementation, two mounts.
+    """
+    lines: list[Text] = []
     width = max((len(label) for label, _ in rows), default=0) + 2
     for label, value in rows:
         line = Text(f"{label:<{width}}", style=_DIM)
         line.append_text(Text(value, style=_TEXT) if isinstance(value, str) else value)
-        parts.append(line)
-    return Group(*parts)
+        lines.append(line)
+    return lines
+
+
+def spec_table(rows: list[tuple[str, Text | str]]) -> Group:
+    """The record card's spec block — dim labels, one value per line."""
+    return Group(*spec_rows(rows))
 
 
 # ── error panel ───────────────────────────────────────────────────────────────
@@ -311,19 +331,28 @@ class ErrorPanelModel:
     rerun_hint: str = ""  # e.g. "x re-runs the diff (all 6 cells)"
 
 
-def error_panel(model: ErrorPanelModel, evidence: RenderableType | None = None) -> Group:
-    """The one error panel — no fake rows, no empty wells, the story in full."""
-    parts: list[RenderableType] = []
+def error_panel_lines(model: ErrorPanelModel) -> list[Text]:
+    """The error story as lines — the one implementation both costumes consume.
+
+    The Static panel stacks these in a Group; the run detail tree mounts them as
+    leaves (a Tree label cannot hold a Group). Either way the grammar is this.
+    """
     head = Text("! ", style=f"bold {_WARN}")
     head.append(model.message, style=f"bold {_WARN}")
-    parts.append(head)
+    lines = [head]
     tried = Text("  attempts  ", style=_DIM)
     tried.append(str(model.attempts), style=_TEXT_HI)
     if model.retry_policy:
         tried.append(f"  · retry {model.retry_policy}", style=_DIM)
-    parts.append(tried)
+    lines.append(tried)
     if model.meaning:
-        parts.append(Text(f"  {model.meaning}", style=_DIM))
+        lines.append(Text(f"  {model.meaning}", style=_DIM))
+    return lines
+
+
+def error_panel(model: ErrorPanelModel, evidence: RenderableType | None = None) -> Group:
+    """The one error panel — no fake rows, no empty wells, the story in full."""
+    parts: list[RenderableType] = list(error_panel_lines(model))
     if evidence is not None:
         parts.append(evidence)
     if model.rerun_hint:

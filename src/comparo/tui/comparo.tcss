@@ -185,6 +185,22 @@ Screen {
     margin-bottom: 1;
 }
 
+/* The finished strip borrows the diff summary's gate tint — one grammar. */
+#run-progress.gate-pass {
+    height: 3;
+    border: round $success;
+}
+
+#run-progress.gate-fail {
+    height: 3;
+    border: round $error;
+}
+
+#run-progress.gate-error {
+    height: 3;
+    border: round $warning;
+}
+
 #run-columns {
     height: 1fr;
 }
