@@ -74,6 +74,7 @@ from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import select_environment
 from comparo.core.streams import parse_sse
+from comparo.tui.components import seg_pill
 from comparo.tui.replay import AssertionSummary
 from comparo.tui.replay import ReplayCell as CellRecord
 from comparo.tui.replay import ReplayRecord as ReportRecord
@@ -1239,16 +1240,8 @@ def _diff_ready(cells: list[CellDiff], pair: tuple[Environment, Environment] | N
 
 
 def _seg_toggle(options: tuple[str, ...], active: str) -> Text:
-    """A mockup-style pill toggle: the active segment reversed, the rest dim."""
-    text = Text()
-    for index, option in enumerate(options):
-        on = option == active
-        if index:
-            text.append(" ", style=_DIM)
-        text.append(
-            f" {option} ", style=f"bold {_INK} on {_ACCENT}" if on else f"{_DIM} on #1b2230"
-        )
-    return text
+    """The pill toggle — delegates to the one shared implementation."""
+    return seg_pill(options, active)
 
 
 def _diff_legend() -> Text:

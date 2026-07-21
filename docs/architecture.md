@@ -314,6 +314,17 @@ screen launches an `ExecutionProfile` (from the Explorer) and shows the same gat
 with `list_records`, so a past diff or execution can be replayed from its persisted,
 redacted `CellRecord`s without re-executing. The core never depends on any of it.
 
+Inside the TUI package, `tui/components.py` is the **single-implementation
+layer**: the summary strip, verdict pill/glyph grammar, progress bar, segmented
+pill, filter row, verdict box, rule-record chrome, error panel, index-pane frame,
+and cross-view navigation stack each exist exactly once there, consume plain
+view-models (buildable from live engine objects and from a saved
+`ReportRecord` alike), and are composed by the views. The hard rule: a view
+never defines a private renderer for a concept that lives in components.
+Dependency order inside the package: `tokens` (constants) ← `components` ←
+`render` (per-domain body renderers: trees, diff wells, payload views) ←
+`app` (views).
+
 **GitHub Action** (`action.yml`) — installs comparo and invokes `comparo diff`
 with the chosen environments and the `markdown` / `junit` / `sarif` reporters, so
 CI gets a step-summary table and machine-readable artifacts, and the job fails
