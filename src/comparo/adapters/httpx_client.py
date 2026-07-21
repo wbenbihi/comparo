@@ -88,7 +88,7 @@ class HttpxClient:
                 cookies=cookies,
                 timeout=httpx_timeout,
             )
-            status, resp_headers, body = await self._roundtrip(
+            status, resp_headers, body, http_version, reason = await self._roundtrip(
                 build,
                 auth,
                 streaming=request.streaming,
@@ -101,7 +101,13 @@ class HttpxClient:
         elapsed_ms = (time.perf_counter() - start) * 1000
         events = parse_stream(body, _content_type(resp_headers)) if request.streaming else None
         return HttpResponse(
-            status=status, headers=resp_headers, body=body, elapsed_ms=elapsed_ms, events=events
+            status=status,
+            headers=resp_headers,
+            body=body,
+            elapsed_ms=elapsed_ms,
+            events=events,
+            http_version=http_version,
+            reason_phrase=reason,
         )
 
     async def _roundtrip(
@@ -112,7 +118,7 @@ class HttpxClient:
         streaming: bool,
         stream_max: float | None = None,
         total: float | None = None,
-    ) -> tuple[int, list[tuple[str, str]], bytes]:
+    ) -> tuple[int, list[tuple[str, str]], bytes, str, str]:
         if streaming:
             response = await self._client.send(request, auth=auth, stream=True)
             chunks: list[bytes] = []
@@ -129,7 +135,13 @@ class HttpxClient:
                 pass
             finally:
                 await response.aclose()
-            return response.status_code, list(response.headers.items()), b"".join(chunks)
+            return (
+                response.status_code,
+                list(response.headers.items()),
+                b"".join(chunks),
+                response.http_version,
+                response.reason_phrase,
+            )
         body_chunks: list[bytes] = []
         try:
             # A trickling server resets httpx's per-read timeout on every byte; the
@@ -155,7 +167,13 @@ class HttpxClient:
         except TimeoutError as error:
             message = f"read exceeded the {total:g}s total deadline"
             raise HttpTimeoutError(message) from error
-        return response.status_code, list(response.headers.items()), b"".join(body_chunks)
+        return (
+            response.status_code,
+            list(response.headers.items()),
+            b"".join(body_chunks),
+            response.http_version,
+            response.reason_phrase,
+        )
 
     async def aclose(self) -> None:
         """Close the underlying httpx client."""

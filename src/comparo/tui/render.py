@@ -64,6 +64,7 @@ from comparo.core.models import Matrix
 from comparo.core.models import Project
 from comparo.core.models import Request
 from comparo.core.models import Schema
+from comparo.core.outbound import outbound_diffs
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
 from comparo.core.redaction import mask_credential_header
@@ -1831,73 +1832,6 @@ def _field_drill_card(
     return Group(*parts)
 
 
-def _outbound_source(label: str) -> str:
-    """Attribute an outbound difference to the config surface that produced it.
-
-    comparo replays the *same* request against both sides, so a difference can
-    only come from environment config — the base URL, an env-specific header or
-    query var, auth, or a value injected into the body. Names the surface (not a
-    fabricated var name — that provenance is not tracked yet), so a reviewer knows
-    where to look.
-    """
-    if label == "url":
-        return "env · base url"
-    if label == "method":
-        return "request method"
-    if label == "body":
-        return "env · injected body value"
-    if label.startswith(("header authorization", "header proxy-authorization")):
-        return "env · auth"
-    if label.startswith("header"):
-        return "env · header"
-    if label.startswith("query"):
-        return "env · query var"
-    return "env config"
-
-
-def _outbound_diffs(
-    baseline: ResolvedRequest,
-    candidate: ResolvedRequest,
-    *,
-    redact: Callable[[str], str],
-) -> list[tuple[str, str, str, str]]:
-    """The redacted field-level differences between two outbound requests.
-
-    Each tuple is ``(label, baseline_value, candidate_value, source)``. Every
-    value is redacted first, so masked secrets compare equal and a hidden token
-    can never surface as a false drift.
-    """
-    diffs: list[tuple[str, str, str, str]] = []
-
-    def scalar(label: str, a: object, b: object) -> None:
-        sa, sb = redact(str(a)), redact(str(b))
-        if sa != sb:
-            diffs.append((label, sa, sb, _outbound_source(label)))
-
-    def mapping(
-        prefix: str,
-        a: list[tuple[str, object]] | dict[str, object],
-        b: list[tuple[str, object]] | dict[str, object],
-    ) -> None:
-        am = a if isinstance(a, dict) else dict(a)
-        bm = b if isinstance(b, dict) else dict(b)
-        ad = {redact(str(k)): redact(str(v)) for k, v in am.items()}
-        bd = {redact(str(k)): redact(str(v)) for k, v in bm.items()}
-        for key in sorted(set(ad) | set(bd)):
-            av, bv = ad.get(key, "—"), bd.get(key, "—")
-            if av != bv:
-                label = f"{prefix} {key}"
-                diffs.append((label, av, bv, _outbound_source(label)))
-
-    scalar("method", baseline.method, candidate.method)
-    scalar("url", baseline.url, candidate.url)
-    mapping("header", baseline.headers, candidate.headers)
-    mapping("query", baseline.query, candidate.query)
-    if baseline.body != candidate.body:
-        diffs.append(("body", "an env value is injected", "—", _outbound_source("body")))
-    return diffs
-
-
 def _outbound_diff_view(
     baseline: ResolvedRequest,
     candidate: ResolvedRequest,
@@ -1920,7 +1854,7 @@ def _outbound_diff_view(
     head.append("   the request we sent to each side", style=_DIM)
     parts.append(head)
 
-    diffs = _outbound_diffs(baseline, candidate, redact=redact)
+    diffs = outbound_diffs(baseline, candidate, redact=redact)
 
     if not diffs:
         verdict = Text("\n✓ identical on both sides", style=f"bold {_SAME}")
@@ -1942,14 +1876,14 @@ def _outbound_diff_view(
         legend.append(cand_name, style=_DIM)
         parts.append(legend)
         body = Text()
-        for label, a, b, source in diffs:
-            body.append(f"\n{label}", style=_LABEL)
-            body.append(f"   ← {source}", style=_DIM)  # where the difference comes from
+        for entry in diffs:
+            body.append(f"\n{entry.label}", style=_LABEL)
+            body.append(f"   ← {entry.source}", style=_DIM)  # where the difference comes from
             body.append("\n  − ", style=f"bold {_DRIFT}")
-            body.append(a or "—", style=_TEXT)
-            if b and b != "—":
+            body.append(entry.baseline or "—", style=_TEXT)
+            if entry.candidate and entry.candidate != "—":
                 body.append("\n  + ", style=f"bold {_SAME}")
-                body.append(b, style=f"bold {_TEXT_HI}")
+                body.append(entry.candidate, style=f"bold {_TEXT_HI}")
         parts.append(body)
         verdict = Text("\n⚠ the outbound differs across environments", style=f"bold {_WARN}")
         verdict.append(
@@ -1986,11 +1920,11 @@ def _outbound_header(
         collapse.append("o", style=f"bold {_ACCENT}")
         collapse.append(" to collapse", style=_DIM)
         return Group(view, collapse)
-    diffs = _outbound_diffs(baseline, candidate, redact=redact)
+    diffs = outbound_diffs(baseline, candidate, redact=redact)
     line = Text(no_wrap=True)
     line.append("OUTBOUND  ", style=f"bold {_LABEL}")
     if diffs:
-        labels = ", ".join(label for label, *_ in diffs[:3])
+        labels = ", ".join(entry.label for entry in diffs[:3])
         more = "…" if len(diffs) > 3 else ""
         line.append("⚠ ", style=f"bold {_WARN}")
         line.append(f"differs · {len(diffs)} field{'s' if len(diffs) != 1 else ''} ", style=_TEXT)
