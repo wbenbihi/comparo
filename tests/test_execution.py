@@ -242,6 +242,60 @@ def test_execution_record_flags_an_assertion_only_failure() -> None:
     assert cell.verdict == "fail"
 
 
+def test_execution_record_reads_error_when_errors_are_the_only_failure() -> None:
+    # A dead side's assertions auto-fail with "no response" — never judged, so
+    # they must not drag an errors-only execution to FAIL.
+    live = _probe_execution()
+    dead = Execution(live.request, live.environment, "", None, "ConnectError: boom", resolved=None)
+    never_judged = AssertionResult(
+        "status", "equals", False, "error", "no response", expected=200, actual=None
+    )
+    outcome = CellOutcome(
+        "request.probe",
+        "",
+        [],
+        [never_judged],
+        diff=None,
+        error="candidate: ConnectError: boom",
+        baseline=live,
+        candidate=dead,
+    )
+    record = _exec_record(outcome)
+    assert record.summary.gate == "ERROR"
+    assert record.cells[0].verdict == "error"
+
+
+def test_execution_record_fail_outranks_an_errored_cell() -> None:
+    live = _probe_execution()
+    dead = Execution(live.request, live.environment, "", None, "ConnectError: boom", resolved=None)
+    broke = AssertionResult(
+        "status", "equals", False, "error", "500 != 200", expected=200, actual=500
+    )
+    judged = CellOutcome("request.probe", "", [broke], [], diff=None, baseline=live)
+    errored = CellOutcome(
+        "request.probe",
+        "b",
+        [],
+        [],
+        diff=None,
+        error="candidate: ConnectError: boom",
+        baseline=live,
+        candidate=dead,
+    )
+    result = ExecutionResult("exec.run", "Base", "Cand", True, True, [judged, errored])
+    record = record_from_execution(
+        _PROFILE,
+        result,
+        record_id="r",
+        created="t",
+        tool="comparo 0",
+        project=None,
+        concurrency=1,
+        redact=str,
+    )
+    assert record.summary.gate == "FAIL"  # the judged broken rule outranks the errored cell
+
+
 def test_execution_record_masks_a_secret_in_an_assertion_detail() -> None:
     # A server can echo a secret into a failed assertion's detail/value; the
     # redactor passed to the builder must mask it before it reaches the record.

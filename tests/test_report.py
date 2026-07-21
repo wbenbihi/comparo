@@ -14,6 +14,8 @@ from comparo.core.models import Environment
 from comparo.core.models import Request
 from comparo.core.report import diff_gate
 from comparo.core.report import diff_passed
+from comparo.core.report import execution_gate
+from comparo.core.report import run_gate
 from comparo.core.report_builder import record_from_diff
 from comparo.core.report_record import ReportRecord
 from comparo.core.resolve import ResolvedRequest
@@ -94,6 +96,21 @@ def test_gate_helpers() -> None:
     assert diff_gate(3, 1, 0) == "FAIL"
     assert diff_gate(3, 0, 1) == "ERROR"
     assert diff_gate(3, 0, 0) == "PASS"
+    assert diff_gate(3, 1, 1) == "FAIL"  # a broken rule outranks errors
+    assert diff_gate(0, 0, 0) == "FAIL"  # empty fails closed
+
+
+def test_run_and_execution_gates_share_the_precedence() -> None:
+    assert run_gate(0, 0, 3) == "PASS"
+    assert run_gate(1, 0, 3) == "FAIL"
+    assert run_gate(0, 1, 3) == "ERROR"  # errors are the only failure
+    assert run_gate(1, 1, 3) == "FAIL"  # a broken rule outranks errors
+    assert run_gate(0, 0, 0) == "FAIL"  # empty fails closed
+    assert execution_gate(0, 0, 0, 3) == "PASS"
+    assert execution_gate(1, 0, 1, 3) == "FAIL"  # drift outranks the errored cell
+    assert execution_gate(0, 1, 1, 3) == "FAIL"  # a failed assertion does too
+    assert execution_gate(0, 0, 1, 3) == "ERROR"
+    assert execution_gate(0, 0, 0, 0) == "FAIL"  # empty plan fails closed
 
 
 def test_json_reporter_emits_the_full_record() -> None:
@@ -101,7 +118,7 @@ def test_json_reporter_emits_the_full_record() -> None:
     assert document["schemaVersion"] == 1
     assert document["kind"] == "diff"
     assert document["summary"]["diff"]["drift"] == 1
-    assert document["summary"]["gate"] == "ERROR"  # an errored cell forces ERROR
+    assert document["summary"]["gate"] == "FAIL"  # the drift outranks the errored cell
 
 
 def test_junit_reporter_is_valid_xml() -> None:
@@ -150,5 +167,5 @@ def test_sarif_reporter_has_physical_location() -> None:
 
 def test_markdown_reporter_has_gate() -> None:
     rendered = REPORTERS["markdown"].render(_record())
-    assert "gate: **ERROR**" in rendered
+    assert "gate: **FAIL**" in rendered  # drift outranks the errored cell
     assert "request.get-json" in rendered

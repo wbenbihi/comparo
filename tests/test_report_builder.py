@@ -145,6 +145,38 @@ def test_empty_diff_gate_fails_closed() -> None:
     assert record.cells == []
 
 
+def test_run_gate_reads_error_when_errors_are_the_only_failure() -> None:
+    # Every rule on a response-less cell auto-fails with "no response" — those
+    # were never judged, so they must not drag an errors-only run to FAIL.
+    _, env, request = _loaded()
+    errored = Execution(request, env, "", None, "ConnectError: boom", resolved=None)
+    never_judged = AssertionResult(
+        "status", "equals", False, "error", "no response", expected=200, actual=None
+    )
+    record = _run(env, [(errored, [never_judged])])
+    assert record.summary.gate == "ERROR"
+    assert record.cells[0].verdict == "error"
+
+
+def test_run_gate_fail_outranks_error() -> None:
+    _, env, request = _loaded()
+    judged = _execution(request, env, {"ok": True})
+    broke = AssertionResult(
+        "status", "equals", False, "error", "500 != 200", expected=200, actual=500
+    )
+    errored = Execution(request, env, "", None, "ConnectError: boom", resolved=None)
+    record = _run(env, [(judged, [broke]), (errored, [])])
+    assert record.summary.gate == "FAIL"  # the broken rule outranks the errored cell
+
+
+def test_empty_run_gate_fails_closed() -> None:
+    # A run that judged nothing must never read green — mirrors the diff gate.
+    _, env, _request = _loaded()
+    record = _run(env, [])
+    assert record.summary.gate == "FAIL"
+    assert record.cells == []
+
+
 def test_selection_is_redacted() -> None:
     _, env, _request = _loaded()
     secret = "s3cr3t-tag"

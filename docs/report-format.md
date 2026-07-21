@@ -68,7 +68,7 @@ The verdict, precomputed so a reader never recomputes from `cells`.
 
 | Field | Type | Notes |
 |---|---|---|
-| `gate` | enum | `PASS` \| `FAIL` \| `ERROR` — the CI exit contract. |
+| `gate` | enum | `PASS` \| `FAIL` \| `ERROR` — the CI exit contract. Precedence: `FAIL` whenever any rule broke anywhere; `ERROR` only when errors are the only failure; a run that judged nothing fails closed. |
 | `calls` | int | Total HTTP calls made (cells × sides that executed). |
 | `cells` | int | Number of cells. |
 | `diff` | object \| null | Drift tally (for `diff`/`execution`): `{ "same", "drift", "error", "skipped" }`. |
@@ -144,13 +144,16 @@ e.g. why a `skip` was skipped).
 ## Errors & edge cases
 
 - **A side that never got a response** → `side.response = null`,
-  `side.error = "<masked message>"`, cell `verdict = "error"`. The gate is `ERROR`
-  if any cell errored.
+  `side.error = "<masked message>"`, cell `verdict = "error"`. The gate reads
+  `ERROR` only when errored cells are the sole failure — a rule broken anywhere
+  else still grades `FAIL`. Rules on an errored cell were never judged and do
+  not count as broken.
 - **Non-JSON body** → `response.body = null`; `bodyText` may carry the redacted raw
   text.
 - **Streamed body** → `response.events` holds the ordered records; the diff runs
   over `events`.
-- **Empty selection** → `cells: []`, `summary.calls: 0`, `gate: PASS`.
+- **Empty selection** → `cells: []`, `summary.calls: 0`, `gate: FAIL` — a run
+  that judged nothing fails closed, for every kind.
 
 ## Versioning
 

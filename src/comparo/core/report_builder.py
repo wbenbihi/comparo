@@ -33,6 +33,8 @@ from comparo.core.redaction import MASK
 from comparo.core.redaction import mask_credential_header
 from comparo.core.redaction import redact_tree
 from comparo.core.report import diff_gate
+from comparo.core.report import execution_gate
+from comparo.core.report import run_gate
 from comparo.core.report_record import AssertionRecord
 from comparo.core.report_record import AssertTally
 from comparo.core.report_record import AuthRecord
@@ -276,6 +278,18 @@ def _assert_tally(per_cell: list[list[AssertionResult]]) -> AssertTally:
     return AssertTally(passed=passed, failed=failed, warned=warned, not_asserted=not_asserted)
 
 
+def _judged_failures(execution: Execution | None, results: list[AssertionResult]) -> int:
+    """Error-severity breaks judged against a real response.
+
+    Every rule on a response-less side auto-fails with "no response" — those were
+    never evaluated, so they count toward the cell's error, never toward the
+    gate's broken rules (an errored cell must not drag an errors-only run to FAIL).
+    """
+    if execution is None or execution.response is None:
+        return 0
+    return sum(1 for result in results if not result.ok and result.severity == "error")
+
+
 def _calls(executions: list[Execution | None]) -> int:
     """How many HTTP calls actually went out — a side that failed to resolve made none."""
     return sum(
@@ -399,9 +413,12 @@ def record_from_execution(
     tally = _assert_tally(
         [outcome.baseline_assertions + outcome.candidate_assertions for outcome in result.outcomes]
     )
-    gate: Literal["PASS", "FAIL", "ERROR"] = (
-        "ERROR" if result.errors else ("PASS" if result.passed else "FAIL")
+    broke = sum(
+        _judged_failures(outcome.baseline, outcome.baseline_assertions)
+        + _judged_failures(outcome.candidate, outcome.candidate_assertions)
+        for outcome in result.outcomes
     )
+    gate = _gate(execution_gate(result.drift, broke, result.errors, len(result.outcomes)))
     summary = Summary(
         gate=gate,
         calls=calls,
@@ -477,9 +494,8 @@ def record_from_run(
     records = [_run_cell(execution, assertions, redact) for execution, assertions in cells]
     tally = _assert_tally([assertions for _, assertions in cells])
     error_cells = sum(1 for execution, _ in cells if execution.response is None)
-    gate: Literal["PASS", "FAIL", "ERROR"] = (
-        "ERROR" if error_cells else ("FAIL" if tally.failed else "PASS")
-    )
+    failed = sum(_judged_failures(execution, results) for execution, results in cells)
+    gate = _gate(run_gate(failed, error_cells, len(cells)))
     summary = Summary(
         gate=gate,
         calls=_calls([execution for execution, _ in cells]),
