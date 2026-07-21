@@ -145,3 +145,20 @@ def test_check_row_and_text_are_importable_shapes() -> None:
     # The view-models are frozen — a renderer can never mutate its input.
     row = CheckRow("status == 200", "held")
     assert isinstance(_plain(Text(row.label)), str)
+
+
+def test_check_row_lines_is_the_one_row_grammar() -> None:
+    # Both the Static verdict box and the run detail tree consume this — a
+    # broken row is two lines (label+provenance, then evidence), a held row one.
+    from comparo.tui.components import check_row_lines
+
+    broken = CheckRow("total <= 100", "broke", provenance="profile asserts.q", evidence="got 240")
+    lines = check_row_lines(broken)
+    assert len(lines) == 2
+    assert "✗ total <= 100" in _plain(lines[0])
+    assert "profile asserts.q" in _plain(lines[0])
+    assert "got 240" in _plain(lines[1])
+    held = CheckRow("status == 200", "held", detail="200")
+    assert len(check_row_lines(held)) == 1
+    # the verdict box renders through the same lines — the grammar cannot fork
+    assert "✗ total <= 100" in _plain(verdict_box([broken, held]))

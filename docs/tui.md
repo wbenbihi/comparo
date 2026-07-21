@@ -112,32 +112,55 @@ every screen is a command, and the TUI writes the flags.
 
 ### Running
 
-`x` switches to a compact progress line (a **run id**, the environment, a bar, and `done · ✓ · ✗`
-counts) over dynamic Miller columns that grow with how deep you drill:
+`x` switches to the **summary strip** over dynamic Miller columns that grow with how deep you
+drill. The strip wears two costumes in one slot: mid-flight it is the run id, the environment, a
+progress bar, and a `✓ · ~ · ✗ · !` cell tally; finished, the bar swaps for the **gate verdict
+pill** (`✓ PASS` / `✗ FAIL` / `! ERROR` — unreachable cells alone grade ERROR, a broken gating
+rule grades FAIL) and the strip's border tints to match. The cell states are the shared grammar:
+`✓` passed, `~` passed with an advisory break, `✗` a gating rule broke, `!` unreachable.
 
-- **Requests** table — status, a variant strip, p50 latency.
+- **Requests** table — status, a variant strip, p50 latency. Once the run finishes the table
+  snaps **worst-first** (`✗ ! ~ ✓` precedence, plan order within a tier); `o` flips it back to
+  plan order.
 - **Variants** table (appears when you open a matrix request) — case, HTTP code, time, and a
   clear **result** (`✓ 2 passed` or `✗ status == 200`, naming the failed rule by its label;
   `reachable` is transport, shown in the detail tree rather than counted here, and an
-  unreachable cell reads `✗ unreachable`). A single-case request skips this and goes straight
-  to the report.
-- **Detail** — a navigable tree of the whole exchange: checks (full assertion results —
-  every rule with its label and detail, then a synthesized `reachable` row last; a broken
-  `warn`-severity rule shows as an amber `~` advisory that never fails the run, and a dead
-  cell shows `✗ reachable` alone — rules that never ran are never painted as broken), metrics,
-  the request, and the response. JSON, HTML, and SSE bodies are collapsible sub-trees you can walk into. `t` cycles the
-  facet it shows — **all · request · response · headers · raw** (the pill strip is the panel
-  subtitle); **raw** dumps the unparsed request line and response body verbatim.
+  unreachable cell reads `! unreachable` — `✗` stays reserved for rules that actually broke).
+  A single-case request skips this and goes straight to the report.
+- **Detail** — a navigable tree of the whole exchange. The checks section wears the **verdict
+  box** grammar: an auditable `N of M rules broke on this cell` header, one line per held rule
+  (with its provenance — `profile asserts.q`, `inline`, `built-in`), two lines per broken rule
+  (label, then the evidence), a broken `warn`-severity rule as an amber `~` advisory that never
+  fails the run, and a synthesized `reachable` row **last** (a dead cell replaces the box with the
+  **error panel** — the verbatim error, attempts, and retry policy, closed by the transport
+  row — because rules that never ran are never painted as broken). A JSON response body mounts the
+  **anchored evidence tree**: each body-targeting rule's verdict is pinned at its exact site
+  (`✓`/`~`/`✗`, with the rule named at a break, and a missing required field planted red where
+  it should have been); `n` / `p` hop between the broken anchors. `t` cycles the facet —
+  **all · request · response · headers · raw** — and `y` copies the raw exchange (request line,
+  headers, status line, body) to the clipboard with **secrets masked**.
+
+**`r` pivots the left column to the rules index**: every assertion rule the run judged, folded to
+one row per *written* rule across all cells — its per-cell `✓~✗` strip, its provenance, and a
+`broke/enforced` count, worst rules first. `enter` opens the rule's **record**: target, op,
+severity, source, a tally, and every judged cell; selecting a cell row jumps straight to that
+cell's detail in the requests pivot. `esc` unwinds the pivot before leaving Running. A dead
+cell's rules were attached but never evaluated: each record lists it as `! never evaluated`
+(with an `! error` stat chip), and it never increments a rule's broken count.
 
 | Key       | Action |
 | --------- | ------ |
 | `↑ ↓`     | move / navigate the detail tree |
-| `enter`   | drill into the next split |
+| `enter`   | drill into the next split · open a rule's record · jump from a record row |
+| `r`       | pivot the left column — requests ⇄ the assertion-rules index |
+| `o`       | flip the requests table worst-first ⇄ plan order |
 | `t`       | cycle the detail facet — all · request · response · headers · raw |
+| `n / p`   | hop to the next / previous broken check pinned in the body |
+| `y`       | copy the raw exchange to the clipboard (secrets masked) |
 | `bksp`    | collapse a split (or return to Prepare) |
 | `z`       | maximize the detail panel |
 | `f`       | filter the tables to failures only |
-| `/`       | filter by request or case name (shown on the panel) |
+| `/`       | filter by request, case, or rule name (shown on the panel) |
 | `a`       | abort the run and return to Prepare |
 | `s`       | save the finished run to masked JSON **and archive it as an assertions report** (visible in the Report tab; secrets redacted, even when echoed back) |
 

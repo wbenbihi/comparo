@@ -1916,6 +1916,7 @@ def test_run_save_never_re_evaluates_assertions(
     # Evaluate-once: the screen, the saved run file, and the archived report all
     # consume the ONE evaluation made when the cell ran. A save that re-evaluates
     # can disagree with what the user saw — so re-evaluation must be impossible.
+
     from comparo.core.archive import list_records
     from comparo.core.assertions import AssertionResult
     from comparo.core.matrix import MatrixCell
@@ -1969,5 +1970,150 @@ def test_run_save_never_re_evaluates_assertions(
             ]
             assert len(assertion_rows) == 1
             assert assertion_rows[0].expected == 200  # the screen's evaluation, serialized
+
+    asyncio.run(go())
+
+
+def test_run_results_sort_worst_first_and_r_pivots_to_the_rules_index() -> None:
+    # ws9: the finished requests table leads with the broken cell (o restores
+    # plan order), and r folds every judged rule into one rules-index row.
+    from textual.coordinate import Coordinate
+
+    from comparo.core.assertions import AssertionResult
+    from comparo.core.assertions import AssertRef
+    from comparo.tui.app import RunView
+    from comparo.tui.render import _run_key
+
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("2")  # Run
+            await pilot.pause()
+            run = app.query_one(RunView)
+            plan = run._plan()
+            assert len(plan) >= 2
+            ref = AssertRef("status", "equals", "error", "status == 200", "inline")
+            broke = AssertionResult(
+                "status", "equals", False, "error", "got 500", label="status == 200", ref=ref
+            )
+            held = AssertionResult(
+                "status", "equals", True, "error", "200", label="status == 200", ref=ref
+            )
+            for request, cell in plan:
+                run._state[_run_key(request, cell)] = "ok"
+                run._results[_run_key(request, cell)] = [held]
+            bad_request, bad_cell = plan[-1]  # the LAST planned cell breaks
+            run._results[_run_key(bad_request, bad_cell)] = [broke]
+            run._done = True
+            run.query_one("#run-mode", ContentSwitcher).current = "running"
+            run._populate_requests()
+            table = run.query_one("#req-table", DataTable)
+            first_key = table.coordinate_to_cell_key(Coordinate(0, 0)).row_key.value
+            bad_id = bad_request.metadata.id or bad_request.metadata.name
+            assert first_key == bad_id  # worst first, not plan order
+            run.action_order()  # o — back to plan order
+            await pilot.pause()
+            first_key = table.coordinate_to_cell_key(Coordinate(0, 0)).row_key.value
+            plan_first = plan[0][0].metadata.id or plan[0][0].metadata.name
+            assert first_key == plan_first
+            run.action_rules()  # r — pivot to the rules index
+            await pilot.pause()
+            assert run._pivot == "rules"
+            assert len(run._rule_index) == 1  # one written rule, folded over every cell
+            folded_ref, hits = run._rule_index[0]
+            assert folded_ref == ref
+            assert len(hits) == len(plan)  # its record covers each judged cell
+            assert run._rule_severity(hits) == 0  # it broke somewhere → worst tier
+            run.action_back()  # esc unwinds the pivot before leaving RUNNING
+            await pilot.pause()
+            assert run._pivot == "requests"
+
+    asyncio.run(go())
+
+
+def test_jump_to_cell_survives_the_rebuild_echo_and_dead_cells_join_the_record() -> None:
+    # Review fixes: (1) a cross-pivot jump must land on the EXACT cell — the
+    # table-rebuild highlight echo may not clobber it with the first cell;
+    # (2) a dead cell's rules fold into the record as never-evaluated errors;
+    # (3) n/p must land the cursor ON an anchor revealed inside a collapsed branch.
+    import json as _json
+
+    from comparo.core.assertions import AssertionResult
+    from comparo.core.assertions import AssertRef
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.models import Environment
+    from comparo.tui.app import RunView
+    from comparo.tui.render import _run_key
+
+    loaded = load_project(SAMPLE)
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("2")
+            await pilot.pause()
+            run = app.query_one(RunView)
+            plan = run._plan()
+            multi = next(r for r, _ in plan if len(run._plan_cells(r)) > 1)
+            cells = run._plan_cells(multi)
+            target_cell = cells[1]  # NOT the first cell — the echo would pick cells[0]
+            ref = AssertRef("body:$.data.items[0].id", "equals", "error", "id == 1", "inline")
+            body = _json.dumps({"data": {"items": [{"id": 2}]}}).encode()
+            env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+            for request, cell in plan:
+                key = _run_key(request, cell)
+                run._state[key] = "ok"
+                run._results[key] = []
+            key = _run_key(multi, target_cell)
+            run._exec[key] = Execution(
+                multi,
+                env,
+                target_cell.key,
+                HttpResponse(200, [("content-type", "application/json")], body, 5.0),
+            )
+            run._results[key] = [
+                AssertionResult(
+                    "body:$.data.items[0].id",
+                    "equals",
+                    False,
+                    "error",
+                    "got 2",
+                    label="id == 1",
+                    ref=ref,
+                )
+            ]
+            # a dead cell elsewhere: its rules must join the fold as errors
+            dead_request, dead_cell = next((r, c) for r, c in plan if r is not multi)
+            run._state[_run_key(dead_request, dead_cell)] = "failed"
+            run._done = True
+            run.query_one("#run-mode", ContentSwitcher).current = "running"
+            run._populate_requests()
+            # (2) rules fold: the dead cell records None hits
+            rows = run._rule_rows()
+            dead_hits = [
+                (rq, cl, res)
+                for _, hits in rows
+                for rq, cl, res in hits
+                if rq is dead_request and res is None
+            ]
+            assert dead_hits, "a dead cell's rules must appear as never-evaluated"
+            # (1) the jump lands on the exact cell and SURVIVES the queued echoes
+            run._jump_to_cell(multi, target_cell)
+            await pilot.pause()
+            await pilot.pause()
+            assert run._focus is multi
+            assert run._focus_cell is not None
+            assert run._focus_cell.key == target_cell.key
+            # (3) the anchor hop lands the cursor on the revealed broken node
+            assert run._anchors, "the broken body check must be in the registry"
+            run.action_next_anchor()
+            await pilot.pause()
+            tree = run.query_one("#detail-tree", Tree)
+            assert tree.cursor_node is run._anchors[0]
 
     asyncio.run(go())

@@ -80,14 +80,18 @@ from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import select_environment
 from comparo.core.streams import parse_sse
+from comparo.tui.components import CheckRow
 from comparo.tui.components import ErrorPanelModel
 from comparo.tui.components import StatChip
 from comparo.tui.components import cell_glyph
+from comparo.tui.components import check_row_lines
 from comparo.tui.components import error_panel
+from comparo.tui.components import error_panel_lines
 from comparo.tui.components import provenance_suffix
 from comparo.tui.components import seg_pill
 from comparo.tui.components import spec_table
 from comparo.tui.components import stat_chips
+from comparo.tui.components import verdict_box_header
 from comparo.tui.replay import AssertionSummary
 from comparo.tui.replay import ReplayCell as CellRecord
 from comparo.tui.replay import ReplayRecord as ReportRecord
@@ -982,7 +986,13 @@ def _build_report_tree(
     redact: Callable[[str], str] = str,
     *,
     focus: str = "all",
-) -> None:
+) -> list[TreeNode[object]]:
+    """Build the per-cell run detail; return the broken-anchor ``n``/``p`` registry.
+
+    The registry lists the evidence-tree nodes where a gating body check broke,
+    in render order — empty when the body is not anchored JSON (or the facet
+    hides the response).
+    """
     tree.clear()
     root = tree.root
     resolved = (
@@ -1010,38 +1020,55 @@ def _build_report_tree(
     # RAW view dumps the unparsed request line and response body verbatim.
     if focus == "raw":
         _raw_detail_into(root, resolved, execution, redact)
-        return
+        return []
     want_request = focus in ("all", "request", "headers")
     want_response = focus in ("all", "response", "headers")
     want_meta = focus in ("all", "response")  # checks + metrics ride with the response
     headers_only = focus == "headers"
 
     if (results or execution is not None) and want_meta and state not in ("pending", "running"):
-        node = root.add(Text("CHECKS", style=f"bold {_LABEL}"), expand=True)
-        for result in results:
-            label = redact(result.label or f"{result.target} {result.op}")
-            detail = redact(result.detail)
-            if result.ok:
-                mark, tint = "✓", _SAME
-            elif result.severity == "warn":
-                # An advisory break: amber ~, never a red ✗ — it cannot fail a gate.
-                mark, tint = "~", _WARN
-            else:
-                mark, tint = "✗", _DRIFT
-            row = Text.assemble((f"{mark} {label}  ", tint), (detail, _DIM))
-            if result.severity == "warn":
-                row.append("  · warn", style=_DIM)
-            node.add_leaf(row)
-        # ``reachable`` is synthesized per cell — transport, not an engine rule —
-        # and always LAST (run-results spec §4); a dead cell shows it alone,
-        # because a rule that never ran must never render as a broken row.
-        if execution is not None:
-            reached = execution.response
-            if reached is not None:
-                node.add_leaf(Text.assemble(("✓ reachable  ", _SAME), (str(reached.status), _DIM)))
-            else:
-                detail = redact(execution.error or "no response")
-                node.add_leaf(Text.assemble(("✗ reachable  ", _DRIFT), (detail, _DIM)))
+        if execution is not None and execution.response is None:
+            # ERROR cell: nothing was judged, so no N-of-M header may claim a
+            # rule broke — the error panel replaces the verdict box (run-results
+            # spec §4), and the transport row alone closes it: ✗ is reserved for
+            # rules that actually broke, ! for calls that never completed.
+            model = ErrorPanelModel(
+                message=redact(execution.error or "no response"),
+                attempts=execution.attempts,
+                retry_policy=execution.retry_policy,
+                meaning="nothing was judged — rules that never ran are never painted as broken",
+            )
+            lines = error_panel_lines(model)
+            node = root.add(lines[0], expand=True)
+            for line in lines[1:]:
+                node.add_leaf(line)
+            reachable = CheckRow(
+                "reachable",
+                "broke",
+                provenance=provenance_suffix("synthetic"),
+                detail="the call never completed",
+            )
+            for line in check_row_lines(reachable, indent=0):
+                node.add_leaf(line)
+        else:
+            # The verdict box, in tree costume: the same N-of-M header and row
+            # grammar as the Static box — check_row_lines is the one implementation.
+            rows = [_check_row(result, redact) for result in results]
+            # ``reachable`` is synthesized per cell — transport, not an engine
+            # rule — and always LAST (run-results spec §4).
+            if execution is not None and execution.response is not None:
+                rows.append(
+                    CheckRow(
+                        "reachable",
+                        "held",
+                        provenance=provenance_suffix("synthetic"),
+                        detail=str(execution.response.status),
+                    )
+                )
+            node = root.add(verdict_box_header(rows), expand=True)
+            for row in rows:
+                for line in check_row_lines(row, indent=0):
+                    node.add_leaf(line)
 
     if execution is not None and execution.response is not None and want_meta:
         response = execution.response
@@ -1072,11 +1099,84 @@ def _build_report_tree(
             headers.add_leaf(Text.assemble((f"{redact(key)}: ", _DIM), (shown, _TEXT)))
         if not headers_only:
             body = node.add(Text("body", style=_DIM), expand=len(response.body) < 800)
-            _body_into(body, response.body, _content_type(response.headers), redact)
+            content_type = _content_type(response.headers)
+            anchors = anchors_from_assertions(results, redact)
+            parsed = _json_body(response.body, content_type) if anchors else None
+            if parsed is not None:
+                # The evidence tree: verdicts pinned at their body sites, the
+                # broken ones returned as the n/p hop registry.
+                body.expand()
+                return _anchored_into(body, parsed, redact, anchors)
+            _body_into(body, response.body, content_type, redact)
     elif execution is not None and execution.error is not None and focus in ("all", "response"):
         root.add_leaf(Text(redact(execution.error), style=_DRIFT))
     elif state == "pending" and focus in ("all", "request", "response"):
         root.add_leaf(Text("not run — press x to execute", style=_DIM))
+    return []
+
+
+def _check_row(result: AssertionResult, redact: Callable[[str], str] = str) -> CheckRow:
+    """One evaluated assertion as a verdict-box row — the shared state grammar."""
+    if result.ok:
+        state = "warn_held" if result.severity == "warn" else "held"
+    elif result.severity == "warn":
+        # An advisory break: amber ~, never a red ✗ — it cannot fail a gate.
+        state = "warn_broke"
+    else:
+        state = "broke"
+    ref = result.ref
+    provenance = ""
+    if ref is not None:
+        provenance = provenance_suffix(ref.origin, ref.profile or ref.request)
+    label = redact(result.label or f"{result.target} {result.op}")
+    detail = redact(result.detail)
+    if result.ok:
+        return CheckRow(label, state, provenance=provenance, detail=detail)
+    return CheckRow(label, state, provenance=provenance, evidence=detail)
+
+
+def _json_body(body: bytes, content_type: str) -> object | None:
+    """The body parsed as JSON when it is JSON — the ``_body_into`` routing rule."""
+    text = body.decode("utf-8", "replace")
+    if "json" not in content_type and text[:1] not in "{[":
+        return None
+    try:
+        return cast("object", json.loads(body))
+    except (ValueError, TypeError):
+        return None
+
+
+def raw_exchange_text(
+    resolved: ResolvedRequest | None,
+    execution: Execution | None,
+    redact: Callable[[str], str] = str,
+) -> str:
+    """The raw exchange as copyable text — masked, never the real secrets.
+
+    What ``y`` puts on the clipboard: request line + headers, then the response
+    status line + headers + body. Every part passes through *redact* and
+    credential-bearing header values are masked by name, exactly like the RAW
+    facet — the clipboard is a sink like any other.
+    """
+    lines: list[str] = []
+    if resolved is not None:
+        lines.append(f"{resolved.method} {redact(resolved.url)}")
+        lines.extend(f"{redact(str(k))}: {redact(str(v))}" for k, v in resolved.headers)
+        lines.append("")
+    if execution is not None and execution.response is not None:
+        response = execution.response
+        version = response.http_version or "HTTP"
+        phrase = f" {redact(response.reason_phrase)}" if response.reason_phrase else ""
+        lines.append(f"{version} {response.status}{phrase}")
+        lines.extend(
+            f"{redact(str(k))}: {redact(mask_credential_header(str(k), str(v)))}"
+            for k, v in response.headers
+        )
+        lines.append("")
+        lines.append(redact(response.body.decode("utf-8", "replace")))
+    elif execution is not None and execution.error is not None:
+        lines.append(redact(execution.error))
+    return "\n".join(lines)
 
 
 def _raw_detail_into(
