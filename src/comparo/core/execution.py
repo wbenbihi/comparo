@@ -12,6 +12,8 @@ import dataclasses
 from collections.abc import Callable
 
 from comparo.core.assertions import AssertionResult
+from comparo.core.assertions import SourcedAssertion
+from comparo.core.assertions import dedupe_rules
 from comparo.core.assertions import evaluate_rules
 from comparo.core.assertions import passed as assertions_pass
 from comparo.core.assertions import profiles_to_rules
@@ -25,7 +27,6 @@ from comparo.core.http import HttpClient
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import MatrixCell
 from comparo.core.matrix import expand
-from comparo.core.models import AssertionRule
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import MatrixScope
@@ -143,14 +144,14 @@ def _build_plan(
     *,
     do_assert: bool,
     scopes: dict[str, MatrixScope],
-) -> tuple[list[tuple[Request, MatrixCell, list[AssertionRule]]], list[Request]]:
+) -> tuple[list[tuple[Request, MatrixCell, list[SourcedAssertion]]], list[Request]]:
     """Expand the profile's selected requests into a flat cell plan.
 
     Returns the ``(plan, empty)`` pair: one entry per ``(request, matrix cell)`` to
     run, and the requests whose matrix expanded to zero cells — recorded so the
     gate fails closed on them rather than silently skipping.
     """
-    plan: list[tuple[Request, MatrixCell, list[AssertionRule]]] = []
+    plan: list[tuple[Request, MatrixCell, list[SourcedAssertion]]] = []
     empty: list[Request] = []
     for request in select_requests(project, profile):
         rules = _assert_rules(project, profile, request) if do_assert else []
@@ -229,7 +230,7 @@ async def run_execution(
             )
 
     async def _run_cell(
-        index: int, request: Request, cell: MatrixCell, rules: list[AssertionRule]
+        index: int, request: Request, cell: MatrixCell, rules: list[SourcedAssertion]
     ) -> tuple[int, CellOutcome]:
         request_id = request.metadata.id or request.metadata.name
         method = request.spec.request.method
@@ -347,22 +348,10 @@ def select_requests(project: LoadedProject, profile: ExecutionProfile) -> list[R
 
 def _assert_rules(
     project: LoadedProject, profile: ExecutionProfile, request: Request
-) -> list[AssertionRule]:
+) -> list[SourcedAssertion]:
     rules = list(request_response_rules(project, request))  # status/schema sugar + response.assert
     rules += profiles_to_rules(project, _execution_profiles(profile, "assert"))
-    return _dedupe_rules(rules)
-
-
-def _dedupe_rules(rules: list[AssertionRule]) -> list[AssertionRule]:
-    """Drop identical rules a layered profile can produce twice, keeping order."""
-    seen: set[tuple[str, str, str, str]] = set()
-    unique: list[AssertionRule] = []
-    for rule in rules:
-        signature = (rule.target, rule.op, repr(rule.value), rule.severity)
-        if signature not in seen:
-            seen.add(signature)
-            unique.append(rule)
-    return unique
+    return dedupe_rules(rules)
 
 
 def _execution_profiles(profile: ExecutionProfile, key: str) -> object:

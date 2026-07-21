@@ -35,7 +35,6 @@ from comparo import __version__
 from comparo.adapters import updates as updates_adapter
 from comparo.adapters.userconfig import UserConfig
 from comparo.core.assertions import AssertionResult
-from comparo.core.checks import Check
 from comparo.core.compare import VOLATILE_HEADER_PATHS
 from comparo.core.compare import CellDiff
 from comparo.core.diagnostics import Diagnostic
@@ -140,7 +139,6 @@ __all__ = [
     "_cell_for_request",
     "_cell_label",
     "_cell_verdict",
-    "_check_result",
     "_clip",
     "_content_type",
     "_crash_report",
@@ -947,11 +945,6 @@ def _pair(node: TreeNode[object] | None) -> tuple[Request | None, MatrixCell | N
     return None, None
 
 
-def _check_result(check: Check) -> AssertionResult:
-    """Adapt a run ``Check`` to an ``AssertionResult`` for the report roll-up."""
-    return AssertionResult(check.name, "", check.ok, "error", check.detail, check.name)
-
-
 def _save_run(
     project: LoadedProject, environment: Environment, run_id: str, entries: list[RunEntry]
 ) -> Path:
@@ -971,7 +964,7 @@ def _build_report_tree(
     cell: MatrixCell,
     execution: Execution | None,
     state: str,
-    checks: list[Check],
+    results: list[AssertionResult],
     redact: Callable[[str], str] = str,
     *,
     focus: str = "all",
@@ -1009,12 +1002,32 @@ def _build_report_tree(
     want_meta = focus in ("all", "response")  # checks + metrics ride with the response
     headers_only = focus == "headers"
 
-    if checks and want_meta:
+    if (results or execution is not None) and want_meta and state not in ("pending", "running"):
         node = root.add(Text("CHECKS", style=f"bold {_LABEL}"), expand=True)
-        for check in checks:
-            mark, tint = ("✓", _SAME) if check.ok else ("✗", _DRIFT)
-            detail = redact(check.detail)
-            node.add_leaf(Text.assemble((f"{mark} {check.name}  ", tint), (detail, _DIM)))
+        for result in results:
+            label = redact(result.label or f"{result.target} {result.op}")
+            detail = redact(result.detail)
+            if result.ok:
+                mark, tint = "✓", _SAME
+            elif result.severity == "warn":
+                # An advisory break: amber ~, never a red ✗ — it cannot fail a gate.
+                mark, tint = "~", _WARN
+            else:
+                mark, tint = "✗", _DRIFT
+            row = Text.assemble((f"{mark} {label}  ", tint), (detail, _DIM))
+            if result.severity == "warn":
+                row.append("  · warn", style=_DIM)
+            node.add_leaf(row)
+        # ``reachable`` is synthesized per cell — transport, not an engine rule —
+        # and always LAST (run-results spec §4); a dead cell shows it alone,
+        # because a rule that never ran must never render as a broken row.
+        if execution is not None:
+            reached = execution.response
+            if reached is not None:
+                node.add_leaf(Text.assemble(("✓ reachable  ", _SAME), (str(reached.status), _DIM)))
+            else:
+                detail = redact(execution.error or "no response")
+                node.add_leaf(Text.assemble(("✗ reachable  ", _DRIFT), (detail, _DIM)))
 
     if execution is not None and execution.response is not None and want_meta:
         response = execution.response

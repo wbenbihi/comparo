@@ -117,10 +117,15 @@ counts) over dynamic Miller columns that grow with how deep you drill:
 
 - **Requests** table — status, a variant strip, p50 latency.
 - **Variants** table (appears when you open a matrix request) — case, HTTP code, time, and a
-  clear **result** (`✓ 3 passed` or `✗ schema`, naming the failed check). A single-case request
-  skips this and goes straight to the report.
-- **Detail** — a navigable tree of the whole exchange: checks, metrics, the request, and the
-  response. JSON, HTML, and SSE bodies are collapsible sub-trees you can walk into. `t` cycles the
+  clear **result** (`✓ 2 passed` or `✗ status == 200`, naming the failed rule by its label;
+  `reachable` is transport, shown in the detail tree rather than counted here, and an
+  unreachable cell reads `✗ unreachable`). A single-case request skips this and goes straight
+  to the report.
+- **Detail** — a navigable tree of the whole exchange: checks (full assertion results —
+  every rule with its label and detail, then a synthesized `reachable` row last; a broken
+  `warn`-severity rule shows as an amber `~` advisory that never fails the run, and a dead
+  cell shows `✗ reachable` alone — rules that never ran are never painted as broken), metrics,
+  the request, and the response. JSON, HTML, and SSE bodies are collapsible sub-trees you can walk into. `t` cycles the
   facet it shows — **all · request · response · headers · raw** (the pill strip is the panel
   subtitle); **raw** dumps the unparsed request line and response body verbatim.
 

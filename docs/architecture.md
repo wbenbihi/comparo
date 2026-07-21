@@ -277,13 +277,12 @@ redacted input.
 | `http.py` | The `HttpClient` port, the `HttpResponse` (with an optional `events` list for streams) / `TimeoutBudget` / `HttpError` value types. Core's only view of the network. |
 | `execute.py` | Resolves a request in the EXECUTE sink, computes its timeout budget, and sends it through an `HttpClient`; failures are captured on the `Execution`, not raised, and runs are bounded by a concurrency semaphore. |
 | `diff.py` | The tri-state comparator: every path is `SAME`, `DRIFT`, or `SKIP`, under modes `ignore` / `exact` / `shape` / `type` / `tolerance`, with the most-specific path rule winning. |
-| `assertions.py` | Evaluates an `AssertionProfile` (or a request's `status`/`schema` sugar) against one materialized response — targets (`status`, `latency`, headers, JSON-path) and ops (`equals`, `matches`, comparisons, `between`, `oneOf`, `exists`, `contains`, `schema`); `error` rules gate, `warn` rules advise. |
+| `assertions.py` | Evaluates an `AssertionProfile` (or a request's `status`/`schema` sugar) against one materialized response — targets (`status`, `latency`, headers, JSON-path) and ops (`equals`, `matches`, comparisons, `between`, `oneOf`, `exists`, `contains`, `schema`); `error` rules gate, `warn` rules advise. Composition returns `SourcedAssertion`s — each rule tagged with an `AssertRef` (target/op/severity/label + provenance: owning profile or request, stable within-block index) that evaluation stamps onto every `AssertionResult`, so rule ↔ result ↔ cell traceability is in the data. The Run tab renders these results directly (evaluated once per cell; the screen, the saved run, and the archived report share the same objects). |
 | `compare.py` | Runs a diff pair: executes every request-cell against both environments concurrently (each through its own `HttpClient`, so cookie jars stay separate), pairs results by `(request id, cell)`, composes the request/project/override diff profiles, and diffs each — as an event sequence for streamed cells. |
 | `execution.py` | Runs an `ExecutionProfile`: resolves it to a plan (which requests, cells, environments), executes each cell against baseline and candidate, asserts both, diffs the pair, and reports a fail-closed gate. Orchestration only — no comparison logic of its own. |
 | `report.py` | The structured `RunReport` and the `Reporter` port; `build_report` folds diff results into cells with a pass/fail gate (`diff_passed` / `diff_gate`), redacting drift details as it goes. |
 | `archive.py` | The saved-report store under `<data>/.reports/`: `ReportRecord` (gate, counts, assertion roll-ups, per-request breakdown) and `CellRecord` (redacted before/after bodies, response headers, status/latency/bytes for a faithful replay); `record_from_diff` / `record_from_execution` / `record_from_run`, `save_record`, `list_records`. |
 | `redaction.py` | The `Redactor` string-match backstop: masks any declared secret *value* (or key/path) found in any string a sink emits, even when it arrived untainted (e.g. echoed back by the server). |
-| `checks.py` | A thin Run-tab boundary: flattens the assertion engine's `error`-severity results (status + schema sugar **and** `response.assert`) into flat `reachable`/`status`/`schema` rows. Holds no validation logic — it delegates to `assertions.py` so the Run tab never disagrees with the CLI. |
 | `triage.py` | Silences a drift by appending an `ignore` rule to the owning `DiffProfile`'s YAML file (round-tripped through ruamel so comments survive) — a reviewable, committed act, never an in-memory hide. |
 | `curl.py` | Renders a `ResolvedRequest` as a runnable multi-line `curl`; masked or real depending on the sink it was resolved with. |
 | `export.py` | Serializes a run to JSON with every secret masked — DISPLAY-sink values plus string-match redaction of response bodies (keys and values). |
@@ -307,7 +306,7 @@ for the project and threads it through every line it prints.
 with Explorer, Run, Diff, Execution, Report, and Settings screens. Despite its size
 it is still a front-end: it imports the same engine functions (`load_project`,
 `Resolver`, `expand`, `execute_request`, `compare_cell`, `run_execution`,
-`check_health`, `run_checks`, `export_run`, `to_curl`) and the `HttpxClient`
+`check_health`, `evaluate_rules`, `export_run`, `to_curl`) and the `HttpxClient`
 adapter, and holds no comparison or resolution logic of its own. The **Execution**
 screen launches an `ExecutionProfile` (from the Explorer) and shows the same gate
 `comparo exec` computes; the **Report** screen browses the saved-run archive under

@@ -22,8 +22,9 @@ from comparo.core.models import AssertionProfileSpec
 from comparo.core.models import AssertionRule
 from comparo.core.models import Request
 from comparo.core.models import Schema
+from comparo.core.outcomes import Provenance
 from comparo.core.refs import ref_id as _ref_id
-from comparo.core.refs import resolve_specs
+from comparo.core.refs import resolve_sources
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -43,6 +44,65 @@ class AssertionResult:
     #: serializing (the report builder does, via ``redaction.redact_tree``).
     expected: object = None
     actual: object = None
+    #: Identity and provenance of the rule that produced this result — the engine
+    #: stamps it during evaluation so a rules index can attribute every row
+    #: without re-deriving composition. ``None`` only on hand-built values.
+    ref: "AssertRef | None" = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class AssertRef:
+    """Identity and provenance of one assertion rule line, as written.
+
+    ``profile`` is the owning AssertionProfile's ``metadata.id`` for
+    ``origin == "profile"``; ``request`` is the owning request's id for the
+    inline ``response.status`` / ``response.schema`` sugar and ``response.assert``
+    inline specs. ``index`` is the rule's position within its owning block —
+    deliberately NOT composition-relative, so the same written rule keeps one
+    identity however profiles compose around it.
+    """
+
+    target: str
+    op: str
+    severity: str
+    label: str
+    origin: Provenance
+    profile: str | None = None
+    request: str | None = None
+    index: int = 0
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SourcedAssertion:
+    """A composed assertion rule together with its provenance."""
+
+    rule: AssertionRule
+    ref: AssertRef
+
+
+def _source(
+    rules: list[AssertionRule],
+    origin: Provenance,
+    profile: str | None = None,
+    request: str | None = None,
+    start: int = 0,
+) -> list[SourcedAssertion]:
+    return [
+        SourcedAssertion(
+            rule,
+            AssertRef(
+                rule.target,
+                rule.op,
+                rule.severity,
+                rule_label(rule),
+                origin,
+                profile,
+                request,
+                start + offset,
+            ),
+        )
+        for offset, rule in enumerate(rules)
+    ]
 
 
 _OP_SYMBOL = {"equals": "==", "lt": "<", "lte": "<=", "gt": ">", "gte": ">=", "matches": "~"}
@@ -87,23 +147,26 @@ def run_assertions(
     Returns:
         One :class:`AssertionResult` per resolved rule, in evaluation order.
     """
-    return evaluate_rules(project, _resolve_rules(project, profile, set()), execution)
+    return evaluate_rules(project, compose_rules(project, profile), execution)
 
 
 def evaluate_rules(
-    project: LoadedProject, rules: list[AssertionRule], execution: Execution
+    project: LoadedProject, rules: list[SourcedAssertion], execution: Execution
 ) -> list[AssertionResult]:
     """Evaluate an already-composed list of rules against *execution*.
 
     Args:
         project: The loaded project (for schema references).
-        rules: The assertion rules to evaluate.
+        rules: The composed assertion rules with their provenance.
         execution: The execution whose response is checked.
 
     Returns:
-        One result per rule.
+        One result per rule, each stamped with its rule's :class:`AssertRef`.
     """
-    return [_evaluate(project, rule, execution) for rule in rules]
+    return [
+        dataclasses.replace(_evaluate(project, sourced.rule, execution), ref=sourced.ref)
+        for sourced in rules
+    ]
 
 
 def passed(results: list[AssertionResult]) -> bool:
@@ -118,7 +181,7 @@ def passed(results: list[AssertionResult]) -> bool:
     return all(result.ok for result in results if result.severity == "error")
 
 
-def request_rules(request: Request) -> list[AssertionRule]:
+def request_rules(request: Request) -> list[SourcedAssertion]:
     """Compile a request's ``response.status`` / ``response.schema`` sugar to rules.
 
     These inline shortcuts are exactly equivalent to explicit assertion rules, so
@@ -128,7 +191,7 @@ def request_rules(request: Request) -> list[AssertionRule]:
         request: The request whose response expectations are compiled.
 
     Returns:
-        The implicit assertion rules (possibly empty).
+        The implicit assertion rules (possibly empty), owned by the request.
     """
     response = request.spec.response
     if response is None:
@@ -138,29 +201,41 @@ def request_rules(request: Request) -> list[AssertionRule]:
         rules.append(AssertionRule(target="status", op="equals", value=response.status))
     if response.schema is not None:
         rules.append(AssertionRule(target="body", op="schema", value=response.schema))
-    return rules
+    owner = request.metadata.id or request.metadata.name
+    return _source(rules, "inline", request=owner)
 
 
-def profiles_to_rules(project: LoadedProject, refs: object) -> list[AssertionRule]:
+def profiles_to_rules(
+    project: LoadedProject, refs: object, request: str | None = None, start: int = 0
+) -> list[SourcedAssertion]:
     """Flatten one or more AssertionProfiles (``$ref`` or inline) into rules.
 
     *refs* is a ``response.assert`` / execution ``profiles.assert`` slot: a single
     reference, an inline spec, or a list of either. Each resolved profile's
     ``include`` chain is composed before its own rules, so a referenced base's
-    rules precede the overriding ones.
+    rules precede the overriding ones. Every rule keeps its provenance: the
+    owning profile's id, or *request* (the attaching request) for inline specs.
+    Inline rules index continuously from *start* across every inline block, so
+    two rules in different blocks of one request can never share an identity.
     """
-    rules: list[AssertionRule] = []
-    for spec in resolve_specs(project, refs, AssertionProfileSpec):
+    rules: list[SourcedAssertion] = []
+    inline_index = start
+    for profile_id, spec in resolve_sources(project, refs, AssertionProfileSpec):
         for reference in spec.include or []:
             identifier = _ref_id(reference)
             included = project.objects.get(identifier) if identifier is not None else None
             if isinstance(included, AssertionProfile):
                 rules.extend(compose_rules(project, included))
-        rules.extend(spec.rules or [])
+        if profile_id is not None:
+            rules.extend(_source(spec.rules or [], "profile", profile=profile_id))
+        else:
+            block = _source(spec.rules or [], "inline", request=request, start=inline_index)
+            inline_index += len(block)
+            rules.extend(block)
     return rules
 
 
-def request_response_rules(project: LoadedProject, request: Request) -> list[AssertionRule]:
+def request_response_rules(project: LoadedProject, request: Request) -> list[SourcedAssertion]:
     """Compile a request's whole response contract into assertion rules.
 
     Combines the ``response.status`` / ``response.schema`` sugar with the
@@ -172,11 +247,32 @@ def request_response_rules(project: LoadedProject, request: Request) -> list[Ass
     rules = list(request_rules(request))
     response = request.spec.response
     if response is not None:
-        rules += profiles_to_rules(project, response.assertions)
-    return rules
+        owner = request.metadata.id or request.metadata.name
+        rules += profiles_to_rules(project, response.assertions, request=owner, start=len(rules))
+    return dedupe_rules(rules)
 
 
-def compose_rules(project: LoadedProject, profile: AssertionProfile) -> list[AssertionRule]:
+def dedupe_rules(rules: list[SourcedAssertion]) -> list[SourcedAssertion]:
+    """Drop identical rules a layered composition can produce twice, keeping order.
+
+    Identity is what the rule CHECKS (target/op/value/severity) — the first
+    occurrence keeps its provenance, so a base profile's rule stays attributed
+    to the base even when an including profile (or a diamond include) restates
+    it. Shared by the run path and the execution planner, so the two can never
+    disagree about how many rules a request carries.
+    """
+    seen: set[tuple[str, str, str, str]] = set()
+    unique: list[SourcedAssertion] = []
+    for sourced in rules:
+        rule = sourced.rule
+        signature = (rule.target, rule.op, repr(rule.value), rule.severity)
+        if signature not in seen:
+            seen.add(signature)
+            unique.append(sourced)
+    return unique
+
+
+def compose_rules(project: LoadedProject, profile: AssertionProfile) -> list[SourcedAssertion]:
     """Return *profile*'s rules flattened with everything it includes.
 
     Args:
@@ -191,19 +287,21 @@ def compose_rules(project: LoadedProject, profile: AssertionProfile) -> list[Ass
 
 def _resolve_rules(
     project: LoadedProject, profile: AssertionProfile, seen: set[str]
-) -> list[AssertionRule]:
+) -> list[SourcedAssertion]:
     identifier = profile.metadata.id
     if identifier is not None:
         if identifier in seen:  # guard against an include cycle
             return []
         seen = seen | {identifier}
-    rules: list[AssertionRule] = []
+    rules: list[SourcedAssertion] = []
     for reference in profile.spec.include or []:
         target = _ref_id(reference)
         included = project.objects.get(target) if target is not None else None
         if isinstance(included, AssertionProfile):
             rules.extend(_resolve_rules(project, included, seen))
-    rules.extend(profile.spec.rules or [])
+    rules.extend(
+        _source(profile.spec.rules or [], "profile", profile=identifier or profile.metadata.name)
+    )
     return rules
 
 

@@ -54,10 +54,8 @@ from comparo.core.archive import list_records
 from comparo.core.archive import save_record
 from comparo.core.assertions import AssertionResult
 from comparo.core.assertions import evaluate_rules
+from comparo.core.assertions import passed as assertions_passed
 from comparo.core.assertions import request_response_rules
-from comparo.core.checks import Check
-from comparo.core.checks import passed as checks_passed
-from comparo.core.checks import run_checks
 from comparo.core.compare import CellDiff
 from comparo.core.compare import compare_cell
 from comparo.core.compare import profile_for
@@ -686,7 +684,7 @@ class RunView(Vertical):
         self._disabled_values: set[tuple[str, int]] = set()
         self._state: dict[tuple[str, str], str] = {}
         self._exec: dict[tuple[str, str], Execution] = {}
-        self._checks: dict[tuple[str, str], list[Check]] = {}
+        self._results: dict[tuple[str, str], list[AssertionResult]] = {}
         self._prep_nodes: dict[tuple[str, str], TreeNode[object]] = {}
         self._prep_branches: dict[str, TreeNode[object]] = {}
         self._view = "requests"
@@ -926,7 +924,7 @@ class RunView(Vertical):
             key = _run_key(request, cell)
             self._state[key] = "pending"
             self._exec.pop(key, None)
-            self._checks.pop(key, None)
+            self._results.pop(key, None)
         self.query_one("#run-mode", ContentSwitcher).current = "running"
         self._populate_requests()
         self._layout()
@@ -939,6 +937,12 @@ class RunView(Vertical):
         client = HttpxClient()
         concurrency, retry = run_settings(self.project)
         limit = asyncio.Semaphore(concurrency)
+        # Compile each request's rules once, up front — the run judges the exact
+        # rule set it launched with, and every cell of a request shares it.
+        rules = {
+            id(request): request_response_rules(self.project, request)
+            for request in {id(r): r for r, _ in plan}.values()
+        }
 
         async def one(request: Request, cell: MatrixCell) -> None:
             key = _run_key(request, cell)
@@ -949,7 +953,15 @@ class RunView(Vertical):
                     self.project, environment, request, client, cell, retry
                 )
             self._exec[key] = execution
-            self._checks[key] = run_checks(self.project, request, execution)
+            # THE evaluation — the screen, the saved run, and the archived report
+            # all read this one result set; nothing re-evaluates later. A dead
+            # cell is never judged: no response means no rule ran (the spec's
+            # no-fake-rows doctrine) — reachable ✗ carries the story alone.
+            self._results[key] = (
+                evaluate_rules(self.project, rules[id(request)], execution)
+                if execution.response is not None
+                else []
+            )
             self._state[key] = "ok" if execution.ok else "failed"
             self._on_progress(request, cell)
 
@@ -990,7 +1002,7 @@ class RunView(Vertical):
         if environment is None:
             return
         entries = [
-            RunEntry(request, cell, self._exec[key], self._checks.get(key, []))
+            RunEntry(request, cell, self._exec[key], self._results.get(key, []))
             for request, cell in self._plan()
             if (key := _run_key(request, cell)) in self._exec
         ]
@@ -1000,19 +1012,9 @@ class RunView(Vertical):
             self.app.notify(str(error), title="Could not save", severity="error")
             return
         # Also archive an assertions report so the run shows up in the Report tab.
-        # Re-evaluate the full assertion results (severity/expected/actual) from each
-        # execution — the run's Check rows are lossy (error-only, no values).
-        run_cells = [
-            (
-                entry.execution,
-                evaluate_rules(
-                    self.project,
-                    request_response_rules(self.project, entry.request),
-                    entry.execution,
-                ),
-            )
-            for entry in entries
-        ]
+        # Evaluate-once: the archived report gets the SAME result objects the
+        # screen showed and the run file serialized — never a second evaluation.
+        run_cells = [(entry.execution, entry.results) for entry in entries]
         record = cast("ComparoApp", self.app).save_run_report(environment, run_cells)
         if record is not None:
             self.app.notify(
@@ -1211,7 +1213,7 @@ class RunView(Vertical):
             cell,
             self._exec.get(key),
             self._state.get(key, "pending"),
-            self._checks.get(key, []),
+            self._results.get(key, []),
             _app_redact(self),
             focus=self._detail_focus,
         )
@@ -1341,12 +1343,23 @@ class RunView(Vertical):
         state = self._state.get(key, "pending")
         if state in ("pending", "running"):
             return Text("—", style=_DIM)
-        checks = self._checks.get(key, [])
-        failed = [check.name for check in checks if not check.ok]
+        if state == "failed":
+            return Text("✗ unreachable", style=_DRIFT)
+        redact = _app_redact(self)
+        results = self._results.get(key, [])
+        failed = [
+            redact(result.label or f"{result.target} {result.op}")
+            for result in results
+            if not result.ok and result.severity == "error"
+        ]
         if failed:
             return Text("✗ " + ", ".join(failed), style=_DRIFT)
-        passed = sum(1 for check in checks if check.ok)
-        return Text(f"✓ {passed} passed", style=_SAME)
+        passed = sum(1 for result in results if result.ok)
+        warned = sum(1 for result in results if not result.ok and result.severity == "warn")
+        cellule = Text(f"✓ {passed} passed", style=_SAME)
+        if warned:
+            cellule.append(f" · ~ {warned}", style=_WARN)
+        return cellule
 
     def _strip(self, request: Request) -> Text:
         strip = Text()
@@ -1404,7 +1417,7 @@ class RunView(Vertical):
 
     def _cell_ok(self, request: Request, cell: MatrixCell) -> bool:
         key = _run_key(request, cell)
-        return self._state.get(key) == "ok" and checks_passed(self._checks.get(key, []))
+        return self._state.get(key) == "ok" and assertions_passed(self._results.get(key, []))
 
     def _request_status(self, request: Request) -> str:
         cells = self._plan_cells(request)
