@@ -80,7 +80,6 @@ from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import select_environment
 from comparo.core.streams import parse_sse
-from comparo.tui.components import CheckRow
 from comparo.tui.components import ErrorPanelModel
 from comparo.tui.components import StatChip
 from comparo.tui.components import cell_glyph
@@ -89,7 +88,6 @@ from comparo.tui.components import provenance_suffix
 from comparo.tui.components import seg_pill
 from comparo.tui.components import spec_table
 from comparo.tui.components import stat_chips
-from comparo.tui.components import verdict_box
 from comparo.tui.replay import AssertionSummary
 from comparo.tui.replay import ReplayCell as CellRecord
 from comparo.tui.replay import ReplayRecord as ReportRecord
@@ -1996,11 +1994,13 @@ def _diff_body_view(
     return Group(title, Text(), well, _git_legend(baseline, candidate), insight, hint)
 
 
-def _headers_well(cell: CellDiff, redact: Callable[[str], str] = str) -> Group | None:
-    """The response-headers diff well — git-style over the ``$headers`` fields.
+def _headers_well(
+    cell: CellDiff, redact: Callable[[str], str] = str, *, unified: bool = True
+) -> Panel | None:
+    """The response-headers diff well — the same rounded chrome as the body well.
 
-    Drifts as -/+ pairs, silenced names as ╎ with their governing rule, and a
-    few identical headers as context so the well reads as the real envelope.
+    Drifts as -/+ pairs (or two panes side-by-side), silenced names as ╎ with
+    their governing rule, and a few identical headers as context.
     """
     fields = [f for f in cell.fields if f.path.startswith("$headers")]
     if not fields:
@@ -2008,40 +2008,59 @@ def _headers_well(cell: CellDiff, redact: Callable[[str], str] = str) -> Group |
     drifts = [f for f in fields if f.state is State.DRIFT]
     skips = [f for f in fields if f.state is State.SKIP]
     sames = [f for f in fields if f.state is State.SAME][:6]
-    head = Text("RESPONSE HEADERS", style=f"bold {_LABEL}")
-    head.append(f"   {len(drifts)} drift · {len(skips)} ignored", style=_DRIFT if drifts else _DIM)
-    lines: list[RenderableType] = [head]
 
     def name_of(field: FieldDiff) -> str:
         return redact(field.path.removeprefix("$headers."))
 
-    for field in sames:
-        line = Text("▏  ", style=_SAME)
-        line.append(f"{name_of(field)}: ", style=_DIM)
-        line.append(_clip(redact(str(field.baseline))), style=_TEXT)
-        lines.append(line)
-    for field in drifts:
-        minus = Text("▌ - ", style=_DRIFT)
-        minus.append(f"{name_of(field)}: ", style=_DIM)
-        minus.append(_clip(redact(str(field.baseline))), style=_DIM)
-        lines.append(minus)
-        plus = Text("▌ + ", style=_DRIFT)
-        plus.append(f"{name_of(field)}: ", style=_DIM)
-        plus.append(_clip(redact(str(field.candidate))), style=f"bold {_DRIFT}")
-        lines.append(plus)
+    band = Text(f"@@ response headers @@  {len(drifts)} drift · {len(skips)} ignored")
+    rows: list[RenderableType] = [_hunk_band(band.plain)]
+    if unified or not drifts:
+        for field in sames:
+            line = Text("▏  ", style=_SAME)
+            line.append(f"{name_of(field)}: ", style=_DIM)
+            line.append(_clip(redact(str(field.baseline))), style=_TEXT)
+            rows.append(_band(line, _DIFF_BG))
+        for field in drifts:
+            minus = Text("- ", style=f"bold {_DRIFT}")
+            minus.append(f"{name_of(field)}: ", style=_DIM)
+            minus.append(_clip(redact(str(field.baseline))), style=_TEXT)
+            rows.append(_band(minus, _DEL_BG))
+            plus = Text("+ ", style=f"bold {_SAME}")
+            plus.append(f"{name_of(field)}: ", style=_DIM)
+            plus.append(_clip(redact(str(field.candidate))), style=f"bold {_TEXT_HI}")
+            rows.append(_band(plus, _ADD_BG))
+    else:
+        pane = Table(box=None, expand=True, show_header=False, padding=(0, 1))
+        pane.add_column(ratio=1)
+        pane.add_column(ratio=1)
+        for field in sames:
+            shown = Text(f"{name_of(field)}: ", style=_DIM)
+            shown.append(_clip(redact(str(field.baseline)), 40), style=_TEXT)
+            pane.add_row(shown, shown.copy())
+        for field in drifts:
+            left = Text(f"{name_of(field)}: ", style=_DIM)
+            left.append(_clip(redact(str(field.baseline)), 40), style=_TEXT)
+            left.stylize(f"on {_DEL_BG}")
+            right = Text(f"{name_of(field)}: ", style=_DIM)
+            right.append(_clip(redact(str(field.candidate)), 40), style=f"bold {_TEXT_HI}")
+            right.stylize(f"on {_ADD_BG}")
+            pane.add_row(left, right)
+        rows.append(pane)
     for field in skips:
         rule = _governing_path(field)
         line = Text("╎  ", style=_SKIP)
         line.append(f"{name_of(field)}: ", style=_DIM)
         line.append("⋯ ignored", style=_SKIP)
         line.append(f" · rule {rule}" if rule else " · built-in volatile", style=_DIM)
-        lines.append(line)
-    return Group(*lines)
+        rows.append(_band(line, _DIFF_BG))
+    return Panel(Group(*rows), box=ROUNDED, expand=True, padding=0, border_style=_WELL_BORDER)
 
 
-def _cell_verdict_rows(cell: CellDiff, redact: Callable[[str], str] = str) -> list[CheckRow]:
-    """The diff verdict box's rows — one per BROKEN rule on this cell."""
-    rows: list[CheckRow] = []
+def _cell_verdict_rows(
+    cell: CellDiff, redact: Callable[[str], str] = str
+) -> list[tuple[RuleRef, str, str, str]]:
+    """The selectable verdict rows — ``(ref, label, provenance, evidence)`` per broken rule."""
+    rows: list[tuple[RuleRef, str, str, str]] = []
     for outcome in cell.rule_outcomes:
         if outcome.outcome != "broke":
             continue
@@ -2055,40 +2074,26 @@ def _cell_verdict_rows(cell: CellDiff, redact: Callable[[str], str] = str) -> li
             ),
             None,
         )
-        label = redact(ref.path)
+        label = f"{redact(ref.path)} · {ref.mode}"
         if witness is not None:
             label = f"{redact(ref.path)} · {ref.mode} → {redact(witness.path)}"
             evidence = (
-                f"{_clip(redact(json.dumps(witness.baseline, default=str)))} → "
-                f"{_clip(redact(json.dumps(witness.candidate, default=str)))}"
+                f"{_clip(redact(json.dumps(witness.baseline, default=str)), 40)} → "
+                f"{_clip(redact(json.dumps(witness.candidate, default=str)), 40)}"
             )
-        rows.append(
-            CheckRow(
-                label,
-                "broke",
-                provenance=provenance_suffix(ref.origin, ref.profile),
-                evidence=evidence,
-            )
-        )
+        provenance = provenance_suffix(ref.origin, redact(ref.profile) if ref.profile else None)
+        rows.append((ref, label, provenance, evidence))
     return rows
 
 
-def _cell_inspect(
+def _cell_inspect_head(
     cell: CellDiff,
-    pair: tuple[Environment, Environment] | None,
+    broken: int,
     *,
-    unified: bool,
     outbound_layer: RenderableType | None = None,
     redact: Callable[[str], str] = str,
 ) -> Group:
-    """The whole-request inspect (mockup states 1-5): ledger → verdict → wells.
-
-    Reads in triage order: the call ledger, the verdict box naming which rules
-    broke (or the green all-held box; or the error panel for a dead cell), the
-    response-headers well, then the body — the git well for JSON, the event
-    sequence for a stream, honest before/after notes otherwise. Clean sections
-    collapse to one-line stubs instead of disappearing.
-    """
+    """Above the selectable rows: the call ledger, the outbound band, the verdict."""
     parts: list[RenderableType] = []
     ledger = _live_call_ledger(cell)
     if ledger is not None:
@@ -2118,18 +2123,33 @@ def _cell_inspect(
             kept = note
         parts.append(error_panel(model, kept))
         return Group(*parts)
-    broken = _cell_verdict_rows(cell, redact)
     effective = sum(1 for outcome in cell.rule_outcomes if outcome.outcome != "absent")
     if broken:
-        parts.append(verdict_box(broken, total=effective))
+        head = Text(f"✗ {broken} of {effective} rules broke on this cell", style=f"bold {_DRIFT}")
+        head.append("   ↓ select a rule · ", style=_DIM)
+        head.append("enter", style=f"bold {_ACCENT}")
+        head.append(" its record across every request", style=_DIM)
     else:
         held = sum(1 for outcome in cell.rule_outcomes if outcome.outcome == "held")
         silenced = sum(1 for outcome in cell.rule_outcomes if outcome.outcome == "silenced")
-        clean = Text("✓ every rule held on this cell", style=f"bold {_SAME}")
-        clean.append(f"  — {held} held · {silenced} silenced", style=_DIM)
-        parts.append(clean)
-    parts.append(Text())
-    headers = _headers_well(cell, redact)
+        head = Text("✓ every rule held on this cell", style=f"bold {_SAME}")
+        head.append(f"  — {held} held · {silenced} silenced", style=_DIM)
+    parts.append(head)
+    return Group(*parts)
+
+
+def _cell_inspect_tail(
+    cell: CellDiff,
+    pair: tuple[Environment, Environment] | None,
+    *,
+    unified: bool,
+    redact: Callable[[str], str] = str,
+) -> Group:
+    """Below the rows: the headers well, then the body — every well in its outline."""
+    parts: list[RenderableType] = []
+    if cell.error is not None:
+        return Group()
+    headers = _headers_well(cell, redact, unified=unified)
     if headers is not None:
         parts.extend((headers, Text()))
     base_events, cand_events = _cell_events(cell)
@@ -2141,32 +2161,43 @@ def _cell_inspect(
         for field in cell.fields
         if not field.path.startswith("$headers") and field.path != "$status"
     }
+    drifted = any(field.state is State.DRIFT for field in body_fields.values())
     if cell.baseline_body is None or cell.candidate_body is None:
-        if not broken:
-            parts.append(Text("body — identical (compared as raw bytes)", style=_DIM))
-        else:
-            parts.append(Text("body — differs (compared as raw bytes)", style=_DRIFT))
+        note = (
+            Text("body — identical (compared as raw bytes)", style=_DIM)
+            if not drifted
+            else Text("body — differs (compared as raw bytes)", style=_DRIFT)
+        )
+        parts.append(note)
         return Group(*parts)
-    if not broken:
+    if not drifted:
         keys = len(cell.baseline_body) if isinstance(cell.baseline_body, dict) else "…"
         parts.append(Text(f"body — identical · {keys} top-level keys", style=_DIM))
         return Group(*parts)
     names = (pair[0].metadata.name, pair[1].metadata.name) if pair is not None else ("a", "b")
     lines = _body_diff_lines(cell.baseline_body, cell.candidate_body, body_fields, redact=redact)
-    well: RenderableType = (
+    body: RenderableType = (
         _diff_unified(lines) if unified else _diff_side_by_side(lines, pair, names)
     )
-    head = Text("BODY", style=f"bold {_LABEL}")
-    parts.extend((head, well, _git_legend(*names)))
+    case = f"  {redact(cell.cell_key)}" if cell.cell_key else ""
+    hunk = f"@@ {cell.request.metadata.name} · body @@{case}"
+    well = Panel(
+        Group(_hunk_band(hunk), body),
+        box=ROUNDED,
+        expand=True,
+        padding=0,
+        border_style=_WELL_BORDER,
+    )
+    parts.extend((well, _git_legend(*names)))
     return Group(*parts)
 
 
-def _rule_record_view(
+def _rule_record_head(
     ref: RuleRef,
     cells: list[tuple[CellDiff, str]],
     redact: Callable[[str], str] = str,
 ) -> Group:
-    """The rule record (mockup states 6-8): spec · stat chips · per-cell record."""
+    """Above the record rows: the rule's spec card and its stat chips."""
     counts = {"broke": 0, "held": 0, "silenced": 0, "absent": 0, "error": 0}
     for _, outcome in cells:
         counts[outcome] = counts.get(outcome, 0) + 1
@@ -2188,48 +2219,56 @@ def _rule_record_view(
         StatChip("— absent", counts["absent"], _DIM),
         StatChip("! error", counts["error"], _WARN),
     ]
-    parts: list[RenderableType] = [spec_table(spec_rows), Text(), stat_chips(chips), Text()]
     record_head = Text("RECORD", style=f"bold {_LABEL}")
-    record_head.append("  every cell this rule touched", style=_DIM)
-    parts.append(record_head)
-    marks = {
-        "broke": ("✗ broke", _DRIFT),
-        "held": ("✓ held", _SAME),
-        "silenced": ("◌ silenced", _SKIP),
-        "absent": ("— absent", _DIM),
-        "error": ("! error", _WARN),
-    }
-    for cell, outcome in cells:
-        word, color = marks.get(outcome, ("?", _DIM))
-        line = Text("  ")
-        line.append(cell.request.metadata.name, style=_TEXT_HI)
-        if cell.cell_key:
-            line.append(f" · {redact(cell.cell_key)}", style=_AXIS)
-        line.append(f"   {word}", style=f"bold {color}")
-        if outcome == "broke":
-            witness = next(
-                (
-                    field
-                    for field in cell.drifts
-                    if field.rule is not None
-                    and written_identity(field.rule) == written_identity(ref)
-                ),
-                None,
-            )
-            if witness is not None:
-                line.append(f"   {redact(witness.path)}", style=_TEXT)
-                line.append(f"  {_clip(redact(witness.detail))}", style=_DIM)
-        elif outcome == "silenced":
-            silenced = sum(
-                1
-                for field in cell.fields
-                if field.state is State.SKIP
-                and field.rule is not None
-                and written_identity(field.rule) == written_identity(ref)
-            )
-            line.append(f"   {silenced} field(s) hidden", style=_DIM)
-        parts.append(line)
-    return Group(*parts)
+    record_head.append("  every cell this rule touched · ", style=_DIM)
+    record_head.append("enter", style=f"bold {_ACCENT}")
+    record_head.append(" opens the cell", style=_DIM)
+    return Group(spec_table(spec_rows), Text(), stat_chips(chips), Text(), record_head)
+
+
+_OUTCOME_MARKS: dict[str, tuple[str, str]] = {
+    "broke": ("✗ broke", _DRIFT),
+    "held": ("✓ held", _SAME),
+    "silenced": ("◌ silenced", _SKIP),
+    "absent": ("— absent", _DIM),
+    "error": ("! error", _WARN),
+}
+
+
+def _rule_record_row(
+    ref: RuleRef, cell: CellDiff, outcome: str, redact: Callable[[str], str] = str
+) -> tuple[Text, Text, Text]:
+    """One record-table row: (request · variant, outcome, detail)."""
+    who = Text(cell.request.metadata.name, style=_TEXT_HI)
+    if cell.cell_key:
+        who.append(f" · {redact(cell.cell_key)}", style=_AXIS)
+    word, color = _OUTCOME_MARKS.get(outcome, ("?", _DIM))
+    verdict = Text(word, style=f"bold {color}")
+    detail = Text("", style=_DIM)
+    if outcome == "broke":
+        witness = next(
+            (
+                field
+                for field in cell.drifts
+                if field.rule is not None and written_identity(field.rule) == written_identity(ref)
+            ),
+            None,
+        )
+        if witness is not None:
+            detail = Text(redact(witness.path), style=_TEXT)
+            detail.append(f"  {_clip(redact(witness.detail), 48)}", style=_DIM)
+    elif outcome == "silenced":
+        hidden = sum(
+            1
+            for field in cell.fields
+            if field.state is State.SKIP
+            and field.rule is not None
+            and written_identity(field.rule) == written_identity(ref)
+        )
+        detail = Text(f"{hidden} field(s) hidden", style=_DIM)
+    elif outcome == "error":
+        detail = Text(_clip(redact(cell.error or ""), 48), style=_DIM)
+    return who, verdict, detail
 
 
 def _git_legend(baseline: str, candidate: str) -> Text:
@@ -2376,6 +2415,87 @@ def _mode_prose(mode: str) -> str:
         "tolerance": "a small numeric drift on this path is absorbed",
         "ignore": "this path is deliberately not compared",
     }.get(mode, "")
+
+
+def _field_head(
+    path: str, entries: list[tuple[CellDiff, FieldDiff]], redact: Callable[[str], str] = str
+) -> Group:
+    """Above the occurrence rows: the field's state, mode, and governing rule."""
+    field = entries[0][1]
+    count = len(entries)
+    plural = "" if count == 1 else "s"
+    status = Text("state   ", style=_DIM)
+    status.append("drift", style=f"bold {_DRIFT}")
+    status.append("\nmode    ", style=_DIM)
+    status.append(field.mode, style=_MODE.get(field.mode, _AXIS))
+    prose = _mode_prose(field.mode)
+    if prose:
+        status.append(f"   {prose}", style=_DIM)
+    status.append("\ndrifts  ", style=_DIM)
+    status.append(f"{count} cell{plural}", style=f"bold {_TEXT_HI}")
+    status.append("\nrule    ", style=_DIM)
+    governing = _governing_path(field)
+    if governing is not None:
+        status.append(redact(governing), style=_SKIP)
+    else:
+        status.append("none", style=_SKIP)
+        status.append("   not silenced by any DiffProfile rule", style=_DIM)
+    head = Text("OCCURRENCES", style=f"bold {_LABEL}")
+    head.append("  every broken check on this field · ", style=_DIM)
+    head.append("enter", style=f"bold {_ACCENT}")
+    head.append(" opens the cell", style=_DIM)
+    return Group(status, Text(), head)
+
+
+def _field_occurrence_row(
+    cell: CellDiff, field: FieldDiff, redact: Callable[[str], str] = str
+) -> tuple[Text, Text, Text]:
+    """One occurrence row: (request · variant, baseline, candidate)."""
+    who = Text(cell.request.metadata.name, style=_TEXT_HI)
+    if cell.cell_key:
+        who.append(f" · {redact(cell.cell_key)}", style=_AXIS)
+    return (
+        who,
+        Text(_clip(redact(_sv(field.baseline)), 36), style=_TEXT),
+        Text(_clip(redact(_sv(field.candidate)), 36), style=f"bold {_DRIFT}"),
+    )
+
+
+def _field_tail(
+    path: str, entries: list[tuple[CellDiff, FieldDiff]], redact: Callable[[str], str] = str
+) -> Group:
+    """Below the occurrences: the drift explanation and the exact triage YAML."""
+    field = entries[0][1]
+    parts: list[RenderableType] = []
+    pairs = {(redact(_sv(f.baseline)), redact(_sv(f.candidate))) for _, f in entries}
+    explain = Text("DRIFT EXPLANATION", style=f"bold {_LABEL}")
+    parts.append(explain)
+    if len(entries) > 1 and len(pairs) == 1:
+        note = Text("systematic", style=f"bold {_TEXT_HI}")
+        note.append(
+            f" — the same value change on all {len(entries)} cells: "
+            "config-shaped, not data-shaped.",
+            style=_DIM,
+        )
+        parts.append(note)
+    base_type = type(field.baseline).__name__
+    cand_type = type(field.candidate).__name__
+    types = Text("type ", style=_DIM)
+    if base_type == cand_type:
+        types.append(f"{base_type} → {cand_type} · unchanged", style=_DIM)
+    else:
+        types.append(f"{base_type} → {cand_type}", style=f"bold {_WARN}")
+        types.append(" — the SHAPE changed, not just the value", style=_DIM)
+    parts.append(types)
+    triage = Text("\nTriage — ", style=f"bold {_TEXT_HI}")
+    triage.append("i", style=f"bold {_ACCENT}")
+    triage.append(" writes the rule below into the committed DiffProfile", style=_TEXT_HI)
+    parts.append(triage)
+    yaml_block = Text("  rules:\n", style=_DIM)
+    yaml_block.append(f"    - path: {redact(path)}\n", style=_SKIP)
+    yaml_block.append("      mode: ignore", style=_SKIP)
+    parts.append(yaml_block)
+    return Group(*parts)
 
 
 def _field_drill_card(
@@ -2547,14 +2667,17 @@ def _outbound_header(
         labels = ", ".join(entry.label for entry in diffs[:3])
         more = "…" if len(diffs) > 3 else ""
         line.append("⚠ ", style=f"bold {_WARN}")
-        line.append(f"differs · {len(diffs)} field{'s' if len(diffs) != 1 else ''} ", style=_TEXT)
+        line.append("we sent DIFFERENT requests ", style=_TEXT)
+        line.append(f"· {len(diffs)} field{'s' if len(diffs) != 1 else ''} ", style=_TEXT)
         line.append(f"({labels}{more})", style=_DIM)
+        line.append(" — some drift may be ours, not the service's", style=_WARN)
     else:
         line.append("✓ ", style=f"bold {_SAME}")
-        line.append("identical on both sides", style=_DIM)
-    line.append("   press ", style=_DIM)
+        line.append("same request sent to both sides", style=_DIM)
+        line.append(" — any response drift is the service's", style=_DIM)
+    line.append("   ", style=_DIM)
     line.append("o", style=f"bold {_ACCENT}")
-    line.append(" to expand", style=_DIM)
+    line.append(" details", style=_DIM)
     return _band(line, _HUNK_BG)
 
 

@@ -607,7 +607,12 @@ def test_diff_enter_jumps_cell_to_rules_and_esc_returns() -> None:
             key = diff._current_row_key()
             assert key is not None
             assert key.startswith("cell::")  # the broken cell is pre-selected
-            await pilot.press("enter")  # jump: cell → its broken rule
+            await pilot.press("enter")  # drill INTO the inspect rows
+            await pilot.pause()
+            focused = app.focused
+            assert focused is not None
+            assert focused.id == "inspect-table"  # the broken-rule rows take focus
+            await pilot.press("enter")  # jump: the focused rule → its record
             await pilot.pause()
             assert diff._index_mode == "rules"
             rules_key = diff._current_row_key()
