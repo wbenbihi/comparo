@@ -36,6 +36,8 @@ from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.outbound import outbound_diffs
 from comparo.core.redaction import MASK
+from comparo.core.redaction import binary_is_clean
+from comparo.core.redaction import decoded_text
 from comparo.core.redaction import mask_credential_header
 from comparo.core.redaction import redact_tree
 from comparo.core.report import diff_gate
@@ -221,7 +223,7 @@ def _response(response: HttpResponse | None, redact: Redact) -> ResponseRecord |
         if parsed is not _NOT_JSON:
             body = redact_tree(parsed, redact)
         else:
-            text = _decoded_text(response.body)
+            text = decoded_text(response.body)
             if text is not None:
                 # Redact BEFORE truncating — a secret's prefix must never survive.
                 masked = redact(text)
@@ -229,7 +231,7 @@ def _response(response: HttpResponse | None, redact: Redact) -> ResponseRecord |
                     body_text, truncated = masked[:_TEXT_CAP], True
                 else:
                     body_text = masked
-            elif _binary_is_clean(response.body, redact):
+            elif binary_is_clean(response.body, redact):
                 # Binary: an honest digest, never mojibake. Both the digest and
                 # the hex head are dropped when the redactor would touch ANY text
                 # view of the WHOLE body — hex must not become a side channel
@@ -264,30 +266,6 @@ def _parse_json(body: bytes) -> object:
         return json.loads(body)
     except (ValueError, TypeError):
         return _NOT_JSON
-
-
-def _decoded_text(body: bytes) -> str | None:
-    """The body as text when it IS text — strict decode, no NULs — else ``None``."""
-    if b"\x00" in body:
-        return None
-    try:
-        return body.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-
-def _binary_is_clean(body: bytes, redact: Redact) -> bool:
-    """Whether NO text view of the whole body trips the redactor.
-
-    Checked over the FULL body (a secret straddling the head cut must still be
-    seen whole) and over both decodings — latin-1 exposes raw bytes, lossy UTF-8
-    exposes a valid-UTF-8 secret the latin-1 view would garble past matching.
-    """
-    latin = body.decode("latin-1")
-    if redact(latin) != latin:
-        return False
-    lossy = body.decode("utf-8", errors="replace")
-    return redact(lossy) == lossy
 
 
 # ── rule inventories ──────────────────────────────────────────────────────────

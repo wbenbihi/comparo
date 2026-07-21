@@ -1,5 +1,7 @@
 """Unit tests for the pure render helpers that back the TUI's panels."""
 
+from pathlib import Path
+
 from rich.cells import cell_len
 from rich.console import Console
 
@@ -418,3 +420,177 @@ def test_exec_triplet_summarizes_a_cell() -> None:
     assert "1 drift" in rendered
     assert "✗ FAIL" in rendered  # the drift fails the cell
     assert "(diff)" in rendered  # ...and the verdict names the failing dimension
+
+
+# ── workstream 7: the payload renderers ──────────────────────────────────────
+
+
+def _tree_labels(root: object) -> list[str]:
+    out = [str(root.label)]  # type: ignore[attr-defined]
+    for child in root.children:  # type: ignore[attr-defined]
+        out.extend(_tree_labels(child))
+    return out
+
+
+def test_the_evidence_tree_pins_verdicts_and_plants_missing_nodes() -> None:
+    from textual.widgets import Tree
+
+    from comparo.core.assertions import AssertionResult
+    from comparo.tui.render import _anchored_into
+    from comparo.tui.render import anchors_from_assertions
+
+    results = [
+        AssertionResult("body:$.quote.currency", "equals", True, "error", "USD", "currency == USD"),
+        AssertionResult(
+            "body:$.quote.total",
+            "lte",
+            False,
+            "error",
+            "too high",
+            "total <= 100",
+            expected=100,
+            actual=240,
+        ),
+        AssertionResult(
+            "body:$.quote.tax",
+            "exists",
+            False,
+            "error",
+            "missing",
+            "tax exists",
+            expected=True,
+            actual=None,
+        ),
+    ]
+    anchors = anchors_from_assertions(results)
+    tree: Tree[object] = Tree("root")
+    body = {"quote": {"currency": "USD", "total": 240}}
+    registry = _anchored_into(tree.root, body, str, anchors)
+    labels = "\n".join(_tree_labels(tree.root))
+    assert "✓ currency" in labels  # the held rule pins green at its site
+    assert "✗ total" in labels  # the broken rule pins red
+    assert "← total <= 100" in labels  # ...and names its rule
+    assert "tax — missing" in labels  # the absent field renders WHERE it should be
+    assert "← tax exists" in labels
+    assert len(registry) == 2  # total + the missing tax: the n/p anchor registry
+
+
+def test_binary_view_is_honest_bytes_and_fail_closed() -> None:
+    from textual.widgets import Tree
+
+    from comparo.core.redaction import Redactor
+    from comparo.tui.render import _binary_into
+    from comparo.tui.render import binary_from_bytes
+
+    secret = "tok-SECRET-123"
+    redact = Redactor.from_values({secret}).text
+    clean = b"\x89PNG\x00" + b"\xab" * 40
+    view = binary_from_bytes(clean, "image/png", redact)
+    assert view.magic == "png"
+    assert view.sha256 is not None
+    assert view.head == clean
+    tree: Tree[object] = Tree("root")
+    _binary_into(tree.root, view)
+    labels = "\n".join(_tree_labels(tree.root))
+    assert "sha256" in labels
+    assert "00000000" in labels  # hex offset column
+
+    tainted = b"\x00" + secret.encode() + b"\xff" * 16
+    withheld = binary_from_bytes(tainted, "application/octet-stream", redact)
+    assert withheld.sha256 is None  # fail closed: no digest oracle
+    assert withheld.head is None  # fail closed: no hex side channel
+
+
+def test_binary_view_replays_from_the_record() -> None:
+    from comparo.core.report_record import ResponseRecord
+    from comparo.tui.render import binary_from_record
+
+    record = ResponseRecord(
+        status=200,
+        headers=[("content-type", "application/pdf")],
+        size_bytes=2048,
+        sha256="ab" * 32,
+        body_head=b"%PDF-1.7".hex(),
+    )
+    view = binary_from_record(record)
+    assert view.magic == "pdf"
+    assert view.sha256 == "ab" * 32
+    assert view.head is not None
+    assert view.head.startswith(b"%PDF")
+
+
+def test_html_outline_is_an_outline_not_tag_soup() -> None:
+    from textual.widgets import Tree
+
+    from comparo.tui.render import _HtmlOutline
+
+    html = (
+        "<html><head><title>Status</title><script>var x=1;</script></head>"
+        "<body><nav><h1>Service status</h1></nav>"
+        "<main><p>All systems operational today.</p>"
+        "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>"
+        "</main></body></html>"
+    )
+    tree: Tree[object] = Tree("root")
+    outline = _HtmlOutline(tree.root, highlight="operational")
+    outline.feed(html)
+    outline.close()
+    labels = "\n".join(_tree_labels(tree.root))
+    assert "⌂ Status" in labels  # the title leads
+    assert "# Service status" in labels  # headings keep their level
+    assert "§ main" in labels  # landmarks branch
+    assert "table  2" in labels  # tables render as shapes (2x2)
+    assert "operational" in labels
+    assert "✓ contains" in labels  # the assertion's needle marked at its site
+    assert "var x=1" not in labels  # boilerplate elided…
+    assert "script/style block" in labels  # …and said out loud
+
+
+def test_raw_response_shows_the_true_status_line() -> None:
+    from textual.widgets import Tree
+
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.loader import load_project
+    from comparo.core.models import Environment
+    from comparo.core.models import Request
+    from comparo.tui.render import _raw_detail_into
+
+    sample = Path(__file__).parent.parent / "examples" / "sample-project"
+    loaded = load_project(sample)
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    environment = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    response = HttpResponse(200, [], b"ok", 5.0, http_version="HTTP/1.1", reason_phrase="OK")
+    execution = Execution(request, environment, "", response)
+    tree: Tree[object] = Tree("root")
+    _raw_detail_into(tree.root, None, execution)
+    labels = "\n".join(_tree_labels(tree.root))
+    assert "HTTP/1.1 200 OK" in labels
+
+
+def test_sse_facet_shows_the_full_envelope() -> None:
+    from textual.widgets import Tree
+
+    from comparo.tui.render import _sse_into
+
+    body = 'retry: 3000\ndata: hello\n\nid: 7\nevent: tick\ndata: {"n": 1}\n\n'
+    tree: Tree[object] = Tree("root")
+    _sse_into(tree.root, body)
+    labels = "\n".join(_tree_labels(tree.root))
+    assert "message" in labels  # the unnamed event wears the spec default
+    assert "no id" in labels
+    assert "reconnect hint" in labels  # retry preserved and labeled
+    assert "tick" in labels
+
+
+def test_event_strip_reads_the_shared_glyphs() -> None:
+    from rich.console import Console
+
+    from comparo.tui.render import _event_strip
+
+    console = Console(width=80)
+    with console.capture() as capture:
+        console.print(_event_strip(["pass", "pass", "fail", "pass"]))
+    rendered = capture.get()
+    assert "✓ 1" in rendered
+    assert "✗ 3" in rendered

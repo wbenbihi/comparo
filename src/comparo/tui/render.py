@@ -7,6 +7,8 @@ class or ComparoApp — this module sits between comparo.tui.tokens and
 comparo.tui.app in the dependency order (constants <- functions <- views).
 """
 
+import dataclasses
+import hashlib
 import json
 import traceback
 from collections.abc import Callable
@@ -66,14 +68,18 @@ from comparo.core.models import Schema
 from comparo.core.outbound import outbound_diffs
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
+from comparo.core.redaction import binary_is_clean
+from comparo.core.redaction import decoded_text
 from comparo.core.redaction import mask_credential_header
 from comparo.core.refs import ref_id as _ref_id
 from comparo.core.report_record import FieldDiffRecord
+from comparo.core.report_record import ResponseRecord
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import select_environment
 from comparo.core.streams import parse_sse
+from comparo.tui.components import cell_glyph
 from comparo.tui.components import seg_pill
 from comparo.tui.replay import AssertionSummary
 from comparo.tui.replay import ReplayCell as CellRecord
@@ -1086,7 +1092,9 @@ def _raw_detail_into(
     if execution is not None and execution.response is not None:
         response = execution.response
         node = root.add(Text("RAW RESPONSE", style=f"bold {_LABEL}"), expand=True)
-        node.add_leaf(Text(f"HTTP {response.status}", style=_TEXT_HI))
+        version = response.http_version or "HTTP"
+        phrase = f" {redact(response.reason_phrase)}" if response.reason_phrase else ""
+        node.add_leaf(Text(f"{version} {response.status}{phrase}", style=_TEXT_HI))
         for key, value in response.headers[:24]:
             shown = redact(mask_credential_header(str(key), str(value)))
             node.add_leaf(Text(f"{redact(str(key))}: {shown}", style=_DIM))
@@ -1096,6 +1104,165 @@ def _raw_detail_into(
             body.add_leaf(Text(line, style=_TEXT))
     elif execution is not None and execution.error is not None:
         root.add_leaf(Text(redact(execution.error), style=_DRIFT))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Anchor:
+    """A verdict pinned into the evidence tree at a body path.
+
+    ``state``: ``held`` / ``broke`` / ``warn_broke``. ``missing`` plants a red
+    synthetic node where the field SHOULD have been — an absent required field
+    renders at its site, never as a detached message.
+    """
+
+    state: str
+    label: str = ""
+    missing: bool = False
+
+
+def anchors_from_assertions(
+    results: list[AssertionResult], redact: Callable[[str], str] = str
+) -> dict[str, Anchor]:
+    """Pin body-targeting assertion results onto their JSON paths.
+
+    ``body:$.quote.currency`` → ``$.quote.currency``; a failed rule whose
+    observed value is absent marks the anchor missing. A broken anchor always
+    outranks a held one on the same path.
+    """
+    anchors: dict[str, Anchor] = {}
+    for result in results:
+        target = result.target
+        if not target.startswith("body"):
+            continue
+        raw = target[5:] if target.startswith("body:") else ""
+        path = "$" if not raw else (raw if raw.startswith("$") else f"$.{raw}")
+        if result.ok:
+            state = "held"
+        elif result.severity == "warn":
+            state = "warn_broke"
+        else:
+            state = "broke"
+        missing = not result.ok and result.actual is None
+        label = redact(result.label or f"{result.target} {result.op}")
+        current = anchors.get(path)
+        if current is None or (state == "broke" and current.state != "broke"):
+            anchors[path] = Anchor(state, label, missing)
+    return anchors
+
+
+_ANCHOR_MARKS: dict[str, tuple[str, str]] = {
+    "held": ("✓ ", _SAME),
+    "broke": ("✗ ", _DRIFT),
+    "warn_broke": ("~ ", _WARN),
+}
+
+
+def _anchor_prefix(anchor: Anchor | None) -> tuple[str, str] | None:
+    if anchor is None:
+        return None
+    return _ANCHOR_MARKS.get(anchor.state)
+
+
+def _anchored_into(
+    node: TreeNode[object],
+    value: object,
+    redact: Callable[[str], str],
+    anchors: dict[str, Anchor],
+    path: str = "$",
+    registry: list[TreeNode[object]] | None = None,
+) -> list[TreeNode[object]]:
+    """The evidence tree: the JSON tree with verdicts pinned at their sites.
+
+    Returns the broken-anchor nodes in render order — the ``n``/``p`` registry a
+    view scrolls between. Missing required fields render as red synthetic nodes
+    inside their parent, labelled with the rule that wanted them.
+    """
+    if registry is None:
+        registry = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child_path = f"{path}.{key}"
+            _anchored_child(node, str(key), item, redact, anchors, child_path, registry)
+        _plant_missing(node, value, anchors, path, registry)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            child_path = f"{path}[{index}]"
+            _anchored_child(node, f"[{index}]", item, redact, anchors, child_path, registry)
+    else:
+        leaf = Text()
+        mark = _anchor_prefix(anchors.get(path))
+        if mark is not None:
+            leaf.append(mark[0], style=f"bold {mark[1]}")
+        leaf.append_text(Text.assemble(_scalar(value, redact)))
+        added = node.add_leaf(leaf)
+        anchor = anchors.get(path)
+        if anchor is not None and anchor.state == "broke":
+            registry.append(added)
+    return registry
+
+
+def _anchored_child(
+    node: TreeNode[object],
+    key: str,
+    value: object,
+    redact: Callable[[str], str],
+    anchors: dict[str, Anchor],
+    path: str,
+    registry: list[TreeNode[object]],
+) -> None:
+    key = redact(key)
+    anchor = anchors.get(path)
+    mark = _anchor_prefix(anchor)
+    prefix = Text()
+    if mark is not None:
+        prefix.append(mark[0], style=f"bold {mark[1]}")
+    if isinstance(value, dict | list):
+        count = f"{{{len(value)}}}" if isinstance(value, dict) else f"[{len(value)}]"
+        label = prefix
+        label.append(key, style=_AXIS)
+        label.append(f"  {count}", style=_DIM)
+        if anchor is not None and anchor.state == "broke" and anchor.label:
+            label.append(f"  ← {anchor.label}", style=_DRIFT)
+        branch = node.add(label, expand=anchor is not None)
+        if anchor is not None and anchor.state == "broke":
+            registry.append(branch)
+        _anchored_into(branch, value, redact, anchors, path, registry)
+        return
+    label = prefix
+    label.append(key, style=_AXIS)
+    label.append(": ", style=_DIM)
+    label.append_text(Text.assemble(_scalar(value, redact)))
+    if anchor is not None:
+        if anchor.state == "broke" and anchor.label:
+            label.append(f"  ← {anchor.label}", style=_DRIFT)
+        elif anchor.state == "warn_broke" and anchor.label:
+            label.append(f"  ← {anchor.label} · warn", style=_WARN)
+    leaf = node.add_leaf(label)
+    if anchor is not None and anchor.state == "broke":
+        registry.append(leaf)
+
+
+def _plant_missing(
+    node: TreeNode[object],
+    value: dict[str, object],
+    anchors: dict[str, Anchor],
+    path: str,
+    registry: list[TreeNode[object]],
+) -> None:
+    """Red synthetic nodes for anchored fields absent from this object."""
+    prefix = f"{path}."
+    for anchor_path, anchor in anchors.items():
+        if not anchor.missing or not anchor_path.startswith(prefix):
+            continue
+        name = anchor_path[len(prefix) :]
+        if "." in name or "[" in name or name in value:
+            continue  # not a direct child, or actually present
+        label = Text("✗ ", style=f"bold {_DRIFT}")
+        label.append(name, style=_DRIFT)
+        label.append(" — missing", style=f"bold {_DRIFT}")
+        if anchor.label:
+            label.append(f"  ← {anchor.label}", style=_DIM)
+        registry.append(node.add_leaf(label))
 
 
 def _value_into(node: TreeNode[object], value: object, redact: Callable[[str], str] = str) -> None:
@@ -1133,6 +1300,99 @@ def _scalar(value: object, redact: Callable[[str], str] = str) -> tuple[str, str
     return redact(f'"{value}"'), _SAME
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class BinaryView:
+    """Honest bytes, never mojibake — buildable live and from a saved record."""
+
+    content_type: str
+    size_bytes: int
+    sha256: str | None  # None = withheld (secret-bearing body, fail closed)
+    head: bytes | None  # at most the first KiB; None = withheld
+    magic: str = ""
+
+
+_BINARY_HEAD = 1024
+
+#: A few load-bearing magics — enough to say what the blob probably is.
+_MAGIC_NAMES: list[tuple[bytes, str]] = [
+    (b"\x89PNG", "png"),
+    (b"\xff\xd8\xff", "jpeg"),
+    (b"GIF8", "gif"),
+    (b"%PDF", "pdf"),
+    (b"PK\x03\x04", "zip"),
+    (b"\x1f\x8b", "gzip"),
+]
+
+
+def binary_from_bytes(
+    body: bytes, content_type: str, redact: Callable[[str], str] = str
+) -> BinaryView:
+    """The live binary view — same fail-closed rule as the saved record.
+
+    The digest and the head are withheld together when any text view of the
+    whole body trips the redactor (hex is a side channel; a digest of
+    secret-bearing bytes is a verification oracle).
+    """
+    clean = binary_is_clean(body, redact)
+    magic = next((name for prefix, name in _MAGIC_NAMES if body.startswith(prefix)), "")
+    return BinaryView(
+        content_type=content_type,
+        size_bytes=len(body),
+        sha256=hashlib.sha256(body).hexdigest() if clean else None,
+        head=body[:_BINARY_HEAD] if clean else None,
+        magic=magic,
+    )
+
+
+def binary_from_record(record: ResponseRecord) -> BinaryView:
+    """The replayed binary view — straight from the stored digest and hex head."""
+    head = bytes.fromhex(record.body_head) if record.body_head else None
+    magic = ""
+    if head is not None:
+        magic = next((name for prefix, name in _MAGIC_NAMES if head.startswith(prefix)), "")
+    return BinaryView(
+        content_type=_content_type(record.headers),
+        size_bytes=record.size_bytes,
+        sha256=record.sha256,
+        head=head,
+        magic=magic,
+    )
+
+
+def _binary_into(node: TreeNode[object], view: BinaryView) -> None:
+    """content-type · size · magic · sha256 (the load-bearing line) · hex rows."""
+    meta = Text()
+    meta.append(view.content_type or "application/octet-stream", style=_TEXT)
+    meta.append(f"  ·  {view.size_bytes} bytes", style=_DIM)
+    if view.magic:
+        meta.append(f"  ·  {view.magic}", style=_AXIS)
+    node.add_leaf(meta)
+    if view.sha256:
+        sha = Text("sha256  ", style=_DIM)
+        sha.append(view.sha256, style=f"bold {_TEXT_HI}")
+        sha.append("  — compare against earlier saved runs", style=_DIM)
+        node.add_leaf(sha)
+    else:
+        node.add_leaf(Text("digest withheld — the body carries a declared secret", style=_WARN))
+    if view.head is None:
+        node.add_leaf(Text("bytes withheld — fail closed, never a hex side channel", style=_WARN))
+    else:
+        rows = node.add(Text("bytes", style=_DIM), expand=view.size_bytes <= 256)
+        for offset in range(0, len(view.head), 16):
+            chunk = view.head[offset : offset + 16]
+            hexes = " ".join(f"{byte:02x}" for byte in chunk)
+            ascii_view = "".join(chr(b) if 32 <= b < 127 else "·" for b in chunk)
+            row = Text(f"{offset:08x}  ", style=_DIM)
+            row.append(f"{hexes:<47}", style=_TEXT)
+            row.append(f"  {ascii_view}", style=_AXIS)
+            rows.add_leaf(row)
+        elided = view.size_bytes - len(view.head)
+        if elided > 0:
+            rows.add_leaf(
+                Text(f"⋯ {elided} bytes elided — full body kept in the saved run", style=_DIM)
+            )
+
+
 def _content_type(headers: list[tuple[str, str]]) -> str:
     for key, value in headers:
         if key.lower() == "content-type":
@@ -1156,24 +1416,48 @@ def _body_into(
     if "html" in content_type or text.lstrip()[:1] == "<":
         # Redact the whole body BEFORE truncating, so a secret straddling the cut
         # can never leak its prefix (the same rule _sv follows).
-        _HtmlOutline(node).feed(redact(text)[:20000])
+        outline = _HtmlOutline(node, highlight=None)
+        outline.feed(redact(text)[:20000])
+        outline.close()
+        return
+    if decoded_text(body) is None and body:
+        # Binary: honest bytes, never mojibake — the same view the record stores.
+        _binary_into(node, binary_from_bytes(body, content_type, redact))
         return
     for line in redact(text)[:4000].splitlines()[:200]:
         node.add_leaf(Text(line, style=_TEXT))
 
 
 def _sse_into(node: TreeNode[object], text: str, redact: Callable[[str], str] = str) -> None:
+    """The SSE facet: the FULL envelope per event — id · event · data · retry.
+
+    An unnamed event shows the spec default *message* dimmed; an id-less event
+    says so; a ``retry`` field is kept and labeled as the reconnect hint. The
+    ``data`` payload parses as JSON when it is JSON, else stays redacted text.
+    """
     events = parse_sse(text)
     if not events:
         node.add_leaf(Text("(no events)", style=_DIM))
         return
     for index, event in enumerate(events):
-        label = Text.assemble((f"event {index}", _AXIS))
+        label = Text.assemble((f"event {index + 1}", _AXIS))
         if event.get("event"):
             label.append(f"  {redact(event['event'])}", style=_ACCENT)
+        else:
+            label.append("  message", style=_DIM)  # the spec default for unnamed events
         entry = node.add(label, expand=len(events) <= 8)
         if event.get("id"):
             entry.add_leaf(Text.assemble(("id: ", _DIM), (redact(event["id"]), _TEXT)))
+        else:
+            entry.add_leaf(Text("no id", style=_DIM))
+        if event.get("retry"):
+            entry.add_leaf(
+                Text.assemble(
+                    ("retry: ", _DIM),
+                    (redact(event["retry"]), _TEXT),
+                    ("  · reconnect hint", _DIM),
+                )
+            )
         data = event.get("data", "")
         try:
             _value_into(entry.add(Text("data", style=_DIM), expand=True), json.loads(data), redact)
@@ -1182,36 +1466,135 @@ def _sse_into(node: TreeNode[object], text: str, redact: Callable[[str], str] = 
             entry.add_leaf(Text.assemble(("data: ", _DIM), (redact(data)[:200], _TEXT)))
 
 
-class _HtmlOutline(HTMLParser):
-    """Streams parsed HTML into a collapsible tag tree under a node."""
+def _event_strip(states: list[str]) -> Text:
+    """The per-event verdict strip — ``✓ 1 · ✗ 3`` — over the shared glyph map."""
+    strip = Text()
+    for index, state in enumerate(states):
+        if index:
+            strip.append(" · ", style=_DIM)
+        glyph, color = cell_glyph(state)
+        strip.append(f"{glyph} {index + 1}", style=f"bold {color}" if state == "fail" else color)
+    return strip
 
-    def __init__(self, root: TreeNode[object]) -> None:
-        """Start the outline under *root*."""
+
+#: Boilerplate whose content never belongs in an outline.
+_HTML_ELIDED = frozenset({"script", "style", "noscript", "template", "svg", "iframe"})
+#: Landmarks that earn their own branch in the outline.
+_HTML_SECTIONS = frozenset({"header", "nav", "main", "section", "article", "aside", "footer"})
+
+
+class _HtmlOutline(HTMLParser):
+    """An OUTLINE of the document, not tag soup.
+
+    Title, headings, landmark sections, table shapes, and quoted text content —
+    boilerplate (scripts, styles, inline SVG) elided with a count. When
+    *highlight* is set (a ``contains`` assertion's needle), its first match is
+    marked at its site in the outline.
+    """
+
+    def __init__(self, root: TreeNode[object], highlight: str | None = None) -> None:
+        """Start the outline under *root*, optionally hunting *highlight*."""
         super().__init__(convert_charrefs=True)
         self._stack = [root]
+        self._highlight = highlight
+        self._highlighted = False
+        self._elide_depth = 0
+        self._elided = 0
+        self._table_depth = 0
+        self._table_rows = 0
+        self._table_cols = 0
+        self._in_title = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        """Open a collapsible node for the tag."""
-        label = Text.assemble((f"<{tag}>", _ACCENT))
-        rendered = " ".join(f"{key}={value}" for key, value in attrs if value)
-        if rendered:
-            label.append(f"  {rendered}", style=_DIM)
-        self._stack.append(self._stack[-1].add(label, expand=False))
+        """Open a branch for landmarks, count boilerplate, track tables."""
+        if self._elide_depth:
+            self._elide_depth += 1
+            return
+        if tag in _HTML_ELIDED:
+            self._elide_depth = 1
+            self._elided += 1
+            return
+        if tag == "title":
+            self._in_title = True
+            return
+        if tag == "table":
+            self._table_depth += 1
+            self._table_rows = self._table_cols = 0
+            return
+        if self._table_depth:
+            if tag == "tr":
+                self._table_rows += 1
+            elif tag in ("td", "th") and self._table_rows == 1:
+                self._table_cols += 1
+            return
+        if tag in _HTML_SECTIONS:
+            label = Text(f"§ {tag}", style=_AXIS)
+            self._stack.append(self._stack[-1].add(label, expand=True))
 
     def handle_endtag(self, tag: str) -> None:
-        """Close the current tag."""
-        if len(self._stack) > 1:
+        """Close landmarks, finish table shapes, leave elisions."""
+        if self._elide_depth:
+            self._elide_depth -= 1
+            return
+        if tag == "title":
+            self._in_title = False
+            return
+        if tag == "table" and self._table_depth:
+            self._table_depth -= 1
+            shape = Text("table", style=_ACCENT)
+            shape.append(f"  {self._table_rows}x{self._table_cols}", style=_DIM)
+            self._stack[-1].add_leaf(shape)
+            return
+        if tag in _HTML_SECTIONS and len(self._stack) > 1:
             self._stack.pop()
 
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        """Add a self-closing tag as a leaf."""
-        self._stack[-1].add_leaf(Text(f"<{tag}/>", style=_ACCENT))
-
     def handle_data(self, data: str) -> None:
-        """Add non-empty text content as a leaf."""
-        text = data.strip()
-        if text:
-            self._stack[-1].add_leaf(Text(text[:200], style=_TEXT))
+        """Title, headings, and meaningful text — with the contains-match marked."""
+        if self._elide_depth or self._table_depth:
+            return
+        content = " ".join(data.split())
+        if not content:
+            return
+        if self._in_title:
+            title = Text("⌂ ", style=_ACCENT)
+            title.append(content[:120], style=f"bold {_TEXT_HI}")
+            self._stack[-1].add_leaf(title)
+            return
+        heading = self._heading_level()
+        if heading:
+            label = Text(f"{'#' * heading} ", style=_ACCENT)
+            label.append(content[:160], style=f"bold {_TEXT_HI}")
+            self._stack[-1].add_leaf(label)
+            return
+        if len(content) < 3:
+            return
+        line = Text("“", style=_DIM)
+        if self._highlight and not self._highlighted and self._highlight.lower() in content.lower():
+            start = content.lower().index(self._highlight.lower())
+            line.append(content[:start][:120], style=_TEXT)
+            line.append(content[start : start + len(self._highlight)], style=f"bold {_SAME}")
+            line.append(content[start + len(self._highlight) :][:120], style=_TEXT)
+            line.append("”  ✓ contains", style=_SAME)
+            self._highlighted = True
+        else:
+            line.append(content[:200], style=_TEXT)
+            line.append("”", style=_DIM)
+        self._stack[-1].add_leaf(line)
+
+    def _heading_level(self) -> int:
+        tag = self.lasttag or ""
+        if len(tag) == 2 and tag[0] == "h" and tag[1].isdigit():
+            return int(tag[1])
+        return 0
+
+    def close(self) -> None:
+        """Finish parsing and note what the outline elided."""
+        super().close()
+        if self._elided:
+            plural = "" if self._elided == 1 else "s"
+            self._stack[0].add_leaf(
+                Text(f"⋯ {self._elided} script/style block{plural} elided", style=_DIM)
+            )
 
 
 def _diff_ready(cells: list[CellDiff], pair: tuple[Environment, Environment] | None) -> Group:
