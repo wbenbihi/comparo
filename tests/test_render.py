@@ -382,8 +382,8 @@ def test_outbound_header_collapses_to_a_summary_and_expands_to_the_full_diff() -
 
     collapsed = _plain(_outbound_header(a, b, env_a, env_b, expanded=False))
     assert "OUTBOUND" in collapsed
-    assert "differs" in collapsed
-    assert "to expand" in collapsed
+    assert "DIFFERENT requests" in collapsed  # the band says what it means
+    assert "o" in collapsed  # the expand affordance
     assert "localhost:8080" not in collapsed  # collapsed stays a summary, no per-field values
 
     expanded = _plain(_outbound_header(a, b, env_a, env_b, expanded=True))

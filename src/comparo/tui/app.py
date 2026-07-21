@@ -12,6 +12,7 @@ import contextlib
 import dataclasses
 import os
 from collections.abc import Callable
+from collections.abc import Sequence
 from datetime import UTC
 from datetime import datetime
 from functools import cached_property
@@ -116,8 +117,10 @@ from comparo.tui.render import _assert_tally
 from comparo.tui.render import _bash
 from comparo.tui.render import _branch
 from comparo.tui.render import _build_report_tree
-from comparo.tui.render import _cell_inspect
+from comparo.tui.render import _cell_inspect_head
+from comparo.tui.render import _cell_inspect_tail
 from comparo.tui.render import _cell_verdict
+from comparo.tui.render import _cell_verdict_rows
 from comparo.tui.render import _crash_report
 from comparo.tui.render import _default_environment
 from comparo.tui.render import _default_pair
@@ -141,7 +144,9 @@ from comparo.tui.render import _exec_setup
 from comparo.tui.render import _exec_stacked_diff
 from comparo.tui.render import _exec_triplet
 from comparo.tui.render import _executions_ledger
-from comparo.tui.render import _field_drill_card
+from comparo.tui.render import _field_head
+from comparo.tui.render import _field_occurrence_row
+from comparo.tui.render import _field_tail
 from comparo.tui.render import _gate_composition
 from comparo.tui.render import _governing_path
 from comparo.tui.render import _graph
@@ -174,7 +179,8 @@ from comparo.tui.render import _req_short
 from comparo.tui.render import _request_detail
 from comparo.tui.render import _request_latencies
 from comparo.tui.render import _requests
-from comparo.tui.render import _rule_record_view
+from comparo.tui.render import _rule_record_head
+from comparo.tui.render import _rule_record_row
 from comparo.tui.render import _run_key
 from comparo.tui.render import _run_label
 from comparo.tui.render import _running_row_from_progress
@@ -1535,6 +1541,7 @@ class DiffView(Vertical):
         self._filter = ""
         self._only_broken = False
         self._nav = NavStack()
+        self._inspect_jumps: list[str] = []
         self._groups: list[tuple[str, list[tuple[CellDiff, FieldDiff]]]] = []
         #: Skipped fields grouped by path — the volatile paths the profile ignores.
         self._skip_groups: list[tuple[str, list[tuple[CellDiff, FieldDiff]]]] = []
@@ -1655,7 +1662,9 @@ class DiffView(Vertical):
                         yield DataTable(id="drift-table", cursor_type="row", show_header=False)
                         yield Static(id="drift-legend")
                     with VerticalScroll(id="col-compare", classes="panel hero"):
-                        yield Static(id="compare-content")
+                        yield Static(id="compare-head")
+                        yield DataTable(id="inspect-table", cursor_type="row")
+                        yield Static(id="compare-tail")
 
     def on_mount(self) -> None:
         """Resolve the diff pair, select everything, and build the checklist."""
@@ -1735,10 +1744,15 @@ class DiffView(Vertical):
         self.run_worker(self._run(self._pair, plan), exclusive=True, group="diff")
 
     def action_back(self) -> None:
-        """Pop a cross-view jump, else return to PREPARE (cancelling a live diff)."""
+        """Step focus out of the inspect rows, pop a jump, else back to PREPARE."""
         current = self.query_one("#diff-mode", ContentSwitcher).current
-        if current == "diff-results" and self._pop_jump():
-            return
+        if current == "diff-results":
+            focused = self.app.focused
+            if focused is not None and focused.id == "inspect-table":
+                self.query_one("#drift-table", DataTable).focus()
+                return
+            if self._pop_jump():
+                return
         if current in ("diff-results", "diff-running"):
             if current == "diff-running":
                 self.workers.cancel_group(self, "diff")
@@ -2175,7 +2189,7 @@ class DiffView(Vertical):
             )
         )
         if table.row_count == 0:
-            self.query_one("#compare-content", Static).update(_diff_ready(self._cells, self._pair))
+            self._set_inspect(_diff_ready(self._cells, self._pair), [], Text(""), ())
             return
         target = self._broken_keys[0] if self._broken_keys else None
         if target is not None:
@@ -2334,8 +2348,11 @@ class DiffView(Vertical):
             wrap = self.query_one("#col-compare")
             wrap.border_title = "INSPECT"
             wrap.border_subtitle = ""
-            self.query_one("#compare-content", Static).update(
-                Text("deselected at prepare — nothing ran for this request", style=_DIM)
+            self._set_inspect(
+                Text("deselected at prepare — nothing ran for this request", style=_DIM),
+                [],
+                Text(""),
+                (),
             )
 
     def _cell_for_key(self, key: str) -> int | None:
@@ -2347,6 +2364,34 @@ class DiffView(Vertical):
                 if (cell.request.metadata.id or cell.request.metadata.name) == rid:
                     return index
         return None
+
+    def _set_inspect(
+        self,
+        head: RenderableType,
+        rows: Sequence[tuple[tuple[Text, ...], str]],
+        tail: RenderableType,
+        columns: tuple[str, ...],
+        *,
+        tone: str = "bad",
+    ) -> None:
+        """Fill the inspect panel: head text, the selectable rows, tail text.
+
+        Each row is ``(cells, jump_key)`` — ``enter`` on it jumps to *jump_key*
+        in its home pivot. The rows table wears a red (bad) or green outline.
+        """
+        self.query_one("#compare-head", Static).update(head)
+        table = self.query_one("#inspect-table", DataTable)
+        table.clear(columns=True)
+        self._inspect_jumps = [jump for _, jump in rows]
+        table.set_class(not rows, "hidden")
+        table.set_class(tone == "bad" and bool(rows), "rows-bad")
+        table.set_class(tone == "good" and bool(rows), "rows-good")
+        if rows:
+            for name in columns:
+                table.add_column(name, key=name)
+            for offset, (cells, _) in enumerate(rows):
+                table.add_row(*cells, key=f"j::{offset}")
+        self.query_one("#compare-tail", Static).update(tail)
 
     def _show_cell_row(self, key: str) -> None:
         index = self._cell_for_key(key)
@@ -2363,14 +2408,38 @@ class DiffView(Vertical):
         wrap.border_subtitle = _seg_toggle(
             ("unified", "side-by-side"), "unified" if self._unified else "side-by-side"
         )
-        self.query_one("#compare-content", Static).update(
-            _cell_inspect(
+        verdict_rows = _cell_verdict_rows(cell, redact)
+        rows: list[tuple[tuple[Text, ...], str]] = []
+        for ref, label, provenance, evidence in verdict_rows:
+            jump = next(
+                (
+                    f"rrule::{j}"
+                    for j, row in enumerate(self._rule_rows)
+                    if written_identity(row.ref) == written_identity(ref)
+                ),
+                "",
+            )
+            rows.append(
+                (
+                    (
+                        Text(f"✗ {label}", style=f"bold {_DRIFT}"),
+                        Text(provenance, style=_DIM),
+                        Text(evidence, style=_DRIFT),
+                    ),
+                    jump,
+                )
+            )
+        self._set_inspect(
+            _cell_inspect_head(
                 cell,
-                self._pair,
-                unified=self._unified,
+                len(verdict_rows),
                 outbound_layer=self._outbound_layer(cell, redact),
                 redact=redact,
-            )
+            ),
+            rows,
+            _cell_inspect_tail(cell, self._pair, unified=self._unified, redact=redact),
+            ("BROKEN RULE", "SOURCE", "BASELINE → CANDIDATE"),
+            tone="bad",
         )
 
     def _show_rule_row(self, index: int) -> None:
@@ -2382,7 +2451,18 @@ class DiffView(Vertical):
         wrap.border_title = Text.from_markup(f"RULE [{_DIM}]·[/] {redact(row.ref.path)}")
         wrap.border_subtitle = _rule_group(row)
         cells = [(self._cells[i], outcome) for i, outcome in row.cells]
-        self.query_one("#compare-content", Static).update(_rule_record_view(row.ref, cells, redact))
+        rows = [
+            (_rule_record_row(row.ref, cell, outcome, redact), f"cell::{i}")
+            for (cell, outcome), (i, _) in zip(cells, row.cells, strict=True)
+        ]
+        tone = "bad" if _rule_group(row) == "broken" else "good"
+        self._set_inspect(
+            _rule_record_head(row.ref, cells, redact),
+            rows,
+            Text(""),
+            ("REQUEST · VARIANT", "OUTCOME", "DETAIL"),
+            tone=tone,
+        )
 
     def _show_field_card(self, path: str) -> None:
         group = next((g for g in self._groups if g[0] == path), None)
@@ -2392,49 +2472,48 @@ class DiffView(Vertical):
         wrap = self.query_one("#col-compare")
         wrap.border_title = Text.from_markup(f"FIELD [{_DIM}]·[/] {redact(path)}")
         wrap.border_subtitle = "i writes the ignore rule shown below"
-        self.query_one("#compare-content", Static).update(_field_drill_card(path, group[1], redact))
+        rows = []
+        for cell, field in group[1]:
+            index = next((i for i, c in enumerate(self._cells) if c is cell), None)
+            jump = f"cell::{index}" if index is not None else ""
+            rows.append((_field_occurrence_row(cell, field, redact), jump))
+        self._set_inspect(
+            _field_head(path, group[1], redact),
+            rows,
+            _field_tail(path, group[1], redact),
+            ("REQUEST · VARIANT", "BASELINE", "CANDIDATE"),
+            tone="bad",
+        )
 
     # ── cross-view jumps (the traceability loop) ─────────────────────────────
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """``enter`` jumps across pivots: cell ↔ its rules, field → its cell."""
-        if event.data_table.id != "drift-table":
+        """``enter`` drills the focused row.
+
+        On the index: focus the inspect rows (tab does too). On the inspect
+        rows: jump to that row's home pivot — a broken rule's record, a record
+        cell's inspect, a field occurrence's cell — with a return crumb.
+        """
+        if event.data_table.id == "drift-table":
+            table = self.query_one("#inspect-table", DataTable)
+            if table.row_count and not table.has_class("hidden"):
+                table.focus()
+            return
+        if event.data_table.id != "inspect-table":
             return
         key = event.row_key.value
-        if key is None or key.startswith(("hdr::", "notrun::")):
+        if key is None or not key.startswith("j::"):
             return
-        if key.startswith(("cell::", "req::")):
-            index = self._cell_for_key(key)
-            if index is None:
-                return
-            target = next(
-                (
-                    f"rrule::{j}"
-                    for j, row in enumerate(self._rule_rows)
-                    if any(i == index and outcome == "broke" for i, outcome in row.cells)
-                ),
-                None,
-            )
-            if target is None:
-                return
-            self._jump("rules", target, self._cells[index].request.metadata.name)
-        elif key.startswith("rrule::"):
-            row = self._rule_rows[int(key.removeprefix("rrule::"))]
-            broke = next((i for i, outcome in row.cells if outcome == "broke"), None)
-            if broke is None:
-                broke = row.cells[0][0] if row.cells else None
-            if broke is None:
-                return
-            self._jump("requests", f"cell::{broke}", row.ref.path)
-        elif key.startswith("fpath::"):
-            path = key.removeprefix("fpath::")
-            group = next((g for g in self._groups if g[0] == path), None)
-            if group is None:
-                return
-            cell = group[1][0][0]
-            index = next((i for i, c in enumerate(self._cells) if c is cell), None)
-            if index is None:
-                return
-            self._jump("requests", f"cell::{index}", path)
+        offset = int(key.removeprefix("j::"))
+        if not 0 <= offset < len(self._inspect_jumps):
+            return
+        target = self._inspect_jumps[offset]
+        if not target:
+            return
+        origin = self._current_row_key() or ""
+        label = origin.split("::")[-1] if origin else self._index_mode
+        mode = "rules" if target.startswith("rrule::") else "requests"
+        self._jump(mode, target, label)
+        self.query_one("#drift-table", DataTable).focus()
 
     def _jump(self, mode: str, row_key: str, label: str) -> None:
         """Push the origin, switch pivots, and land on *row_key* with a crumb."""
@@ -2564,12 +2643,20 @@ class DiffView(Vertical):
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Show the inspect panel for the highlighted index row."""
-        self._render_row(event.row_key.value)
+        if event.data_table.id == "drift-table":
+            self._render_row(event.row_key.value)
 
     def _render_progress(self) -> None:
         """Render the summary bar: counts, the gate verdict, and the env selector."""
         panel = self.query_one("#diff-progress", Static)
         self.query_one("#diff-progress").border_title = "SUMMARY"
+        gate_class = ""
+        if self._cells:
+            drifted = any(cell.drifted for cell in self._cells)
+            errored = any(cell.error is not None for cell in self._cells)
+            gate_class = "gate-fail" if drifted else ("gate-error" if errored else "gate-pass")
+        for name in ("gate-pass", "gate-fail", "gate-error"):
+            self.query_one("#diff-progress").set_class(name == gate_class, name)
         if self._pair is None:
             panel.update(Text("no diff pair configured", style=_WARN))
             return

@@ -866,3 +866,37 @@ ConfirmModal, EnvPickerModal {
     color: $text-muted;
     padding: 0 1;
 }
+
+#compare-head, #compare-tail {
+    height: auto;
+}
+
+#inspect-table {
+    height: auto;
+    max-height: 12;
+    margin: 1 0;
+}
+
+#inspect-table.hidden {
+    display: none;
+}
+
+#inspect-table.rows-bad {
+    border: round $error 60%;
+}
+
+#inspect-table.rows-good {
+    border: round $success 60%;
+}
+
+#diff-progress.gate-pass {
+    border: round $success;
+}
+
+#diff-progress.gate-fail {
+    border: round $error;
+}
+
+#diff-progress.gate-error {
+    border: round $warning;
+}
