@@ -117,7 +117,8 @@ def test_json_reporter_emits_the_full_record() -> None:
     document = json.loads(REPORTERS["json"].render(_record()))
     assert document["schemaVersion"] == 1
     assert document["kind"] == "diff"
-    assert document["summary"]["diff"]["drift"] == 1
+    assert document["summary"]["fields"]["drift"] == 1
+    assert document["summary"]["cellVerdicts"]["errors"] == 1
     assert document["summary"]["gate"] == "FAIL"  # the drift outranks the errored cell
 
 

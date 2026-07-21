@@ -20,6 +20,7 @@ from typing import Protocol
 
 from comparo.core.diff import State
 from comparo.core.diff import diff
+from comparo.core.redaction import mask_credential_header
 from comparo.core.redaction import redact_tree
 
 
@@ -90,6 +91,15 @@ def outbound_diffs(
         if sa != sb:
             diffs.append(OutboundFieldDiff(label, sa, sb, outbound_source(label)))
 
+    def shown(prefix: str, key: object, value: object) -> str:
+        # Header values get the NAME policy first: an undeclared credential
+        # (authorization, cookie, x-api-key…) must mask even though the value
+        # redactor only knows declared secrets — masked-equal credentials then
+        # correctly emit no drift row at all.
+        if prefix == "header":
+            return redact(mask_credential_header(str(key), str(value)))
+        return redact(str(value))
+
     def mapping(
         prefix: str,
         a: Sequence[tuple[str, object]] | Mapping[str, object],
@@ -97,8 +107,8 @@ def outbound_diffs(
     ) -> None:
         am = dict(a) if not isinstance(a, Mapping) else a
         bm = dict(b) if not isinstance(b, Mapping) else b
-        ad = {redact(str(k)): redact(str(v)) for k, v in am.items()}
-        bd = {redact(str(k)): redact(str(v)) for k, v in bm.items()}
+        ad = {redact(str(k)): shown(prefix, k, v) for k, v in am.items()}
+        bd = {redact(str(k)): shown(prefix, k, v) for k, v in bm.items()}
         for key in sorted(set(ad) | set(bd)):
             av, bv = ad.get(key, "—"), bd.get(key, "—")
             if av != bv:

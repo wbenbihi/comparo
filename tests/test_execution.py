@@ -7,6 +7,7 @@ from pathlib import Path
 import msgspec
 
 from comparo.core.assertions import AssertionResult
+from comparo.core.assertions import AssertRef
 from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionResult
@@ -345,3 +346,63 @@ def test_execution_matrix_scope_limits_cells(tmp_path: Path) -> None:
     result = _run(tmp_path)
     assert len(result.outcomes) == 1
     assert "tier=free" in result.outcomes[0].cell_key
+
+
+def test_execution_tallies_count_cells_not_phantom_sides() -> None:
+    # A baseline-only execution must not count a phantom candidate side as
+    # not-asserted, and a rule judged on BOTH sides of one cell counts once.
+    held = AssertionResult(
+        "status",
+        "equals",
+        True,
+        "error",
+        "200 == 200",
+        "status == 200",
+        expected=200,
+        actual=200,
+        ref=AssertRef("status", "equals", "error", "status == 200", "inline", request="request.r"),
+    )
+    both_sides = CellOutcome(
+        "request.probe",
+        "",
+        [held],
+        [held],
+        diff=None,
+        baseline=_probe_execution(),
+        candidate=_probe_execution(),
+    )
+    record = _exec_record(both_sides)
+    assert record.summary.assertions is not None
+    assert record.summary.assertions.not_asserted == 0
+    assert record.rules is not None
+    (rule,) = record.rules.assertions
+    assert rule.outcomes.held == 1  # one CELL, not two sides
+
+    baseline_only = CellOutcome(
+        "request.probe", "", [held], [], diff=None, baseline=_probe_execution()
+    )
+    record = _exec_record(baseline_only)
+    assert record.summary.assertions is not None
+    assert record.summary.assertions.passed == 1
+    assert record.summary.assertions.not_asserted == 0  # the cell WAS asserted
+
+
+def test_advisory_marks_passed_cells_only() -> None:
+    # A failed cell with a broken warn is a failure, never additionally advisory.
+    broke = AssertionResult("status", "equals", False, "error", "500", "status == 200")
+    warn = AssertionResult("latency", "lte", False, "warn", "slow", "latency <= 1ms")
+    failed_cell = CellOutcome(
+        "request.probe", "", [broke, warn], [], diff=None, baseline=_probe_execution()
+    )
+    record = _exec_record(failed_cell)
+    assert record.cells[0].verdict == "fail"
+    assert record.cells[0].advisory is False
+    assert record.summary.cell_verdicts is not None
+    assert record.summary.cell_verdicts.advisory == 0
+
+    passed_cell = CellOutcome(
+        "request.probe", "", [warn], [], diff=None, baseline=_probe_execution()
+    )
+    record = _exec_record(passed_cell)
+    assert record.cells[0].verdict == "pass"
+    assert record.cells[0].advisory is True  # the ~ marker: green with a warning

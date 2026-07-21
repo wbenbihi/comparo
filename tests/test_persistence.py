@@ -18,10 +18,10 @@ from comparo.core.redaction import MASK
 from comparo.core.redaction import Redactor
 from comparo.core.report_record import Cell
 from comparo.core.report_record import Comparison
-from comparo.core.report_record import DiffTally
 from comparo.core.report_record import Environments
 from comparo.core.report_record import EnvRef
 from comparo.core.report_record import FieldDiffRecord
+from comparo.core.report_record import FieldTally
 from comparo.core.report_record import Invocation
 from comparo.core.report_record import OutboundRequest
 from comparo.core.report_record import RecordMeta
@@ -45,7 +45,7 @@ def _record(record_id: str, created: str) -> ReportRecord:
         request_id="users",
         name="Users",
         variant="locale=fr-FR",
-        verdict="drift",
+        verdict="fail",
         sides=Sides(baseline, candidate),
         comparison=Comparison(
             verdict="drift",
@@ -66,7 +66,9 @@ def _record(record_id: str, created: str) -> ReportRecord:
             environments=Environments(EnvRef("Stable", "http://s"), EnvRef("Canary", "http://c")),
             concurrency=2,
         ),
-        summary=Summary(gate="FAIL", calls=2, cells=1, diff=DiffTally(same=1, drift=1, skipped=1)),
+        summary=Summary(
+            gate="FAIL", calls=2, cells=1, fields=FieldTally(same=1, drift=1, skipped=1)
+        ),
         cells=[cell],
     )
 

@@ -1,10 +1,20 @@
 """The versioned report record — the single artifact comparo writes per invocation.
 
-One shape covers all three kinds. A ``run`` has one side; a ``diff`` and an
-``execution`` have two (``baseline`` + ``candidate``). Everything else follows
-from ``kind``. It captures the *whole* interaction — the resolved outbound
-request **and** the response, per side — so a saved report replays in full detail
-offline, feeds the TUI's Report tab, and is the source the CI reporters project.
+One envelope covers all three kinds; ``kind`` selects which optional sections are
+present. A ``run`` is sides + assertions (no candidate, no comparison); a ``diff``
+is sides + comparison (no assertions); an ``execution`` is both **over the same
+sides** — the exchange is stored once per cell-side, never duplicated. It
+captures the *whole* interaction — the resolved outbound request (with its
+provenance trail) **and** the response, per side — so a saved report replays in
+full detail offline, feeds the TUI's Report tab, and is the source the CI
+reporters project.
+
+Non-repetition rules: rule inventories live once at record level and cells
+reference them by id; ``same`` fields serialize path-only (values recovered by
+pure lookup into the stored side — recomputing a diff from redacted bodies is
+unsound, so stored verdicts are authoritative); the body is exactly one of
+parsed ``body`` ⊕ ``events`` ⊕ ``bodyText`` ⊕ a binary digest; derived values
+(latency deltas, unused rules, exit codes) are never stored.
 
 These structs mirror ``docs/report-format.md``. ``schemaVersion`` is a stored
 constant ``1`` (this is the first published format — pre-alpha, so no migration
@@ -13,8 +23,9 @@ so an additive field never breaks an older reader. ``kind``/``state``/``mode`` a
 the verdicts are stored ``Literal`` fields, not msgspec tags.
 
 Every value here is already redacted by the builder — url, headers, query, body,
-cookies, auth, JSON paths, names, and error messages. ``auth.value`` is always the
-mask glyph. The never-leak invariant holds unconditionally over this surface.
+cookies, auth, JSON paths, names, labels, and error messages. ``auth.value`` is
+always the mask glyph. The never-leak invariant holds unconditionally over this
+surface.
 """
 
 from typing import Any
@@ -28,9 +39,18 @@ SCHEMA_VERSION = 1
 
 Kind = Literal["run", "diff", "execution"]
 Gate = Literal["PASS", "FAIL", "ERROR"]
-#: A cell verdict spans both domains: diff-side (same/drift) and assert-side (pass/fail).
-CellVerdict = Literal["same", "drift", "error", "pass", "fail"]
+#: One cell vocabulary for every kind: a diff cell is ``fail`` when it drifted
+#: and ``pass`` when clean ("clean" is display copy, not a verdict). ``not_run``
+#: is reserved for the roster — builders record deselected cells in ``notRun``,
+#: never inside ``cells``; a reader may still meet the value defensively.
+CellVerdict = Literal["pass", "fail", "error", "not_run"]
+#: The diff *dimension*'s verdict on one cell — field-level vocabulary survives
+#: here and in tallies, never at cell level.
 DiffVerdict = Literal["same", "drift", "error"]
+#: How one rule fared — the shared five-state vocabulary (`core.outcomes`).
+CheckOutcome = Literal["held", "broke", "silenced", "absent", "error"]
+#: Where a rule came from.
+RuleOrigin = Literal["profile", "inline", "default", "synthetic"]
 
 
 class EnvRef(msgspec.Struct, rename="camel"):
@@ -75,22 +95,42 @@ class RecordMeta(msgspec.Struct, rename="camel"):
     title: str | None = None  # optional human label (e.g. an execution profile's name)
 
 
-class DiffTally(msgspec.Struct, rename="camel"):
-    """Field/cell drift counts — present for ``diff``/``execution``."""
+class FieldTally(msgspec.Struct, rename="camel"):
+    """Field-path comparison counts across all cells — ``diff``/``execution``."""
 
     same: int = 0
     drift: int = 0
-    error: int = 0
     skipped: int = 0
 
 
+class CellTally(msgspec.Struct, rename="camel"):
+    """Cell-verdict counts — one unit, never mixed with field counts.
+
+    ``advisory`` counts passed cells with at least one broken warn rule.
+    ``notRun`` counts the roster — so these counts span ``cells`` + ``notRun``
+    and may sum past ``summary.cells`` (which counts executed cells only).
+    """
+
+    passed: int = 0
+    failed: int = 0
+    errors: int = 0
+    not_run: int = 0
+    advisory: int = 0
+
+
 class AssertTally(msgspec.Struct, rename="camel"):
-    """Assertion counts — present for ``run``/``execution``."""
+    """Assertion counts — present for ``run``/``execution``.
+
+    ``unjudged`` counts rows evaluated against a response-less side: those rules
+    never ran (they are the cell's error, not broken rules) and belong to
+    neither ``passed`` nor ``failed``.
+    """
 
     passed: int = 0
     failed: int = 0
     warned: int = 0
     not_asserted: int = 0
+    unjudged: int = 0
 
 
 class Summary(msgspec.Struct, rename="camel"):
@@ -99,8 +139,60 @@ class Summary(msgspec.Struct, rename="camel"):
     gate: Gate
     calls: int
     cells: int
-    diff: DiffTally | None = None
-    assertions: AssertTally | None = None
+    fields: FieldTally | None = None  # diff/execution
+    cell_verdicts: CellTally | None = None
+    assertions: AssertTally | None = None  # run/execution
+
+
+class RuleTally(msgspec.Struct, rename="camel"):
+    """Per-rule outcome counts, in cells, across the whole record.
+
+    A rule with every count zero matched nothing anywhere — "unused" is derived,
+    never stored.
+    """
+
+    broke: int = 0
+    held: int = 0
+    silenced: int = 0
+    absent: int = 0
+    error: int = 0
+    warn_broke: int = 0
+    warn_held: int = 0
+
+
+class DiffRuleRecord(msgspec.Struct, rename="camel"):
+    """One effective diff rule — inventory entry cells reference by ``id``."""
+
+    id: str  # stable within this record (e.g. "d0")
+    path: str  # declared path (redacted): $.…, $status, $headers.…, or a root for a catch-all
+    mode: str  # exact | ignore | shape | type | tolerance
+    origin: RuleOrigin
+    profile: str | None = None  # owning DiffProfile id (redacted); origin == "profile"
+    array_length: Literal["exact", "tolerant"] | None = None
+    tolerance: float | None = None
+    outcomes: RuleTally = msgspec.field(default_factory=RuleTally)
+
+
+class AssertRuleRecord(msgspec.Struct, rename="camel"):
+    """One effective assertion rule — inventory entry cells reference by ``id``."""
+
+    id: str  # stable within this record (e.g. "a0")
+    target: str  # redacted
+    op: str
+    severity: Literal["error", "warn"]
+    label: str  # redacted human form ("status == 200")
+    origin: RuleOrigin  # profile | inline
+    profile: str | None = None  # owning AssertionProfile id (redacted)
+    request: str | None = None  # owning request id for inline sugar/specs (redacted)
+    expected: Any = None  # the declared expectation (redacted)
+    outcomes: RuleTally = msgspec.field(default_factory=RuleTally)
+
+
+class Rules(msgspec.Struct, rename="camel"):
+    """The record-level rule inventories — stored once, referenced by id."""
+
+    diff: list[DiffRuleRecord] = []
+    assertions: list[AssertRuleRecord] = []
 
 
 class AuthRecord(msgspec.Struct, rename="camel"):
@@ -108,6 +200,14 @@ class AuthRecord(msgspec.Struct, rename="camel"):
 
     scheme: Literal["basic", "bearer"]
     value: str  # always "••••••"
+
+
+class TrailRecord(msgspec.Struct, rename="camel"):
+    """Where one resolved request value came from — the provenance annotation."""
+
+    path: str  # e.g. "headers.authorization", "query.plan", "endpoint" (redacted)
+    origin: str  # variable | secret | instance | matrix | file (lowercase, as serialized)
+    detail: str  # e.g. "env staging · vars.tenant", "matrix plan" (redacted)
 
 
 class OutboundRequest(msgspec.Struct, rename="camel"):
@@ -122,18 +222,31 @@ class OutboundRequest(msgspec.Struct, rename="camel"):
     auth: AuthRecord | None = None
     cookies: dict[str, Any] = {}  # name -> value cookies sent (redacted)
     streaming: bool = False
+    trail: list[TrailRecord] = []  # provenance of every injected value
 
 
 class ResponseRecord(msgspec.Struct, rename="camel"):
-    """What came back — status, headers, timing, and the parsed, redacted body."""
+    """What came back — status, wire metadata, and exactly one body representation.
+
+    The body is parsed ``body`` (JSON) ⊕ ``events`` (a stream) ⊕ ``bodyText``
+    (non-JSON text, redacted then truncated) ⊕ a binary digest (``sha256`` +
+    ``bodyHead``, when the body is not text). ``bodyHead`` is hex of at most the
+    first KiB and is dropped entirely if the redactor would touch its text view —
+    fail closed, never leak through hex.
+    """
 
     status: int
     headers: list[tuple[str, str]] = []  # ordered response headers (redacted)
     latency_ms: float = 0.0
     size_bytes: int = 0  # materialized-body length
+    http_version: str = ""  # e.g. "HTTP/1.1" — the raw facet's status line
+    reason_phrase: str = ""
     body: Any = None  # parsed, redacted body (JSON) — None for non-JSON
     events: list[Any] | None = None  # ordered parsed records, for a stream
-    body_text: str | None = None  # optional raw redacted text for a non-JSON body
+    body_text: str | None = None  # redacted raw text for a non-JSON text body
+    body_truncated: bool = False  # bodyText was cut after redaction (sizeBytes is true size)
+    sha256: str | None = None  # hex digest of the raw body — binary bodies only
+    body_head: str | None = None  # hex of the first bytes, for the hex/magic view
 
 
 class AssertionRecord(msgspec.Struct, rename="camel"):
@@ -143,34 +256,56 @@ class AssertionRecord(msgspec.Struct, rename="camel"):
     op: str
     ok: bool
     severity: Literal["error", "warn"]
+    label: str = ""  # redacted human form — replay shows what the screen showed
+    rule_id: str | None = None  # into rules.assertions
+    outcome: CheckOutcome | None = None  # "error" = never judged (dead side)
     expected: Any = None  # expected value (redacted)
     actual: Any = None  # observed value (redacted)
     detail: str | None = None  # human message (redacted)
 
 
 class FieldDiffRecord(msgspec.Struct, rename="camel"):
-    """One non-same field of a comparison — a drift or a deliberately skipped path."""
+    """One compared field — drift, deliberate skip, or a path-only ``same`` entry.
+
+    ``same`` entries carry no values (recovered by path lookup into the stored
+    side); they exist so rule outcomes and field indexes replay without
+    re-diffing redacted bodies.
+    """
 
     path: str  # JSON path (redacted)
-    state: Literal["drift", "skip"]
+    state: Literal["same", "drift", "skip"]
     mode: Literal["exact", "ignore", "shape", "type", "tolerance"]
     baseline: Any = None  # baseline value (redacted) — present for drift
     candidate: Any = None  # candidate value (redacted) — present for drift
-    rule: str | None = None  # the DiffProfile rule path that governed this
+    rule_id: str | None = None  # into rules.diff
+
+
+class OutboundDiffRecord(msgspec.Struct, rename="camel"):
+    """One differing outbound field — redacted before → after, with its source."""
+
+    label: str
+    baseline: str
+    candidate: str
+    source: str  # the config surface it came from ("env · header", …)
+
+
+class RequestComparison(msgspec.Struct, rename="camel"):
+    """Did we send the same request to both sides — the outbound layer, stored."""
+
+    verdict: Literal["same", "drift"]
+    fields: list[OutboundDiffRecord] = []
 
 
 class Comparison(msgspec.Struct, rename="camel"):
-    """The diff of the two sides — present for ``diff``/``execution``.
-
-    ``fields`` holds only the **non-same** paths (drift + skip); same-valued fields
-    are omitted (derivable from the two ``response.body`` blobs) to stay compact.
-    """
+    """The diff of the two sides — present for ``diff``/``execution``."""
 
     verdict: DiffVerdict
     same: int = 0
     drift: int = 0
     skipped: int = 0
     fields: list[FieldDiffRecord] = []
+    profiles: list[str] = []  # composed DiffProfile ids, composition order (redacted)
+    default_mode: str | None = None
 
 
 class Side(msgspec.Struct, rename="camel"):
@@ -180,6 +315,8 @@ class Side(msgspec.Struct, rename="camel"):
     response: ResponseRecord | None = None  # None if the call errored before a response
     assertions: list[AssertionRecord] | None = None  # checks vs this response
     error: str | None = None  # transport/resolution error (redacted), else None
+    attempts: int = 1  # transport attempts made (1 = no retry fired)
+    retry_policy: str | None = None  # e.g. "exponential x3"
 
 
 class Sides(msgspec.Struct, rename="camel"):
@@ -197,7 +334,18 @@ class Cell(msgspec.Struct, rename="camel"):
     variant: str  # the matrix cell key (redacted); "" when there is no matrix
     verdict: CellVerdict
     sides: Sides
+    advisory: bool = False  # passed, but at least one warn rule broke
+    error: str | None = None  # cell-level error (redacted): pairing, empty matrix, …
     comparison: Comparison | None = None  # present for diff/execution
+    request_comparison: RequestComparison | None = None  # the outbound layer
+
+
+class NotRunCell(msgspec.Struct, rename="camel"):
+    """A cell deselected at prepare — recorded so the ⊘ roster replays."""
+
+    request_id: str  # redacted
+    name: str  # redacted
+    variant: str = ""
 
 
 class ReportRecord(msgspec.Struct, rename="camel", kw_only=True):
@@ -208,4 +356,6 @@ class ReportRecord(msgspec.Struct, rename="camel", kw_only=True):
     metadata: RecordMeta
     invocation: Invocation
     summary: Summary
+    rules: Rules | None = None
     cells: list[Cell] = []
+    not_run: list[NotRunCell] = []

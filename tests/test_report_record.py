@@ -46,7 +46,7 @@ def _diff_record() -> ReportRecord:
         request_id="request.checkout",
         name="Checkout",
         variant="region=eu",
-        verdict="drift",
+        verdict="fail",
         sides=Sides(side, cand),
         comparison=Comparison(
             verdict="drift",
@@ -55,7 +55,7 @@ def _diff_record() -> ReportRecord:
             skipped=1,
             fields=[
                 FieldDiffRecord("$.total", "drift", "exact", baseline=10, candidate=12),
-                FieldDiffRecord("$.ts", "skip", "ignore", rule="$.ts"),
+                FieldDiffRecord("$.ts", "skip", "ignore", rule_id="d1"),
             ],
         ),
     )

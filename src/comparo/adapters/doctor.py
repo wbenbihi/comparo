@@ -42,6 +42,8 @@ from comparo.core.loader import load_project
 from comparo.core.matrix import MatrixCell
 from comparo.core.models import Environment
 from comparo.core.models import Request
+from comparo.core.provenance import Origin
+from comparo.core.provenance import Trail
 from comparo.core.redaction import Redact
 from comparo.core.redaction import Redactor
 from comparo.core.report_builder import record_from_diff as _v1_from_diff
@@ -239,7 +241,7 @@ def _saved_reports(scenario: _Scenario) -> str:
     return path.read_text(encoding="utf-8") + "\n" + run_json
 
 
-def _tainted_resolved() -> ResolvedRequest:
+def _tainted_resolved(cookie: str = CANARY_COOKIE) -> ResolvedRequest:
     """A resolved outbound request echoing every canary where a report might persist it.
 
     Each canary rides a channel the v1 record serializes: the url, a query param,
@@ -253,7 +255,7 @@ def _tainted_resolved() -> ResolvedRequest:
         headers=[
             ("authorization", f"Bearer {CANARY}"),  # credential header — masked by name
             ("x-api-key", CANARY),  # credential header — masked by name
-            ("cookie", CANARY_COOKIE),  # undeclared token — masked by header name
+            ("cookie", cookie),  # undeclared token — masked by header name
             (CANARY, CANARY),  # declared secret as a header name AND value
         ],
         query={"token": CANARY, CANARY: CANARY_SPECIAL},
@@ -263,7 +265,9 @@ def _tainted_resolved() -> ResolvedRequest:
             "special": CANARY_SPECIAL,
             "overlap": CANARY_OVERLAP_LONG,
         },
-        trail=[],
+        # The provenance trail serializes into the record — a secret-shaped path
+        # or detail must mask like any other channel.
+        trail=[Trail(f"headers.{CANARY}", Origin.SECRET, f"$secret:{CANARY}")],
         body_type="json",
         auth={"bearer": CANARY},  # the value must never survive — auth is always masked
         cookies={"session": CANARY, CANARY: CANARY_SPECIAL},  # declared secrets
@@ -292,16 +296,19 @@ def _tainted_response(*, events: bool) -> HttpResponse:
         b"" if events else body,
         5.0,
         events=stream,
+        reason_phrase=f"Reason {CANARY}",  # the raw status line channel
     )
 
 
-def _tainted_execution(scenario: _Scenario, *, events: bool) -> Execution:
+def _tainted_execution(
+    scenario: _Scenario, *, events: bool, cookie: str = CANARY_COOKIE
+) -> Execution:
     return Execution(
         scenario.request,
         scenario.environment,
         f"token={CANARY}",
         _tainted_response(events=events),
-        resolved=_tainted_resolved(),
+        resolved=_tainted_resolved(cookie),
     )
 
 
@@ -381,15 +388,49 @@ def _tainted_assertions() -> list[AssertionResult]:
     ]
 
 
+def _tainted_text_execution(scenario: _Scenario, body: bytes) -> Execution:
+    """An execution whose response body is NOT JSON — the bodyText / binary channels."""
+    return Execution(
+        scenario.request,
+        scenario.environment,
+        "",
+        HttpResponse(200, [("content-type", "text/plain")], body, 5.0),
+        resolved=_tainted_resolved(),
+    )
+
+
 def _tainted_diff_record(scenario: _Scenario) -> ReportRecord:
     """A two-sided ``diff`` record echoing the canary across every serialized channel."""
     baseline = _tainted_execution(scenario, events=False)  # exercises the JSON body channel
-    candidate = _tainted_execution(scenario, events=True)  # exercises the events channel
+    # The candidate's undeclared credential DIFFERS, so the outbound layer
+    # (RequestComparison) emits rows through the real outbound_diffs — a channel
+    # that must mask by header NAME, not only by declared value.
+    candidate = _tainted_execution(
+        scenario, events=True, cookie=f"{CANARY_COOKIE}-candidate"
+    )  # exercises the events channel
     cell = _tainted_cell_v1(scenario, baseline, candidate)
+    # bodyText: a non-JSON text body carrying the canary must serialize masked.
+    text_cell = CellDiff(
+        scenario.request,
+        "",
+        [],
+        error=f"pairing failed: {CANARY}",  # the cell-level error channel
+        baseline=_tainted_text_execution(scenario, f"the token is {CANARY} !".encode()),
+        candidate=_tainted_text_execution(scenario, f"now it is {CANARY_SPECIAL} .".encode()),
+    )
+    # Binary: the canary's bytes sit inside the first KiB, so the hex head must be
+    # DROPPED (fail closed) — only the digest and size may survive.
+    binary_cell = CellDiff(
+        scenario.request,
+        "",
+        [],
+        baseline=_tainted_text_execution(scenario, b"\x00\x89PNG" + CANARY.encode() + b"\xff" * 64),
+        candidate=_tainted_text_execution(scenario, b"\x00\x89PNG" + b"\xff" * 64),
+    )
     return _v1_from_diff(
         scenario.environment,
         scenario.environment,
-        [cell],
+        [cell, text_cell, binary_cell],
         record_id="doctor",
         created="1970-01-01T00:00:00Z",
         tool="comparo 0.0.0",
@@ -492,7 +533,9 @@ def _run_sink(
     # with it) — surfaces it. _MARKER never appears in legitimate output in any
     # casing (secret names and object names deliberately avoid it), so a
     # case-insensitive hit is unambiguously a leak.
-    return SinkCheck(name, detail, ok=_MARKER.lower() not in output.lower())
+    lowered = output.lower()
+    hex_marker = _MARKER.encode().hex()  # a hex channel (bodyHead) hides the substring
+    return SinkCheck(name, detail, ok=_MARKER.lower() not in lowered and hex_marker not in lowered)
 
 
 def run_selfcheck() -> list[SinkCheck]:

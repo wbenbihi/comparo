@@ -70,14 +70,13 @@ def test_field_from_record_maps_the_real_state_and_mode() -> None:
     # M-6 core: the replay reconstructs a live FieldDiff from the saved record's
     # real state + mode, never a fabricated "exact".
     drift = _field_from_record(
-        FieldDiffRecord("$.total", "drift", "shape", baseline=1, candidate=2, rule="$.total")
+        FieldDiffRecord("$.total", "drift", "shape", baseline=1, candidate=2, rule_id="d0")
     )
     assert drift.state is State.DRIFT
     assert drift.mode == "shape"  # the true mode, not "exact"
     assert drift.baseline == 1
     assert drift.candidate == 2
-    assert drift.rule is not None
-    assert drift.rule.path == "$.total"
+    assert drift.rule is None  # inventory refs are the replay adapters' job
     skip = _field_from_record(FieldDiffRecord("$.ts", "skip", "ignore"))
     assert skip.state is State.SKIP
     assert skip.mode == "ignore"
@@ -132,7 +131,7 @@ def _cell() -> ReplayCell:
         candidate_events=None,
         fields=[
             FieldDiffRecord("$.total", "drift", "exact", baseline=10, candidate=12),
-            FieldDiffRecord("$.ts", "skip", "ignore", rule="$.ts"),
+            FieldDiffRecord("$.ts", "skip", "ignore", rule_id="d1"),
         ],
     )
 

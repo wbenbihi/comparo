@@ -51,6 +51,10 @@ class RuleRef:
     origin: Provenance
     profile: str | None = None
     index: int = 0
+    #: The rule's parameters, part of its written identity — a tolerance band
+    #: must survive into any inventory ("tolerance ±0.05" is displayable data).
+    tolerance: float | None = None
+    array_length: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -74,7 +78,18 @@ def source_rules(
 ) -> list[SourcedRule]:
     """Tag a homogeneous rule list with provenance (profile, inline, synthetic)."""
     return [
-        SourcedRule(rule, RuleRef(rule.path, rule.mode, origin, profile, start + offset))
+        SourcedRule(
+            rule,
+            RuleRef(
+                rule.path,
+                rule.mode,
+                origin,
+                profile,
+                start + offset,
+                rule.tolerance,
+                rule.array_length,
+            ),
+        )
         for offset, rule in enumerate(rules)
     ]
 
