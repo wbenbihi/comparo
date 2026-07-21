@@ -393,7 +393,7 @@ def test_outbound_header_collapses_to_a_summary_and_expands_to_the_full_diff() -
     assert "SECRETVALUE" not in expanded  # the masked token stayed masked
 
     identical = _plain(_outbound_header(a, a, env_a, env_b, expanded=False))
-    assert "identical on both sides" in identical
+    assert "same request sent to both sides" in identical
 
 
 def test_exec_triplet_summarizes_a_cell() -> None:
