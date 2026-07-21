@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: SSE test stream
+  id: request.sse
+  description: >-
+    sse.dev's /test — pick the sse-dev environment on the RUN tab to watch the
+    full SSE envelope (id · event · data · retry). Deselect it when diffing the
+    httpbin pair.
+  tags:
+    - sse
+spec:
+  request:
+    method: GET
+    endpoint: /test
+  response:
+    streaming: true
+    diff:
+      default: shape        # timestamps inside each event vary per call

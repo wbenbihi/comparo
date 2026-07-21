@@ -3,9 +3,14 @@ kind: Environment
 metadata:
   name: baseline
   id: environment.baseline
-  description: The stable side (serve.py :8091).
+  description: httpbin.org with the stable configuration.
 spec:
-  baseUrl: http://127.0.0.1:8091
+  baseUrl: https://httpbin.org
   timeout:
-    connect: 2s
-    read: 5s
+    connect: 5s
+    read: 15s
+  variables:
+    TAX_RATE: "0.20"
+    API_VERSION: 2024-08
+    STATUS: "200"
+    DELAY: "0"
