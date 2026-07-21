@@ -422,7 +422,7 @@ def _rule_outcomes(effective: list[RuleRef], fields: list[FieldDiff]) -> list[Ru
 WrittenRule = tuple[str, str | None, str, str, float | None, str | None]
 
 
-def _written_identity(ref: RuleRef) -> WrittenRule:
+def written_identity(ref: RuleRef) -> WrittenRule:
     """The identity of a rule *as written* — stable across compositions.
 
     ``RuleRef.index`` is composition-relative (the same profile rule lands at
@@ -448,7 +448,7 @@ def unused_rules(cells: list[CellDiff]) -> list[RuleRef]:
                 continue
             if outcome.outcome == "error":
                 continue
-            key = _written_identity(outcome.ref)
+            key = written_identity(outcome.ref)
             ref, used = seen.get(key, (outcome.ref, False))
             seen[key] = (ref, used or outcome.outcome != "absent")
     return [ref for ref, used in seen.values() if not used]

@@ -452,10 +452,7 @@ Screen {
 }
 
 /* ── Diff ────────────────────────────────────────────────────────────────── */
-#diff-mode, #diff-prepare, #diff-results, #diff-running, #diff-drill {
-    height: 1fr;
-}
-
+#diff-mode, #diff-prepare, #diff-results, #diff-running,
 /* PREPARE — pick the pair and which requests/cases to diff (mirrors Run). */
 #diff-prepare {
     align: center top;
@@ -517,6 +514,11 @@ Screen {
     background: transparent;
     width: 1fr;
     height: 1fr;
+}
+
+#drift-filter {
+    height: auto;
+    margin-bottom: 1;
 }
 
 #drift-legend {

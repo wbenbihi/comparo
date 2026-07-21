@@ -9,6 +9,7 @@ this module.
 
 import asyncio
 import contextlib
+import dataclasses
 import os
 from collections.abc import Callable
 from datetime import UTC
@@ -59,9 +60,11 @@ from comparo.core.assertions import request_response_rules
 from comparo.core.compare import CellDiff
 from comparo.core.compare import compare_cell
 from comparo.core.compare import profile_for
+from comparo.core.compare import written_identity
 from comparo.core.curl import to_curl
 from comparo.core.diagnostics import LoadError
 from comparo.core.diff import FieldDiff
+from comparo.core.diff import RuleRef
 from comparo.core.diff import State
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_request
@@ -101,6 +104,11 @@ from comparo.core.secrets import SecretError
 from comparo.core.triage import TriageError
 from comparo.core.triage import profile_path
 from comparo.core.triage import silence
+from comparo.tui.components import NavEntry
+from comparo.tui.components import NavStack
+from comparo.tui.components import cell_mark
+from comparo.tui.components import filter_row
+from comparo.tui.components import verdict_pill
 from comparo.tui.render import _app_env
 from comparo.tui.render import _app_redact
 from comparo.tui.render import _assert_count_text
@@ -108,19 +116,16 @@ from comparo.tui.render import _assert_tally
 from comparo.tui.render import _bash
 from comparo.tui.render import _branch
 from comparo.tui.render import _build_report_tree
-from comparo.tui.render import _cell_events
+from comparo.tui.render import _cell_inspect
 from comparo.tui.render import _cell_verdict
-from comparo.tui.render import _clip
 from comparo.tui.render import _crash_report
 from comparo.tui.render import _default_environment
 from comparo.tui.render import _default_pair
 from comparo.tui.render import _description
 from comparo.tui.render import _diff_body_view
 from comparo.tui.render import _diff_error_view
-from comparo.tui.render import _diff_field
 from comparo.tui.render import _diff_legend
 from comparo.tui.render import _diff_ready
-from comparo.tui.render import _diff_skip_view
 from comparo.tui.render import _environment_detail
 from comparo.tui.render import _environments
 from comparo.tui.render import _envs_label
@@ -144,7 +149,6 @@ from comparo.tui.render import _help_body
 from comparo.tui.render import _json
 from comparo.tui.render import _keys_bar
 from comparo.tui.render import _leaf
-from comparo.tui.render import _live_call_ledger
 from comparo.tui.render import _matches
 from comparo.tui.render import _object_detail
 from comparo.tui.render import _ok_report
@@ -170,7 +174,7 @@ from comparo.tui.render import _req_short
 from comparo.tui.render import _request_detail
 from comparo.tui.render import _request_latencies
 from comparo.tui.render import _requests
-from comparo.tui.render import _rule_detail
+from comparo.tui.render import _rule_record_view
 from comparo.tui.render import _run_key
 from comparo.tui.render import _run_label
 from comparo.tui.render import _running_row_from_progress
@@ -179,16 +183,16 @@ from comparo.tui.render import _RunningRow
 from comparo.tui.render import _save_run
 from comparo.tui.render import _seg_toggle
 from comparo.tui.render import _settings_body
-from comparo.tui.render import _stream_body_view
 from comparo.tui.render import _title
 from comparo.tui.replay import ReplayRecord
 from comparo.tui.replay import project
 from comparo.tui.theme import COMPARO_INK
 from comparo.tui.tokens import _ACCENT
 from comparo.tui.tokens import _AXIS
-from comparo.tui.tokens import _DANGER
+from comparo.tui.tokens import _DIFF_FIELDS_KEYS
 from comparo.tui.tokens import _DIFF_PREPARE_KEYS
-from comparo.tui.tokens import _DIFF_RESULTS_KEYS
+from comparo.tui.tokens import _DIFF_REQ_KEYS
+from comparo.tui.tokens import _DIFF_RULES_KEYS
 from comparo.tui.tokens import _DIFF_RUNNING_KEYS
 from comparo.tui.tokens import _DIM
 from comparo.tui.tokens import _DRIFT
@@ -209,7 +213,6 @@ from comparo.tui.tokens import _KIND_GLYPH
 from comparo.tui.tokens import _KINDS
 from comparo.tui.tokens import _LABEL
 from comparo.tui.tokens import _METHOD
-from comparo.tui.tokens import _MODE
 from comparo.tui.tokens import _PREPARE_KEYS
 from comparo.tui.tokens import _REPORT_DIFF_KEYS
 from comparo.tui.tokens import _REPORT_LIST_KEYS
@@ -1445,6 +1448,50 @@ class RunView(Vertical):
         return next((c for c in expand(self.project, request) if c.key == cell_key), None)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _RuleRow:
+    """One folded rule across the run: its ref and per-cell outcomes."""
+
+    ref: RuleRef
+    cells: tuple[tuple[int, str], ...]  # (cell index, outcome)
+
+    @property
+    def counts(self) -> dict[str, int]:
+        """Outcome → cell count for this rule."""
+        counts: dict[str, int] = {}
+        for _, outcome in self.cells:
+            counts[outcome] = counts.get(outcome, 0) + 1
+        return counts
+
+
+def _fold_rule_rows(cells: list[CellDiff]) -> list[_RuleRow]:
+    """Fold every cell's rule outcomes by written identity, first-seen order."""
+    order: list[tuple[object, ...]] = []
+    refs: dict[tuple[object, ...], RuleRef] = {}
+    hits: dict[tuple[object, ...], list[tuple[int, str]]] = {}
+    for index, cell in enumerate(cells):
+        for outcome in cell.rule_outcomes:
+            key = written_identity(outcome.ref)
+            if key not in refs:
+                refs[key] = outcome.ref
+                order.append(key)
+                hits[key] = []
+            hits[key].append((index, outcome.outcome))
+    return [_RuleRow(refs[key], tuple(hits[key])) for key in order]
+
+
+def _rule_group(row: _RuleRow) -> str:
+    """Which index section a rule belongs to: broken · ignored · passed · unused."""
+    counts = row.counts
+    if counts.get("broke"):
+        return "broken"
+    if row.ref.mode == "ignore" or counts.get("silenced"):
+        return "ignored"
+    if counts.get("held"):
+        return "passed"
+    return "unused"
+
+
 class DiffView(Vertical):
     """The signature diff: replay a pair, group drift by field, silence to config.
 
@@ -1459,9 +1506,13 @@ class DiffView(Vertical):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("b", "pick_baseline", "baseline"),
         Binding("c", "pick_candidate", "candidate"),
-        Binding("r", "toggle_index", "fields/rules"),
+        Binding("r", "cycle_index", "view"),
         Binding("v", "toggle_view", "unified/side-by-side"),
         Binding("o", "outbound", "outbound"),
+        Binding("slash", "find", "filter"),
+        Binding("f", "only_broken", "broken only"),
+        Binding("n", "next_drift", "next ✗"),
+        Binding("p", "prev_drift", "prev ✗"),
         Binding("i", "silence", "ignore field"),
         Binding("s", "save", "save"),
         Binding("escape", "back", "back"),
@@ -1478,6 +1529,12 @@ class DiffView(Vertical):
         self.project = project
         self._cells: list[CellDiff] = []
         self._pair: tuple[Environment, Environment] | None = None
+        self._rule_rows: list[_RuleRow] = []
+        self._not_run: list[tuple[Request, MatrixCell]] = []
+        self._broken_keys: list[str] = []
+        self._filter = ""
+        self._only_broken = False
+        self._nav = NavStack()
         self._groups: list[tuple[str, list[tuple[CellDiff, FieldDiff]]]] = []
         #: Skipped fields grouped by path — the volatile paths the profile ignores.
         self._skip_groups: list[tuple[str, list[tuple[CellDiff, FieldDiff]]]] = []
@@ -1486,13 +1543,15 @@ class DiffView(Vertical):
         self._run_id: str | None = None
         self._done = False
         self._saved = False
+        self._nav.clear()
+        self._filter = ""
+        self._only_broken = False
         #: live-progress state for the RUNNING sub-view (mirrors the Execution one)
         self._run_done = 0
         self._run_total = 0
         self._run_rows: list[_RunningRow] = []
         self._unified = True
-        self._index_mode = "fields"
-        #: Whether the compare panel is showing the outbound-request diff (DIFF-27).
+        self._index_mode = "requests"
         self._outbound_shown = False
         #: The PREPARE selection: which (request id, cell key) pairs to diff.
         self._selected: set[tuple[str, str]] = set()
@@ -1508,21 +1567,23 @@ class DiffView(Vertical):
         """Whether the diff is showing RESULTS (vs the PREPARE checklist)."""
         return self.query_one("#diff-mode", ContentSwitcher).current == "diff-results"
 
-    def action_toggle_index(self) -> None:
-        """Flip the drift index between grouped-by-field and broken-rules (RESULTS only)."""
+    def action_cycle_index(self) -> None:
+        """Cycle the index pivot: requests → rules → fields (RESULTS only)."""
         if not self._in_results():
             return
-        self._index_mode = "rules" if self._index_mode == "fields" else "fields"
+        order = ("requests", "rules", "fields")
+        self._index_mode = order[(order.index(self._index_mode) + 1) % len(order)]
+        self._nav.clear()
+        self.query_one("#col-drift").border_subtitle = ""
         self._populate_drift()
+        self.refresh_footer()
 
     def action_toggle_view(self) -> None:
         """Flip the body diff between unified and side-by-side (RESULTS only)."""
         if not self._in_results():
             return
         self._unified = not self._unified
-        group = self._selected_group()
-        if group is not None:
-            self._show_field(group[0])
+        self._render_row(self._current_row_key())
 
     def action_pick_baseline(self) -> None:
         """Choose the baseline environment for the diff."""
@@ -1590,12 +1651,11 @@ class DiffView(Vertical):
                 yield Static(id="diff-progress", classes="panel")
                 with Horizontal(id="diff-cols"):
                     with Vertical(id="col-drift", classes="panel"):
+                        yield Static(id="drift-filter")
                         yield DataTable(id="drift-table", cursor_type="row", show_header=False)
                         yield Static(id="drift-legend")
                     with VerticalScroll(id="col-compare", classes="panel hero"):
                         yield Static(id="compare-content")
-            with VerticalScroll(id="diff-drill", classes="panel hero"):
-                yield Static(id="diff-drill-content")
 
     def on_mount(self) -> None:
         """Resolve the diff pair, select everything, and build the checklist."""
@@ -1675,12 +1735,9 @@ class DiffView(Vertical):
         self.run_worker(self._run(self._pair, plan), exclusive=True, group="diff")
 
     def action_back(self) -> None:
-        """Return from RUNNING / RESULTS to PREPARE (cancelling an in-flight diff)."""
+        """Pop a cross-view jump, else return to PREPARE (cancelling a live diff)."""
         current = self.query_one("#diff-mode", ContentSwitcher).current
-        if current == "diff-drill":  # the field-drill card steps back to results
-            self.query_one("#diff-mode", ContentSwitcher).current = "diff-results"
-            self.query_one("#drift-table", DataTable).focus()
-            self.refresh_footer()
+        if current == "diff-results" and self._pop_jump():
             return
         if current in ("diff-results", "diff-running"):
             if current == "diff-running":
@@ -1887,7 +1944,7 @@ class DiffView(Vertical):
         index and from the field-drill card.
         """
         current = self.query_one("#diff-mode", ContentSwitcher).current
-        if current not in ("diff-results", "diff-drill"):
+        if current != "diff-results":
             return
         group = self._selected_group()
         if group is None:
@@ -2079,323 +2136,406 @@ class DiffView(Vertical):
 
     def _regroup(self) -> None:
         groups: dict[str, list[tuple[CellDiff, FieldDiff]]] = {}
-        skips: dict[str, list[tuple[CellDiff, FieldDiff]]] = {}
         for cell in self._cells:
             for field in cell.fields:
                 if field.state is State.DRIFT:
                     groups.setdefault(field.path, []).append((cell, field))
-                elif field.state is State.SKIP:
-                    skips.setdefault(field.path, []).append((cell, field))
         self._groups = sorted(groups.items())
-        self._skip_groups = sorted(skips.items())
+        self._rule_rows = _fold_rule_rows(self._cells)
+        self._not_run = [
+            (request, cell)
+            for request in _requests(self.project)
+            for cell in expand(self.project, request)
+            if _run_key(request, cell) not in self._selected
+        ]
 
+    # ── the three indexes (requests · rules · fields) ────────────────────────
     def _populate_drift(self) -> None:
+        """Populate the left index for the active pivot and select a first row."""
         table = self.query_one("#drift-table", DataTable)
         table.clear(columns=True)
-        self._row_cells = {}
-        errors = [cell for cell in self._cells if cell.error is not None]
-        if not self._groups and not errors and not self._skip_groups:
-            # Nothing drifted, errored, or was skipped — the only bare PASS state.
-            table.add_column("", key="st", width=3)
-            table.add_column("FIELD", key="field")
-            self.query_one("#col-drift").border_title = "DRIFT INDEX"
-            self.query_one("#drift-legend", Static).update(Text(""))
+        table.add_column("", key="st", width=3)
+        table.add_column("ROW", key="row")
+        self._broken_keys = []
+        if self._index_mode == "rules":
+            self._populate_rules_index(table)
+        elif self._index_mode == "fields":
+            self._populate_fields_index(table)
+        else:
+            self._populate_requests_index(table)
+        title = Text("INDEX  ", style=_DIM)
+        title.append(_seg_toggle(("requests", "rules", "fields"), self._index_mode))
+        self.query_one("#col-drift").border_title = title
+        self.query_one("#drift-filter", Static).update(
+            filter_row(
+                self._filter,
+                toggle_key="f",
+                toggle_label="broken only" if self._index_mode != "requests" else "fails only",
+                toggle_on=self._only_broken,
+            )
+        )
+        if table.row_count == 0:
             self.query_one("#compare-content", Static).update(_diff_ready(self._cells, self._pair))
             return
-        if self._index_mode == "rules":
-            self._populate_rules(table)
-        else:
-            self._populate_fields(table)
-        redact = _app_redact(self)
-        for cell in errors:
-            key = f"error::{cell.cell_key}::{id(cell)}"
-            self._row_cells[key] = cell
-            label = Text(cell.request.metadata.name, style=_WARN)
-            if cell.cell_key:
-                label.append(f" · {redact(cell.cell_key)}", style=_DIM)
-            table.add_row(
-                Text("!", style=_WARN), label, Text("error", style=f"bold {_WARN}"), key=key
-            )
-        # The mockup's segmented toggle → a pill control in the panel title.
-        active = "grouped" if self._index_mode != "rules" else "broken rules"
-        title = Text("DRIFT INDEX  ", style=_DIM)
-        title.append(_seg_toggle(("grouped", "broken rules"), active))
-        self.query_one("#col-drift").border_title = title
-        self._render_drift_legend(errors)
-        # Select the first drift if any, else the first error; skips are visible but
-        # never a failure, so a skip-only run still reads its clean PASS on the right.
-        rules = self._rule_order()
-        if self._index_mode == "rules" and rules:
-            self._show_rule(rules[0])
-        elif self._groups:
-            self._show_field(self._groups[0][0])
-        elif errors:
-            self._show_error(errors[0])
-        else:
-            self.query_one("#compare-content", Static).update(_diff_ready(self._cells, self._pair))
+        target = self._broken_keys[0] if self._broken_keys else None
+        if target is not None:
+            with contextlib.suppress(Exception):
+                table.move_cursor(row=table.get_row_index(target))
+        self._render_row(self._current_row_key())
 
-    def _render_drift_legend(self, errors: list[CellDiff]) -> None:
-        legend = Text()
-        if self._groups:
-            biggest = max(len(entries) for _, entries in self._groups)
-            word = "cell" if biggest == 1 else "cells"
-            legend.append(
-                f"one field drifting on {biggest} {word} is one bug, not {biggest}.", style=_DIM
-            )
-        elif errors:
-            legend.append(f"{len(errors)} request(s) failed to execute — select one.", style=_DIM)
-        else:
-            legend.append("no drift — the skipped paths below are ignored by design.", style=_DIM)
-        example = self._rule_example()
-        legend.append("\ntoggle ", style=_DIM)
+    def _cell_state(self, cell: CellDiff) -> str:
+        if cell.error is not None:
+            return "error"
+        return "fail" if cell.drifted else "pass"
+
+    def _populate_requests_index(self, table: DataTable[Text]) -> None:
+        redact = _app_redact(self)
+        query = self._filter.lower()
+        by_request: dict[str, list[int]] = {}
+        order: list[str] = []
+        for index, cell in enumerate(self._cells):
+            rid = cell.request.metadata.id or cell.request.metadata.name
+            if rid not in by_request:
+                by_request[rid] = []
+                order.append(rid)
+            by_request[rid].append(index)
+        for rid in order:
+            indices = by_request[rid]
+            cells = [self._cells[i] for i in indices]
+            states = [self._cell_state(cell) for cell in cells]
+            broken = any(state in ("fail", "error") for state in states)
+            if self._only_broken and not broken:
+                continue
+            name = cells[0].request.metadata.name
+            haystack = f"{name} {' '.join(cell.cell_key for cell in cells)}".lower()
+            if query and query not in haystack:
+                continue
+            worst = "error" if "error" in states else ("fail" if "fail" in states else "pass")
+            method = cells[0].request.spec.request.method
+            label = Text(name, style=f"bold {_TEXT_HI}")
+            label.append(f"  {method}", style=_METHOD.get(method, _DIM))
+            if len(indices) > 1:
+                fails = sum(1 for state in states if state != "pass")
+                label.append(f"  · {len(indices)} cells", style=_DIM)
+                if fails:
+                    label.append(f" · {fails} ✗", style=_DRIFT)
+                table.add_row(cell_mark(worst), label, key=f"req::{rid}")
+                for i in indices:
+                    cell = self._cells[i]
+                    state = self._cell_state(cell)
+                    sub = Text("  ")
+                    sub.append(redact(cell.cell_key) or "base", style=_AXIS)
+                    key = f"cell::{i}"
+                    table.add_row(cell_mark(state), sub, key=key)
+                    if state != "pass":
+                        self._broken_keys.append(key)
+            else:
+                key = f"cell::{indices[0]}"
+                table.add_row(cell_mark(worst), label, key=key)
+                if worst != "pass":
+                    self._broken_keys.append(key)
+        seen: set[str] = set()
+        for request, _cell in self._not_run:
+            rid = request.metadata.id or request.metadata.name
+            if rid in seen or rid in by_request:
+                continue
+            seen.add(rid)
+            label = Text(request.metadata.name, style=_DIM)
+            label.append("  not run — deselected at prepare", style=_DIM)
+            table.add_row(cell_mark("not_run"), label, key=f"notrun::{rid}")
+        legend = Text("✓ clean · ✗ rule broke · ! error · ⊘ not run", style=_DIM)
+        legend.append("   ·   ", style=_DIM)
         legend.append("r", style=f"bold {_ACCENT}")
-        legend.append(" → broken rules: ", style=_DIM)
-        legend.append(example, style=_DIM)
+        legend.append(" cycles the index", style=_DIM)
         self.query_one("#drift-legend", Static).update(legend)
 
-    def _rule_example(self) -> str:
+    def _populate_rules_index(self, table: DataTable[Text]) -> None:
         redact = _app_redact(self)
+        query = self._filter.lower()
+        sections: dict[str, list[tuple[int, _RuleRow]]] = {
+            "broken": [],
+            "passed": [],
+            "ignored": [],
+            "unused": [],
+        }
+        for index, row in enumerate(self._rule_rows):
+            sections[_rule_group(row)].append((index, row))
+        styles = {
+            "broken": (_DRIFT, "✗"),
+            "passed": (_SAME, "✓"),
+            "ignored": (_SKIP, "◌"),
+            "unused": (_DIM, "–"),
+        }
+        for section in ("broken", "passed", "ignored", "unused"):
+            rows = sections[section]
+            if not rows or (self._only_broken and section != "broken"):
+                continue
+            style, mark = styles[section]
+            header = Text(f"{section.upper()} — {len(rows)}", style=f"bold {style}")
+            table.add_row(Text(""), header, key=f"hdr::{section}")
+            for index, row in rows:
+                shown = redact(row.ref.path)
+                if query and query not in shown.lower():
+                    continue
+                label = Text(shown, style=style)
+                label.append(f"  {row.ref.mode}", style=_DIM)
+                counts = row.counts
+                if section == "broken":
+                    label.append(
+                        f"  · broke {counts.get('broke', 0)}/{len(row.cells)} cells",
+                        style=_DIM,
+                    )
+                elif section == "passed":
+                    label.append(f"  · held {counts.get('held', 0)}", style=_DIM)
+                elif section == "ignored":
+                    label.append(f"  · silenced {counts.get('silenced', 0)}", style=_DIM)
+                else:
+                    label.append("  · matched nothing — typo?", style=_DIM)
+                key = f"rrule::{index}"
+                table.add_row(Text(mark, style=style), label, key=key)
+                if section == "broken":
+                    self._broken_keys.append(key)
+        legend = Text(
+            "broken first, then passed, then ignored — every rule is accountable", style=_DIM
+        )
+        self.query_one("#drift-legend", Static).update(legend)
+
+    def _populate_fields_index(self, table: DataTable[Text]) -> None:
+        redact = _app_redact(self)
+        query = self._filter.lower()
         for path, entries in self._groups:
+            shown = redact(path)
+            if query and query not in shown.lower():
+                continue
             field = entries[0][1]
-            return f"{redact(path)} · {field.mode} · {_clip(redact(field.detail)) or 'differs'}"
-        return "the DiffProfile rules that fired"
+            rule = _governing_path(field) or "default"
+            label = Text(shown, style=f"bold {_DRIFT}")
+            count = len(entries)
+            label.append(f"  · {count} cell{'' if count == 1 else 's'}", style=_DIM)
+            label.append(f" · rule {redact(rule)}", style=_DIM)
+            key = f"fpath::{path}"
+            table.add_row(Text("✗", style=_DRIFT), label, key=key)
+            self._broken_keys.append(key)
+        legend = Text("one field on N cells is one bug, not N", style=_DIM)
+        self.query_one("#drift-legend", Static).update(legend)
 
-    def _populate_fields(self, table: DataTable[Text]) -> None:
-        redact = _app_redact(self)
-        table.add_column("", key="st", width=3)
-        table.add_column("FIELD", key="field")
-        table.add_column("META", key="meta", width=18)
-        for path, entries in self._groups:
-            meta = Text(f"×{len(entries)}", style=_AXIS)
-            meta.append(f" · {entries[0][1].mode}", style=_MODE.get(entries[0][1].mode, _DIM))
-            table.add_row(
-                Text("✗", style=_DRIFT),
-                Text(redact(path), style=_DRIFT),
-                meta,
-                key=f"drift::{path}",
-            )
-            # Name which request/cell each drift came from — one dim sub-row apiece.
-            for index, (cell, _) in enumerate(entries):
-                key = f"cell::{path}::{index}"
-                self._row_cells[key] = cell
-                label = Text(f"  ↳ {cell.request.metadata.name}", style=_DIM)
-                if cell.cell_key:
-                    label.append(f" · {redact(cell.cell_key)}", style=_AXIS)
-                table.add_row(Text(""), label, Text(""), key=key)
-        # Skipped fields stay visible — green never means full coverage.
-        for path, entries in self._skip_groups:
-            mode = entries[0][1].mode
-            table.add_row(
-                Text("◐", style=_SKIP),
-                Text(redact(path), style=_SKIP),
-                Text(f"skipped · {mode}", style=_DIM),
-                key=f"skip::{path}",
-            )
-            requests = sorted({cell.request.metadata.name for cell, _ in entries})
-            who = "all requests" if len(requests) > 1 else requests[0]
-            sub = Text(f"  ↳ {who}", style=_DIM)
-            # Name the exact ignore rule that carved this hole, so a green cell says
-            # out loud *which* rule chose not to check the field — not just "skipped".
-            rule = _governing_path(entries[0][1])
-            if rule:
-                sub.append(" · ignored by ", style=_DIM)
-                sub.append(redact(rule), style=_SKIP)
-            else:
-                sub.append(" · volatile", style=_SKIP)
-            table.add_row(Text(""), sub, Text(""), key=f"skipsub::{path}")
-
-    def _populate_rules(self, table: DataTable[Text]) -> None:
-        # The "broken rules" view: one row per SILENCING rule that fired (ignore /
-        # tolerance), with how many fields and requests it silenced — not the drifted
-        # fields (that is the "grouped by field" view). Selecting a rule shows its
-        # detail, so a skip is auditable, never a silent pass.
-        redact = _app_redact(self)
-        table.add_column("", key="st", width=3)
-        table.add_column("RULE", key="rule")
-        table.add_column("SILENCED", key="meta", width=18)
-        for rule in self._rule_order():
-            groups = self._rule_groups(rule)
-            mode = groups[0][1][0][1].mode
-            requests = {cell.request.metadata.name for _, ents in groups for cell, _ in ents}
-            rule_text = Text(redact(rule), style=_SKIP)
-            rule_text.append(f"  {mode}", style=_DIM)
-            count = len(groups)
-            plural = "" if count == 1 else "s"
-            meta = Text(f"{count} field{plural} · {len(requests)} req", style=_DIM)
-            table.add_row(Text("◐", style=_SKIP), rule_text, meta, key=f"rule::{rule}")
-        if not self._skip_groups:
-            table.add_row(
-                Text("✓", style=_SAME), Text("no silencing rules fired", style=_DIM), Text("")
-            )
-
-    def _rule_order(self) -> list[str]:
-        """The silencing rules that fired, in first-seen order."""
-        order: list[str] = []
-        for path, entries in self._skip_groups:
-            rule = _governing_path(entries[0][1]) or path
-            if rule not in order:
-                order.append(rule)
-        return order
-
-    def _rule_groups(self, rule: str) -> list[tuple[str, list[tuple[CellDiff, FieldDiff]]]]:
-        """The skipped-field groups a given silencing *rule* carved out."""
-        return [(p, e) for p, e in self._skip_groups if (_governing_path(e[0][1]) or p) == rule]
-
-    def _show_rule(self, rule: str) -> None:
-        """Render a silencing rule's detail — its mode, why, and every field it hid."""
-        redact = _app_redact(self)
-        groups = self._rule_groups(rule)
-        if not groups:
+    # ── inspect dispatch ─────────────────────────────────────────────────────
+    def _render_row(self, key: str | None) -> None:
+        """Render the inspect panel for an index row key."""
+        if key is None or key.startswith("hdr::"):
             return
-        mode = groups[0][1][0][1].mode
+        if key.startswith(("cell::", "req::")):
+            self._show_cell_row(key)
+        elif key.startswith("rrule::"):
+            self._show_rule_row(int(key.removeprefix("rrule::")))
+        elif key.startswith("fpath::"):
+            self._show_field_card(key.removeprefix("fpath::"))
+        elif key.startswith("notrun::"):
+            wrap = self.query_one("#col-compare")
+            wrap.border_title = "INSPECT"
+            wrap.border_subtitle = ""
+            self.query_one("#compare-content", Static).update(
+                Text("deselected at prepare — nothing ran for this request", style=_DIM)
+            )
+
+    def _cell_for_key(self, key: str) -> int | None:
+        if key.startswith("cell::"):
+            return int(key.removeprefix("cell::"))
+        if key.startswith("req::"):
+            rid = key.removeprefix("req::")
+            for index, cell in enumerate(self._cells):
+                if (cell.request.metadata.id or cell.request.metadata.name) == rid:
+                    return index
+        return None
+
+    def _show_cell_row(self, key: str) -> None:
+        index = self._cell_for_key(key)
+        if index is None:
+            return
+        cell = self._cells[index]
+        redact = _app_redact(self)
         wrap = self.query_one("#col-compare")
-        wrap.border_title = Text.from_markup(f"RULE [{_DIM}]· {redact(rule)}[/]")
-        wrap.border_subtitle = f"{mode} · {len(groups)} silenced field(s)"
-        silenced = [
-            (redact(path), sorted({cell.request.metadata.name for cell, _ in entries}))
-            for path, entries in groups
-        ]
-        detail = _rule_detail(redact(rule), mode, silenced)
-        self.query_one("#compare-content", Static).update(detail)
+        title = Text.from_markup(f"INSPECT [{_DIM}]·[/] ")
+        title.append(cell.request.metadata.name, style=_TEXT_HI)
+        if cell.cell_key:
+            title.append(f" · {redact(cell.cell_key)}", style=_AXIS)
+        wrap.border_title = title
+        wrap.border_subtitle = _seg_toggle(
+            ("unified", "side-by-side"), "unified" if self._unified else "side-by-side"
+        )
+        self.query_one("#compare-content", Static).update(
+            _cell_inspect(
+                cell,
+                self._pair,
+                unified=self._unified,
+                outbound_layer=self._outbound_layer(cell, redact),
+                redact=redact,
+            )
+        )
 
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        """Show the comparison (or error) for the highlighted row.
-
-        The OUTBOUND header's expand/collapse state persists across rows (DIFF-27);
-        it is a layer of the compare panel now, not a separate overlay mode.
-        """
-        self._render_row(event.row_key.value)
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """``enter`` on a drifted field opens the focused field-drill card (d-drill)."""
-        if event.data_table.id != "drift-table":
+    def _show_rule_row(self, index: int) -> None:
+        if not 0 <= index < len(self._rule_rows):
             return
-        key = event.row_key.value
-        if key is None:
-            return
-        if key.startswith("drift::"):
-            self._open_drill(key.removeprefix("drift::"))
-        elif key.startswith("cell::"):
-            self._open_drill(key.split("::")[1])
+        row = self._rule_rows[index]
+        redact = _app_redact(self)
+        wrap = self.query_one("#col-compare")
+        wrap.border_title = Text.from_markup(f"RULE [{_DIM}]·[/] {redact(row.ref.path)}")
+        wrap.border_subtitle = _rule_group(row)
+        cells = [(self._cells[i], outcome) for i, outcome in row.cells]
+        self.query_one("#compare-content", Static).update(_rule_record_view(row.ref, cells, redact))
 
-    def _open_drill(self, path: str) -> None:
+    def _show_field_card(self, path: str) -> None:
         group = next((g for g in self._groups if g[0] == path), None)
         if group is None:
             return
         redact = _app_redact(self)
-        wrap = self.query_one("#diff-drill")
-        wrap.border_title = Text.from_markup(f"FIELD DRILL [{_DIM}]· {redact(path)}[/]")
-        wrap.border_subtitle = "esc back · i ignore"
-        self.query_one("#diff-drill-content", Static).update(
-            _field_drill_card(path, group[1], redact)
-        )
-        self.query_one("#diff-mode", ContentSwitcher).current = "diff-drill"
-        self.query_one("#diff-drill").focus()
+        wrap = self.query_one("#col-compare")
+        wrap.border_title = Text.from_markup(f"FIELD [{_DIM}]·[/] {redact(path)}")
+        wrap.border_subtitle = "i writes the ignore rule shown below"
+        self.query_one("#compare-content", Static).update(_field_drill_card(path, group[1], redact))
 
-    def _render_row(self, key: str | None) -> None:
-        """Render the compare panel for a drift-table row key."""
-        if key is None:
+    # ── cross-view jumps (the traceability loop) ─────────────────────────────
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """``enter`` jumps across pivots: cell ↔ its rules, field → its cell."""
+        if event.data_table.id != "drift-table":
             return
-        if key.startswith("rule::"):
-            self._show_rule(key.removeprefix("rule::"))
-        elif key.startswith("drift::"):
-            self._show_field(key.removeprefix("drift::"))
-        elif key.startswith("cell::"):
-            cell = self._row_cells.get(key)
-            path = key.split("::")[1]
-            if cell is not None:
-                self._show_field(path, cell)
-        elif key.startswith(("skip::", "skipsub::")):
-            self._show_skip(key.split("::", 1)[1])
-        elif key.startswith("error::"):
-            cell = self._row_cells.get(key)
-            if cell is not None:
-                self._show_error(cell)
+        key = event.row_key.value
+        if key is None or key.startswith(("hdr::", "notrun::")):
+            return
+        if key.startswith(("cell::", "req::")):
+            index = self._cell_for_key(key)
+            if index is None:
+                return
+            target = next(
+                (
+                    f"rrule::{j}"
+                    for j, row in enumerate(self._rule_rows)
+                    if any(i == index and outcome == "broke" for i, outcome in row.cells)
+                ),
+                None,
+            )
+            if target is None:
+                return
+            self._jump("rules", target, self._cells[index].request.metadata.name)
+        elif key.startswith("rrule::"):
+            row = self._rule_rows[int(key.removeprefix("rrule::"))]
+            broke = next((i for i, outcome in row.cells if outcome == "broke"), None)
+            if broke is None:
+                broke = row.cells[0][0] if row.cells else None
+            if broke is None:
+                return
+            self._jump("requests", f"cell::{broke}", row.ref.path)
+        elif key.startswith("fpath::"):
+            path = key.removeprefix("fpath::")
+            group = next((g for g in self._groups if g[0] == path), None)
+            if group is None:
+                return
+            cell = group[1][0][0]
+            index = next((i for i, c in enumerate(self._cells) if c is cell), None)
+            if index is None:
+                return
+            self._jump("requests", f"cell::{index}", path)
+
+    def _jump(self, mode: str, row_key: str, label: str) -> None:
+        """Push the origin, switch pivots, and land on *row_key* with a crumb."""
+        self._nav.push(NavEntry(self._index_mode, self._current_row_key(), label=label))
+        self._index_mode = mode
+        self._populate_drift()
+        table = self.query_one("#drift-table", DataTable)
+        with contextlib.suppress(Exception):
+            table.move_cursor(row=table.get_row_index(row_key))
+        self._render_row(row_key)
+        crumb = self._nav.crumb()
+        if crumb is not None:
+            self.query_one("#col-drift").border_subtitle = crumb
+        self.refresh_footer()
+
+    def _pop_jump(self) -> bool:
+        """Return to where a cross-view jump came from. True when handled."""
+        entry = self._nav.pop()
+        if entry is None:
+            return False
+        self._index_mode = entry.index_mode
+        self._populate_drift()
+        if entry.row_key is not None:
+            table = self.query_one("#drift-table", DataTable)
+            with contextlib.suppress(Exception):
+                table.move_cursor(row=table.get_row_index(entry.row_key))
+            self._render_row(entry.row_key)
+        crumb = self._nav.crumb()
+        self.query_one("#col-drift").border_subtitle = crumb if crumb is not None else ""
+        self.refresh_footer()
+        return True
 
     def _current_row_key(self) -> str | None:
-        """The drift-table row key under the cursor, or None."""
+        """The index-table row key under the cursor, or None."""
         table = self.query_one("#drift-table", DataTable)
         if table.row_count == 0:
             return None
         return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
 
-    def action_outbound(self) -> None:
-        """Expand or collapse the persistent OUTBOUND header on the compare panel (DIFF-27).
+    # ── filters and red-row hopping ──────────────────────────────────────────
+    @property
+    def filter_query(self) -> str:
+        """The active index filter (FilterModal's contract)."""
+        return self._filter
 
-        comparo replays the *same* request against both environments, so the
-        outbound only differs where env config does — a different base URL, a
-        per-env auth token, an env-specific header. The header sits above the
-        body diff and answers the first triage question: is the drift the
-        service's, or did we send two different requests? ``o`` toggles it between
-        the one-line summary and the full request diff, staying on the field diff.
-        """
-        if not self._in_results() or self._pair is None:
+    def apply_filter(self, query: str) -> int:
+        """Filter the active index by substring; returns the row count."""
+        self._filter = query
+        self._populate_drift()
+        return self.query_one("#drift-table", DataTable).row_count
+
+    def action_find(self) -> None:
+        """Open the shared filter prompt over the active index (RESULTS only)."""
+        if self._in_results():
+            self.app.push_screen(FilterModal(self))
+
+    def action_only_broken(self) -> None:
+        """Toggle the index down to broken/failing rows only."""
+        if not self._in_results():
             return
-        self._outbound_shown = not self._outbound_shown
-        self._render_row(self._current_row_key())
+        self._only_broken = not self._only_broken
+        self._populate_drift()
+
+    def action_next_drift(self) -> None:
+        """Hop the cursor to the next red row (n)."""
+        self._hop(1)
+
+    def action_prev_drift(self) -> None:
+        """Hop the cursor to the previous red row (p)."""
+        self._hop(-1)
+
+    def _hop(self, step: int) -> None:
+        if not self._in_results() or not self._broken_keys:
+            return
+        current = self._current_row_key()
+        keys = self._broken_keys
+        position = keys.index(current) if current in keys else (-step if step > 0 else 0)
+        target = keys[(position + step) % len(keys)]
+        table = self.query_one("#drift-table", DataTable)
+        with contextlib.suppress(Exception):
+            table.move_cursor(row=table.get_row_index(target))
+        self._render_row(target)
 
     def _selected_group(self) -> tuple[str, list[tuple[CellDiff, FieldDiff]]] | None:
-        table = self.query_one("#drift-table", DataTable)
-        if table.row_count == 0:
-            return None
-        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        """The drifted-field group behind the cursor — the silence target."""
+        key = self._current_row_key()
         if key is None:
             return None
-        if key.startswith("drift::"):
-            path = key.removeprefix("drift::")
-        elif key.startswith("cell::"):
-            path = key.split("::")[1]
-        else:
-            return None
-        return next((group for group in self._groups if group[0] == path), None)
-
-    def _show_field(self, path: str, cell: CellDiff | None = None) -> None:
-        group = next((g for g in self._groups if g[0] == path), None)
-        wrap = self.query_one("#col-compare")
-        if group is None:
-            wrap.border_title = "COMPARE"
-            return
-        entries = [(c, f) for c, f in group[1] if c is cell] if cell is not None else group[1]
-        mode = "unified" if self._unified else "side-by-side"
-        request = entries[0][0].request.metadata.name if entries else ""
-        envs = ""
-        if self._pair is not None:
-            envs = f" · {self._pair[0].metadata.name} ⇄ {self._pair[1].metadata.name}"
-        redact = _app_redact(self)
-        wrap.border_title = Text.from_markup(
-            f"COMPARE [{_DIM}]·[/] {redact(path)} [{_DIM}]· {request}{envs}[/]"
-        )
-        cell = entries[0][0] if entries else None
-        # A streamed response diffs its event SEQUENCE (numbered ✓/✗), never one
-        # assembled blob; a normal response gets the git-style body diff.
-        base_events, cand_events = _cell_events(cell) if cell is not None else (None, None)
-        if path == "$status" or path.startswith("$headers"):
-            # Status and header drifts have no home in the body tree — render the
-            # per-cell before/after card so the evidence is on screen, not hidden
-            # behind an empty body well. (The dedicated headers diff well is the
-            # Results-rework's job; this keeps the live view honest until then.)
-            wrap.border_subtitle = "response envelope · before/after"
-            body: RenderableType = _diff_field((path, entries), self._pair, redact)
-        elif base_events is not None or cand_events is not None:
-            wrap.border_subtitle = "streaming · per-event diff"
-            body = _stream_body_view(base_events or [], cand_events or [], redact)
-        else:
-            wrap.border_subtitle = _seg_toggle(("unified", "side-by-side"), mode)
-            body = _diff_body_view(
-                (path, entries), self._pair, unified=self._unified, redact=redact
-            )
-        # The compare panel is three stacked layers: call ledger → outbound → body,
-        # so a latency/size regression and the "did we send the same request" answer
-        # sit above the response diff (mockup d-results).
-        ledger = _live_call_ledger(cell) if cell is not None else None
-        header = self._outbound_layer(cell, redact)
-        layers: list[RenderableType] = []
-        for part in (ledger, header):
-            if part is not None:
-                layers.extend((part, Text()))
-        layers.append(body)
-        content = Group(*layers) if len(layers) > 1 else body
-        self.query_one("#compare-content", Static).update(content)
+        if key.startswith("fpath::"):
+            path = key.removeprefix("fpath::")
+            return next((group for group in self._groups if group[0] == path), None)
+        if key.startswith(("cell::", "req::")):
+            index = self._cell_for_key(key)
+            if index is None:
+                return None
+            drifts = self._cells[index].drifts
+            if not drifts:
+                return None
+            path = drifts[0].path
+            return next((group for group in self._groups if group[0] == path), None)
+        return None
 
     def _outbound_layer(
         self, cell: CellDiff | None, redact: Callable[[str], str]
@@ -2422,22 +2562,9 @@ class DiffView(Vertical):
             redact=redact,
         )
 
-    def _show_error(self, cell: CellDiff) -> None:
-        """Render the transport/execution error for a cell — request, env, message."""
-        wrap = self.query_one("#col-compare")
-        wrap.border_title = Text.from_markup(f"COMPARE [{_DIM}]· error[/]")
-        redact = _app_redact(self)
-        self.query_one("#compare-content", Static).update(
-            _diff_error_view(cell, self._pair, redact=redact)
-        )
-
-    def _show_skip(self, path: str) -> None:
-        """Explain a field the profile deliberately skips — what and why."""
-        group = next((g for g in self._skip_groups if g[0] == path), None)
-        wrap = self.query_one("#col-compare")
-        wrap.border_title = Text.from_markup(f"COMPARE [{_DIM}]· skipped[/]")
-        redact = _app_redact(self)
-        self.query_one("#compare-content", Static).update(_diff_skip_view(path, group, redact))
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Show the inspect panel for the highlighted index row."""
+        self._render_row(event.row_key.value)
 
     def _render_progress(self) -> None:
         """Render the summary bar: counts, the gate verdict, and the env selector."""
@@ -2463,16 +2590,18 @@ class DiffView(Vertical):
             left.append(f"{errors} error", style=f"bold {_WARN}" if errors else _WARN)
             left.append("    │  ", style=_DIM)
             left.append("gate ", style=_DIM)
-            passed = drift == 0 and errors == 0
-            left.append("PASS" if passed else "FAIL", style=f"bold {_SAME if passed else _DANGER}")
-            if not passed:
-                untriaged = drift + errors
-                noun = "drift" if untriaged == 1 else "drifts"
-                if errors == 0:
-                    what = f"{untriaged} untriaged {noun}"
-                else:
-                    what = f"{drift} drift · {errors} error"
+            # The locked precedence: FAIL when any rule broke; ERROR only when
+            # errors are the only failure — the same words the record stores.
+            gate = "FAIL" if drift else ("ERROR" if errors else "PASS")
+            left.append_text(verdict_pill(gate))
+            if gate == "FAIL":
+                noun = "drift" if drift == 1 else "drifts"
+                what = (
+                    f"{drift} untriaged {noun}" if not errors else f"{drift} drift · {errors} error"
+                )
                 left.append(f"  {what}", style=_DIM)
+            elif gate == "ERROR":
+                left.append(f"  {errors} cell(s) could not compare", style=_DIM)
         else:
             left.append("press ", style=_DIM)
             left.append("x", style=f"bold {_ACCENT}")
@@ -2494,7 +2623,13 @@ class DiffView(Vertical):
         switcher = self.query_one("#diff-mode", ContentSwitcher) if self.is_mounted else None
         current = switcher.current if switcher is not None else None
         if current == "diff-results":
-            return _DIFF_RESULTS_KEYS
+            keys = {
+                "rules": _DIFF_RULES_KEYS,
+                "fields": _DIFF_FIELDS_KEYS,
+            }.get(self._index_mode, _DIFF_REQ_KEYS)
+            if self._nav:
+                return (("esc", "return"), *keys)
+            return keys
         if current == "diff-running":
             return _DIFF_RUNNING_KEYS
         return _DIFF_PREPARE_KEYS
@@ -3203,7 +3338,7 @@ class FilterModal(ModalScreen[None]):
 
     def __init__(
         self,
-        target: "ExplorerView | RunView | ReportView",
+        target: "DiffView | ExplorerView | RunView | ReportView",
         *,
         title: str = "FILTER",
         placeholder: str = "filter…",
