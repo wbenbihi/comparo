@@ -1,5 +1,6 @@
 """Tests for parsing a streamed response into its ordered records."""
 
+from comparo.core.streams import parse_sse
 from comparo.core.streams import parse_stream
 
 
@@ -39,3 +40,53 @@ def test_parse_ndjson() -> None:
 
 def test_parse_falls_back_to_whole_text() -> None:
     assert parse_stream(b"just text", "text/plain") == ["just text"]
+
+
+def test_parse_sse_handles_crlf_and_cr_line_endings() -> None:
+    # The spec admits \r\n, \r, and \n; values must not keep a trailing \r.
+    events = parse_sse("data: a\r\nid: 1\r\n\r\ndata: b\r\r")
+    assert events == [{"data": "a", "id": "1"}, {"data": "b"}]
+
+
+def test_parse_sse_strips_a_leading_bom() -> None:
+    events = parse_sse("﻿data: x\n\n")
+    assert events == [{"data": "x"}]
+
+
+def test_parse_sse_colonless_line_is_a_field_with_empty_value() -> None:
+    events = parse_sse("data\n\n")
+    assert events == [{"data": ""}]
+
+
+def test_parse_sse_multiple_data_lines_join_before_any_parsing() -> None:
+    events = parse_sse("data: {\ndata: }\n\n")
+    assert events == [{"data": "{\n}"}]
+
+
+def test_parse_sse_later_event_field_overwrites_earlier() -> None:
+    events = parse_sse("event: a\nevent: b\ndata: x\n\n")
+    assert events == [{"event": "b", "data": "x"}]
+
+
+def test_parse_sse_ignores_an_id_containing_nul() -> None:
+    events = parse_sse("id: bad\x00id\ndata: x\n\n")
+    assert events == [{"data": "x"}]
+
+
+def test_parse_sse_comment_only_block_dispatches_nothing() -> None:
+    assert parse_sse(": keepalive\n\n: another\n\n") == []
+
+
+def test_parse_sse_keeps_a_trailing_unterminated_event() -> None:
+    # Deliberate divergence from the spec's discard rule: a stream cut by the
+    # idle/total timeout still diffs whatever arrived.
+    events = parse_sse("data: a\n\ndata: cut")
+    assert events == [{"data": "a"}, {"data": "cut"}]
+
+
+def test_parse_sse_whitespace_only_line_is_not_a_dispatch() -> None:
+    # Only a truly empty line dispatches; " " is a (weird but legal) field name,
+    # so both data lines still belong to ONE event.
+    events = parse_sse("data: a\n \ndata: b\n\n")
+    assert len(events) == 1
+    assert events[0]["data"] == "a\nb"
