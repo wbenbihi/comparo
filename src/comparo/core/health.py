@@ -14,11 +14,12 @@ from comparo.core.http import TimeoutBudget
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
 from comparo.core.models import HealthCheck
+from comparo.core.models import Instance
 from comparo.core.resolution import Context
+from comparo.core.resolution import Engine
 from comparo.core.resolution import ExecuteSecrets
 from comparo.core.resolution import InterpolationError
 from comparo.core.resolution import SecretError
-from comparo.core.resolution import interpolate
 from comparo.core.resolve import ResolvedRequest
 
 
@@ -103,11 +104,18 @@ def _aggregate(results: list[CheckResult]) -> Health:
 
 def _context(project: LoadedProject, environment: Environment) -> Context:
     sources = environment.spec.secrets or {}
+
+    def instance_value(identifier: str) -> object:
+        obj = project.objects.get(identifier)
+        return obj.spec.value if isinstance(obj, Instance) else None
+
     return Context(
         variables=dict(environment.spec.variables or {}),
         secret_names=frozenset(sources),
         mask_secrets=False,
         secret_values=ExecuteSecrets(dict(sources), project.root),
+        instances=instance_value,
+        root=project.root,
     )
 
 
@@ -123,6 +131,7 @@ def _headers(
 
 
 def _interpolate(value: object, context: Context) -> object:
-    if isinstance(value, str):
-        return interpolate(value, context).value
-    return value
+    # Resolve through the shared engine so a health header honours every directive
+    # ($env/$file/$secret/$val/$var/$from), not just ${...} — the same execute-sink
+    # path a real request takes, so nothing about health is invisible to a resolver.
+    return Engine(context).value(value)
