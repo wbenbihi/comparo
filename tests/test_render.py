@@ -812,7 +812,7 @@ def test_stream_event_diff_follows_the_unified_side_by_side_toggle() -> None:
     cand: list[object] = [{"event": "tick", "data": '{"seq": 2, "price": 118.0}'}]
 
     def ansi(unified: bool) -> str:
-        console = RichConsole(width=100, force_terminal=True)
+        console = RichConsole(width=100, force_terminal=True, color_system="truecolor")
         with console.capture() as capture:
             console.print(
                 _stream_body_view(
@@ -907,7 +907,7 @@ def test_headers_well_is_the_same_diff_component_as_the_body_well() -> None:
     cell = CellDiff(request, "", fields)
 
     def ansi(unified: bool) -> str:
-        console = RichConsole(width=100, force_terminal=True)
+        console = RichConsole(width=100, force_terminal=True, color_system="truecolor")
         with console.capture() as capture:
             well = _headers_well(cell, str, unified=unified, names=("stable", "canary"))
             assert well is not None
