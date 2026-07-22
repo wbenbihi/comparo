@@ -2415,6 +2415,8 @@ def _cell_inspect_tail(
                 redact,
                 focus=event_focus,
                 drifted=drifted_event_indices(cell.fields),
+                unified=unified,
+                names=header_names,
             )
         )
         return Group(*parts)
@@ -4214,9 +4216,20 @@ def _event_envelope_table(
 
 
 def _event_expanded(
-    index: int, left: object | None, right: object | None, redact: Callable[[str], str]
+    index: int,
+    left: object | None,
+    right: object | None,
+    redact: Callable[[str], str],
+    *,
+    unified: bool = True,
+    names: tuple[str, str] | None = None,
 ) -> RenderableType:
-    """One drifted (or focused) event opened in place: envelope + its data diff."""
+    """One drifted (or focused) event opened in place: envelope + its data diff.
+
+    The data diff follows the SAME layout toggle as the body well — ``unified``
+    stacks -/+ bands, side-by-side draws two panes — so ``v`` flips the stream
+    exactly as it flips a JSON body.
+    """
     parts: list[RenderableType] = []
     envelope = _event_envelope_table(left, right, redact)
     if envelope is not None:
@@ -4231,19 +4244,18 @@ def _event_expanded(
         return Group(*parts)
     left_data, right_data = _event_data(left), _event_data(right)
     if isinstance(left_data, str) or isinstance(right_data, str):
-        if left_data == right_data:
-            parts.append(Text(f"data: {_clip(redact(str(left_data)), 160)}", style=_DIM))
-        else:
-            minus = Text("− ", style=f"bold {_DRIFT}")
-            minus.append(_clip(redact(str(left_data)), 160), style=_DRIFT)
-            plus = Text("+ ", style=f"bold {_SAME}")
-            plus.append(_clip(redact(str(right_data)), 160), style=_SAME)
-            parts.extend((minus, plus))
-        return Group(*parts)
-    fields = {field.path: field for field in structural_diff(left_data, right_data, "exact", [])}
-    lines = _body_diff_lines(left_data, right_data, fields, redact=redact)
+        # Non-JSON data: one diff line, routed through the same renderer so it,
+        # too, honors side-by-side.
+        state = "same" if left_data == right_data else "drift"
+        lines = [(0, redact(str(left_data)), redact(str(right_data)), state, "")]
+    else:
+        fields = {
+            field.path: field for field in structural_diff(left_data, right_data, "exact", [])
+        }
+        lines = _body_diff_lines(left_data, right_data, fields, redact=redact)
+    body = _diff_unified(lines) if unified else _diff_side_by_side(lines, None, names)
     well = Panel(
-        Group(_hunk_band(f"@@ event {index + 1} · data @@"), _diff_unified(lines)),
+        Group(_hunk_band(f"@@ event {index + 1} · data @@"), body),
         box=ROUNDED,
         expand=True,
         padding=0,
@@ -4277,6 +4289,8 @@ def _stream_body_view(
     *,
     focus: int | None = None,
     drifted: list[int] | None = None,
+    unified: bool = True,
+    names: tuple[str, str] | None = None,
 ) -> Group:
     """A streamed response diffed as an event SEQUENCE, never one assembled blob.
 
@@ -4325,7 +4339,8 @@ def _stream_body_view(
             row.append(f"  {preview}", style=_SKIP if same else _DRIFT)
         parts.append(row)
         if index == opened:
-            parts.append(Padding(_event_expanded(index, left, right, redact), (0, 0, 0, 2)))
+            expanded = _event_expanded(index, left, right, redact, unified=unified, names=names)
+            parts.append(Padding(expanded, (0, 0, 0, 2)))
     hint = Text("▸/▾ mark the opened event — ", style=_DIM)
     hint.append("enter", style=f"bold {_ACCENT}")
     hint.append(" on an event row in the card above opens it here", style=_DIM)
@@ -4441,6 +4456,8 @@ def _replay_compare_well(
                 cell.candidate_events or [],
                 redact,
                 drifted=judged,
+                unified=unified,
+                names=(record.baseline, record.candidate or "candidate"),
             ),
         ]
     if ledger is not None:
