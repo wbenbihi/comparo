@@ -24,6 +24,7 @@ import hashlib
 import os
 import re
 from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol
 
@@ -87,8 +88,9 @@ class Context:
     In the display sink ``mask_secrets`` is true and every declared secret
     renders as ``mask``; in the execute sink it is false and ``secret_values``
     resolves the real value lazily — so an unused, unavailable secret never
-    fails a run. ``instances`` expands ``$val`` (id → the instance's value tree)
-    and ``root`` confines inline ``$file``.
+    fails a run. ``instances`` expands ``$val`` (id → the instance's value tree),
+    ``root`` confines inline ``$file``, and ``env`` is the env-file overlay ``$env``
+    consults ahead of ``os.environ``.
     """
 
     variables: dict[str, str]
@@ -98,6 +100,7 @@ class Context:
     secret_values: Secrets = dataclasses.field(default_factory=_empty_secrets)
     instances: Callable[[str], object] = _no_instance
     root: Path | None = None
+    env: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -112,8 +115,12 @@ class Interpolated:
 # ── source backend: $env / $file / $literal / $from ─────────────────────────
 
 
-def _env_source(variable: str) -> str:
-    value = os.environ.get(variable)
+def _env_source(variable: str, env: Mapping[str, str]) -> str:
+    # The env-file overlay wins over the ambient process environment (an explicit
+    # per-run file is authoritative), then $env falls back to os.environ.
+    value = env.get(variable)
+    if value is None:
+        value = os.environ.get(variable)
     if value is None:
         message = f"environment variable '{variable}' is not set"
         raise SecretUnavailableError(message)
@@ -175,7 +182,9 @@ def _human_bytes(size: int) -> str:
     return f"{size} B"  # pragma: no cover
 
 
-def resolve_source(source: object, root: Path | None, _depth: int = 0) -> tuple[str, Origin]:
+def resolve_source(
+    source: object, root: Path | None, *, env: Mapping[str, str] | None = None, _depth: int = 0
+) -> tuple[str, Origin]:
     """Resolve a ``{$env|$file|$literal|$from: …}`` source dict to a real value.
 
     The one backend shared by the ``secrets:`` block (:class:`ExecuteSecrets`)
@@ -186,6 +195,7 @@ def resolve_source(source: object, root: Path | None, _depth: int = 0) -> tuple[
     Args:
         source: The source dict to resolve.
         root: The project root, for confining ``$file``.
+        env: The env-file overlay ``$env`` consults ahead of ``os.environ``.
 
     Returns:
         ``(value, origin)`` — the resolved value and which concrete source
@@ -205,7 +215,7 @@ def resolve_source(source: object, root: Path | None, _depth: int = 0) -> tuple[
         raise SecretUnavailableError("$from nesting too deep")
     if isinstance(source, dict):
         if "$env" in source:
-            return _env_source(str(source["$env"])), Origin.ENV
+            return _env_source(str(source["$env"]), env or {}), Origin.ENV
         if "$literal" in source:
             return str(source["$literal"]), Origin.LITERAL
         if "$file" in source:
@@ -214,7 +224,8 @@ def resolve_source(source: object, root: Path | None, _depth: int = 0) -> tuple[
         if isinstance(candidates, list):
             for candidate in candidates:
                 try:
-                    return resolve_source(candidate, root, _depth + 1)  # (value, origin)
+                    # Returns (value, origin) from the winning candidate.
+                    return resolve_source(candidate, root, env=env, _depth=_depth + 1)
                 except SecretUnavailableError:
                     # A benign absence — try the next source. An anomalous
                     # SecretError (unreadable/escaping $file) propagates and fails
@@ -242,6 +253,7 @@ class ExecuteSecrets:
 
     sources: dict[str, object]
     root: Path
+    env: Mapping[str, str] = dataclasses.field(default_factory=dict)
     _cache: dict[str, str] = dataclasses.field(default_factory=dict)
 
     def __getitem__(self, name: str) -> str:
@@ -257,7 +269,7 @@ class ExecuteSecrets:
             message = f"no secret named '{name}'"
             raise SecretUnavailableError(message)
         try:
-            value, _origin = resolve_source(self.sources[name], self.root)
+            value, _origin = resolve_source(self.sources[name], self.root, env=self.env)
         except SecretError as error:
             # Re-stamp the anonymous backend error with the secret's name. The
             # backend never reprs a value, so this carries no plaintext.
@@ -513,7 +525,7 @@ class Engine:
         # target is a list that may carry a ``$literal`` secret fallback, so never
         # render it — the detail is the directive alone.
         detail = "$from" if sigil == "$from" else f"{sigil}:{target}"
-        value, origin = resolve_source({sigil: target}, self.context.root)
+        value, origin = resolve_source({sigil: target}, self.context.root, env=self.context.env)
         self.trail.append(Trail(path, origin, detail))
         return value
 

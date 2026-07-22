@@ -140,6 +140,15 @@ class EnvironmentSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True
         dict[str, str] | None,
         _f("Named string values referenced as ${NAME} or {$var: NAME}.", {"region": "us-east-1"}),
     ] = None
+    env_file: Annotated[
+        str | None,
+        _f(
+            "Path (relative to comparo.yaml) to a KEY=VALUE env file backing $env lookups; "
+            "its values are never displayed. A CLI --env-file merges over it (CLI wins per key).",
+            ".env",
+            "env/prod.env",
+        ),
+    ] = None
     headers: Annotated[
         list[Header] | None,
         _f(

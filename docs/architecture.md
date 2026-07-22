@@ -172,7 +172,9 @@ in `core/resolution.py`, which fills:
   (`${NAME | fallback}`), and typed-cast (`${NAME:int}`) forms;
 - `$val` / `$var` — inline a reusable `Instance` value, or reference a variable;
 - `$secret` / `$env` / `$file` / `$literal` / `$from` — value sources that resolve
-  their real value **anywhere** they appear, not only inside `secrets:`.
+  their real value **anywhere** they appear, not only inside `secrets:`. `$env`
+  reads an environment's `envFile` overlay (and the CLI `--env-file`) ahead of
+  `os.environ` (`core/envfile.py`).
 
 The output is a `ResolvedRequest` — concrete method, URL, headers, query, body —
 plus a provenance `trail`. The engine is path- and provenance-aware, so one `$val`
@@ -191,9 +193,10 @@ In the **DISPLAY** sink, a declared secret is replaced by the mask string and it
 position is recorded in the provenance trail, so a human can see *that* a secret is
 there without ever seeing its value — `ExecuteSecrets` is never even instantiated.
 In the **EXECUTE** sink, `core/resolution.py`'s `ExecuteSecrets` resolves the real
-value on demand from its source — `$env`, `$literal`, `$file`, or an ordered `$from`
-fallback — and **caches** it. Lazy resolution means a declared-but-unavailable
-secret only fails a run if something actually uses it.
+value on demand from its source — `$env` (an `envFile`/`--env-file` overlay, then
+`os.environ`), `$literal`, `$file`, or an ordered `$from` fallback — and **caches**
+it. Lazy resolution means a declared-but-unavailable secret only fails a run if
+something actually uses it.
 
 ### Masking is keyed off the `secrets:` declaration
 
@@ -201,8 +204,10 @@ Masking is keyed off *what is declared secret*, never off the directive that pro
 a value. `core/provenance.py`'s `Origin` enum (`LITERAL`, `VARIABLE`, `SECRET`,
 `INSTANCE`, `MATRIX`, `ENV`, `FILE`) marks only `SECRET` as `tainted` — masked in
 display and never persisted. `$env`/`$file` resolve real values and are **not**
-tainted; they are masked only when their value is itself a declared secret, caught by
-the floor below. Two mechanisms enforce it:
+tainted by origin; such a value is masked only once it enters the redactor's value
+floor below — because it is itself a declared secret, or (for `$env`) because it
+came from an env file, whose **every** value joins the floor. Two mechanisms
+enforce it:
 
 - **Secret-first by name.** In `resolution.py`, a `${NAME}`, `$var: NAME`, or
   `$secret: NAME` whose name is declared resolves as a secret *even when the name is
@@ -210,8 +215,9 @@ the floor below. Two mechanisms enforce it:
 - **A string-match backstop scrubs echoes too.** Drift and assertion *details*
   are built from real EXECUTE-sink responses, and a server can echo a secret
   straight back into a body it drifts on. So `core/redaction.py` defines a
-  `Redactor` — built over every environment's resolved secret values — that masks
-  any known secret value (and, since a server can echo a secret as a JSON *key*, any
+  `Redactor` — built over every environment's resolved secret values **and every
+  value its `envFile`/`--env-file` supplies** — that masks any known secret value
+  (and, since a server can echo a secret as a JSON *key*, any
   key or field path) anywhere it appears in a string. It is applied at **every sink
   that leaves the process**: the `diff`/`run`/`exec` console output, the built-in
   reporters (`build_report`), `core/export.py`'s JSON run export (`runs/*.json`), and
@@ -270,7 +276,8 @@ redacted input.
 | `loader.py` | Loads a directory of YAML into a `LoadedProject` in diagnostics-collecting passes (parse + envelope, id indexing, reference checking, then profile-slot validation); keeps `$use`/`$val`/`${...}` as holes; dangling references and unresolvable profile slots are hard errors with near-miss hints. |
 | `diagnostics.py` | `Diagnostic` (file, message, line, hint) and `LoadError`, which carries every problem found in one load. |
 | `refs.py` | `resolve_specs`: the one resolver for a profile attachment slot — a `$use`, an inline spec, or a list that composes — shared by the diff and assertion slots. An unresolvable slot is a hard error, never a silent empty rule set. |
-| `resolution.py` | The one home for value resolution: the `${...}` grammar (required / optional / default / typed-cast, *secret-first*), the `$val` / `$var` / `$secret` / `$literal` / `$env` / `$file` / `$from` directive `Engine`, and the `ExecuteSecrets` source backend (`$env` / `$literal` / `$file`, root-confined, lazily cached). Masking is keyed off the `secrets:` declaration. |
+| `resolution.py` | The one home for value resolution: the `${...}` grammar (required / optional / default / typed-cast, *secret-first*), the `$val` / `$var` / `$secret` / `$literal` / `$env` / `$file` / `$from` directive `Engine`, and the `ExecuteSecrets` source backend (`$env` / `$literal` / `$file`, root-confined, lazily cached). `$env` reads the env-file overlay on the `Context` ahead of `os.environ`. Masking is keyed off the `secrets:` declaration. |
+| `envfile.py` | Parses an environment's `envFile` (and the CLI `--env-file`) into the `KEY=VALUE` overlay `$env` consults ahead of `os.environ`: a minimal dotenv parser, a root-confined loader (`load_env_overlay`, CLI merges over the profile file per key), and `env_file_values` — every value the file supplies, for the redactor floor. |
 | `resolve.py` | Environment selection and pairing, plus the `Resolver` that keeps the request-shaped tree-walk (matrix injection, header merge, auth override) and delegates every hole/string to the `resolution.py` `Engine`, producing a `ResolvedRequest` (method, URL, headers, query, body, `bodyType`, `auth`, `cookies`, `streaming`) under the DISPLAY or EXECUTE `Sink`. A matrix whose target is `request.path` fills `${...}` placeholders in the endpoint here. |
 | `provenance.py` | `Origin` (with the `tainted` property) and `Trail` — the single fact that drives masking, scrubbing, and diff explanations. |
 | `matrix.py` | Expands a request across its referenced matrices into one `MatrixCell` per combination (cartesian product), each with a stable `key`; applies an ExecutionProfile's per-matrix `include` / `exclude` / `override` scope. |
@@ -283,7 +290,7 @@ redacted input.
 | `execution.py` | Runs an `ExecutionProfile`: resolves it to a plan (which requests, cells, environments), executes each cell against baseline and candidate, asserts both, diffs the pair, and reports a fail-closed gate. Orchestration only — no comparison logic of its own. |
 | `report.py` | The structured `RunReport` and the `Reporter` port; `build_report` folds diff results into cells with a pass/fail gate (`diff_passed` / `diff_gate`), redacting drift details as it goes. |
 | `archive.py` | The saved-report store under `<data>/.reports/`: `ReportRecord` (gate, counts, assertion roll-ups, per-request breakdown) and `CellRecord` (redacted before/after bodies, response headers, status/latency/bytes for a faithful replay); `record_from_diff` / `record_from_execution` / `record_from_run`, `save_record`, `list_records`. |
-| `redaction.py` | The `Redactor` string-match backstop: masks any declared secret *value* (or key/path) found in any string a sink emits, even when it arrived untainted (e.g. echoed back by the server). |
+| `redaction.py` | The `Redactor` string-match backstop: masks any declared secret *value* (or key/path) — plus every value an `envFile`/`--env-file` supplies — found in any string a sink emits, even when it arrived untainted (e.g. echoed back by the server). |
 | `triage.py` | Silences a drift by appending an `ignore` rule to the owning `DiffProfile`'s YAML file (round-tripped through ruamel so comments survive) — a reviewable, committed act, never an in-memory hide. |
 | `curl.py` | Renders a `ResolvedRequest` as a runnable multi-line `curl`; masked or real depending on the sink it was resolved with. |
 | `export.py` | Serializes a run to JSON with every secret masked — DISPLAY-sink values plus string-match redaction of response bodies (keys and values). |

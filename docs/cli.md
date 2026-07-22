@@ -28,6 +28,7 @@ The CLI, the TUI, and the GitHub Action are all thin front-ends over one engine
   - [`comparo tui`](#comparo-tui)
   - [`comparo help`](#comparo-help)
 - [Selecting environments](#selecting-environments)
+- [Env files and `--env-file`](#env-files-and---env-file)
 - [Report formats](#report-formats)
 - [The gate](#the-gate)
 - [GitHub Action](#github-action)
@@ -129,10 +130,10 @@ comparo import openapi SPEC [--output DIR] [--name NAME]
 comparo validate [--config CONFIG]
 comparo doctor
 comparo schema   [--output FILE]
-comparo render   REQUEST_ID [--config CONFIG] [--env NAME]
-comparo run      [REQUEST_ID] [--config CONFIG] [--env NAME]
-comparo exec     EXECUTION_ID [--config CONFIG]
-comparo diff     [REQUEST_ID] [--config CONFIG] [--pair NAME | --baseline NAME --candidate NAME] [--report FMT]... [--output DIR]
+comparo render   REQUEST_ID [--config CONFIG] [--env NAME] [--env-file FILE]
+comparo run      [REQUEST_ID] [--config CONFIG] [--env NAME] [--env-file FILE]
+comparo exec     EXECUTION_ID [--config CONFIG] [--env-file FILE]
+comparo diff     [REQUEST_ID] [--config CONFIG] [--pair NAME | --baseline NAME --candidate NAME] [--env-file FILE] [--report FMT]... [--output DIR]
 comparo tui      [--config CONFIG]
 comparo help
 ```
@@ -364,7 +365,7 @@ query, and body — with a provenance trail. Secret values are **masked**; they 
 never printed.
 
 ```
-comparo render REQUEST_ID [--config CONFIG] [--env NAME]
+comparo render REQUEST_ID [--config CONFIG] [--env NAME] [--env-file FILE]
 ```
 
 **Arguments**
@@ -379,6 +380,7 @@ comparo render REQUEST_ID [--config CONFIG] [--env NAME]
 | --- | --- | --- | --- |
 | `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
 | `--env` | `-e` | project default | Environment name or id to resolve against. See [Selecting environments](#selecting-environments). |
+| `--env-file` | | — | A `KEY=VALUE` file backing `$env`. See [Env files and `--env-file`](#env-files-and---env-file). |
 
 **Behavior & exit code**
 
@@ -408,7 +410,7 @@ Execute requests against a single environment and report each cell's status code
 and latency. Matrix requests expand to one cell per case.
 
 ```
-comparo run [REQUEST_ID] [--config CONFIG] [--env NAME]
+comparo run [REQUEST_ID] [--config CONFIG] [--env NAME] [--env-file FILE]
 ```
 
 **Arguments**
@@ -423,6 +425,7 @@ comparo run [REQUEST_ID] [--config CONFIG] [--env NAME]
 | --- | --- | --- | --- |
 | `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
 | `--env` | `-e` | project default | Environment name or id to run against. |
+| `--env-file` | | — | A `KEY=VALUE` file backing `$env`. See [Env files and `--env-file`](#env-files-and---env-file). |
 
 **Behavior & exit code**
 
@@ -468,7 +471,7 @@ gate. This is the headless equivalent of the TUI's Execution screen, and its exi
 is the exact gate that screen shows.
 
 ```
-comparo exec EXECUTION_ID [--config CONFIG] [--report FORMAT ...] [--output DIR]
+comparo exec EXECUTION_ID [--config CONFIG] [--env-file FILE] [--report FORMAT ...] [--output DIR]
 ```
 
 **Arguments**
@@ -482,6 +485,7 @@ comparo exec EXECUTION_ID [--config CONFIG] [--report FORMAT ...] [--output DIR]
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
 | `--config` | `-C` | `comparo.yaml` | The manifest (or project directory) to load. |
+| `--env-file` | | — | A `KEY=VALUE` file backing `$env`, applied to both of the profile's environments. See [Env files and `--env-file`](#env-files-and---env-file). |
 | `--report` | | manifest's `report.formats` | Report format(s) to write: `junit`, `sarif`, `json`, `markdown` (repeatable). |
 | `--output` | `-o` | manifest's `report.output`, else `reports/` | Directory to write report files into. |
 
@@ -529,7 +533,7 @@ is the command CI runs.
 ```
 comparo diff [REQUEST_ID] [--config CONFIG] \
   [--pair NAME | --baseline NAME --candidate NAME] \
-  [--report FMT]... [--output DIR]
+  [--env-file FILE] [--report FMT]... [--output DIR]
 ```
 
 **Arguments**
@@ -546,6 +550,7 @@ comparo diff [REQUEST_ID] [--config CONFIG] \
 | `--pair` | `-p` | first declared pair | A named diff pair from the project manifest. |
 | `--baseline` | `-b` | — | Baseline environment name or id. |
 | `--candidate` | `-c` | — | Candidate environment name or id. |
+| `--env-file` | | — | A `KEY=VALUE` file backing `$env`, applied to both environments. See [Env files and `--env-file`](#env-files-and---env-file). |
 | `--report` | | none | Report format to write. Repeatable. One of `junit`, `sarif`, `json`, `markdown`. See [Report formats](#report-formats). |
 | `--output` | `-o` | `reports` | Directory report files are written to (created if missing). |
 
@@ -654,6 +659,32 @@ When no environment is given, commands fall back to the project's declared defau
 (`spec.environments.default`). If none is given and the project declares no
 default, the command exits `1` with
 `no environment given and the project declares no default`.
+
+## Env files and `--env-file`
+
+An env file is a dotenv-style `KEY=VALUE` file whose pairs back the
+[`$env`](configuration.md#secret--env--file--literal--from--value-sources) directive.
+Its values are consulted **only** by `$env` — nothing is auto-injected — and **every
+value it supplies is masked** wherever it would appear (the terminal, reports, and
+exports), so it is the place to keep the many secret values a run needs.
+
+There are two sources, and they compose:
+
+- **Per environment** — an `Environment` declares `envFile: <path>` (relative to
+  `comparo.yaml`, confined to the project root). See
+  [Env files](configuration.md#env-files) in the configuration reference. A
+  missing declared file is benign — it simply contributes nothing.
+- **On the command line** — `--env-file <path>` on `render`, `run`, `exec`, and
+  `diff`. It is resolved relative to the working directory (so it may live outside
+  the project) and **merges over** the profile's `envFile`, winning per key. For
+  `exec` and `diff` it applies to every environment the command touches. A
+  `--env-file` naming a file that does not exist is a **usage error** (exit `2`) —
+  unlike a benign missing profile `envFile`.
+
+When a key is defined in both the env file and the process environment, **the env
+file wins**; `$env` still falls back to `os.environ` for keys the file does not
+define. Because every value is masked, put only genuine secrets in an env file —
+ordinary configuration belongs in an environment's `variables:`.
 
 ## Report formats
 

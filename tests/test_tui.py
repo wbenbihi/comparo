@@ -57,7 +57,7 @@ def test_app_redactor_is_built_once_and_reused(monkeypatch: pytest.MonkeyPatch) 
     calls = 0
     real = redaction.secret_values
 
-    def counting(project: object, *, best_effort: bool = False) -> set[str]:
+    def counting(project: object, *, best_effort: bool = False, cli_env: object = None) -> set[str]:
         nonlocal calls
         calls += 1
         return real(project, best_effort=best_effort)  # type: ignore[arg-type]

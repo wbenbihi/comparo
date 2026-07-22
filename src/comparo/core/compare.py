@@ -10,6 +10,7 @@ sequence for streams) — and records, per effective rule, how the rule fared.
 import asyncio
 import dataclasses
 import json
+from collections.abc import Mapping
 
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import RuleRef
@@ -99,6 +100,8 @@ async def diff_run(
     requests: list[Request],
     client: HttpClient,
     candidate_client: HttpClient | None = None,
+    *,
+    cli_env: Mapping[str, str] | None = None,
 ) -> list[CellDiff]:
     """Execute *requests* against both environments and diff the paired results.
 
@@ -110,13 +113,14 @@ async def diff_run(
         client: The transport for the baseline run.
         candidate_client: A separate transport for the candidate run, so the two
             do not share a cookie jar; defaults to *client* when omitted.
+        cli_env: A ``--env-file`` override merged over each environment's ``envFile``.
 
     Returns:
         One :class:`CellDiff` per baseline request cell.
     """
     baseline_runs, candidate_runs = await asyncio.gather(
-        execute_all(project, baseline, requests, client),
-        execute_all(project, candidate, requests, candidate_client or client),
+        execute_all(project, baseline, requests, client, cli_env=cli_env),
+        execute_all(project, candidate, requests, candidate_client or client, cli_env=cli_env),
     )
     index = {(run.request.metadata.id, run.cell_key): run for run in candidate_runs}
     return [

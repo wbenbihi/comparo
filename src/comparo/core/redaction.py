@@ -11,8 +11,11 @@ import dataclasses
 import json
 import urllib.parse
 from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
 
+from comparo.core.envfile import env_file_values
+from comparo.core.envfile import load_env_overlay
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
 from comparo.core.resolution import ExecuteSecrets
@@ -105,7 +108,11 @@ def redact_tree(value: object, redact: Callable[[str], str], _depth: int = 0) ->
 
 
 def environment_secret_values(
-    environment: Environment, root: Path, *, best_effort: bool = False
+    environment: Environment,
+    root: Path,
+    *,
+    best_effort: bool = False,
+    cli_env: Mapping[str, str] | None = None,
 ) -> set[str]:
     """One environment's resolved secret values (``$file`` sources confined to *root*).
 
@@ -114,10 +121,14 @@ def environment_secret_values(
     so it was never sent or echoed, and crashing an interactive UI is worse. For a
     persisted sink (a report/archive/export) ``best_effort`` is false and the read
     fails closed, so a secret that may have been sent is never dropped from the mask.
+
+    The env-file overlay backs any secret whose source is ``$env``, so a secret drawn
+    from the env file resolves here and joins the mask like any other declared secret.
     """
     values: set[str] = set()
     sources = environment.spec.secrets or {}
-    secrets = ExecuteSecrets(dict(sources), root)
+    overlay = load_env_overlay(environment, root, cli_env=cli_env, best_effort=best_effort)
+    secrets = ExecuteSecrets(dict(sources), root, env=overlay)
     for name in sources:
         try:
             value = secrets[name]
@@ -137,12 +148,16 @@ def environment_secret_values(
     return values
 
 
-def secret_values(project: LoadedProject, *, best_effort: bool = False) -> set[str]:
+def secret_values(
+    project: LoadedProject, *, best_effort: bool = False, cli_env: Mapping[str, str] | None = None
+) -> set[str]:
     """Every environment's resolved secret values (a superset masked everywhere)."""
     values: set[str] = set()
     for obj in project.objects.values():
         if isinstance(obj, Environment):
-            values |= environment_secret_values(obj, project.root, best_effort=best_effort)
+            values |= environment_secret_values(
+                obj, project.root, best_effort=best_effort, cli_env=cli_env
+            )
     return values
 
 
@@ -191,7 +206,13 @@ class Redactor:
         return cls(tuple(sorted(forms, key=len, reverse=True)))
 
     @classmethod
-    def for_project(cls, project: LoadedProject, *, best_effort: bool = False) -> "Redactor":
+    def for_project(
+        cls,
+        project: LoadedProject,
+        *,
+        best_effort: bool = False,
+        cli_env: Mapping[str, str] | None = None,
+    ) -> "Redactor":
         """Build a redactor over every resolved secret value in *project*.
 
         The string-match backstop is a security *floor*: it is ALWAYS active for
@@ -201,11 +222,17 @@ class Redactor:
         forward-compatibility but can never turn masking off, because doing so
         would write a server-echoed secret to disk.
 
+        Every value an env file supplies (a profile's ``envFile`` or the CLI
+        ``cli_env`` override) joins the floor too — the whole file is secret
+        material, so nothing it provides ever reaches a display or a persisted sink.
+
         With ``best_effort`` (the ephemeral TUI display), a declared secret that
         cannot be read now is skipped so the UI never crashes; persisted sinks leave
         it false so an unreadable declared secret fails closed.
         """
-        return cls.from_values(secret_values(project, best_effort=best_effort))
+        values = secret_values(project, best_effort=best_effort, cli_env=cli_env)
+        values |= env_file_values(project, cli_env=cli_env, best_effort=best_effort)
+        return cls.from_values(values)
 
     def text(self, text: str) -> str:
         """Return *text* with every known secret value replaced by the mask."""

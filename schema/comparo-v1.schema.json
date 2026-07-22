@@ -239,6 +239,22 @@
           ],
           "default": null
         },
+        "envFile": {
+          "description": "Path (relative to comparo.yaml) to a KEY=VALUE env file backing $env lookups; its values are never displayed. A CLI --env-file merges over it (CLI wins per key).",
+          "examples": [
+            ".env",
+            "env/prod.env"
+          ],
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "headers": {
           "description": "Headers applied to every request unless it overrides them.",
           "examples": [

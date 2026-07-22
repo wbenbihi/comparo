@@ -8,6 +8,7 @@ aborts a run of many.
 
 import asyncio
 import dataclasses
+from collections.abc import Mapping
 
 from comparo.core.http import HttpClient
 from comparo.core.http import HttpError
@@ -115,6 +116,8 @@ async def execute_request(
     client: HttpClient,
     cell: MatrixCell | None = None,
     retry: RetryConfig | None = None,
+    *,
+    cli_env: Mapping[str, str] | None = None,
 ) -> Execution:
     """Resolve and send one request cell, capturing any failure on the result.
 
@@ -125,6 +128,7 @@ async def execute_request(
         client: The transport to send through.
         cell: The matrix cell to inject, or ``None`` for the base request.
         retry: The retry policy for transport failures, or ``None`` for one try.
+        cli_env: A ``--env-file`` override merged over the environment's ``envFile``.
 
     Returns:
         The execution outcome, with either a response or an error message.
@@ -133,7 +137,9 @@ async def execute_request(
     try:
         # Resolution failures (a missing secret, a bad interpolation) are config
         # errors, not transient — never retried.
-        resolved = Resolver(project, environment, Sink.EXECUTE).resolve_request(request, cell)
+        resolved = Resolver(project, environment, Sink.EXECUTE, cli_env=cli_env).resolve_request(
+            request, cell
+        )
         timeout = TimeoutBudget.resolve(request.spec.timeout, environment.spec.timeout)
     except (SecretError, InterpolationError) as error:
         return Execution(request, environment, key, None, str(error))
@@ -171,6 +177,8 @@ async def execute_all(
     client: HttpClient,
     concurrency: int | None = None,
     retry: RetryConfig | None = None,
+    *,
+    cli_env: Mapping[str, str] | None = None,
 ) -> list[Execution]:
     """Execute every request, expanded across its matrices, with bounded concurrency.
 
@@ -183,6 +191,7 @@ async def execute_all(
             ``spec.run.concurrency`` (default 4).
         retry: The retry policy for transport failures; ``None`` reads
             ``spec.run.retry``.
+        cli_env: A ``--env-file`` override merged over the environment's ``envFile``.
 
     Returns:
         One execution outcome per request cell.
@@ -195,7 +204,9 @@ async def execute_all(
 
     async def _one(request: Request, cell: MatrixCell) -> Execution:
         async with limit:
-            return await execute_request(project, environment, request, client, cell, retry)
+            return await execute_request(
+                project, environment, request, client, cell, retry, cli_env=cli_env
+            )
 
     coroutines = [_one(request, cell) for request in requests for cell in expand(project, request)]
     return await asyncio.gather(*coroutines)

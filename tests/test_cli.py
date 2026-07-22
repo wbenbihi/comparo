@@ -58,7 +58,7 @@ def test_exec_exit_code_matches_the_gate(monkeypatch: pytest.MonkeyPatch) -> Non
         return ExecutionResult("exec.release-gate", "Stable", "Canary", True, True, [outcome])
 
     for passes, expected in ((True, 0), (False, 1)):
-        monkeypatch.setattr(cli, "_run_execution", lambda _l, _p, ok=passes: fake(ok))
+        monkeypatch.setattr(cli, "_run_execution", lambda _l, _p, ok=passes, **_k: fake(ok))
         invoked = runner.invoke(app, ["exec", "execution.release-gate", "--config", str(CANARY)])
         assert invoked.exit_code == expected
 
@@ -292,3 +292,59 @@ def test_render_reports_an_unresolved_variable_cleanly(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert "could not resolve" in result.output
     assert "MISSING_VAR" in result.output
+
+
+def _env_file_project(tmp_path: Path) -> str:
+    # A project whose one request injects an env-file value inline via $env, so the
+    # rendered value passes through the redactor and must never appear as plaintext.
+    (tmp_path / ".env").write_text("TOKEN=sk-file-secret\n", encoding="utf-8")
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\n"
+        "metadata: {name: P, id: project.p}\nspec: {data: .}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: Local, id: environment.local}\n"
+        "spec: {baseUrl: 'http://h', envFile: .env}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "req.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
+        "spec: {request: {method: GET, endpoint: /x, headers: {Authorization: {$env: TOKEN}}}}\n",
+        encoding="utf-8",
+    )
+    return str(tmp_path / "comparo.yaml")
+
+
+def test_render_never_prints_an_env_file_value(tmp_path: Path) -> None:
+    config = _env_file_project(tmp_path)
+    result = runner.invoke(app, ["render", "request.r", "--config", config, "--env", "local"])
+    assert result.exit_code == 0
+    assert "sk-file-secret" not in result.output  # resolved, then masked — never shown
+    assert "••••••" in result.output
+
+
+def test_render_cli_env_file_value_is_also_masked(tmp_path: Path) -> None:
+    config = _env_file_project(tmp_path)
+    override = tmp_path / "override.env"
+    override.write_text("TOKEN=sk-cli-secret\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["render", "request.r", "--config", config, "--env", "local", "--env-file", str(override)],
+    )
+    assert result.exit_code == 0
+    # The CLI value wins the lookup and is masked; neither value leaks.
+    assert "sk-cli-secret" not in result.output
+    assert "sk-file-secret" not in result.output
+    assert "••••••" in result.output
+
+
+def test_missing_env_file_is_a_usage_error(tmp_path: Path) -> None:
+    config = _env_file_project(tmp_path)
+    result = runner.invoke(
+        app,
+        ["render", "request.r", "--config", config, "--env", "local", "--env-file", "absent.env"],
+    )
+    assert result.exit_code == 2  # an explicit --env-file naming a missing file is a hard error
+    assert "--env-file" in result.output

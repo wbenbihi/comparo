@@ -7,7 +7,9 @@ client and free of any HTTP-library import.
 
 import dataclasses
 import enum
+from collections.abc import Mapping
 
+from comparo.core.envfile import load_env_overlay
 from comparo.core.http import HttpClient
 from comparo.core.http import HttpError
 from comparo.core.http import TimeoutBudget
@@ -51,7 +53,11 @@ class HealthReport:
 
 
 async def check_health(
-    project: LoadedProject, environment: Environment, client: HttpClient
+    project: LoadedProject,
+    environment: Environment,
+    client: HttpClient,
+    *,
+    cli_env: Mapping[str, str] | None = None,
 ) -> HealthReport:
     """Run every declared health check for *environment* and aggregate the result.
 
@@ -64,6 +70,7 @@ async def check_health(
         project: The loaded project, used to resolve secret sources.
         environment: The environment to probe.
         client: The transport the probes are sent through.
+        cli_env: A ``--env-file`` override merged over the environment's ``envFile``.
 
     Returns:
         The per-check results and the aggregate status.
@@ -71,7 +78,7 @@ async def check_health(
     checks = environment.spec.health or []
     if not checks:
         return HealthReport(Health.UNKNOWN, [])
-    context = _context(project, environment)
+    context = _context(project, environment, cli_env=cli_env)
     base = environment.spec.base_url.rstrip("/")
     budget = TimeoutBudget.resolve(None, environment.spec.timeout)
     results: list[CheckResult] = []
@@ -102,8 +109,14 @@ def _aggregate(results: list[CheckResult]) -> Health:
     return Health.PARTIAL
 
 
-def _context(project: LoadedProject, environment: Environment) -> Context:
+def _context(
+    project: LoadedProject,
+    environment: Environment,
+    *,
+    cli_env: Mapping[str, str] | None = None,
+) -> Context:
     sources = environment.spec.secrets or {}
+    overlay = load_env_overlay(environment, project.root, cli_env=cli_env)
 
     def instance_value(identifier: str) -> object:
         obj = project.objects.get(identifier)
@@ -113,9 +126,10 @@ def _context(project: LoadedProject, environment: Environment) -> Context:
         variables=dict(environment.spec.variables or {}),
         secret_names=frozenset(sources),
         mask_secrets=False,
-        secret_values=ExecuteSecrets(dict(sources), project.root),
+        secret_values=ExecuteSecrets(dict(sources), project.root, env=overlay),
         instances=instance_value,
         root=project.root,
+        env=overlay,
     )
 
 

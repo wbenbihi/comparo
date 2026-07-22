@@ -1015,6 +1015,34 @@ def test_explorer_execution_profile_composes_and_cli_hint() -> None:
     assert "comparo exec" in rendered  # the equivalent CLI
 
 
+def test_environment_detail_shows_env_file_path_never_its_values(tmp_path: Path) -> None:
+    # The env detail names the envFile path but never a value it supplies — the file
+    # is secret material and the redactor masks every value it provides.
+    from comparo.core.loader import load_project
+    from comparo.core.models import Environment
+    from comparo.core.redaction import Redactor
+    from comparo.tui.render import _object_detail
+
+    (tmp_path / ".env").write_text("API_TOKEN=sk-detail-secret\n", encoding="utf-8")
+    (tmp_path / "comparo.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Project\n"
+        "metadata: {name: P, id: project.p}\nspec: {data: .}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "env.yaml").write_text(
+        "apiVersion: comparo/v1\nkind: Environment\n"
+        "metadata: {name: Local, id: environment.local}\n"
+        "spec: {baseUrl: 'http://h', envFile: .env, secrets: {TOKEN: {$env: API_TOKEN}}}\n",
+        encoding="utf-8",
+    )
+    loaded = load_project(tmp_path)
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    rendered = _plain(_object_detail(env, Redactor.for_project(loaded).text, project=loaded))
+    assert ".env" in rendered  # the path is shown
+    assert "values never shown" in rendered
+    assert "sk-detail-secret" not in rendered  # a value from it never is
+
+
 def test_explorer_edges_span_executions_and_manifest() -> None:
     from comparo.tui.render import _edges
 

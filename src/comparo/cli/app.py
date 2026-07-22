@@ -25,6 +25,7 @@ from comparo.core.assertions import request_response_rules
 from comparo.core.compare import CellDiff
 from comparo.core.compare import diff_run
 from comparo.core.diagnostics import LoadError
+from comparo.core.envfile import parse_env_file
 from comparo.core.execute import Execution
 from comparo.core.execute import execute_all
 from comparo.core.execute import run_settings
@@ -69,6 +70,39 @@ ConfigOption = Annotated[
         help="The comparo.yaml manifest to load (or a project directory).",
     ),
 ]
+
+EnvFileOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--env-file",
+        help="A KEY=VALUE env file backing $env (merged over the profile's envFile, CLI wins).",
+    ),
+]
+
+
+def _load_cli_env(env_file: Path | None) -> dict[str, str] | None:
+    """Parse a ``--env-file`` into an overlay, exiting cleanly on a bad path.
+
+    Resolved relative to the working directory (an operator may keep secrets
+    outside the project), so — unlike a benign missing profile ``envFile`` — a
+    ``--env-file`` naming a file that is not there is a hard usage error: the
+    operator asked for it explicitly, so a typo must not be silently ignored.
+
+    Args:
+        env_file: The ``--env-file`` path, or ``None`` when the flag was omitted.
+
+    Returns:
+        The parsed overlay, or ``None`` when no flag was given.
+    """
+    if env_file is None:
+        return None
+    try:
+        text = env_file.read_text(encoding="utf-8")
+    except OSError as error:
+        typer.secho(f"cannot read --env-file '{env_file}': {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(_EXIT_USAGE) from error
+    return parse_env_file(text)
+
 
 import_app = typer.Typer(
     name="import",
@@ -287,6 +321,7 @@ def render(
     *,
     config: ConfigOption = DEFAULT_CONFIG,
     env: Annotated[str | None, typer.Option("--env", "-e", help="Environment name or id.")] = None,
+    env_file: EnvFileOption = None,
 ) -> None:
     """Show a request fully resolved for an environment, with secrets masked.
 
@@ -294,8 +329,10 @@ def render(
         request_id: The ``metadata.id`` of the request to resolve.
         config: The manifest (or project directory) to load.
         env: The environment to resolve for; defaults to the project default.
+        env_file: A ``--env-file`` backing ``$env`` (merged over the profile's ``envFile``).
     """
     loaded = _open_project(config)
+    cli_env = _load_cli_env(env_file)
     obj = loaded.objects.get(request_id)
     if not isinstance(obj, Request):
         typer.secho(f"no Request with id '{request_id}'", fg=typer.colors.RED, err=True)
@@ -305,7 +342,7 @@ def render(
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE) from error
-    resolved = Resolver(loaded, environment).resolve_request(obj)
+    resolved = Resolver(loaded, environment, cli_env=cli_env).resolve_request(obj)
     # The display sink degrades an unresolved value (a required ${VAR} unset, a bad
     # cast, a $val cycle) rather than crashing; render is the command that reports it.
     unresolved = [trail for trail in resolved.trail if trail.origin is Origin.UNRESOLVED]
@@ -316,7 +353,7 @@ def render(
             err=True,
         )
         raise typer.Exit(_EXIT_USAGE)
-    _print_resolved(resolved, environment.metadata.name, _redactor(loaded))
+    _print_resolved(resolved, environment.metadata.name, _redactor(loaded, cli_env=cli_env))
 
 
 @app.command(name="run")
@@ -327,6 +364,7 @@ def run_requests(
     *,
     config: ConfigOption = DEFAULT_CONFIG,
     env: Annotated[str | None, typer.Option("--env", "-e", help="Environment name or id.")] = None,
+    env_file: EnvFileOption = None,
 ) -> None:
     """Execute requests against an environment and report status and latency.
 
@@ -334,8 +372,10 @@ def run_requests(
         request_id: A single request id to run, or ``None`` to run every request.
         config: The manifest (or project directory) to load.
         env: The environment to run against; defaults to the project default.
+        env_file: A ``--env-file`` backing ``$env`` (merged over the profile's ``envFile``).
     """
     loaded = _open_project(config)
+    cli_env = _load_cli_env(env_file)
     try:
         environment = select_environment(loaded, env)
     except EnvironmentSelectionError as error:
@@ -345,7 +385,7 @@ def run_requests(
     if not requests:
         typer.secho("no requests to run", fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE)
-    results = asyncio.run(_execute(loaded, environment, requests))
+    results = asyncio.run(_execute(loaded, environment, requests, cli_env=cli_env))
     if not results:
         # A selected request whose matrix expands to zero cells verifies nothing —
         # a run that checked nothing must fail closed, never report a green gate.
@@ -355,7 +395,7 @@ def run_requests(
             err=True,
         )
         raise typer.Exit(_EXIT_USAGE)
-    ok = _print_results(loaded, results, environment.metadata.name)
+    ok = _print_results(loaded, results, environment.metadata.name, cli_env=cli_env)
     if not ok:
         raise typer.Exit(_EXIT_GATE)
 
@@ -365,6 +405,7 @@ def exec_profile(
     execution_id: Annotated[str, typer.Argument(help="The ExecutionProfile id to run.")],
     *,
     config: ConfigOption = DEFAULT_CONFIG,
+    env_file: EnvFileOption = None,
     report: Annotated[
         list[str] | None,
         typer.Option("--report", help="Report format(s): junit, sarif, json, markdown."),
@@ -383,20 +424,22 @@ def exec_profile(
     Args:
         execution_id: The ``metadata.id`` of the ExecutionProfile to run.
         config: The manifest (or project directory) to load.
+        env_file: A ``--env-file`` backing ``$env`` (merged over each profile's ``envFile``).
         report: Report format(s) to write (defaults to the manifest's).
         output: The directory report files are written to.
     """
     loaded = _open_project(config)
+    cli_env = _load_cli_env(env_file)
     profile = loaded.objects.get(execution_id)
     if not isinstance(profile, ExecutionProfile):
         typer.secho(f"no ExecutionProfile with id '{execution_id}'", fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE)
     try:
-        result = asyncio.run(_run_execution(loaded, profile))
+        result = asyncio.run(_run_execution(loaded, profile, cli_env=cli_env))
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE) from error
-    redact = _redactor(loaded)
+    redact = _redactor(loaded, cli_env=cli_env)
     _print_execution(result, redact)
     _emit_reports(
         loaded,
@@ -416,10 +459,15 @@ def exec_profile(
     raise typer.Exit(0 if result.passed else _EXIT_GATE)
 
 
-async def _run_execution(loaded: LoadedProject, profile: ExecutionProfile) -> ExecutionResult:
+async def _run_execution(
+    loaded: LoadedProject,
+    profile: ExecutionProfile,
+    *,
+    cli_env: dict[str, str] | None = None,
+) -> ExecutionResult:
     client, candidate_client = HttpxClient(), HttpxClient()
     try:
-        return await run_execution(loaded, profile, client, candidate_client)
+        return await run_execution(loaded, profile, client, candidate_client, cli_env=cli_env)
     finally:
         await client.aclose()
         await candidate_client.aclose()
@@ -457,6 +505,7 @@ def diff(
     ] = None,
     *,
     config: ConfigOption = DEFAULT_CONFIG,
+    env_file: EnvFileOption = None,
     pair: Annotated[str | None, typer.Option("--pair", "-p", help="Named diff pair.")] = None,
     baseline: Annotated[
         str | None, typer.Option("--baseline", "-b", help="Baseline environment.")
@@ -477,6 +526,7 @@ def diff(
     Args:
         request_id: A single request id to diff, or ``None`` for all.
         config: The manifest (or project directory) to load.
+        env_file: A ``--env-file`` backing ``$env`` (merged over each profile's ``envFile``).
         pair: A named diff pair from the manifest.
         baseline: An explicit baseline environment (overrides the pair).
         candidate: An explicit candidate environment (overrides the pair).
@@ -484,6 +534,7 @@ def diff(
         output: The directory report files are written to.
     """
     loaded = _open_project(config)
+    cli_env = _load_cli_env(env_file)
     try:
         base_env, candidate_env = resolve_pair(loaded, pair, baseline, candidate)
     except EnvironmentSelectionError as error:
@@ -493,8 +544,8 @@ def diff(
     if not requests:
         typer.secho("no requests to diff", fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE)
-    results = asyncio.run(_diff(loaded, base_env, candidate_env, requests))
-    redact = _redactor(loaded)
+    results = asyncio.run(_diff(loaded, base_env, candidate_env, requests, cli_env=cli_env))
+    redact = _redactor(loaded, cli_env=cli_env)
     if not results:
         typer.secho(
             "nothing to diff — every selected request expanded to zero cells",
@@ -608,15 +659,18 @@ def _open_project(config: Path) -> LoadedProject:
         raise typer.Exit(_EXIT_USAGE) from error
 
 
-def _redactor(loaded: LoadedProject) -> Callable[[str], str]:
+def _redactor(
+    loaded: LoadedProject, *, cli_env: dict[str, str] | None = None
+) -> Callable[[str], str]:
     """Build the project's secret mask, exiting cleanly if a declared secret is unreadable.
 
     A declared secret backed by an unreadable/root-escaping ``$file`` fails closed —
     the mask cannot be built, so we must not proceed and risk leaking it — but that
-    is a config error to report, not a raw traceback.
+    is a config error to report, not a raw traceback. Every env-file value (profile
+    ``envFile`` or ``cli_env``) joins the mask so it can never reach the terminal.
     """
     try:
-        return Redactor.for_project(loaded).text
+        return Redactor.for_project(loaded, cli_env=cli_env).text
     except SecretError as error:
         typer.secho(f"could not build the secret mask: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE) from error
@@ -904,6 +958,12 @@ and reference it by name. Masking is keyed off the `secrets:` declaration, not t
 a value is masked because it is declared secret (secret-first by name, plus an always-on
 value floor) — so declare anything sensitive.
 
+An Environment may set `envFile: <path>` (a git-ignored `KEY=VALUE` file, relative to
+`comparo.yaml`) to back `$env`: `$env: VAR` reads that file first, then `os.environ`. The CLI
+`--env-file <path>` on `run`/`diff`/`exec`/`render` merges over it (CLI wins per key). Every
+value an env file supplies is masked everywhere, so put only secrets in it — ordinary config
+belongs in `variables:`.
+
 ## `${...}` interpolation (inside strings)
 
 - `${VAR}` — required (fails if unset)
@@ -968,12 +1028,19 @@ def _write_reports(record: ReportRecord, formats: list[str], output: Path) -> No
 
 
 async def _diff(
-    loaded: LoadedProject, baseline: Environment, candidate: Environment, requests: list[Request]
+    loaded: LoadedProject,
+    baseline: Environment,
+    candidate: Environment,
+    requests: list[Request],
+    *,
+    cli_env: dict[str, str] | None = None,
 ) -> list[CellDiff]:
     client = HttpxClient()
     candidate_client = HttpxClient()
     try:
-        return await diff_run(loaded, baseline, candidate, requests, client, candidate_client)
+        return await diff_run(
+            loaded, baseline, candidate, requests, client, candidate_client, cli_env=cli_env
+        )
     finally:
         await client.aclose()
         await candidate_client.aclose()
@@ -1035,16 +1102,26 @@ def _select_requests(loaded: LoadedProject, request_id: str | None) -> list[Requ
 
 
 async def _execute(
-    loaded: LoadedProject, environment: Environment, requests: list[Request]
+    loaded: LoadedProject,
+    environment: Environment,
+    requests: list[Request],
+    *,
+    cli_env: dict[str, str] | None = None,
 ) -> list[Execution]:
     client = HttpxClient()
     try:
-        return await execute_all(loaded, environment, requests, client)
+        return await execute_all(loaded, environment, requests, client, cli_env=cli_env)
     finally:
         await client.aclose()
 
 
-def _print_results(loaded: LoadedProject, results: list[Execution], environment_name: str) -> bool:
+def _print_results(
+    loaded: LoadedProject,
+    results: list[Execution],
+    environment_name: str,
+    *,
+    cli_env: dict[str, str] | None = None,
+) -> bool:
     """Print each result against its declared response, returning the gate verdict.
 
     A request that returns a response is *not* automatically a pass — its
@@ -1052,7 +1129,7 @@ def _print_results(loaded: LoadedProject, results: list[Execution], environment_
     a declared 200 is red and fails the gate.
     """
     typer.secho(f"run · {environment_name}", bold=True)
-    redact = _redactor(loaded)
+    redact = _redactor(loaded, cli_env=cli_env)
     ok_all = True
     for execution in results:
         identifier = execution.request.metadata.id or execution.request.metadata.name

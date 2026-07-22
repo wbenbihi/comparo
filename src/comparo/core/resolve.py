@@ -8,7 +8,9 @@ holes, and the resolver fills them for a chosen environment. The display sink
 
 import dataclasses
 import enum
+from collections.abc import Mapping
 
+from comparo.core.envfile import load_env_overlay
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import Injection
 from comparo.core.matrix import MatrixCell
@@ -142,7 +144,12 @@ class Resolver:
     """Resolves a :class:`Request` against an :class:`Environment`."""
 
     def __init__(
-        self, project: LoadedProject, environment: Environment, sink: Sink = Sink.DISPLAY
+        self,
+        project: LoadedProject,
+        environment: Environment,
+        sink: Sink = Sink.DISPLAY,
+        *,
+        cli_env: Mapping[str, str] | None = None,
     ) -> None:
         """Build a resolver bound to a project and one environment.
 
@@ -151,10 +158,17 @@ class Resolver:
             environment: The environment whose variables and secrets apply.
             sink: Which sink to produce — ``DISPLAY`` masks secrets and records a
                 provenance trail; ``EXECUTE`` injects real secret values lazily.
+            cli_env: A ``--env-file`` override, merged over the environment's own
+                ``envFile`` (CLI wins per key) to form the ``$env`` overlay.
         """
         self.project = project
         self.environment = environment
         self.sink = sink
+        # The display sink degrades an unreadable envFile (a preview must not crash);
+        # the execute sink fails closed so a real send never proceeds on a half-read file.
+        overlay = load_env_overlay(
+            environment, project.root, cli_env=cli_env, best_effort=(sink is Sink.DISPLAY)
+        )
         secret_sources = environment.spec.secrets or {}
         secret_names = frozenset(secret_sources)
         if sink is Sink.EXECUTE:
@@ -162,9 +176,10 @@ class Resolver:
                 variables=dict(environment.spec.variables or {}),
                 secret_names=secret_names,
                 mask_secrets=False,
-                secret_values=ExecuteSecrets(dict(secret_sources), project.root),
+                secret_values=ExecuteSecrets(dict(secret_sources), project.root, env=overlay),
                 instances=self._instance_value,
                 root=project.root,
+                env=overlay,
             )
         else:
             self.context = Context(
@@ -172,6 +187,7 @@ class Resolver:
                 secret_names=secret_names,
                 instances=self._instance_value,
                 root=project.root,
+                env=overlay,
             )
 
     def resolve_tree(self, value: object) -> tuple[object, list[Trail]]:

@@ -415,9 +415,11 @@ Press `r` to re-check after editing — fix a file, press `r`, watch the list sh
   reflects it.
 - **Tabs are self-contained.** A screen never redirects you to a different tab to show a result;
   it pushes a sub-view in place.
-- **Secrets are never shown.** Any declared secret value is masked in every display and redacted
-  from every saved artifact — saved runs, `.reports/*.json`, exports, and CI reports — even when a
-  server echoes it back, and even when it appears as a JSON key or field path.
+- **Secrets are never shown.** Any declared secret value — and every value an environment's
+  `envFile` supplies — is masked in every display and redacted from every saved artifact — saved
+  runs, `.reports/*.json`, exports, and CI reports — even when a server echoes it back, and even
+  when it appears as a JSON key or field path. An environment's detail names its `envFile` *path*
+  but never a value from it.
 - **The accent border marks the active panel;** `tab` cycles panels; `?` lists every key.
 - **Nothing is hidden silently.** An active filter is shown on the panel; skipped diff fields are
   counted; a matrix value turned off still appears (as `✕ matrix off`) rather than vanishing.

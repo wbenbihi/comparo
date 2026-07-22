@@ -888,6 +888,12 @@ def _environment_detail(
             secrets.append(redact(str(key)), style=_DRIFT)
         secrets.append("   resolved, never shown", style=_DIM)
         rows.append(("secrets", secrets))
+    if spec.env_file:
+        # The path is safe to show; its parsed values are secret material and are
+        # masked everywhere, so only the filename ever appears here.
+        env_file = Text(redact(str(spec.env_file)), style=_TEXT_HI)
+        env_file.append("   $env overlay, values never shown", style=_DIM)
+        rows.append(("env file", env_file))
     parts.append(spec_table(rows))
     if project is not None:
         requests = sum(1 for obj in project.objects.values() if isinstance(obj, Request))

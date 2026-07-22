@@ -10,6 +10,7 @@ comparison logic of its own.
 import asyncio
 import dataclasses
 from collections.abc import Callable
+from collections.abc import Mapping
 
 from comparo.core.assertions import AssertionResult
 from comparo.core.assertions import SourcedAssertion
@@ -171,6 +172,7 @@ async def run_execution(
     candidate_client: HttpClient | None = None,
     *,
     on_progress: Callable[[ExecutionProgress], None] | None = None,
+    cli_env: Mapping[str, str] | None = None,
 ) -> ExecutionResult:
     """Resolve *profile* to a plan and run it, asserting both envs and diffing.
 
@@ -182,6 +184,7 @@ async def run_execution(
             not share a cookie jar; defaults to *client* when omitted.
         on_progress: An optional callback fired before (``done=False``) and after
             (``done=True``) each cell executes, so a UI can show a live transition.
+        cli_env: A ``--env-file`` override merged over each environment's ``envFile``.
 
     Returns:
         The complete execution outcome.
@@ -242,9 +245,13 @@ async def run_execution(
                         request_id, cell.key, index, total, done=False, method=method, path=path
                     )
                 )
-            base = await execute_request(project, baseline, request, client, cell, retry)
+            base = await execute_request(
+                project, baseline, request, client, cell, retry, cli_env=cli_env
+            )
             cand = (
-                await execute_request(project, candidate, request, cand_client, cell, retry)
+                await execute_request(
+                    project, candidate, request, cand_client, cell, retry, cli_env=cli_env
+                )
                 if candidate is not None
                 else None
             )

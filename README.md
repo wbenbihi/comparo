@@ -86,7 +86,8 @@ documents every command and the GitHub Action.
 - **Reviewable triage.** Silencing a drift writes an ignore rule into a committed profile — it
   shows up in `git diff`, not just in memory.
 - **Secrets never leak.** Values are masked in the TUI, redacted from saved runs and reports
-  (even when a server echoes them back), and kept out of version control.
+  (even when a server echoes them back), and kept out of version control. Inject many at once from
+  a git-ignored **env file** (`envFile:` or `--env-file`) — every value it supplies is masked too.
 - **The gate is the gate.** The TUI's Report screen, the CLI, and the Action share one reporter
   engine, so exit codes and verdicts match everywhere.
 
@@ -97,7 +98,7 @@ Projects are described by version-controlled YAML objects, each with a Kubernete
 
 | `kind`             | Purpose |
 | ------------------ | ------- |
-| `Environment`      | a target: base URL, timeout, credentials, variables, auth, health checks |
+| `Environment`      | a target: base URL, timeout, credentials, variables, env file, auth, health checks |
 | `Request`          | an HTTP request (matrix-expanded, streaming, auth, cookies, body encodings) with a response schema and diff/assertion profiles |
 | `Schema`           | a JSON Schema used for structural validation |
 | `Instance`         | a reusable value injected by reference to avoid duplication |

@@ -25,6 +25,7 @@ Every example below is drawn from or is consistent with the runnable
 - [Object kinds](#object-kinds)
   - [Project](#project)
   - [Environment](#environment)
+    - [Env files](#env-files)
   - [Request](#request)
   - [Schema](#schema)
   - [Instance](#instance)
@@ -304,6 +305,7 @@ A target the requests run against.
 | timeout   | `timeout`    | [Duration](#duration)         | no       | Per-request timeout budget.                                            |
 | secrets   | `secrets`    | map of name → source          | no       | Declared secrets — see [Secrets and masking](#secrets-and-masking).    |
 | variables | `variables`  | map of string → string        | no       | Values available to `${...}` interpolation.                            |
+| env_file  | `envFile`    | string (path)                 | no       | A `KEY=VALUE` file backing `$env` — see [Env files](#env-files).       |
 | headers   | `headers`    | list of [Header](#header)     | no       | Headers merged into every request (request headers override by name).  |
 | health    | `health`     | list of health checks         | no       | Readiness probes (`method`, `endpoint`, optional `headers`).           |
 | auth      | `auth`       | [Auth](#auth)                 | no       | Default Basic/Bearer auth applied to every request unless it sets its own. |
@@ -326,6 +328,7 @@ spec:
       $env: COMPARO_DEMO_TOKEN
   variables:
     DEFAULT_LOCALE: en-US
+  envFile: env/prod.env
   health:
     - method: GET
       endpoint: /status/200
@@ -333,6 +336,30 @@ spec:
 
 A **health check** entry has `method` (required), `endpoint` (required), and an optional
 `headers` list.
+
+#### Env files
+
+`envFile` points at a dotenv-style `KEY=VALUE` file, relative to `comparo.yaml` and confined to
+the project root (keep it out of version control). Its pairs are consulted **only** by the
+[`$env`](#env) directive — a value reaches a request only where you write `$env` (a `secrets:`
+source, an env `auth`/header value, or an inline hole), never automatically. When a key is present
+in both the env file and the process environment, **the env file wins**; `$env` still falls back
+to `os.environ` for keys the file does not define.
+
+Because the file is secret material, **every value it supplies is masked** wherever it would
+appear — the TUI, reports, and exports — exactly like a declared secret's value. Only the file
+*path* is ever shown (in the TUI's environment detail). Put only genuine secrets in it; ordinary
+configuration belongs in `variables:`.
+
+The parser is minimal: `KEY=VALUE` lines, `#` full-line comments, blank lines, an optional leading
+`export`, and one layer of surrounding quotes on the value. There is **no** variable expansion, so
+`${...}` is left verbatim (it never collides with comparo's own interpolation grammar).
+
+On the command line, `--env-file <path>` (on `run`, `diff`, `exec`, and `render`) supplies an
+overlay too. It is resolved relative to the working directory (so it may live outside the project),
+and it **merges over** any profile `envFile`, winning per key. A `--env-file` naming a file that
+does not exist is a usage error — unlike a benign missing profile `envFile`, which simply
+contributes nothing.
 
 ### Request
 
@@ -885,7 +912,7 @@ as inside a `secrets:` source. Masking is **not** the directive's job (see
 | Directive       | Resolves to                                                                              |
 | --------------- | ---------------------------------------------------------------------------------------- |
 | `$secret: NAME` | The declared secret `NAME` — masked in display, the real value in execute.               |
-| `$env: VAR`     | The OS environment variable `VAR`.                                                        |
+| `$env: VAR`     | The environment's [env file](#env-files) (and the CLI `--env-file`) if `VAR` is defined there, else the OS environment variable `VAR`. Any value drawn from an env file is masked. |
 | `$file: PATH`   | A file's contents (relative to the project root, whitespace-stripped, **root-confined**). |
 | `$literal: X`   | `X` verbatim — never interpolated (the escape hatch for a literal `${...}`).             |
 | `$from: [ … ]`  | A list of the above tried in order; the first that resolves wins.                        |

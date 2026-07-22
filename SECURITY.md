@@ -18,6 +18,10 @@ comparo is designed so that secret values never leak:
   is masked in the TUI and scrubbed from reports and snapshots.
 - Recorded responses and diff artifacts are scrubbed of secret-tainted values before they are
   written.
+- An environment's `envFile` (and the CLI `--env-file`) is treated as secret material:
+  its values back the `$env` directive only, are never auto-injected, and **every** value it
+  supplies is masked wherever it would appear — the TUI (only the file path is shown), reports,
+  and exports. Keep env files out of version control.
 
 If you find a way to make a secret leak into terminal output, logs, reports, snapshots, or
 version control, please report it as a vulnerability.

@@ -39,6 +39,7 @@ graph TD
         matrix
         schema
         secrets
+        envfile
         redaction
         curl
         http["http<br/>(HttpClient port)"]:::port
@@ -62,8 +63,12 @@ graph TD
         resolve --> interpolation
         resolve --> matrix
         resolve --> secrets
+        resolve --> envfile
         matrix --> loader
         redaction --> secrets
+        redaction --> envfile
+        envfile --> secrets
+        health --> envfile
         http --> models
         http --> resolve
         execute --> http
