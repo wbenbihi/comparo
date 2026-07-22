@@ -1,14 +1,18 @@
 apiVersion: comparo/v1
 kind: Request
 metadata:
-  name: HTML page
+  name: Status page
   id: request.html
-  description: /html is static — a clean cell, and the outline renderer on the Run tab.
+  description: >-
+    /page returns HTML. The candidate changes one paragraph ("All systems
+    operational." → "Checkout is degraded."), so the DIFF shows the text drift
+    and a RUN renders the document as an outline (title, headings, the table's
+    shape), not tag soup. The raw facet has the verbatim bytes.
   tags:
-    - pages
+    - payload
 spec:
   request:
     method: GET
-    endpoint: /html
+    endpoint: /page
   response:
     status: 200

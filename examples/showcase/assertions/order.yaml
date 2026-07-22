@@ -4,21 +4,27 @@ metadata:
   name: Order contract
   id: assert.order
   description: >-
-    The RUN showcase profile, attached to Checkout. One rule is deliberately
-    wrong (total == 999 against an echoed 240.0) so the run always shows a
-    ✗ FAIL cell, a red anchor pinned at $.json.order.total in the evidence
-    tree, and a broken row in the rules index with expected · got. The sku
-    rule holds (the green anchor), and the content-type warn holds too —
-    a `~ · held` line in the verdict card.
+    Checkout's profile, composing assert.base via `include`. One rule is
+    deliberately wrong — total == 999 against the echoed 240.0 — so the run
+    always shows a ✗ FAIL cell with expected · got and a red anchor pinned at
+    $.order.total in the evidence tree. The sku and header rules hold (green
+    anchors), and the x-request-id warn holds too — a `~ · held` line.
 spec:
+  include:
+    - $ref: assert.base
   rules:
-    - target: body:$.json.order.total
+    # The deterministic FAIL: serve.py echoes the posted total, 240.0.
+    - target: body:$.order.total
       op: equals
       value: 999
-    - target: body:$.json.order.sku
+    - target: body:$.order.sku
       op: equals
       value: WIDGET-1
-    - target: header:content-type
-      op: matches
-      value: application/json
+    # The header-target assertion: serve.py sends x-service-tier: gold.
+    - target: header:x-service-tier
+      op: equals
+      value: gold
+    # A warn advisory that HELD — every showcase response carries the header.
+    - target: header:x-request-id
+      op: exists
       severity: warn

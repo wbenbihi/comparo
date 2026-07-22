@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Price feed
+  id: request.stream
+  description: >-
+    /events is a streamed SSE response (streaming: true). The full envelope is
+    exercised — retry, id, named events, an unnamed event (renders the spec
+    default "message"), multi-line data. The candidate drifts the third event's
+    price (100.25 → 118.0) and drops the trailing "done" event, so the sequence
+    diff shows a per-event drift AND a length cut; on a RUN the events are a
+    foldable, explorable tree.
+  tags:
+    - stream
+spec:
+  request:
+    method: GET
+    endpoint: /events
+  response:
+    status: 200
+    streaming: true

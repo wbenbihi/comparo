@@ -1,0 +1,20 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Health check
+  id: request.health
+  description: >-
+    /health answers identically on both sides — the CLEAN cell: no drift, a
+    green all-held verdict box. It also carries the schema check that PASSES
+    (schema.health) and the inline status sugar, so a RUN shows every rule
+    green and the diff shows an identical body.
+  tags:
+    - smoke
+spec:
+  request:
+    method: GET
+    endpoint: /health
+  response:
+    status: 200
+    schema:
+      $ref: schema.health

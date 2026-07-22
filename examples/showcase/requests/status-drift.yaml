@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Flaky endpoint
+  id: request.status-drift
+  description: >-
+    The synthetic $status drift: /flaky answers 200 on baseline and 503 on the
+    candidate with the SAME body, so the only drifted row is $status — and on
+    a candidate RUN, the inline `status: 200` sugar fails too.
+  tags:
+    - drift
+spec:
+  request:
+    method: GET
+    endpoint: /flaky
+  response:
+    status: 200

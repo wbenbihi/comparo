@@ -4,14 +4,18 @@ metadata:
   name: Checkout
   id: request.checkout
   description: >-
-    A fixed order posted to the echo — identical on both sides: the clean cell,
-    with the tolerance rule on $.json.order.total held.
+    POST a fixed order to /checkout, which echoes it back. assert.order (which
+    composes assert.base) demands $.order.total == 999 against the echoed
+    240.0, so the RUN cell FAILS deterministically with expected 999 · got
+    240.0 and a red anchor at $.order.total; the header rule x-service-tier ==
+    gold holds, and x-request-id (warn) holds. The order is identical on both
+    sides, so the DIFF cell is clean.
   tags:
     - pricing
 spec:
   request:
     method: POST
-    endpoint: /anything
+    endpoint: /checkout
     body:
       order:
         sku: WIDGET-1

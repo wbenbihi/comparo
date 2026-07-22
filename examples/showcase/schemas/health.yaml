@@ -1,0 +1,16 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Health
+  id: schema.health
+  description: The /health body — the schema check that PASSES on Health check.
+spec:
+  type: object
+  required:
+    - status
+    - region
+  properties:
+    status:
+      type: string
+    region:
+      type: string

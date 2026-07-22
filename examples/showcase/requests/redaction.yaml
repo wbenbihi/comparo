@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Token echo
+  id: request.redaction
+  description: >-
+    The never-leak demo. The request sends the SHOWCASE_TOKEN secret in a Bearer
+    header; /whoami echoes it straight back into $.tokenEcho and an
+    x-echoed-token response header. Every display sink shows •••••• instead of
+    the value — the string-match backstop masks a server-echoed secret before
+    it can reach the body diff, the evidence tree, or the saved report. Same
+    token on both sides, so the cell is clean (and masked).
+  tags:
+    - security
+spec:
+  request:
+    method: GET
+    endpoint: /whoami
+    headers:
+      authorization: Bearer ${SHOWCASE_TOKEN}
+  response:
+    status: 200

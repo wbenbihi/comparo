@@ -4,27 +4,30 @@ metadata:
   name: Showcase
   id: diff.showcase
   description: >-
-    Exact by default; httpbin's echo noise ignored; a tolerance band on the
-    order total; one deliberately unused rule so the "unused" section has a face.
+    The project default: exact everywhere, with one rule per silencing story —
+    a tolerance band that absorbs (/rounding) and one that breaks (/fees), a
+    deliberately-volatile body field ignored, a user-written header silence on
+    a real per-side drift, and one rule that matches nothing so the "unused"
+    section has a face.
 spec:
   default: exact
   rules:
-    - path: $.headers
-      mode: ignore          # httpbin echoes request headers — host/trace ids vary
-    - path: $.origin
-      mode: ignore          # the caller IP
-    - path: $.url
-      mode: ignore          # embeds the query, which the envs deliberately vary
-    - path: $[*].headers
-      mode: ignore          # the same echo noise, per stream event
-    - path: $[*].origin
-      mode: ignore
-    - path: $[*].url
-      mode: ignore
-    - path: $.json.order.total
-      mode: tolerance       # float rounding is not a regression
+    # ABSORBED on /rounding: 240.0 vs 240.004 stays inside the band → SAME.
+    - path: $.totals.rounded
+      mode: tolerance
       tolerance: 0.01
-    - path: $headers.access-control-allow-origin
-      mode: ignore          # a user-written header rule — shows grey in the rules pivot
+    # BROKEN on /fees: 12.5 vs 14.0 blows through the same-sized band → DRIFT.
+    - path: $.totals.fee
+      mode: tolerance
+      tolerance: 0.01
+    # /quote's nonce differs on every call — volatile by design, silenced here.
+    - path: $.meta.nonce
+      mode: ignore
+    # Every response carries a per-SIDE x-build-id; this user rule silences a
+    # drift that would otherwise light up every cell (the built-ins already
+    # silence date, x-request-id, content-length, and friends).
+    - path: $headers.x-build-id
+      mode: ignore
+    # Deliberately matches nothing anywhere — the rules index flags it unused.
     - path: $.tpyo.field
-      mode: ignore          # deliberately matches nothing → the "unused" section
+      mode: ignore

@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Rounded total
+  id: request.tolerance-absorbed
+  description: >-
+    Tolerance ABSORBED: /rounding answers 240.0 vs 240.004, inside the ±0.01
+    band on $.totals.rounded — the cell stays ✓ same, and the rules index
+    shows the band held (float rounding is not a regression).
+  tags:
+    - pricing
+spec:
+  request:
+    method: GET
+    endpoint: /rounding
+  response:
+    status: 200

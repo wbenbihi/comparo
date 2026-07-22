@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Parked request
+  id: request.parked
+  description: >-
+    /parked is identical on both sides and exists only for the not-run roster:
+    deselect it at Prepare (space) and it renders ⊘ not run in the results, off
+    to the side, never judged. The success path for "I chose not to check this."
+  tags:
+    - parked
+spec:
+  request:
+    method: GET
+    endpoint: /parked
+  response:
+    status: 200

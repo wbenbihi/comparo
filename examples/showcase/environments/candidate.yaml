@@ -4,15 +4,21 @@ metadata:
   name: candidate
   id: environment.candidate
   description: >-
-    The same httpbin.org, configured like a misdeployed canary: a bumped tax
-    rate, a new API version header, a 503 status, and a 10s delay.
+    The release under test — serve.py's :8092 side, deliberately misbehaving:
+    drifted values, a 503, a truncated response, a slow lane, and a bumped
+    TAX_RATE in its own configuration.
 spec:
-  baseUrl: https://httpbin.org
+  baseUrl: http://127.0.0.1:8092
   timeout:
-    connect: 5s
-    read: 15s
+    connect: 2s
+    read: 5s
+  secrets:
+    SHOWCASE_TOKEN:
+      from:
+        - $env: COMPARO_SHOWCASE_TOKEN
+        - $literal: shhh-showcase-secret
   variables:
     TAX_RATE: "0.25"
-    API_VERSION: 2025-01
-    STATUS: "503"
-    DELAY: "10"
+  health:
+    - method: GET
+      endpoint: /health

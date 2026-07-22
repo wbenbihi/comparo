@@ -1,0 +1,18 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Approval stamp
+  id: request.stamp
+  description: >-
+    /stamp returns DIFFERENT PNG bytes per side — binary DRIFT: the sha256
+    differs, so the cell drifts even though neither body is text. The honest
+    bytes treatment (magic · size · sha256 · hex head) is all a binary diff can
+    say, and it is enough.
+  tags:
+    - payload
+spec:
+  request:
+    method: GET
+    endpoint: /stamp
+  response:
+    status: 200

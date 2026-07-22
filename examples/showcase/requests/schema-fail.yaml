@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Renewal contract
+  id: request.schema-fail
+  description: >-
+    /contract returns {contract: {id}} on both sides — reachable, identical,
+    and still WRONG: schema.contract requires contract.renewsOn, which is
+    absent. The RUN shows the schema assertion FAIL (a red row) while the status
+    stays 200 and the DIFF stays clean — the case for asserting shape, not just
+    reachability.
+  tags:
+    - contract
+spec:
+  request:
+    method: GET
+    endpoint: /contract
+  response:
+    status: 200
+    schema:
+      $ref: schema.contract
