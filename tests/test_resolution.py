@@ -219,10 +219,9 @@ def test_unsupported_source_error_never_reprs_the_value(tmp_path: Path) -> None:
     secret = "sk-live-realtoken"
     for source in ({"oops": secret}, {"$from": [secret]}):
         secrets = ExecuteSecrets({"TOKEN": source}, tmp_path)
-        with pytest.raises(SecretError) as exc:
+        with pytest.raises(SecretError) as exc:  # SecretUnavailableError is a SecretError
             _ = secrets["TOKEN"]
         assert secret not in str(exc.value)  # never the plaintext value
-        assert "unsupported source shape" in str(exc.value)
 
 
 def test_from_via_file_records_file_origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -238,14 +237,65 @@ def test_from_via_file_records_file_origin(tmp_path: Path, monkeypatch: pytest.M
     assert trail[0].origin is Origin.FILE
 
 
-def test_deeply_nested_value_raises_a_caught_error_not_recursionerror() -> None:
-    # A pathological deep value tree must raise InterpolationError (caught by the
-    # execute/health handlers), never an uncaught RecursionError that aborts the run.
+def _deep_tree(levels: int) -> dict[str, object]:
     node: dict[str, object] = {}
     cursor = node
-    for _ in range(500):
+    for _ in range(levels):
         child: dict[str, object] = {}
         cursor["k"] = child
         cursor = child
+    return node
+
+
+def test_deep_value_tree_degrades_in_display_but_raises_caught_in_execute() -> None:
+    # A pathological deep value tree must never raise an uncaught RecursionError.
+    # The display sink degrades the overflowing subtree (a preview can't crash); the
+    # execute sink raises InterpolationError, caught by the execute/health handlers.
+    node = _deep_tree(500)
+    shown, _ = resolve_value(node, _ctx())  # display
+    assert shown is not None  # degraded, no crash
     with pytest.raises(InterpolationError):
-        resolve_value(node, _ctx())
+        resolve_value(node, _ctx(execute=True))
+
+
+def _deep_from(levels: int) -> dict[str, object]:
+    node: dict[str, object] = {"$env": "COMPARO_DEFINITELY_UNSET"}
+    for _ in range(levels):
+        node = {"$from": [node]}
+    return node
+
+
+def test_deep_from_chain_is_caught_not_recursionerror() -> None:
+    # A $from recurses through resolve_source (not Engine.value), so it needs its own
+    # cap — a deep chain must raise a caught SecretError, never a raw RecursionError.
+    node = _deep_from(5000)
+    with pytest.raises(SecretError):  # SecretUnavailableError is a SecretError
+        resolve_value(node, _ctx(execute=True))
+    shown, _ = resolve_value(node, _ctx())  # display degrades
+    assert shown == ""
+
+
+def test_nul_byte_file_becomes_secreterror_not_raw_valueerror(tmp_path: Path) -> None:
+    # `.resolve()` raises a raw ValueError on a NUL byte; it must be re-raised as
+    # SecretError so the display degrade and the execute/health/redaction handlers
+    # all catch it instead of an uncaught crash.
+    node = {"$file": "tok\x00.txt"}
+    shown, _ = resolve_value(node, _ctx(root=tmp_path))
+    assert shown == ""  # display degrades, never a raw ValueError crash
+    with pytest.raises(SecretError):
+        resolve_value(node, _ctx(execute=True, root=tmp_path))
+
+
+def test_malformed_declared_source_is_benign_so_the_redactor_skips_it(tmp_path: Path) -> None:
+    # A schema-accepted secret typo ({env: X} missing the $) must be benign
+    # (SecretUnavailableError), so the redactor build skips it instead of crashing the
+    # whole TUI/CLI, and never embeds a secret in key position into the error.
+    from comparo.core.resolution import ExecuteSecrets
+    from comparo.core.resolution import SecretUnavailableError
+
+    with pytest.raises(SecretUnavailableError):
+        _ = ExecuteSecrets({"TOKEN": {"env": "COMPARO_TOKEN"}}, tmp_path)["TOKEN"]
+    # a secret sitting in key position (pathological) never leaks into the message
+    with pytest.raises(SecretUnavailableError) as exc:
+        _ = ExecuteSecrets({"TOKEN": {"$from": [{"sk-live-SECRET": 1}]}}, tmp_path)["TOKEN"]
+    assert "sk-live-SECRET" not in str(exc.value)

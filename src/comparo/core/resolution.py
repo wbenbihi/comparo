@@ -123,19 +123,29 @@ def _file_source(relative: object, root: Path | None) -> str:
     if root is None:
         message = f"$file '{relative}' has no project root to resolve against"
         raise SecretError(message)
-    base = root.resolve()
-    path = (base / str(relative)).resolve()
-    if not path.is_relative_to(base):
-        message = f"$file path escapes the project root: {relative}"
-        raise SecretError(message)
     try:
+        base = root.resolve()
+        # ``.resolve()`` itself raises a raw ValueError on a NUL byte, and an
+        # OSError/RuntimeError on a symlink loop or over-long path — so the whole
+        # path build/containment check must sit inside the try, or those escape the
+        # documented ``Raises: SecretError`` contract and crash every sink.
+        path = (base / str(relative)).resolve()
+        if not path.is_relative_to(base):
+            message = f"$file path escapes the project root: {relative}"
+            raise SecretError(message)
         return path.read_text(encoding="utf-8").strip()
-    except (OSError, ValueError, LookupError) as error:
-        message = f"cannot read $file {path}"
+    except (OSError, ValueError, LookupError, RuntimeError) as error:
+        message = f"cannot read $file {relative!s}"
         raise SecretError(message) from error
 
 
-def resolve_source(source: object, root: Path | None) -> tuple[str, Origin]:
+#: Cap on nesting depth for both the value-tree walk (:meth:`Engine.value`) and a
+#: ``$from`` chain (:func:`resolve_source`), so a runaway structure raises a caught
+#: error rather than an uncaught ``RecursionError``. Real configs nest a handful deep.
+_MAX_DEPTH = 200
+
+
+def resolve_source(source: object, root: Path | None, _depth: int = 0) -> tuple[str, Origin]:
     """Resolve a ``{$env|$file|$literal|$from: …}`` source dict to a real value.
 
     The one backend shared by the ``secrets:`` block (:class:`ExecuteSecrets`)
@@ -153,9 +163,16 @@ def resolve_source(source: object, root: Path | None) -> tuple[str, Origin]:
         winning candidate's origin).
 
     Raises:
-        SecretUnavailableError: If the source is absent (unset env, exhausted chain).
-        SecretError: If the source is anomalous (unreadable/escaping file, bad shape).
+        SecretUnavailableError: If the source is never resolvable (unset env,
+            exhausted/too-deep ``$from`` chain, malformed/unrecognised shape).
+        SecretError: If the source is anomalous — a real file that cannot be read
+            or a root-escaping ``$file`` (fails closed, never skipped by ``$from``).
     """
+    if _depth > _MAX_DEPTH:
+        # A runaway ``$from`` recurses through this function (not Engine.value), so
+        # it needs its own cap. Structurally never-resolvable → benign, so the redactor
+        # skips it and a caught error (not RecursionError) reaches every handler.
+        raise SecretUnavailableError("$from nesting too deep")
     if isinstance(source, dict):
         if "$env" in source:
             return _env_source(str(source["$env"])), Origin.ENV
@@ -167,7 +184,7 @@ def resolve_source(source: object, root: Path | None) -> tuple[str, Origin]:
         if isinstance(candidates, list):
             for candidate in candidates:
                 try:
-                    return resolve_source(candidate, root)  # (value, origin) of the winner
+                    return resolve_source(candidate, root, _depth + 1)  # (value, origin)
                 except SecretUnavailableError:
                     # A benign absence — try the next source. An anomalous
                     # SecretError (unreadable/escaping $file) propagates and fails
@@ -175,11 +192,17 @@ def resolve_source(source: object, root: Path | None) -> tuple[str, Origin]:
                     continue
             message = "no source in '$from' resolved"
             raise SecretUnavailableError(message)
-    # Shape-only diagnostic — NEVER repr the source: a $literal candidate (or a
-    # malformed value) may be a declared secret, and this error is displayed and
-    # persisted (health CheckResult.detail, Execution.error).
-    shape = sorted(map(str, source)) if isinstance(source, dict) else type(source).__name__
-    raise SecretError(f"unsupported source shape: {shape}")
+    # A malformed/unrecognised source was never resolvable, so it is BENIGN
+    # (SecretUnavailableError): the redactor skips it instead of crashing the whole
+    # TUI/CLI build, and a $from chain tries the next candidate. NEVER repr the
+    # source — show only its ``$``-directive keys (a real secret never sits in key
+    # position), so a $literal secret value can't leak into a displayed/persisted error.
+    if isinstance(source, dict):
+        keys = sorted(key for key in map(str, source) if key.startswith("$"))
+        shape = str(keys) if keys else "a dict with no $-directive key"
+    else:
+        shape = type(source).__name__
+    raise SecretUnavailableError(f"unsupported source shape: {shape}")
 
 
 @dataclasses.dataclass(slots=True)
@@ -328,12 +351,6 @@ def _join(path: str, key: object) -> str:
     return f"{path}.{key}" if path else str(key)
 
 
-#: Cap on value-tree nesting, so a runaway structure raises a caught
-#: ``InterpolationError`` rather than an uncaught ``RecursionError`` (mirrors the
-#: redactor's depth cap). Real configs nest a handful of levels deep.
-_MAX_DEPTH = 200
-
-
 class Engine:
     """Resolves a value tree against a :class:`Context`, holes and all.
 
@@ -357,8 +374,11 @@ class Engine:
             if self._depth > _MAX_DEPTH:
                 # A runaway nesting (a pathological value tree, or a $val chain the
                 # static cycle check missed) would otherwise raise an uncaught
-                # RecursionError that escapes the execute/health handlers and aborts
-                # the whole run. Raise a caught error so only this value degrades.
+                # RecursionError. The display sink degrades the overflowing subtree
+                # (a preview must not crash the Explorer/report/export); the execute
+                # sink raises a caught error so only this request/check degrades.
+                if self.context.mask_secrets:
+                    return ""
                 raise InterpolationError("value nesting too deep")
             if isinstance(node, str):
                 part = interpolate(node, self.context)
