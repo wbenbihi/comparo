@@ -101,11 +101,11 @@ from comparo.core.report_builder import record_from_diff
 from comparo.core.report_builder import record_from_execution
 from comparo.core.report_builder import record_from_run
 from comparo.core.report_record import ReportRecord
+from comparo.core.resolution import SecretError
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
 from comparo.core.resolve import resolve_pair
-from comparo.core.secrets import SecretError
 from comparo.core.triage import TriageError
 from comparo.core.triage import profile_path
 from comparo.core.triage import silence

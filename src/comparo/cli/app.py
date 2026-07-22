@@ -30,7 +30,6 @@ from comparo.core.execute import execute_all
 from comparo.core.execute import run_settings
 from comparo.core.execution import ExecutionResult
 from comparo.core.execution import run_execution
-from comparo.core.interpolation import InterpolationError
 from comparo.core.loader import LoadedProject
 from comparo.core.loader import load_project
 from comparo.core.models import Environment
@@ -41,13 +40,14 @@ from comparo.core.report import diff_passed
 from comparo.core.report_builder import record_from_diff
 from comparo.core.report_builder import record_from_execution
 from comparo.core.report_record import ReportRecord
+from comparo.core.resolution import InterpolationError
+from comparo.core.resolution import SecretError
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import resolve_pair
 from comparo.core.resolve import select_environment
 from comparo.core.schema import SCHEMA_ID
-from comparo.core.secrets import SecretError
 
 app = typer.Typer(
     name="comparo",

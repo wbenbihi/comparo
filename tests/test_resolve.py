@@ -263,11 +263,11 @@ def test_a_val_cycle_is_a_captured_error_not_a_recursion_crash() -> None:
     import msgspec
     import pytest
 
-    from comparo.core.interpolation import InterpolationError
     from comparo.core.loader import LoadedProject
     from comparo.core.models import Environment
     from comparo.core.models import Instance
     from comparo.core.models import Object
+    from comparo.core.resolution import InterpolationError
 
     def instance(ident: str, ref: str) -> Instance:
         obj = msgspec.convert(

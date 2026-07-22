@@ -31,8 +31,8 @@ from comparo.core.redaction import environment_secret_values
 from comparo.core.report_builder import record_from_diff as _v1_from_diff
 from comparo.core.report_builder import record_from_run as _v1_from_run
 from comparo.core.report_record import ReportRecord
+from comparo.core.resolution import SecretError
 from comparo.core.resolve import ResolvedRequest
-from comparo.core.secrets import SecretError
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "canary-project"
 SECRET = "cG9zdG1hbjpwYXNzd29yZA=="  # the canary BASIC_AUTH literal

@@ -14,17 +14,17 @@ from comparo.core.http import HttpError
 from comparo.core.http import HttpResponse
 from comparo.core.http import HttpTimeoutError
 from comparo.core.http import TimeoutBudget
-from comparo.core.interpolation import InterpolationError
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import MatrixCell
 from comparo.core.matrix import expand
 from comparo.core.models import Environment
 from comparo.core.models import Request
 from comparo.core.models import RetryConfig
+from comparo.core.resolution import InterpolationError
+from comparo.core.resolution import SecretError
 from comparo.core.resolve import ResolvedRequest
 from comparo.core.resolve import Resolver
 from comparo.core.resolve import Sink
-from comparo.core.secrets import SecretError
 
 #: Base delay for retry backoff, in seconds; scaled by the chosen strategy.
 _RETRY_BASE = 0.5

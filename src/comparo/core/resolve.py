@@ -9,9 +9,6 @@ holes, and the resolver fills them for a chosen environment. The display sink
 import dataclasses
 import enum
 
-from comparo.core.interpolation import Context
-from comparo.core.interpolation import InterpolationError
-from comparo.core.interpolation import interpolate
 from comparo.core.loader import LoadedProject
 from comparo.core.matrix import Injection
 from comparo.core.matrix import MatrixCell
@@ -22,7 +19,10 @@ from comparo.core.models import Instance
 from comparo.core.models import Request
 from comparo.core.provenance import Origin
 from comparo.core.provenance import Trail
-from comparo.core.secrets import ExecuteSecrets
+from comparo.core.resolution import Context
+from comparo.core.resolution import Engine
+from comparo.core.resolution import ExecuteSecrets
+from comparo.core.resolution import hole
 
 
 class EnvironmentSelectionError(Exception):
@@ -155,8 +155,6 @@ class Resolver:
         self.project = project
         self.environment = environment
         self.sink = sink
-        #: Instance ids currently being expanded, to detect a ``$val`` cycle.
-        self._resolving: set[str] = set()
         secret_sources = environment.spec.secrets or {}
         secret_names = frozenset(secret_sources)
         if sink is Sink.EXECUTE:
@@ -165,11 +163,15 @@ class Resolver:
                 secret_names=secret_names,
                 mask_secrets=False,
                 secret_values=ExecuteSecrets(dict(secret_sources), project.root),
+                instances=self._instance_value,
+                root=project.root,
             )
         else:
             self.context = Context(
                 variables=dict(environment.spec.variables or {}),
                 secret_names=secret_names,
+                instances=self._instance_value,
+                root=project.root,
             )
 
     def resolve_tree(self, value: object) -> tuple[object, list[Trail]]:
@@ -177,7 +179,7 @@ class Resolver:
 
         Used to resolve a standalone value such as an ``Instance`` — every
         ``${...}`` hole and ``$val``/``$secret`` reference is filled the same way
-        it would be inside a request.
+        it would be inside a request, by the shared resolution engine.
 
         Args:
             value: The value tree to resolve.
@@ -185,9 +187,8 @@ class Resolver:
         Returns:
             The resolved value and the provenance trail of everything filled.
         """
-        trail: list[Trail] = []
-        resolved = self._value(value, "", trail)
-        return resolved, trail
+        engine = Engine(self.context)
+        return engine.value(value), engine.trail
 
     def resolve_request(self, request: Request, cell: MatrixCell | None = None) -> ResolvedRequest:
         """Resolve *request* into a concrete tree with a provenance trail.
@@ -197,27 +198,27 @@ class Resolver:
             cell: The matrix cell to inject, or ``None`` for the base request.
 
         Returns:
-            The resolved request; secret-tainted values are masked.
+            The resolved request; declared secrets are masked in the display sink.
         """
         outbound = request.spec.request
         base = self.environment.spec.base_url.rstrip("/")
-        trail: list[Trail] = []
-        # Fill path-matrix ``${key}`` holes first, then interpolate ``${VAR}``
-        # references against the environment's variables/secrets.
+        engine = Engine(self.context)
+        # Fill path-matrix ``${key}`` holes first, then resolve every hole/string
+        # through the shared engine (which records provenance onto ``engine.trail``).
         injected = _inject_path(outbound.endpoint, cell)
-        resolved_endpoint = self._value(injected, "endpoint", trail)
+        resolved_endpoint = engine.value(injected, "endpoint")
         endpoint = str(resolved_endpoint) if resolved_endpoint is not None else ""
         url = f"{base}/{endpoint.lstrip('/')}"
-        headers = self._headers(outbound.headers, trail)
+        headers = self._headers(outbound.headers, engine)
         query = {
-            key: self._value(value, f"query.{key}", trail)
+            key: engine.value(value, f"query.{key}")
             for key, value in (outbound.query or {}).items()
         }
-        body = None if outbound.body is None else self._value(outbound.body, "body", trail)
+        body = None if outbound.body is None else engine.value(outbound.body, "body")
         auth_spec = outbound.auth if outbound.auth is not None else self.environment.spec.auth
-        auth = None if auth_spec is None else self._value(auth_spec, "auth", trail)
+        auth = None if auth_spec is None else engine.value(auth_spec, "auth")
         cookies = {
-            key: self._value(value, f"cookies.{key}", trail)
+            key: engine.value(value, f"cookies.{key}")
             for key, value in (outbound.cookies or {}).items()
         }
         response = request.spec.response
@@ -227,7 +228,7 @@ class Resolver:
             headers,
             query,
             body,
-            trail,
+            engine.trail,
             body_type=outbound.body_type or "json",
             auth=auth,
             cookies=cookies or None,
@@ -235,7 +236,7 @@ class Resolver:
         )
         if cell is not None:
             for injection in cell.injections:
-                self._inject(resolved, injection, trail)
+                self._inject(resolved, injection, engine.trail)
         return resolved
 
     def _inject(self, resolved: ResolvedRequest, injection: Injection, trail: list[Trail]) -> None:
@@ -251,25 +252,21 @@ class Resolver:
         elif top == "body":
             resolved.body = _apply(resolved.body, rest, injection)
 
-    def _headers(self, request_headers: object, trail: list[Trail]) -> list[tuple[str, object]]:
+    def _headers(self, request_headers: object, engine: Engine) -> list[tuple[str, object]]:
         merged: dict[str, tuple[str, object]] = {}
         for header in self.environment.spec.headers or []:
             merged[header.key.lower()] = (header.key, header.value)
-        for key, raw in self._header_pairs(request_headers, trail):
+        for key, raw in self._header_pairs(request_headers, engine):
             merged[key.lower()] = (key, raw)
-        return [
-            (key, self._value(raw, f"headers.{key.lower()}", trail)) for key, raw in merged.values()
-        ]
+        return [(key, engine.value(raw, f"headers.{key.lower()}")) for key, raw in merged.values()]
 
-    def _header_pairs(
-        self, request_headers: object, trail: list[Trail]
-    ) -> list[tuple[str, object]]:
+    def _header_pairs(self, request_headers: object, engine: Engine) -> list[tuple[str, object]]:
         node = request_headers
         if isinstance(node, dict):
-            hole = _hole(node)
-            if hole is not None and hole[0] == "$val" and isinstance(hole[1], str):
-                trail.append(Trail("headers", Origin.INSTANCE, hole[1]))
-                node = self._instance_value(hole[1])
+            spot = hole(node)
+            if spot is not None and spot[0] == "$val" and isinstance(spot[1], str):
+                engine.trail.append(Trail("headers", Origin.INSTANCE, spot[1]))
+                node = self._instance_value(spot[1])
         pairs: list[tuple[str, object]] = []
         if isinstance(node, list):
             for item in node:
@@ -277,67 +274,15 @@ class Resolver:
                     pairs.append((item.key, item.value))
                 elif isinstance(item, dict) and "key" in item:
                     pairs.append((str(item["key"]), item.get("value")))
-        elif isinstance(node, dict) and _hole(node) is None:
-            # Mapping form: ``{Header-Name: value}`` (values still flow through
-            # ``_value`` in ``_headers``, so ``${...}``/``$secret`` resolve/mask).
+        elif isinstance(node, dict) and hole(node) is None:
+            # Mapping form: ``{Header-Name: value}`` (values still flow through the
+            # engine in ``_headers``, so ``${...}``/``$secret`` resolve/mask).
             pairs.extend((str(key), value) for key, value in node.items())
         return pairs
-
-    def _value(self, node: object, path: str, trail: list[Trail]) -> object:
-        if isinstance(node, str):
-            result = interpolate(node, self.context)
-            if result.origin is not Origin.LITERAL and result.detail is not None:
-                trail.append(Trail(path, result.origin, result.detail))
-            return result.value
-        if isinstance(node, dict):
-            hole = _hole(node)
-            if hole is not None:
-                return self._reference(hole[0], hole[1], path, trail)
-            return {key: self._value(value, _join(path, key), trail) for key, value in node.items()}
-        if isinstance(node, list):
-            return [self._value(item, f"{path}[{index}]", trail) for index, item in enumerate(node)]
-        return node
-
-    def _reference(self, sigil: str, target: object, path: str, trail: list[Trail]) -> object:
-        if sigil == "$val" and isinstance(target, str):
-            if target in self._resolving:
-                chain = " → ".join([*self._resolving, target])
-                message = f"$val cycle: {chain}"
-                raise InterpolationError(message)
-            trail.append(Trail(path, Origin.INSTANCE, target))
-            self._resolving.add(target)
-            try:
-                return self._value(self._instance_value(target), path, trail)
-            finally:
-                self._resolving.discard(target)
-        if sigil == "$literal":
-            return target
-        if sigil == "$secret" and isinstance(target, str):
-            trail.append(Trail(path, Origin.SECRET, f"$secret:{target}"))
-            if self.context.mask_secrets:
-                return self.context.mask
-            return self.context.secret_values[target]
-        if sigil in ("$env", "$file"):
-            trail.append(Trail(path, Origin.SECRET, f"{sigil}:{target}"))
-            return self.context.mask
-        return {sigil: target}
 
     def _instance_value(self, identifier: str) -> object:
         instance = self.project.objects.get(identifier)
         return instance.spec.value if isinstance(instance, Instance) else None
-
-
-def _hole(node: dict[object, object]) -> tuple[str, object] | None:
-    if len(node) != 1:
-        return None
-    (key, value) = next(iter(node.items()))
-    if isinstance(key, str) and key.startswith("$"):
-        return key, value
-    return None
-
-
-def _join(path: str, key: object) -> str:
-    return f"{path}.{key}" if path else str(key)
 
 
 def _apply(container: object, path: list[str], injection: Injection) -> object:

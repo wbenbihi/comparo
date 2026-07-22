@@ -11,15 +11,15 @@ import enum
 from comparo.core.http import HttpClient
 from comparo.core.http import HttpError
 from comparo.core.http import TimeoutBudget
-from comparo.core.interpolation import Context
-from comparo.core.interpolation import InterpolationError
-from comparo.core.interpolation import interpolate
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
 from comparo.core.models import HealthCheck
+from comparo.core.resolution import Context
+from comparo.core.resolution import ExecuteSecrets
+from comparo.core.resolution import InterpolationError
+from comparo.core.resolution import SecretError
+from comparo.core.resolution import interpolate
 from comparo.core.resolve import ResolvedRequest
-from comparo.core.secrets import ExecuteSecrets
-from comparo.core.secrets import SecretError
 
 
 class Health(enum.Enum):

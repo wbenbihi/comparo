@@ -15,8 +15,8 @@ from pathlib import Path
 
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
-from comparo.core.secrets import ExecuteSecrets
-from comparo.core.secrets import SecretUnavailableError
+from comparo.core.resolution import ExecuteSecrets
+from comparo.core.resolution import SecretUnavailableError
 
 #: What a redacted secret becomes — the same glyph the DISPLAY sink uses.
 MASK = "••••••"

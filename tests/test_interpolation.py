@@ -2,10 +2,10 @@
 
 import pytest
 
-from comparo.core.interpolation import Context
-from comparo.core.interpolation import InterpolationError
-from comparo.core.interpolation import interpolate
 from comparo.core.provenance import Origin
+from comparo.core.resolution import Context
+from comparo.core.resolution import InterpolationError
+from comparo.core.resolution import interpolate
 
 CTX = Context(variables={"LOCALE": "en-US", "PORT": "8080"}, secret_names=frozenset({"TOKEN"}))
 

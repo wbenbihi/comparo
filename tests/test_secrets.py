@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from comparo.core.secrets import ExecuteSecrets
-from comparo.core.secrets import SecretError
-from comparo.core.secrets import SecretUnavailableError
+from comparo.core.resolution import ExecuteSecrets
+from comparo.core.resolution import SecretError
+from comparo.core.resolution import SecretUnavailableError
 
 
 def test_env_secret(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

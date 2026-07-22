@@ -18,11 +18,18 @@ class Origin(enum.Enum):
     INSTANCE = "instance"
     MATRIX = "matrix"
     FILE = "file"
+    ENV = "env"
 
     @property
     def tainted(self) -> bool:
-        """Whether values of this origin must be masked and never persisted."""
-        return self in (Origin.SECRET, Origin.FILE)
+        """Whether values of this origin must be masked and never persisted.
+
+        Only a declared secret is tainted. ``$env``/``$file`` resolve real values
+        that are masked *iff* they are a declared secret — that is the redactor's
+        value-keyed floor, not this origin — so they are not tainted here. Masking
+        is keyed off the ``secrets:`` declaration, never off the directive.
+        """
+        return self is Origin.SECRET
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
