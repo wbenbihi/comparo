@@ -228,10 +228,61 @@ Screen {
 #run-columns.r-v-d #col-variants { display: block; width: 52; margin-right: 1; }
 #run-columns.r-v-d #col-details { display: block; width: 1fr; }
 
+/* The mockup's bordered filter input — one class, every index panel. */
+.filterrow {
+    height: 3;
+    border: round $border;
+    background: #141b28;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#run-head-scroll {
+    height: auto;
+    max-height: 60%;
+    margin-bottom: 1;
+    scrollbar-size-vertical: 1;
+}
+
+#run-inspect-head {
+    height: auto;
+}
+
+#run-record {
+    background: transparent;
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
+#run-record.hidden {
+    display: none;
+}
+
+#run-record > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: none;
+}
+
+#run-record > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
+}
+
+#detail-tree.hidden {
+    display: none;
+}
+
 #req-table, #var-table {
     background: transparent;
     width: 1fr;
     height: 1fr;
+}
+
+#run-legend {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
 }
 
 #req-table > .datatable--header,
@@ -249,6 +300,7 @@ Screen {
 
 #detail-tree {
     background: transparent;
+    height: 1fr;
     padding: 1 1;
     overflow-x: hidden;
     scrollbar-size-vertical: 1;
@@ -532,10 +584,7 @@ Screen {
     height: 1fr;
 }
 
-#drift-filter {
-    height: auto;
-    margin-bottom: 1;
-}
+
 
 #drift-legend {
     height: auto;
@@ -887,22 +936,40 @@ ConfirmModal, EnvPickerModal {
     height: auto;
 }
 
-#inspect-table {
+#inspect-table, #run-checks {
+    background: transparent;
     height: auto;
-    max-height: 12;
+    max-height: 16;
     margin: 1 0;
+    scrollbar-size-vertical: 1;
 }
 
-#inspect-table.hidden {
+#inspect-table.hidden, #run-checks.hidden {
     display: none;
 }
 
-#inspect-table.rows-bad {
+/* The verdict card: the phrase in the border, the tone on the outline. */
+DataTable.rows-bad {
     border: round $error 60%;
+    border-title-align: left;
 }
 
-#inspect-table.rows-good {
+DataTable.rows-good {
     border: round $success 60%;
+    border-title-align: left;
+}
+
+#inspect-table > .datatable--header,
+#run-checks > .datatable--header {
+    background: transparent;
+    color: $text-muted;
+    text-style: none;
+}
+
+#inspect-table > .datatable--cursor,
+#run-checks > .datatable--cursor {
+    background: #1e2b45;
+    color: $text;
 }
 
 #diff-progress.gate-pass {

@@ -2027,7 +2027,17 @@ def test_run_results_sort_worst_first_and_r_pivots_to_the_rules_index() -> None:
             assert folded_ref == ref
             assert len(hits) == len(plan)  # its record covers each judged cell
             assert run._rule_severity(hits) == 0  # it broke somewhere → worst tier
-            run.action_back()  # esc unwinds the pivot before leaving RUNNING
+            run._view = "details"
+            run._populate_rule_detail(0)  # the record is a real DataTable now
+            await pilot.pause()
+            record = run.query_one("#run-record", DataTable)
+            assert not record.has_class("hidden")
+            assert record.row_count == len(plan)
+            assert run.query_one("#detail-tree", Tree).has_class("hidden")
+            run.action_back()  # esc: first out of the record detail…
+            await pilot.pause()
+            assert run._pivot == "rules"
+            run.action_back()  # …then unwinds the pivot before leaving RUNNING
             await pilot.pause()
             assert run._pivot == "requests"
 
@@ -2109,11 +2119,112 @@ def test_jump_to_cell_survives_the_rebuild_echo_and_dead_cells_join_the_record()
             assert run._focus is multi
             assert run._focus_cell is not None
             assert run._focus_cell.key == target_cell.key
+            # drilled → the left index wears the compact costume (mockup reqIndex)
+            assert run._index_costume == "compact"
+            req_table = run.query_one("#req-table", DataTable)
+            rid = multi.metadata.id or multi.metadata.name
+            nested_keys = [key for key, (rq, _) in run._cellrow_data.items() if rq is multi]
+            table_keys = {str(row.value) for row in req_table.rows}
+            assert nested_keys, "the matrix request nests its cells inline"
+            assert set(nested_keys) <= table_keys
+            assert run._cellrow_keys[(rid, target_cell.key)] in table_keys
             # (3) the anchor hop lands the cursor on the revealed broken node
             assert run._anchors, "the broken body check must be in the registry"
             run.action_next_anchor()
             await pilot.pause()
             tree = run.query_one("#detail-tree", Tree)
             assert tree.cursor_node is run._anchors[0]
+            # (4) the verdict card is a focusable table; enter on its broken
+            # rule opens that rule's record in the rules pivot
+            checks = run.query_one("#run-checks", DataTable)
+            assert not checks.has_class("hidden")
+            assert checks.has_class("rows-bad")  # a broken cell wears the red card
+            assert run._check_refs
+            assert run._check_refs[0] == ref  # worst first, ref attached
+            assert run._check_refs[-1] is None  # reachable last, no record
+            run._open_rule_record(ref)
+            await pilot.pause()
+            assert run._pivot == "rules"
+            assert not run.query_one("#run-record", DataTable).has_class("hidden")
+            assert checks.has_class("hidden")  # the record replaced the card
+
+    asyncio.run(go())
+
+
+def test_diff_inspect_wears_the_verdict_card_and_streams_are_navigable() -> None:
+    # Fidelity round 2: the verdict phrase lives INSIDE the red/green card
+    # (the inspect table's border title), a clean cell gets an auditable green
+    # card, stream events are selectable rows that expand in the tail, and o
+    # actually toggles the outbound layer.
+    from comparo.core.compare import CellDiff
+    from comparo.core.compare import RuleOutcome
+    from comparo.core.diff import FieldDiff
+    from comparo.core.diff import State
+    from comparo.core.diff import default_ref
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.models import Environment
+
+    loaded = load_project(SAMPLE)
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            ref = default_ref("exact")
+            drift = FieldDiff("$.a", State.DRIFT, "exact", '"0.20" → "0.25"', rule=ref)
+            cell = CellDiff(
+                request,
+                "",
+                [drift],
+                None,
+                {"a": "0.20"},
+                {"a": "0.25"},
+                rule_outcomes=[RuleOutcome(ref, "broke", broke=1)],
+            )
+            base_events: list[object] = [{"event": "tick", "data": '{"seq": 1}'}]
+            cand_events: list[object] = [{"event": "tick", "data": '{"seq": 9}'}]
+            stream_cell = CellDiff(
+                request,
+                "streamed",
+                [FieldDiff("$[1]", State.DRIFT, "exact", "events differ")],
+                None,
+                baseline=Execution(
+                    request, env, "streamed", HttpResponse(200, [], b"", 5.0, base_events)
+                ),
+                candidate=Execution(
+                    request, env, "streamed", HttpResponse(200, [], b"", 5.0, cand_events)
+                ),
+            )
+            diff._cells = [cell, stream_cell]
+            diff._done = True
+            diff.query_one("#diff-mode", ContentSwitcher).current = "diff-results"
+            diff._regroup()
+            diff._populate_drift()
+            await pilot.pause()
+            diff._render_row("cell::0")
+            await pilot.pause()
+            table = diff.query_one("#inspect-table", DataTable)
+            assert table.has_class("rows-bad")  # the red verdict card…
+            assert "broke on this cell" in str(table.border_title)  # …asserts inside itself
+            # the streamed cell lists its events as selectable rows
+            diff._render_row("cell::1")
+            await pilot.pause()
+            keys = list(diff._inspect_jumps)
+            assert any(k.startswith("evt::") for k in keys)
+            # selecting the event row focuses it in the tail (no crash, focus set)
+            diff._event_focus = 0
+            diff._render_row("cell::1")
+            await pilot.pause()
+            # o toggles the outbound layer without error (no resolved sides here,
+            # so the band is simply absent — the action must still be safe)
+            diff.action_outbound()
+            await pilot.pause()
+            assert diff._outbound_shown
 
     asyncio.run(go())

@@ -30,7 +30,8 @@ at Prepare when diffing (it belongs to the `sse-dev` environment).
 | User rules (grey) | `$.headers` / `$.origin` / `$.url` — httpbin's echo noise, deliberately ignored |
 | Unused rule | `$.tpyo.field` — matches nothing anywhere; the rules pivot calls it out (`– … typo?`) |
 | Stream drift | **Price feed** — `/stream/5`'s five events each echo the injected taxRate: per-event drift in the sequence view |
-| Transport error | **Slow endpoint** — `/delay/10` against a 2s read budget: the candidate times out; the error panel shows attempts and the deadline |
+| Transport error (one side) | **Slow endpoint** — `/delay/${DELAY}` against a 2s read budget: only the candidate (10s) times out |
+| Transport error (both sides) | **Legacy quote** — `/delay/10` against a 1s budget: times out everywhere; the `!` cell in both tabs |
 | `$status` drift | **Status probe** — 200 vs 503 |
 | Clean cell | **Checkout** and **HTML page** — the green all-held box, collapsed sections |
 | Not run (`⊘`) | Deselect **Quote history** at Prepare |
@@ -41,3 +42,21 @@ at Prepare when diffing (it belongs to the `sse-dev` environment).
 The traceability loop: on a red **Price quote** cell press `enter` (into the
 broken-rule rows) → `enter` again (that rule's record across every request) →
 `enter` on a record row (back to a cell) → `esc` unwinds each hop.
+
+## The Run tab, state by state
+
+Run tab (`2`) → `x` (executes against **baseline** by default; `e` at Prepare
+switches — against **candidate**, `STATUS=503` also breaks Status probe):
+
+| RUN state | Where |
+|---|---|
+| `✗ FAIL` cell + red verdict card | **Checkout** — `assert.order` demands `total == 999` against an echoed `240.0`; the card shows expected · got |
+| Red anchor in the body (`n`/`p`) | the same cell — `✗ json.order.total` pinned at its site; `sku` carries the green `✓` |
+| `~ advisory` PASS cells | **Price quote** ×3 — the 5ms latency SLO breaks, amber everywhere, gate untouched |
+| `! ERROR` cell + error card | **Legacy quote** — verbatim timeout, attempts (retry ×2), the kept masked request |
+| Matrix variants table | **Price quote** — `✓ PASS / ✗ FAIL / ! ERROR` per case |
+| Rules index (`r`) | broken (`total == 999`) on top → advisory (`latency <= 5ms`) → held → **Legacy quote's** rules as `! error · never evaluated` |
+| Record table jump | open `total == 999` → `enter` on a record row lands in that cell's detail |
+| Worst-first + `o` | the finished table leads with Checkout (✗) and Legacy quote (!) |
+| Filter by attribute | `/` then `fail`, `error`, `POST`, `sse`, a case key… — not just names |
+| Facets + `y` | `t` cycles all · request · response · headers · raw; `y` copies the masked exchange |

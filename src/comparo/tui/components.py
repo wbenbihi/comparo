@@ -21,8 +21,10 @@ import dataclasses
 from collections.abc import Callable
 from typing import Literal
 
+from rich import box as rich_box
 from rich.console import Group
 from rich.console import RenderableType
+from rich.table import Table as RichTable
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -97,29 +99,47 @@ def progress_bar(done: int, total: int, *, width: int = 24) -> Text:
     return bar
 
 
+#: The pill/segment background and the table hairline — the mockup's --line.
+_PILL_BG = "#1b2230"
+_LINE = "#2a3345"
+
+
 def seg_pill(options: tuple[str, ...], active: str) -> Text:
-    """The segmented pill toggle: the active segment reversed, the rest dim."""
+    """The segmented pill — quiet and readable, no background patches.
+
+    Dim segments joined by hairline separators; the active one in bold accent.
+    """
     text = Text()
     for index, option in enumerate(options):
         on = option == active
         if index:
-            text.append(" ", style=_DIM)
-        text.append(
-            f" {option} ", style=f"bold {_INK} on {_ACCENT}" if on else f"{_DIM} on #1b2230"
-        )
+            text.append(" │ ", style=_LINE)
+        text.append(option, style=f"bold {_ACCENT}" if on else _DIM)
     return text
 
 
-def filter_row(query: str, *, toggle_key: str, toggle_label: str, toggle_on: bool) -> Text:
-    """The one ``/ filter`` strip with its only-the-broken/fails toggle."""
-    row = Text()
-    row.append("/", style=f"bold {_ACCENT}")
-    row.append(f" {query}" if query else " filter…", style=_TEXT if query else _DIM)
-    row.append("   ", style=_DIM)
-    row.append(toggle_key, style=f"bold {_ACCENT}")
-    row.append(f" {toggle_label} ", style=_DIM)
-    row.append(" on ", style=f"bold {_INK} on {_ACCENT}" if toggle_on else f"{_DIM} on #1b2230")
-    return row
+def filter_row(
+    query: str, *, toggle_key: str, toggle_label: str, toggle_on: bool
+) -> RenderableType:
+    """The one ``/ filter`` strip — the mockup's bordered input row.
+
+    Left: ``/`` and the ACTIVE query (the placeholder only when empty). Right:
+    the fails/broken-only toggle as a chip. The host Static wears the
+    ``filterrow`` CSS class, which draws the input's rounded border.
+    """
+    table = RichTable(box=None, show_header=False, expand=True, padding=0, pad_edge=False)
+    table.add_column(ratio=1)
+    table.add_column(justify="right")
+    left = Text(no_wrap=True)
+    left.append("/ ", style=f"bold {_ACCENT}")
+    left.append(query if query else "filter…", style=_TEXT_HI if query else _DIM)
+    right = Text(no_wrap=True)
+    right.append(toggle_key, style=f"bold {_ACCENT}")
+    right.append(f" {toggle_label} ", style=_DIM)
+    state = " on " if toggle_on else " off "
+    right.append(state, style=f"bold {_INK} on {_ACCENT}" if toggle_on else f"{_DIM} on {_PILL_BG}")
+    table.add_row(left, right)
+    return table
 
 
 # ── summary strip — one slot, two costumes ────────────────────────────────────
@@ -287,14 +307,38 @@ class StatChip:
 
 
 def stat_chips(chips: list[StatChip]) -> Text:
-    """The record card's stat row — ``enforced 4 · ✗ broke 3 · ✓ held 1``."""
+    """The record card's stat row — pill-shaped chips, like the mockup's ``.stat``.
+
+    ``enforced 4`` ``✗ broke 3`` ``✓ held 1`` — each chip on its own subtle
+    background so the tally reads as badges, not a sentence.
+    """
     text = Text()
     for index, chip in enumerate(chips):
         if index:
-            text.append("   ", style=_DIM)
+            text.append("  ")
         style = chip.style if chip.count else _DIM
-        text.append(f"{chip.label} {chip.count}", style=style)
+        text.append(f" {chip.label} {chip.count} ", style=f"{style} on {_PILL_BG}")
     return text
+
+
+def record_table(*, header: bool = True, expand: bool = True) -> RichTable:
+    """The one data-table chrome — the mockup's ``table.t tight``.
+
+    A dim UPPERCASE header row and hairline separators between every row.
+    Every ledger, record card, and spec block that renders as a Rich table
+    builds on this frame; callers add their own columns and rows.
+    """
+    return RichTable(
+        box=rich_box.HORIZONTALS,
+        show_header=header,
+        show_lines=True,
+        show_edge=False,
+        expand=expand,
+        pad_edge=False,
+        padding=(0, 1),
+        border_style=_LINE,
+        header_style=f"bold {_LABEL}",
+    )
 
 
 def spec_rows(rows: list[tuple[str, Text | str]]) -> list[Text]:
@@ -312,9 +356,14 @@ def spec_rows(rows: list[tuple[str, Text | str]]) -> list[Text]:
     return lines
 
 
-def spec_table(rows: list[tuple[str, Text | str]]) -> Group:
-    """The record card's spec block — dim labels, one value per line."""
-    return Group(*spec_rows(rows))
+def spec_table(rows: list[tuple[str, Text | str]]) -> RichTable:
+    """The record card's spec block — dim labels, hairline-separated rows."""
+    table = record_table(header=False)
+    table.add_column(no_wrap=True, style=_DIM, min_width=9)
+    table.add_column()
+    for label, value in rows:
+        table.add_row(label, Text(value, style=_TEXT) if isinstance(value, str) else value)
+    return table
 
 
 # ── error panel ───────────────────────────────────────────────────────────────
@@ -436,7 +485,7 @@ class IndexPane(Vertical):
     def compose(self) -> ComposeResult:
         """The fixed skeleton: header, filter, table, legend."""
         yield Static("", classes="index-header")
-        yield Static("", classes="index-filter")
+        yield Static("", classes="index-filter filterrow")
         yield DataTable(cursor_type="row", show_header=False)
         yield Static("", classes="index-legend")
 

@@ -19,3 +19,5 @@ spec:
         total: 240.0
   response:
     status: 200
+    assert:
+      $ref: assert.order
