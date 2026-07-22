@@ -182,7 +182,7 @@ Screen {
 #run-progress {
     height: 1;
     padding: 0 2;
-    margin-bottom: 1;
+    margin: 0;
 }
 
 /* The finished strip borrows the diff summary's gate tint — one grammar. */
@@ -520,8 +520,13 @@ Screen {
 }
 
 /* ── Diff ────────────────────────────────────────────────────────────────── */
-#diff-mode, #diff-prepare, #diff-results, #diff-running,
-/* PREPARE — pick the pair and which requests/cases to diff (mirrors Run). */
+#diff-mode, #diff-prepare, #diff-results, #diff-running {
+    height: 1fr;
+}
+
+/* PREPARE — pick the pair and which requests/cases to diff (mirrors Run).
+   The centering + top padding is scoped to PREPARE only; the results/running
+   panes must NOT inherit it, or the summary bar is pushed down two rows. */
 #diff-prepare {
     align: center top;
     padding: 1 0 0 0;
@@ -560,7 +565,7 @@ Screen {
 #diff-progress {
     height: 3;
     padding: 0 1;
-    margin-bottom: 1;
+    margin: 0;
 }
 
 #diff-cols {
