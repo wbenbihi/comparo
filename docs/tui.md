@@ -119,39 +119,52 @@ pill** (`✓ PASS` / `✗ FAIL` / `! ERROR` — unreachable cells alone grade ER
 rule grades FAIL) and the strip's border tints to match. The cell states are the shared grammar:
 `✓` passed, `~` passed with an advisory break, `✗` a gating rule broke, `!` unreachable.
 
-- **Requests** table — status, a variant strip, p50 latency. Once the run finishes the table
-  snaps **worst-first** (`✗ ! ~ ✓` precedence, plan order within a tier); `o` flips it back to
-  plan order.
-- **Variants** table (appears when you open a matrix request) — case, HTTP code, time, and a
-  clear **result** (`✓ 2 passed` or `✗ status == 200`, naming the failed rule by its label;
-  `reachable` is transport, shown in the detail tree rather than counted here, and an
-  unreachable cell reads `! unreachable` — `✗` stays reserved for rules that actually broke).
+- **Requests** table — the triage table: verdict glyph, the request (name, method, payload type
+  — `json · sse · html · pdf` — and `×` for a matrix request), the per-cell strip, an
+  **assertions rollup** (counts only, `✓ 12 · ✗ 3 · ~ 1`; an errored request says
+  `nothing judged — no response`), and P50. A persistent **filter row** sits on top
+  (`/ filter…` shows the active query; `f fails only` is its toggle) and the panel carries the
+  **requests ⇄ rules** pill. Once the run finishes the table snaps **worst-first** (`✗ ! ~ ✓`
+  precedence, plan order within a tier); `o` flips it back to plan order. Requests deselected
+  at Prepare stay visible as dim `⊘ deselected` rows. **When you drill in, the panel switches
+  to the compact index** — one line per request (`✗ Price quote GET json · ✓✗✓`), a matrix
+  request's cells nested and selectable beneath it, the glyph legend at the bottom — and
+  switches back when you step out.
+- **Variants** table (appears when you open a matrix request) — **verdict** (`✓ PASS` /
+  `✗ FAIL` / `! ERROR`), case, HTTP code, time. Rule *names* live in the detail, never here.
   A single-case request skips this and goes straight to the report.
-- **Detail** — a navigable tree of the whole exchange. The checks section wears the **verdict
-  box** grammar: an auditable `N of M rules broke on this cell` header, one line per held rule
-  (with its provenance — `profile asserts.q`, `inline`, `built-in`), two lines per broken rule
-  (label, then the evidence), a broken `warn`-severity rule as an amber `~` advisory that never
-  fails the run, and a synthesized `reachable` row **last** (a dead cell replaces the box with the
-  **error panel** — the verbatim error, attempts, and retry policy, closed by the transport
-  row — because rules that never ran are never painted as broken). A JSON response body mounts the
-  **anchored evidence tree**: each body-targeting rule's verdict is pinned at its exact site
-  (`✓`/`~`/`✗`, with the rule named at a break, and a missing required field planted red where
-  it should have been); `n` / `p` hop between the broken anchors. `t` cycles the facet —
-  **all · request · response · headers · raw** — and `y` copies the raw exchange (request line,
-  headers, status line, body) to the clipboard with **secrets masked**.
+- **Detail** — the judging chrome sits ABOVE the evidence as its own block: the **call line**
+  (verdict · `HTTP 500 · time 96 ms · size 231 B · type application/json`), then the
+  **verdict card** — a red/green rounded card whose border carries the phrase
+  (`✗ N of M rules broke on this cell` / `✓ every rule held — N/N`) with every rule inside as
+  a **focusable row**: `tab` into the card, `enter` on a rule opens its record in the rules
+  pivot. The rows:
+  one line per held rule (with its provenance — `profile asserts.q`, `inline · <request>`,
+  `built-in`), two lines per broken rule (label, then the evidence), amber `~` advisories that
+  never fail the run, and the synthesized `reachable` row **last**. A dead cell gets the amber
+  **error card** instead: the verbatim error, attempts and retry policy in a spec table, a
+  "What this means" note, and the resolved request we sent (masked) — no fake N-of-M claim.
+  Below the card, the **evidence tree**: the resolved request and the response; a JSON body
+  pins each body rule's verdict at its exact site (a missing required field is planted red
+  where it should have been) and `n` / `p` hop between the broken anchors. `t` cycles the facet
+  — **all · request · response · headers · raw** — and `y` copies the raw exchange (request
+  line, headers, status line, body) to the clipboard with **secrets masked**.
 
-**`r` pivots the left column to the rules index**: every assertion rule the run judged, folded to
-one row per *written* rule across all cells — its per-cell `✓~✗` strip, its provenance, and a
-`broke/enforced` count, worst rules first. `enter` opens the rule's **record**: target, op,
-severity, source, a tally, and every judged cell; selecting a cell row jumps straight to that
+**`r` pivots the left column to the rules index**: every assertion rule the run carried, folded
+to one row per *written* rule across all cells — its per-cell `✓~✗!` strip, its provenance, and
+a `broke/enforced` count, worst rules first. `enter` opens the rule's **record card**: the spec
+table (target · op · severity · source), pill-shaped stat chips (`enforced · ✗ broke ·
+~ advisory · ✓ held · ! error`), and the **record table** — request · variant · outcome ·
+expected · got, one row per cell the rule belongs to; `enter` on a row jumps straight to that
 cell's detail in the requests pivot. `esc` unwinds the pivot before leaving Running. A dead
-cell's rules were attached but never evaluated: each record lists it as `! never evaluated`
-(with an `! error` stat chip), and it never increments a rule's broken count.
+cell's rules were attached but never evaluated: each record lists it as `! error ·
+never evaluated`, and it never increments a rule's broken count.
 
 | Key       | Action |
 | --------- | ------ |
-| `↑ ↓`     | move / navigate the detail tree |
-| `enter`   | drill into the next split · open a rule's record · jump from a record row |
+| `↑ ↓`     | move / navigate the focused panel |
+| `tab`     | move focus — index · verdict card · record · evidence tree |
+| `enter`   | drill in · a verdict-card rule ↗ its record · a record row ↗ its cell |
 | `r`       | pivot the left column — requests ⇄ the assertion-rules index |
 | `o`       | flip the requests table worst-first ⇄ plan order |
 | `t`       | cycle the detail facet — all · request · response · headers · raw |
@@ -160,7 +173,7 @@ cell's rules were attached but never evaluated: each record lists it as `! never
 | `bksp`    | collapse a split (or return to Prepare) |
 | `z`       | maximize the detail panel |
 | `f`       | filter the tables to failures only |
-| `/`       | filter by request, case, or rule name (shown on the panel) |
+| `/`       | filter by ANY attribute — name, method, payload type, case, status, or state (`fail`, `error`, `warn`, `pass`…) |
 | `a`       | abort the run and return to Prepare |
 | `s`       | save the finished run to masked JSON **and archive it as an assertions report** (visible in the Report tab; secrets redacted, even when echoed back) |
 
@@ -198,21 +211,31 @@ result set seen through three indexes**, cycled with `r` (the pill in the panel 
 which is active):
 
 - **requests** — every request with its matrix variants nested under it, one glyph each
-  (`✓` clean · `✗` a rule broke · `!` error · `⊘` not run — deselected at prepare). Selecting
-  a cell shows the whole-request inspect: the **call ledger**, the **verdict box** naming
-  exactly which rules broke (`✗ 1 of 9 rules broke on this cell`, with the evidence line),
-  the **response-headers well** (drifts as −/+, silenced names annotated with their rule),
-  and the **body** — the git-style well for JSON (`v` flips unified ⇄ side-by-side), the
-  event sequence for a stream, or the error panel (verbatim engine error, attempts, retry
-  policy, the kept single-sided baseline) for a dead cell.
+  (`✓` clean · `✗` a rule broke · `!` error · `⊘` not run — deselected at prepare). A
+  persistent **filter row** heads the index (`/ filter…` shows the active query; `f` is its
+  broken-only toggle). Selecting a cell shows the whole-request inspect: the **call ledger**
+  (a headered table — `baseline · <env>` vs `candidate · <env>` vs Δ — with hairline row
+  separators), the **outbound band** (see below), and the **verdict card** — a red or green
+  rounded card whose border carries the phrase itself (`✗ N of M rules broke on this cell` /
+  `✓ every rule held on this cell`) with the rules as selectable rows inside: broken rules
+  with their evidence on a red card, and on a **clean cell the green card lists every held
+  and silenced rule** — "clean" is a claim you can audit. Below: the **response-headers
+  well** (drifts as −/+, silenced names annotated with their rule) and the **body** — the
+  git-style well for JSON (`v` flips unified ⇄ side-by-side), the **event sequence** for a
+  stream, or the error panel (verbatim engine error, attempts, retry policy, the kept
+  single-sided baseline) for a dead cell. A streamed cell lists **every event as a
+  selectable row** in the card (`✗ event 3 · price.tick`); `enter` opens that event in
+  place — its SSE envelope (id · event · retry, drift marked) and a real per-event **data
+  diff** with the git gutter.
 - **rules** — every effective rule with its record: **broken** in red on top, then **passed**
   (green — a held rule is auditable too), **ignored** (grey — what the profile chose not to
   check), and **unused** (matched nothing anywhere: a typo'd path never fails a gate).
-  Selecting a rule shows its spec, stat chips, and every cell it touched with a color-coded
-  outcome.
+  Selecting a rule shows its spec table, pill-shaped stat chips, and the **record table** —
+  request and variant in their own columns, outcome, detail — one row per cell it touched.
 - **fields** — only the broken paths, one row per field however many cells it hit, each
-  naming its governing rule. Selecting one shows the full triage card, including the exact
-  ignore rule `i` would write.
+  naming its governing rule. The occurrences are the same headered table — request · variant
+  · baseline · candidate — and the tail card explains the drift, including the exact ignore
+  rule `i` would write.
 
 **The traceability loop:** `enter` jumps across indexes — a broken cell lands on its broken
 rule in the rules index, a rule lands on the cell it broke, a field lands on its cell — with
@@ -225,14 +248,22 @@ red rows.
 | `↑ ↓` | move the active index — the right panel inspects the selection |
 | `enter` | jump across indexes (cell ↔ rule, field → cell) with a return crumb |
 | `r`   | cycle the index: requests → rules → fields |
-| `/`   | filter the active index |
+| `/`   | filter the active index — names, methods, cases, and state words (`drift`, `error`, `clean`) |
 | `f`   | show only broken / failing rows |
 | `n / p` | hop to the next / previous red row |
 | `v`   | toggle unified ⇄ side-by-side |
-| `o`   | toggle the **outbound-request layer** (what was sent to each side) |
+| `o`   | expand / collapse the **outbound band** (see below) |
 | `i`   | **silence** the selected drift — writes an ignore rule into its committed DiffProfile |
 | `s`   | **save** the diff to the archive as a report (redacted; re-openable in the Report tab) |
 | `esc` | pop a cross-index jump, else return to **Prepare** |
+
+**The outbound band** answers the first triage question — *did we even send the same request
+to both sides?* comparo resolves the same request against each environment, so the outbound
+calls differ exactly where env config differs (host, an env var in a query param, an auth
+header). The band shows one line per cell: `✓ same request sent to both sides — any response
+drift is the service's`, or `⚠ we sent DIFFERENT requests · N fields (url, x-tenant…)` — in
+which case some drift may be your config, not the service. `o` expands it into the full
+side-by-side outbound diff (values masked) and collapses it back.
 
 Silencing is a reviewable act: `i` opens a confirmation naming the exact file, then appends a
 `{path, mode: ignore}` rule to the profile's YAML (comments preserved), so quieting a diff shows

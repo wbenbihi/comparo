@@ -10,6 +10,7 @@ comparo.tui.app in the dependency order (constants <- functions <- views).
 import dataclasses
 import hashlib
 import json
+import re
 import traceback
 from collections.abc import Callable
 from datetime import datetime
@@ -25,6 +26,7 @@ from rich.box import ROUNDED
 from rich.cells import cell_len
 from rich.console import Group
 from rich.console import RenderableType
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -37,6 +39,8 @@ from comparo import __version__
 from comparo.adapters import updates as updates_adapter
 from comparo.adapters.userconfig import UserConfig
 from comparo.core.assertions import AssertionResult
+from comparo.core.assertions import AssertRef
+from comparo.core.assertions import passed as assertion_pass
 from comparo.core.compare import CellDiff
 from comparo.core.compare import written_identity
 from comparo.core.diagnostics import Diagnostic
@@ -44,6 +48,7 @@ from comparo.core.diagnostics import LoadError
 from comparo.core.diff import FieldDiff
 from comparo.core.diff import RuleRef
 from comparo.core.diff import State
+from comparo.core.diff import diff as structural_diff
 from comparo.core.execute import Execution
 from comparo.core.execution import CellOutcome
 from comparo.core.execution import ExecutionProgress
@@ -84,14 +89,12 @@ from comparo.tui.components import CheckRow
 from comparo.tui.components import ErrorPanelModel
 from comparo.tui.components import StatChip
 from comparo.tui.components import cell_glyph
-from comparo.tui.components import check_row_lines
 from comparo.tui.components import error_panel
-from comparo.tui.components import error_panel_lines
 from comparo.tui.components import provenance_suffix
+from comparo.tui.components import record_table
 from comparo.tui.components import seg_pill
 from comparo.tui.components import spec_table
 from comparo.tui.components import stat_chips
-from comparo.tui.components import verdict_box_header
 from comparo.tui.replay import AssertionSummary
 from comparo.tui.replay import ReplayCell as CellRecord
 from comparo.tui.replay import ReplayRecord as ReportRecord
@@ -123,7 +126,6 @@ from comparo.tui.tokens import _METHOD
 from comparo.tui.tokens import _MODAL_HELP_SCREENS
 from comparo.tui.tokens import _MODE
 from comparo.tui.tokens import _REPO_URL
-from comparo.tui.tokens import _RUN_GLYPH
 from comparo.tui.tokens import _SAME
 from comparo.tui.tokens import _SKIP
 from comparo.tui.tokens import _SYNTAX_BG
@@ -974,6 +976,150 @@ def _save_run(
     return destination
 
 
+def _run_cell_verdict(state: str, results: list[AssertionResult]) -> tuple[str, str, str]:
+    """The cell's verdict ``(word, glyph, colour)`` — PASS / FAIL / ERROR."""
+    if state == "failed":
+        return "ERROR", "!", _WARN
+    if state != "ok":
+        return "…", "◐" if state == "running" else "·", _DIM
+    if not assertion_pass(results):
+        return "FAIL", "✗", _DRIFT
+    return "PASS", "✓", _SAME
+
+
+def _run_call_line(execution: Execution | None, state: str, results: list[AssertionResult]) -> Text:
+    """The single-response call line — verdict · HTTP · time · size · type."""
+    word, glyph, colour = _run_cell_verdict(state, results)
+    line = Text()
+    line.append(f"{glyph} {word}", style=f"bold {colour}")
+    advisory = sum(1 for r in results if not r.ok and r.severity == "warn")
+    if advisory and word == "PASS":
+        line.append(f" · {advisory} advisory", style=f"bold {_WARN}")
+    response = execution.response if execution is not None else None
+    if response is None:
+        if state == "failed":
+            line.append("   — no response arrived", style=f"bold {_WARN}")
+        return line
+    line.append("   HTTP ", style=_DIM)
+    ok = 200 <= response.status < 400
+    line.append(str(response.status), style=f"bold {_SAME if ok else _WARN}")
+    line.append("   time ", style=_DIM)
+    line.append(f"{response.elapsed_ms:.0f} ms", style=_TEXT_HI)
+    line.append("   size ", style=_DIM)
+    line.append(_fmt_bytes(len(response.body)), style=_TEXT_HI)
+    content_type = _content_type(response.headers)
+    if content_type:
+        line.append("   type ", style=_DIM)
+        line.append(content_type.split(";")[0], style=_TEXT_HI)
+    return line
+
+
+def _run_error_card(
+    execution: Execution,
+    resolved: ResolvedRequest | None,
+    results_expected: list[AssertionResult],
+    redact: Callable[[str], str] = str,
+) -> Panel:
+    """The dead cell's card (mockup state 5): what happened, what it means, what survives."""
+    parts: list[RenderableType] = []
+    head = Text("! ERROR ", style=f"bold {_WARN}")
+    head.append("— no response arrived", style=f"bold {_WARN}")
+    parts.append(head)
+    rows: list[tuple[str, Text | str]] = [
+        ("error", Text(redact(execution.error or "no response"), style=f"bold {_WARN}"))
+    ]
+    attempts = Text(str(execution.attempts), style=_TEXT_HI)
+    if execution.retry_policy:
+        attempts.append(f" · retry {execution.retry_policy}", style=_DIM)
+    rows.append(("attempts", attempts))
+    if resolved is not None:
+        rows.append(("target", Text(redact(resolved.url), style=_TEXT_HI)))
+    parts.append(spec_table(rows))
+    meaning = Text("What this means  ", style=f"bold {_LABEL}")
+    meaning.append(
+        "0 rules evaluated — the cell grades ! ERROR on its own; each rule's "
+        "record shows ! error, never ✗ — an unreachable host is not a broken contract.",
+        style=_DIM,
+    )
+    parts.append(meaning)
+    if resolved is not None:
+        kept = Text("Request kept — what we sent\n", style=f"bold {_LABEL}")
+        kept.append(f"{resolved.method} {redact(resolved.url)}", style=_TEXT_HI)
+        kept.append(f"\n{len(resolved.headers)} headers · secrets masked", style=_DIM)
+        parts.append(kept)
+    return Panel(Group(*parts), box=ROUNDED, expand=True, padding=(0, 1), border_style=_WARN)
+
+
+def _run_check_rows(
+    execution: Execution | None,
+    state: str,
+    results: list[AssertionResult],
+    redact: Callable[[str], str] = str,
+) -> list[tuple[CheckRow, AssertRef | None]]:
+    """The verdict card's rows, worst first, ``reachable`` LAST.
+
+    Each row carries its rule's ref so the selectable card can jump to its
+    record — ``None`` for the synthesized transport row, which has none.
+    """
+    if state in ("pending", "running"):
+        return []
+    if execution is None or execution.response is None:
+        return []
+    rank = {"broke": 0, "warn_broke": 1, "warn_held": 2, "held": 3, "error": 4}
+    judged = sorted(
+        ((_check_row(result, redact), result.ref) for result in results),
+        key=lambda pair: rank.get(pair[0].state, 5),
+    )
+    rows = list(judged)
+    # ``reachable`` is synthesized per cell — transport, not an engine rule —
+    # and always LAST (run-results spec §4).
+    rows.append(
+        (
+            CheckRow(
+                "reachable",
+                "held",
+                provenance=provenance_suffix("synthetic"),
+                detail=str(execution.response.status),
+            ),
+            None,
+        )
+    )
+    return rows
+
+
+def _run_inspect_head(
+    project: LoadedProject,
+    environment: Environment | None,
+    request: Request,
+    cell: MatrixCell,
+    execution: Execution | None,
+    state: str,
+    results: list[AssertionResult],
+    redact: Callable[[str], str] = str,
+    *,
+    focus: str = "all",
+) -> RenderableType:
+    """The run inspect head — call line, then the verdict (or error) card.
+
+    Sits ABOVE the evidence tree as its own block, per the mockup: the cell is
+    judged here; the tree below is for reading the exchange.
+    """
+    if focus == "raw":
+        # Raw is the wire, verbatim (mockup state 14) — no judging chrome.
+        return Group()
+    resolved = (
+        Resolver(project, environment).resolve_request(request, cell)
+        if environment is not None
+        else None
+    )
+    parts: list[RenderableType] = [_run_call_line(execution, state, results)]
+    if execution is not None and execution.response is None and state == "failed":
+        # A dead cell replaces the verdict card with the error card — no fake
+        # N-of-M claim (the selectable checks table stays hidden).
+        parts.append(_run_error_card(execution, resolved, results, redact))
+    return Group(*parts)
+
+
 def _build_report_tree(
     tree: Tree[object],
     project: LoadedProject,
@@ -987,11 +1133,12 @@ def _build_report_tree(
     *,
     focus: str = "all",
 ) -> list[TreeNode[object]]:
-    """Build the per-cell run detail; return the broken-anchor ``n``/``p`` registry.
+    """Build the per-cell evidence tree; return the broken-anchor ``n``/``p`` registry.
 
-    The registry lists the evidence-tree nodes where a gating body check broke,
-    in render order — empty when the body is not anchored JSON (or the facet
-    hides the response).
+    The judging chrome (call line, verdict card) lives in ``_run_inspect_head``
+    — this tree is the exchange itself: the resolved request and the response,
+    with assertion verdicts pinned at their body sites. The registry lists the
+    nodes where a gating body check broke, in render order.
     """
     tree.clear()
     root = tree.root
@@ -1000,21 +1147,6 @@ def _build_report_tree(
         if environment is not None
         else None
     )
-    method = resolved.method if resolved else request.spec.request.method
-    head = Text()
-    head.append(f" {method} ", style=f"bold {_INK} on {_METHOD.get(method, _ACCENT)}")
-    head.append("  ")
-    head.append(redact(resolved.url if resolved else request.spec.request.endpoint), style=_TEXT_HI)
-    root.add_leaf(head)
-    if cell.key:
-        root.add_leaf(Text.assemble(("case    ", _LABEL), (redact(cell.key), _AXIS)))
-    glyph, colour = _RUN_GLYPH[state]
-    status = Text.assemble(("status  ", _LABEL), (f"{glyph} {state}", colour))
-    if execution is not None and execution.response is not None:
-        response = execution.response
-        status.append(f"   {response.status} · {response.elapsed_ms:.0f}ms", style=_TEXT)
-    root.add_leaf(status)
-
     # RUN-27: the detail is switchable — Request · Response · Headers · Raw (and
     # the default "all" overview). Each mode carves the tree to one facet; the
     # RAW view dumps the unparsed request line and response body verbatim.
@@ -1023,61 +1155,17 @@ def _build_report_tree(
         return []
     want_request = focus in ("all", "request", "headers")
     want_response = focus in ("all", "response", "headers")
-    want_meta = focus in ("all", "response")  # checks + metrics ride with the response
     headers_only = focus == "headers"
-
-    if (results or execution is not None) and want_meta and state not in ("pending", "running"):
-        if execution is not None and execution.response is None:
-            # ERROR cell: nothing was judged, so no N-of-M header may claim a
-            # rule broke — the error panel replaces the verdict box (run-results
-            # spec §4), and the transport row alone closes it: ✗ is reserved for
-            # rules that actually broke, ! for calls that never completed.
-            model = ErrorPanelModel(
-                message=redact(execution.error or "no response"),
-                attempts=execution.attempts,
-                retry_policy=execution.retry_policy,
-                meaning="nothing was judged — rules that never ran are never painted as broken",
-            )
-            lines = error_panel_lines(model)
-            node = root.add(lines[0], expand=True)
-            for line in lines[1:]:
-                node.add_leaf(line)
-            reachable = CheckRow(
-                "reachable",
-                "broke",
-                provenance=provenance_suffix("synthetic"),
-                detail="the call never completed",
-            )
-            for line in check_row_lines(reachable, indent=0):
-                node.add_leaf(line)
-        else:
-            # The verdict box, in tree costume: the same N-of-M header and row
-            # grammar as the Static box — check_row_lines is the one implementation.
-            rows = [_check_row(result, redact) for result in results]
-            # ``reachable`` is synthesized per cell — transport, not an engine
-            # rule — and always LAST (run-results spec §4).
-            if execution is not None and execution.response is not None:
-                rows.append(
-                    CheckRow(
-                        "reachable",
-                        "held",
-                        provenance=provenance_suffix("synthetic"),
-                        detail=str(execution.response.status),
-                    )
-                )
-            node = root.add(verdict_box_header(rows), expand=True)
-            for row in rows:
-                for line in check_row_lines(row, indent=0):
-                    node.add_leaf(line)
-
-    if execution is not None and execution.response is not None and want_meta:
-        response = execution.response
-        node = root.add(Text("METRICS", style=f"bold {_LABEL}"), expand=True)
-        node.add_leaf(Text.assemble(("duration  ", _DIM), (f"{response.elapsed_ms:.0f} ms", _TEXT)))
-        node.add_leaf(Text.assemble(("size      ", _DIM), (f"{len(response.body)} bytes", _TEXT)))
 
     if resolved is not None and want_request:
         node = root.add(Text("REQUEST", style=f"bold {_LABEL}"), expand=focus != "all")
+        method = Text()
+        method.append(
+            f" {resolved.method} ", style=f"bold {_INK} on {_METHOD.get(resolved.method, _ACCENT)}"
+        )
+        method.append("  ")
+        method.append(redact(resolved.url), style=_TEXT_HI)
+        node.add_leaf(method)
         headers = node.add(Text("headers", style=_DIM), expand=headers_only)
         for key, value in resolved.headers:
             # The DISPLAY sink masks $secret refs; the string-match redactor is the
@@ -1133,6 +1221,26 @@ def _check_row(result: AssertionResult, redact: Callable[[str], str] = str) -> C
     if result.ok:
         return CheckRow(label, state, provenance=provenance, detail=detail)
     return CheckRow(label, state, provenance=provenance, evidence=detail)
+
+
+def _payload_label(content_type: str) -> str:
+    """The payload type as the requests-table shorthand — json · sse · html · pdf."""
+    ct = content_type.split(";")[0].strip().lower()
+    if not ct:
+        return ""
+    if "event-stream" in ct:
+        return "sse"
+    for label in ("json", "html", "pdf", "xml"):
+        if label in ct:
+            return label
+    if ct.startswith("text/"):
+        return "text"
+    return ct.rsplit("/", 1)[-1][:6]
+
+
+def _run_value(value: object, redact: Callable[[str], str] = str) -> str:
+    """An expected/actual value as one clipped, redacted record-table cell."""
+    return _clip(redact(json.dumps(value, ensure_ascii=False, default=str)), 36)
 
 
 def _json_body(body: bytes, content_type: str) -> object | None:
@@ -1924,7 +2032,11 @@ def _body_diff_lines(
     return [(depth, left, right, state, note)]
 
 
-def _band(content: RenderableType, bg: str, *, expand: bool = True) -> Table:
+#: The side-by-side pane separator — a touch lighter than the well itself.
+_SBS_SEP = "#232c3d"
+
+
+def _band(content: RenderableType, bg: str, *, expand: bool = True, pad: bool = True) -> Table:
     """A single full-width row whose background *bg* fills the whole cell.
 
     Rich fills a cell's padding with the *row* style, not the cell renderable's
@@ -1932,7 +2044,7 @@ def _band(content: RenderableType, bg: str, *, expand: bool = True) -> Table:
     spans the full width at any panel size — in both the unified and the
     side-by-side view.
     """
-    table = Table(expand=expand, box=None, show_header=False, padding=(0, 1))
+    table = Table(expand=expand, box=None, show_header=False, padding=(0, 1) if pad else 0)
     table.add_column(ratio=1)
     table.add_row(content, style=f"on {bg}")
     return table
@@ -2007,8 +2119,14 @@ def _diff_side_by_side(
             right_col.append(_band(Text(f"{pad}{right}", style=_DIM, no_wrap=True), _DIFF_BG))
     table = Table(expand=True, box=None, show_header=False, padding=0)
     table.add_column(ratio=1)
+    table.add_column(width=1)
     table.add_column(ratio=1)
-    table.add_row(Group(*left_col), Group(*right_col))
+    # The pane separator: a hairline a touch lighter than the well, banded so
+    # the recessed background stays contiguous across the gap.
+    separator = Group(
+        *(_band(Text("│", style=_SBS_SEP), _DIFF_BG, pad=False) for _ in range(len(left_col)))
+    )
+    table.add_row(Group(*left_col), separator, Group(*right_col))
     return table
 
 
@@ -2191,11 +2309,12 @@ def _cell_inspect_head(
     broken: int,
     *,
     outbound_layer: RenderableType | None = None,
+    names: tuple[str, str] | None = None,
     redact: Callable[[str], str] = str,
 ) -> Group:
-    """Above the selectable rows: the call ledger, the outbound band, the verdict."""
+    """Above the selectable rows: the call ledger, the outbound band, the error story."""
     parts: list[RenderableType] = []
-    ledger = _live_call_ledger(cell)
+    ledger = _live_call_ledger(cell, names)
     if ledger is not None:
         parts.extend((ledger, Text()))
     if outbound_layer is not None:
@@ -2223,19 +2342,24 @@ def _cell_inspect_head(
             kept = note
         parts.append(error_panel(model, kept))
         return Group(*parts)
+    return Group(*parts)
+
+
+def _cell_verdict_title(cell: CellDiff, broken: int) -> tuple[Text, str]:
+    """The verdict card's own headline — ``(phrase, tone)`` for the card border.
+
+    The phrase lives INSIDE the red/green card (its border title), per the
+    mockup: the card asserts its verdict, the rows below are the audit.
+    """
     effective = sum(1 for outcome in cell.rule_outcomes if outcome.outcome != "absent")
     if broken:
-        head = Text(f"✗ {broken} of {effective} rules broke on this cell", style=f"bold {_DRIFT}")
-        head.append("   ↓ select a rule · ", style=_DIM)
-        head.append("enter", style=f"bold {_ACCENT}")
-        head.append(" its record across every request", style=_DIM)
-    else:
-        held = sum(1 for outcome in cell.rule_outcomes if outcome.outcome == "held")
-        silenced = sum(1 for outcome in cell.rule_outcomes if outcome.outcome == "silenced")
-        head = Text("✓ every rule held on this cell", style=f"bold {_SAME}")
-        head.append(f"  — {held} held · {silenced} silenced", style=_DIM)
-    parts.append(head)
-    return Group(*parts)
+        phrase = f" ✗ {broken} of {effective} rules broke on this cell "
+        return Text(phrase, style=f"bold {_DRIFT}"), "bad"
+    held = sum(1 for outcome in cell.rule_outcomes if outcome.outcome == "held")
+    silenced = sum(1 for outcome in cell.rule_outcomes if outcome.outcome == "silenced")
+    title = Text(" ✓ every rule held on this cell ", style=f"bold {_SAME}")
+    title.append(f"— {held} held · {silenced} silenced ", style=_DIM)
+    return title, "good"
 
 
 def _cell_inspect_tail(
@@ -2243,6 +2367,7 @@ def _cell_inspect_tail(
     pair: tuple[Environment, Environment] | None,
     *,
     unified: bool,
+    event_focus: int | None = None,
     redact: Callable[[str], str] = str,
 ) -> Group:
     """Below the rows: the headers well, then the body — every well in its outline."""
@@ -2254,7 +2379,15 @@ def _cell_inspect_tail(
         parts.extend((headers, Text()))
     base_events, cand_events = _cell_events(cell)
     if base_events is not None or cand_events is not None:
-        parts.append(_stream_body_view(base_events or [], cand_events or [], redact))
+        parts.append(
+            _stream_body_view(
+                base_events or [],
+                cand_events or [],
+                redact,
+                focus=event_focus,
+                drifted=drifted_event_indices(cell.fields),
+            )
+        )
         return Group(*parts)
     body_fields = {
         field.path: field
@@ -2337,11 +2470,10 @@ _OUTCOME_MARKS: dict[str, tuple[str, str]] = {
 
 def _rule_record_row(
     ref: RuleRef, cell: CellDiff, outcome: str, redact: Callable[[str], str] = str
-) -> tuple[Text, Text, Text]:
-    """One record-table row: (request · variant, outcome, detail)."""
+) -> tuple[Text, Text, Text, Text]:
+    """One record-table row: (request, variant, outcome, detail)."""
     who = Text(cell.request.metadata.name, style=_TEXT_HI)
-    if cell.cell_key:
-        who.append(f" · {redact(cell.cell_key)}", style=_AXIS)
+    variant = Text(redact(cell.cell_key) if cell.cell_key else "—", style=_AXIS)
     word, color = _OUTCOME_MARKS.get(outcome, ("?", _DIM))
     verdict = Text(word, style=f"bold {color}")
     detail = Text("", style=_DIM)
@@ -2368,7 +2500,7 @@ def _rule_record_row(
         detail = Text(f"{hidden} field(s) hidden", style=_DIM)
     elif outcome == "error":
         detail = Text(_clip(redact(cell.error or ""), 48), style=_DIM)
-    return who, verdict, detail
+    return who, variant, verdict, detail
 
 
 def _git_legend(baseline: str, candidate: str) -> Text:
@@ -2549,13 +2681,13 @@ def _field_head(
 
 def _field_occurrence_row(
     cell: CellDiff, field: FieldDiff, redact: Callable[[str], str] = str
-) -> tuple[Text, Text, Text]:
-    """One occurrence row: (request · variant, baseline, candidate)."""
+) -> tuple[Text, Text, Text, Text]:
+    """One occurrence row: (request, variant, baseline, candidate)."""
     who = Text(cell.request.metadata.name, style=_TEXT_HI)
-    if cell.cell_key:
-        who.append(f" · {redact(cell.cell_key)}", style=_AXIS)
+    variant = Text(redact(cell.cell_key) if cell.cell_key else "—", style=_AXIS)
     return (
         who,
+        variant,
         Text(_clip(redact(_sv(field.baseline)), 36), style=_TEXT),
         Text(_clip(redact(_sv(field.candidate)), 36), style=f"bold {_DRIFT}"),
     )
@@ -3902,6 +4034,7 @@ def _ledger_table(
     cand_ms: int | None,
     base_size: int | None,
     cand_size: int | None,
+    names: tuple[str, str] | None = None,
 ) -> Table | None:
     """The CALL LEDGER — baseline vs candidate status / latency / size, and Δ.
 
@@ -3918,10 +4051,16 @@ def _ledger_table(
     def signed(value: int) -> str:
         return f"+{value}" if value >= 0 else str(value)
 
-    table = _table()
-    table.add_column("CALL", style=_LABEL, no_wrap=True)
-    table.add_column("baseline", justify="right")
-    table.add_column("candidate", justify="right")
+    base_name, cand_name = names if names is not None else ("baseline", "candidate")
+    table = record_table()
+    table.add_column("call", no_wrap=True)
+    base_head = Text("baseline", style=f"bold {_LABEL}")
+    cand_head = Text("candidate", style=f"bold {_LABEL}")
+    if names is not None:
+        base_head.append(f" · {base_name}", style=_TEXT_HI)
+        cand_head.append(f" · {cand_name}", style=_TEXT_HI)
+    table.add_column(base_head, justify="right")
+    table.add_column(cand_head, justify="right")
     table.add_column("Δ", justify="right")
 
     base_ok = base_status is not None and 200 <= base_status < 400
@@ -3972,7 +4111,11 @@ def _call_ledger(cell: CellRecord) -> Table | None:
     )
 
 
-def _executions_ledger(base: Execution | None, cand: Execution | None) -> Table | None:
+def _executions_ledger(
+    base: Execution | None,
+    cand: Execution | None,
+    names: tuple[str, str] | None = None,
+) -> Table | None:
     """The CALL LEDGER for a live pair of executions — metrics read off each response.
 
     This is the same ledger the saved-report replay shows, wired into the live
@@ -3988,69 +4131,173 @@ def _executions_ledger(base: Execution | None, cand: Execution | None) -> Table 
         round(c.elapsed_ms) if c is not None else None,
         len(b.body) if b is not None else None,
         len(c.body) if c is not None else None,
+        names,
     )
 
 
-def _live_call_ledger(cell: CellDiff) -> Table | None:
+def _live_call_ledger(cell: CellDiff, names: tuple[str, str] | None = None) -> Table | None:
     """The CALL LEDGER for a live diff cell — reads the executions carried on the cell."""
-    return _executions_ledger(cell.baseline, cell.candidate)
+    return _executions_ledger(cell.baseline, cell.candidate, names)
 
 
-def _event_sequence(
-    baseline: list[object], candidate: list[object], redact: Callable[[str], str]
-) -> Table:
-    """A streamed response as a numbered event sequence — per event, ✓ same or ✗ drifted.
+def _event_name(event: object) -> str:
+    """The event's SSE name — the spec default *message* when unnamed."""
+    if isinstance(event, dict):
+        return str(event.get("event") or "message")
+    return "event"
 
-    Each row aligns event *n* of the two sides so the eye lands on exactly which
-    event in the sequence diverged (a length change shows as a ``—`` on the short side).
-    """
-    table = _table()
-    table.add_column("#", style=_DIM, justify="right", no_wrap=True)
-    table.add_column("", width=2, no_wrap=True)
-    table.add_column("baseline", ratio=1)
-    table.add_column("candidate", ratio=1)
 
-    def one(event: object | None) -> str:
-        if event is None:
-            return "—"
-        return redact(json.dumps(event, ensure_ascii=False, default=str))
+def _event_data(event: object) -> object:
+    """The event's data payload, parsed as JSON when it is JSON."""
+    if not isinstance(event, dict):
+        return event
+    data = event.get("data", "")
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except (ValueError, TypeError):
+            return data
+    return data
 
-    for index in range(max(len(baseline), len(candidate))):
-        left = baseline[index] if index < len(baseline) else None
-        right = candidate[index] if index < len(candidate) else None
-        same = left == right and left is not None
+
+def _event_envelope_table(
+    left: object, right: object, redact: Callable[[str], str]
+) -> Table | None:
+    """The expanded event's envelope — id · event · retry, both sides, drift marked."""
+    if not isinstance(left, dict) and not isinstance(right, dict):
+        return None
+    table = record_table(header=False, expand=False)
+    table.add_column(style=_DIM, no_wrap=True)
+    table.add_column()
+    table.add_column()
+    for field in ("id", "event", "retry"):
+        lv = left.get(field) if isinstance(left, dict) else None
+        rv = right.get(field) if isinstance(right, dict) else None
+        if lv is None and rv is None:
+            continue
+        same = lv == rv
         table.add_row(
-            str(index + 1),
-            Text("✓" if same else "✗", style=_SAME if same else _DRIFT),
-            Text(one(left), style=_DIM if same else _DRIFT, no_wrap=False),
-            Text(one(right), style=_DIM if same else _SAME, no_wrap=False),
+            field,
+            Text(redact(str(lv)) if lv is not None else "—", style=_TEXT if same else _DRIFT),
+            Text(redact(str(rv)) if rv is not None else "—", style=_TEXT if same else _SAME),
         )
     return table
 
 
-def _stream_body_view(
-    baseline: list[object], candidate: list[object], redact: Callable[[str], str] = str
-) -> Group:
-    """A streamed response as an event SEQUENCE, not one assembled blob (d-stream).
+def _event_expanded(
+    index: int, left: object | None, right: object | None, redact: Callable[[str], str]
+) -> RenderableType:
+    """One drifted (or focused) event opened in place: envelope + its data diff."""
+    parts: list[RenderableType] = []
+    envelope = _event_envelope_table(left, right, redact)
+    if envelope is not None:
+        parts.append(envelope)
+    if left is None or right is None:
+        side = "baseline" if left is None else "candidate"
+        missing = f"only one side sent event {index + 1} — missing on {side}"
+        parts.append(Text(missing, style=_DRIFT))
+        present = left if left is not None else right
+        data = _event_data(present)
+        parts.append(Text(_clip(redact(json.dumps(data, default=str)), 200), style=_SKIP))
+        return Group(*parts)
+    left_data, right_data = _event_data(left), _event_data(right)
+    if isinstance(left_data, str) or isinstance(right_data, str):
+        if left_data == right_data:
+            parts.append(Text(f"data: {_clip(redact(str(left_data)), 160)}", style=_DIM))
+        else:
+            minus = Text("− ", style=f"bold {_DRIFT}")
+            minus.append(_clip(redact(str(left_data)), 160), style=_DRIFT)
+            plus = Text("+ ", style=f"bold {_SAME}")
+            plus.append(_clip(redact(str(right_data)), 160), style=_SAME)
+            parts.extend((minus, plus))
+        return Group(*parts)
+    fields = {field.path: field for field in structural_diff(left_data, right_data, "exact", [])}
+    lines = _body_diff_lines(left_data, right_data, fields, redact=redact)
+    well = Panel(
+        Group(_hunk_band(f"@@ event {index + 1} · data @@"), _diff_unified(lines)),
+        box=ROUNDED,
+        expand=True,
+        padding=0,
+        border_style=_WELL_BORDER,
+    )
+    parts.append(well)
+    return Group(*parts)
 
-    A per-event ✓/✗ strip so the eye lands on which event diverged, then the
-    aligned per-event table. This is what the mockup asks for when the response
-    is chunked/SSE — the diff runs over events, not a single concatenated body.
+
+def drifted_event_indices(fields: list[FieldDiff]) -> list[int]:
+    """Which event positions the ENGINE judged drifted — display never re-judges.
+
+    A silenced-only difference is not a drift: the ✓/✗ marks must agree with
+    the cell verdict, so they read the profile-judged FieldDiffs, not raw
+    equality.
+    """
+    out: set[int] = set()
+    for field in fields:
+        if field.state is not State.DRIFT:
+            continue
+        match = re.match(r"^\$\[(\d+)\]", field.path)
+        if match:
+            out.add(int(match.group(1)))
+    return sorted(out)
+
+
+def _stream_body_view(
+    baseline: list[object],
+    candidate: list[object],
+    redact: Callable[[str], str] = str,
+    *,
+    focus: int | None = None,
+    drifted: list[int] | None = None,
+) -> Group:
+    """A streamed response diffed as an event SEQUENCE, never one assembled blob.
+
+    Every event is one row — index, verdict, name, data preview; the *focus*
+    event (or the first drifted one) expands in place with its envelope and a
+    real per-event data diff. Select an event row above to move the focus.
+    *drifted* carries the engine's judged event positions; the raw-equality
+    fallback only serves callers with no FieldDiffs (a bare replay).
     """
     count = max(len(baseline), len(candidate))
-    drifts = 0
+    if drifted is not None:
+        drifts = drifted
+    else:
+        drifts = [
+            index
+            for index in range(count)
+            if not (
+                index < len(baseline)
+                and index < len(candidate)
+                and baseline[index] == candidate[index]
+            )
+        ]
     strip = Text("event sequence  ", style=f"bold {_LABEL}")
+    for index in range(count):
+        if index:
+            strip.append(" · ", style=_DIM)
+        same = index not in drifts
+        strip.append(f"{'✓' if same else '✗'}{index + 1}", style=_SAME if same else _DRIFT)
+    plural = "" if count == 1 else "s"
+    strip.append(f"   — {len(drifts)} of {count} event{plural} drift", style=_DIM)
+    opened = focus if focus is not None else (drifts[0] if drifts else None)
+    parts: list[RenderableType] = [strip, Text()]
     for index in range(count):
         left = baseline[index] if index < len(baseline) else None
         right = candidate[index] if index < len(candidate) else None
-        same = left == right and left is not None
-        if not same:
-            drifts += 1
-        if index:
-            strip.append(" · ", style=_DIM)
-        strip.append(f"{'✓' if same else '✗'}{index + 1}", style=_SAME if same else _DRIFT)
-    strip.append(f"   — {drifts} of {count} event{'' if count == 1 else 's'} drift", style=_DIM)
-    return Group(strip, Text(), _event_sequence(baseline, candidate, redact))
+        same = index not in drifts
+        row = Text()
+        row.append("▾ " if index == opened else "▸ ", style=_DIM)
+        row.append(f"{index + 1} ", style=_DIM)
+        row.append("✓ " if same else "✗ ", style=f"bold {_SAME if same else _DRIFT}")
+        name = _event_name(left if left is not None else right)
+        row.append(redact(name), style=_ACCENT if name != "message" else _DIM)
+        if index != opened:
+            shown = left if left is not None else right
+            preview = _clip(redact(json.dumps(_event_data(shown), default=str)), 80)
+            row.append(f"  {preview}", style=_SKIP if same else _DRIFT)
+        parts.append(row)
+        if index == opened:
+            parts.append(Padding(_event_expanded(index, left, right, redact), (0, 0, 0, 2)))
+    return Group(*parts)
 
 
 def _cell_events(cell: CellDiff) -> tuple[list[object] | None, list[object] | None]:
@@ -4145,9 +4392,23 @@ def _replay_compare_well(
     ledger = _call_ledger(cell)
     parts: list[RenderableType] = [title, Text(), well]
     if cell.baseline_events is not None or cell.candidate_events is not None:
+        # The saved record already carries the judged drift paths — replay never
+        # re-judges either.
+        judged = sorted(
+            {
+                int(match.group(1))
+                for path in cell.drift_paths
+                if (match := re.match(r"^\$\[(\d+)\]", path)) is not None
+            }
+        )
         parts += [
-            Text("\nevent sequence", style=f"bold {_DIM}"),
-            _event_sequence(cell.baseline_events or [], cell.candidate_events or [], redact),
+            Text(),
+            _stream_body_view(
+                cell.baseline_events or [],
+                cell.candidate_events or [],
+                redact,
+                drifted=judged,
+            ),
         ]
     if ledger is not None:
         parts += [Text("\ncall ledger", style=f"bold {_DIM}"), ledger]

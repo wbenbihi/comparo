@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: Order contract
+  id: assert.order
+  description: >-
+    The RUN showcase profile, attached to Checkout. One rule is deliberately
+    wrong (total == 999 against an echoed 240.0) so the run always shows a
+    ✗ FAIL cell, a red anchor pinned at $.json.order.total in the evidence
+    tree, and a broken row in the rules index with expected · got. The sku
+    rule holds (the green anchor), and the content-type warn holds too —
+    a `~ · held` line in the verdict card.
+spec:
+  rules:
+    - target: body:$.json.order.total
+      op: equals
+      value: 999
+    - target: body:$.json.order.sku
+      op: equals
+      value: WIDGET-1
+    - target: header:content-type
+      op: matches
+      value: application/json
+      severity: warn

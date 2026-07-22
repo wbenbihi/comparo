@@ -465,6 +465,7 @@ _HELP_SCREEN: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "run": (
         ("↑ ↓", "move through rows / the detail tree"),
+        ("tab", "RUNNING — move focus: index · verdict card · record · evidence tree"),
         ("space", "PREPARE — fold a request to show its cases"),
         ("enter", "PREPARE select · RUNNING drill into the next split"),
         ("e", "PREPARE — choose the environment this run executes against"),

@@ -234,14 +234,28 @@ def test_gate_composition_shows_each_factor_and_the_rollup() -> None:
 
 
 def test_event_sequence_marks_each_streamed_event() -> None:
-    from comparo.tui.render import _event_sequence
+    from comparo.tui.render import _stream_body_view
 
-    baseline: list[object] = [{"seq": 1}, {"seq": 2}, {"seq": 3}]
-    candidate: list[object] = [{"seq": 1}, {"seq": 99}]  # event 2 differs, event 3 missing
-    rendered = _plain(_event_sequence(baseline, candidate, str))
-    assert "✓" in rendered  # event 1 matches
-    assert "✗" in rendered  # event 2 differs / event 3 missing
-    assert "—" in rendered  # candidate is shorter → em dash on the missing row
+    baseline: list[object] = [
+        {"event": "tick", "data": '{"seq": 1}'},
+        {"event": "tick", "data": '{"seq": 2}'},
+        {"event": "tick", "data": '{"seq": 3}'},
+    ]
+    candidate: list[object] = [
+        {"event": "tick", "data": '{"seq": 1}'},
+        {"event": "tick", "data": '{"seq": 99}'},
+    ]  # event 2 differs, event 3 missing
+    rendered = _plain(_stream_body_view(baseline, candidate, str))
+    assert "✓1" in rendered  # event 1 matches
+    assert "✗2" in rendered  # event 2 differs
+    assert "✗3" in rendered  # event 3 missing on the candidate
+    assert "2 of 3 events drift" in rendered
+    # the first drifted event opens in place with a REAL per-event data diff
+    assert "@@ event 2 · data @@" in rendered
+    assert "seq" in rendered
+    # a later focus opens THAT event instead
+    focused = _plain(_stream_body_view(baseline, candidate, str, focus=2))
+    assert "missing on candidate" in focused
 
 
 def test_replay_compare_well_renders_a_streamed_event_sequence() -> None:
@@ -632,20 +646,36 @@ def test_run_detail_wears_the_verdict_box_and_returns_the_anchor_registry() -> N
         ),
         AssertionResult("status", "equals", True, "error", "200", label="status == 200"),
     ]
+    from comparo.tui.render import _run_inspect_head
+
     tree: Tree[object] = Tree("root")
     registry = _build_report_tree(
         tree, loaded, env, request, MatrixCell("", ()), execution, "ok", results
     )
-    labels = _tree_labels(tree.root)
-    joined = "\n".join(labels)
-    assert "1 of 3 rules broke on this cell" in joined  # 2 results + reachable
-    assert "profile asserts.q" in joined  # provenance rides the row
-    idx_rule = next(i for i, label in enumerate(labels) if "total <= 100" in label)
-    idx_reachable = next(i for i, label in enumerate(labels) if "reachable" in label)
-    idx_metrics = next(i for i, label in enumerate(labels) if "METRICS" in label)
-    assert idx_rule < idx_reachable < idx_metrics  # reachable is the checks' LAST row
+    joined = "\n".join(_tree_labels(tree.root))
     assert "✗ total" in joined  # the evidence tree pinned the break at its site
     assert registry, "the broken anchor must land in the n/p registry"
+    # The judging chrome is the SELECTABLE verdict card: its rows come from
+    # _run_check_rows (worst first, reachable LAST, each with its jumpable ref)
+    # and its border title is the N-of-M phrase.
+    from comparo.tui.components import verdict_box_header
+    from comparo.tui.render import _run_check_rows
+
+    rows = _run_check_rows(execution, "ok", results)
+    assert "1 of 3 rules broke on this cell" in _plain(
+        verdict_box_header([row for row, _ in rows])
+    )  # 2 results + reachable
+    assert rows[0][0].state == "broke"  # worst first...
+    assert rows[0][1] == ref  # ...and carrying the ref the card jumps with
+    assert "profile asserts.q" in rows[0][0].provenance
+    assert rows[-1][0].label == "reachable"  # reachable LAST
+    assert rows[-1][1] is None  # the transport row has no record to open
+    head = _plain(
+        _run_inspect_head(loaded, env, request, MatrixCell("", ()), execution, "ok", results)
+    )
+    assert "✗ FAIL" in head  # the call line leads with the verdict
+    assert "HTTP" in head
+    assert "type" in head
 
 
 def test_run_detail_returns_no_anchors_for_a_non_json_body() -> None:
@@ -720,15 +750,88 @@ def test_dead_cell_detail_shows_the_error_panel_not_a_dishonest_verdict_box() ->
     execution = Execution(
         request, env, "", None, error="connect timeout", attempts=3, retry_policy="exponential x3"
     )
+    from comparo.tui.render import _run_inspect_head
+
     tree: Tree[object] = Tree("root")
     registry = _build_report_tree(
         tree, loaded, env, request, MatrixCell("", ()), execution, "failed", []
     )
-    joined = "\n".join(_tree_labels(tree.root))
-    assert "rules broke on this cell" not in joined  # no fake N-of-M claim
-    assert "! connect timeout" in joined  # the error panel head, verbatim
-    assert "attempts  3" in joined
-    assert "exponential x3" in joined
-    assert "nothing was judged" in joined
-    assert "reachable" in joined  # the transport row still closes the story
     assert registry == []
+    head = _plain(
+        _run_inspect_head(loaded, env, request, MatrixCell("", ()), execution, "failed", [])
+    )
+    assert "rules broke on this cell" not in head  # no fake N-of-M claim
+    assert "! ERROR" in head
+    assert "connect timeout" in head  # the engine's verbatim record
+    assert "exponential x3" in head
+    assert "What this means" in head
+    assert "Request kept" in head  # the resolved request survives, masked
+
+
+def test_stream_view_masks_event_names_and_trusts_the_engine_verdict() -> None:
+    # Review round 2: (1) a secret echoed as the SSE event NAME must be masked;
+    # (2) the per-event ✓/✗ marks come from the ENGINE's judged fields — a
+    # silenced-only difference never paints an event ✗.
+    from comparo.core.diff import FieldDiff
+    from comparo.core.diff import State
+    from comparo.core.redaction import MASK
+    from comparo.core.redaction import Redactor
+    from comparo.tui.render import _stream_body_view
+    from comparo.tui.render import drifted_event_indices
+
+    secret = "sk-evt-9999"
+    redact = Redactor(values=(secret,)).text
+    baseline: list[object] = [{"event": secret, "data": '{"seq": 1}'}]
+    candidate: list[object] = [{"event": secret, "data": '{"seq": 1}'}]
+    rendered = _plain(_stream_body_view(baseline, candidate, redact))
+    assert secret not in rendered  # the event NAME is server data — a sink like any other
+    assert MASK in rendered
+
+    # engine verdicts: event 0 differs only under a silenced path → stays ✓
+    fields = [
+        FieldDiff("$[0].data", State.SKIP, "ignore", "silenced"),
+        FieldDiff("$[1].data", State.DRIFT, "exact", "differs"),
+    ]
+    assert drifted_event_indices(fields) == [1]
+    two_base: list[object] = [{"data": "a"}, {"data": "b"}]
+    two_cand: list[object] = [{"data": "x"}, {"data": "y"}]
+    judged = _plain(_stream_body_view(two_base, two_cand, str, drifted=[1]))
+    assert "✓1" in judged  # raw-different but silenced → the engine's ✓ wins
+    assert "✗2" in judged
+    assert "1 of 2 events drift" in judged
+
+
+def test_run_facets_carry_only_their_mockup_chrome() -> None:
+    # State 12: the response facet drops the verdict card (reading, not judging).
+    # State 14: raw has no judging chrome at all.
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.loader import load_project
+    from comparo.core.matrix import MatrixCell
+    from comparo.core.models import Environment
+    from comparo.core.models import Request
+    from comparo.tui.render import _run_inspect_head
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    response = HttpResponse(200, [("content-type", "application/json")], b"{}", 40.0)
+    execution = Execution(request, env, "", response)
+    results = [AssertionResult("status", "equals", True, "error", "200", label="status == 200")]
+
+    def head(focus: str) -> str:
+        return _plain(
+            _run_inspect_head(
+                loaded, env, request, MatrixCell("", ()), execution, "ok", results, focus=focus
+            )
+        )
+
+    from comparo.tui.render import _run_check_rows
+
+    # `all` judges the cell — via the selectable card's rows; the head keeps
+    # the call line on every facet except raw (state 14: the bare wire).
+    assert _run_check_rows(execution, "ok", results)  # rows exist to mount
+    assert "every rule held" not in head("response")  # response reads, not judges
+    assert "HTTP" in head("response")  # ...but keeps the call line
+    assert "HTTP" in head("all")
+    assert head("raw").strip() == ""  # raw is the wire, verbatim
