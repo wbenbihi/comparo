@@ -16,7 +16,7 @@ spec:
     # example runs out of the box. Declared in BOTH environments so the key-set
     # matches and the header's taint never flips.
     SHOWCASE_TOKEN:
-      from:
+      $from:
         - $env: COMPARO_SHOWCASE_TOKEN
         - $literal: shhh-showcase-secret
   variables:

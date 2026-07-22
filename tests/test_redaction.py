@@ -870,7 +870,7 @@ def _project_with_secrets(
     if secrets:
         lines.append("  secrets:")
         for name, value in secrets.items():
-            lines += [f"    {name}:", "      from:", f"        - $literal: {json.dumps(value)}"]
+            lines += [f"    {name}:", "      $from:", f"        - $literal: {json.dumps(value)}"]
     (tmp_path / "env.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
     if with_request:
         (tmp_path / "req.yaml").write_text(

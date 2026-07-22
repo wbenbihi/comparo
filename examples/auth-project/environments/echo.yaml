@@ -19,17 +19,17 @@ spec:
     # The password half of the /basic-auth login. postman-echo's public creds are
     # postman / password, so the literal fallback lets the example run immediately.
     BASIC_PASSWORD:
-      from:
+      $from:
         - $env: COMPARO_BASIC_PASSWORD
         - $literal: password
     # The default service Bearer token, applied environment-wide (see spec.auth).
     API_TOKEN:
-      from:
+      $from:
         - $env: COMPARO_API_TOKEN
         - $literal: demo-service-token
     # A second Bearer token a single request swaps in, to show a per-request override.
     ADMIN_TOKEN:
-      from:
+      $from:
         - $env: COMPARO_ADMIN_TOKEN
         - $literal: demo-admin-token
   # Environment-level default auth: first-class Bearer applied to every request that

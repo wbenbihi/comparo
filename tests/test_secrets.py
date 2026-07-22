@@ -49,10 +49,25 @@ def test_exhausted_from_chain_is_unavailable(
     monkeypatch.delenv("COMPARO_MISS_A", raising=False)
     monkeypatch.delenv("COMPARO_MISS_B", raising=False)
     sources: dict[str, object] = {
-        "API": {"from": [{"$env": "COMPARO_MISS_A"}, {"$env": "COMPARO_MISS_B"}]}
+        "API": {"$from": [{"$env": "COMPARO_MISS_A"}, {"$env": "COMPARO_MISS_B"}]}
     }
     with pytest.raises(SecretUnavailableError):
         _ = ExecuteSecrets(sources, tmp_path)["API"]
+
+
+def test_from_chain_propagates_an_anomalous_error(tmp_path: Path) -> None:
+    # A $from chain skips only a BENIGN absence (unset $env). An anomalous source
+    # — a root-escaping (or unreadable) $file — is a real misconfiguration and must
+    # fail closed, NOT be silently swallowed in favour of a later fallback that works.
+    root = tmp_path / "proj"
+    root.mkdir()
+    (tmp_path / "outside.txt").write_text("leaked", encoding="utf-8")
+    sources: dict[str, object] = {
+        "API": {"$from": [{"$file": "../outside.txt"}, {"$literal": "fallback"}]}
+    }
+    with pytest.raises(SecretError) as exc:
+        _ = ExecuteSecrets(sources, root)["API"]
+    assert not isinstance(exc.value, SecretUnavailableError)  # anomalous, not benign
 
 
 def test_file_secret_reads_within_the_project(tmp_path: Path) -> None:
@@ -87,7 +102,7 @@ def test_from_falls_back_to_first_available(
     monkeypatch.delenv("COMPARO_MISS", raising=False)
     monkeypatch.setenv("COMPARO_TEST_FALLBACK", "fb")
     sources: dict[str, object] = {
-        "API": {"from": [{"$env": "COMPARO_MISS"}, {"$env": "COMPARO_TEST_FALLBACK"}]}
+        "API": {"$from": [{"$env": "COMPARO_MISS"}, {"$env": "COMPARO_TEST_FALLBACK"}]}
     }
     assert ExecuteSecrets(sources, tmp_path)["API"] == "fb"
 

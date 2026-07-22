@@ -105,7 +105,7 @@ _ENVIRONMENT_YAML = (
     "  baseUrl: https://sentinel.invalid\n"
     "  secrets:\n"
     + "".join(
-        f"    {name}:\n      from:\n        - $literal: {json.dumps(value)}\n"
+        f"    {name}:\n      $from:\n        - $literal: {json.dumps(value)}\n"
         for name, value in _SECRETS.items()
     )
 )

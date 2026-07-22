@@ -16,7 +16,7 @@ class SecretError(Exception):
 class SecretUnavailableError(SecretError):
     """A secret whose source is simply *absent*.
 
-    An unset ``$env`` var, an undeclared name, or a fully-exhausted ``from`` chain.
+    An unset ``$env`` var, an undeclared name, or a fully-exhausted ``$from`` chain.
     Distinguished from a plain :class:`SecretError` (an *anomalous* failure — an
     unreadable or root-escaping ``$file``, an unsupported source shape) so the
     redactor can skip a benign gap while still failing closed on a declared
@@ -77,17 +77,21 @@ def _resolve(name: str, source: object, root: Path) -> str:
             except (OSError, ValueError, LookupError) as error:
                 message = f"secret '{name}': cannot read {path}"
                 raise SecretError(message) from error
-        candidates = source.get("from")
+        candidates = source.get("$from")
         if isinstance(candidates, list):
             for candidate in candidates:
                 try:
                     return _resolve(name, candidate, root)
-                except SecretError:
+                except SecretUnavailableError:
+                    # A benign absence (unset $env, exhausted sub-chain) — try the
+                    # next source. An anomalous SecretError (unreadable or
+                    # root-escaping $file) is fatal and propagates: a fallback must
+                    # never silently mask a real misconfiguration.
                     continue
             # An explicit fallback chain that resolves to nothing: the secret is
             # unavailable this session (it would also fail at execute time, so it
             # was never sent). Benign for the redactor to skip.
-            message = f"secret '{name}': no source in 'from' resolved"
+            message = f"secret '{name}': no source in '$from' resolved"
             raise SecretUnavailableError(message)
     message = f"secret '{name}': unsupported source"
     raise SecretError(message)

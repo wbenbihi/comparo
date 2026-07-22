@@ -14,7 +14,7 @@ spec:
     read: 5s
   secrets:
     SHOWCASE_TOKEN:
-      from:
+      $from:
         - $env: COMPARO_SHOWCASE_TOKEN
         - $literal: shhh-showcase-secret
   variables:

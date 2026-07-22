@@ -15,7 +15,7 @@ spec:
     # else a literal fallback so the example runs out of the box. Declared in both
     # environments so the key-set matches and the header's taint never flips.
     BASIC_AUTH:
-      from:
+      $from:
         - $env: COMPARO_BASIC_AUTH
         - $literal: cG9zdG1hbjpwYXNzd29yZA==
   variables:

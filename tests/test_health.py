@@ -90,7 +90,7 @@ def test_a_health_check_with_an_unresolvable_secret_fails_that_check(tmp_path: P
     (tmp_path / "env.yaml").write_text(
         "apiVersion: comparo/v1\nkind: Environment\nmetadata: {name: E, id: environment.e}\n"
         "spec:\n  baseUrl: http://127.0.0.1:1\n"
-        "  secrets:\n    TOKEN:\n      from:\n        - $env: DEFINITELY_UNSET_HEALTH_VAR\n"
+        "  secrets:\n    TOKEN:\n      $from:\n        - $env: DEFINITELY_UNSET_HEALTH_VAR\n"
         "  health:\n    - method: GET\n      endpoint: /up\n"
         "      headers:\n        - {key: authorization, value: '${TOKEN}'}\n",
         encoding="utf-8",

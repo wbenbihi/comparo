@@ -211,7 +211,7 @@ def test_redaction_backstop_is_an_unconditional_floor(tmp_path: Path) -> None:
         "apiVersion: comparo/v1\nkind: Environment\n"
         "metadata: {name: local, id: environment.local}\n"
         "spec:\n  baseUrl: http://127.0.0.1:1\n"
-        "  secrets:\n    T:\n      from:\n        - $literal: SUPERSECRETVALUE\n",
+        "  secrets:\n    T:\n      $from:\n        - $literal: SUPERSECRETVALUE\n",
         encoding="utf-8",
     )
     loaded = load_project(tmp_path / "comparo.yaml")
