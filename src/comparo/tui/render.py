@@ -2213,12 +2213,17 @@ def _diff_body_view(
 
 
 def _headers_well(
-    cell: CellDiff, redact: Callable[[str], str] = str, *, unified: bool = True
+    cell: CellDiff,
+    redact: Callable[[str], str] = str,
+    *,
+    unified: bool = True,
+    names: tuple[str, str] | None = None,
 ) -> Panel | None:
-    """The response-headers diff well — the same rounded chrome as the body well.
+    """The response-headers diff well — the SAME component as the body well.
 
-    Drifts as -/+ pairs (or two panes side-by-side), silenced names as ╎ with
-    their governing rule, and a few identical headers as context.
+    Header drifts become the shared diff-line shape and render through
+    ``_diff_unified`` / ``_diff_side_by_side``, so both wells share one visual
+    grammar: banded muted backgrounds, the pane separator, the ⋯ skip rows.
     """
     fields = [f for f in cell.fields if f.path.startswith("$headers")]
     if not fields:
@@ -2230,48 +2235,35 @@ def _headers_well(
     def name_of(field: FieldDiff) -> str:
         return redact(field.path.removeprefix("$headers."))
 
-    band = Text(f"@@ response headers @@  {len(drifts)} drift · {len(skips)} ignored")
-    rows: list[RenderableType] = [_hunk_band(band.plain)]
-    if unified or not drifts:
-        for field in sames:
-            line = Text("▏  ", style=_SAME)
-            line.append(f"{name_of(field)}: ", style=_DIM)
-            line.append(_clip(redact(str(field.baseline))), style=_TEXT)
-            rows.append(_band(line, _DIFF_BG))
-        for field in drifts:
-            minus = Text("- ", style=f"bold {_DRIFT}")
-            minus.append(f"{name_of(field)}: ", style=_DIM)
-            minus.append(_clip(redact(str(field.baseline))), style=_TEXT)
-            rows.append(_band(minus, _DEL_BG))
-            plus = Text("+ ", style=f"bold {_SAME}")
-            plus.append(f"{name_of(field)}: ", style=_DIM)
-            plus.append(_clip(redact(str(field.candidate))), style=f"bold {_TEXT_HI}")
-            rows.append(_band(plus, _ADD_BG))
-    else:
-        pane = Table(box=None, expand=True, show_header=False, padding=(0, 1))
-        pane.add_column(ratio=1)
-        pane.add_column(ratio=1)
-        for field in sames:
-            shown = Text(f"{name_of(field)}: ", style=_DIM)
-            shown.append(_clip(redact(str(field.baseline)), 40), style=_TEXT)
-            pane.add_row(shown, shown.copy())
-        for field in drifts:
-            left = Text(f"{name_of(field)}: ", style=_DIM)
-            left.append(_clip(redact(str(field.baseline)), 40), style=_TEXT)
-            left.stylize(f"on {_DEL_BG}")
-            right = Text(f"{name_of(field)}: ", style=_DIM)
-            right.append(_clip(redact(str(field.candidate)), 40), style=f"bold {_TEXT_HI}")
-            right.stylize(f"on {_ADD_BG}")
-            pane.add_row(left, right)
-        rows.append(pane)
+    lines: list[tuple[int, str, str, str, str]] = []
+    for field in sames:
+        shown = f"{name_of(field)}: {_clip(redact(str(field.baseline)))}"
+        lines.append((0, shown, shown, "same", ""))
+    for field in drifts:
+        lines.append(
+            (
+                0,
+                f"{name_of(field)}: {_clip(redact(str(field.baseline)))}",
+                f"{name_of(field)}: {_clip(redact(str(field.candidate)))}",
+                "drift",
+                "",
+            )
+        )
     for field in skips:
         rule = _governing_path(field)
-        line = Text("╎  ", style=_SKIP)
-        line.append(f"{name_of(field)}: ", style=_DIM)
-        line.append("⋯ ignored", style=_SKIP)
-        line.append(f" · rule {rule}" if rule else " · built-in volatile", style=_DIM)
-        rows.append(_band(line, _DIFF_BG))
-    return Panel(Group(*rows), box=ROUNDED, expand=True, padding=0, border_style=_WELL_BORDER)
+        note = f"rule {rule}" if rule else "built-in volatile"
+        lines.append((0, f"{name_of(field)}:", "", "skip", note))
+    band = f"@@ response headers @@  {len(drifts)} drift · {len(skips)} ignored"
+    body: RenderableType = (
+        _diff_unified(lines) if unified else _diff_side_by_side(lines, None, names)
+    )
+    return Panel(
+        Group(_hunk_band(band), body),
+        box=ROUNDED,
+        expand=True,
+        padding=0,
+        border_style=_WELL_BORDER,
+    )
 
 
 def _cell_verdict_rows(
@@ -2374,7 +2366,8 @@ def _cell_inspect_tail(
     parts: list[RenderableType] = []
     if cell.error is not None:
         return Group()
-    headers = _headers_well(cell, redact, unified=unified)
+    header_names = (pair[0].metadata.name, pair[1].metadata.name) if pair is not None else None
+    headers = _headers_well(cell, redact, unified=unified, names=header_names)
     if headers is not None:
         parts.extend((headers, Text()))
     base_events, cand_events = _cell_events(cell)
