@@ -801,6 +801,39 @@ def test_stream_view_masks_event_names_and_trusts_the_engine_verdict() -> None:
     assert "1 of 2 events drift" in judged
 
 
+def test_stream_event_diff_follows_the_unified_side_by_side_toggle() -> None:
+    # The event sequence must honor v like the git wells: unified stacks -/+
+    # bands; side-by-side draws two named panes.
+    from rich.console import Console as RichConsole
+
+    from comparo.tui.render import _stream_body_view
+
+    base: list[object] = [{"event": "tick", "data": '{"seq": 2, "price": 100.25}'}]
+    cand: list[object] = [{"event": "tick", "data": '{"seq": 2, "price": 118.0}'}]
+
+    def ansi(unified: bool) -> str:
+        console = RichConsole(width=100, force_terminal=True)
+        with console.capture() as capture:
+            console.print(
+                _stream_body_view(
+                    base, cand, str, drifted=[0], unified=unified, names=("stable", "canary")
+                )
+            )
+        return capture.get()
+
+    for unified in (True, False):
+        out = ansi(unified)
+        assert "@@ event 1 · data @@" in out
+        assert "48;2;43;22;28" in out  # the muted DEL band, both layouts
+        assert "48;2;18;42;32" in out  # the muted ADD band
+    # only side-by-side draws the two named panes
+    assert "stable" not in ansi(True)
+    side = ansi(False)
+    assert "stable" in side
+    assert "canary" in side
+    assert "│" in side  # the pane separator, same as the body well
+
+
 def test_run_facets_carry_only_their_mockup_chrome() -> None:
     # State 12: the response facet drops the verdict card (reading, not judging).
     # State 14: raw has no judging chrome at all.
