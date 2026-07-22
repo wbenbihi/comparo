@@ -835,3 +835,59 @@ def test_run_facets_carry_only_their_mockup_chrome() -> None:
     assert "HTTP" in head("response")  # ...but keeps the call line
     assert "HTTP" in head("all")
     assert head("raw").strip() == ""  # raw is the wire, verbatim
+
+
+def test_headers_well_is_the_same_diff_component_as_the_body_well() -> None:
+    # One diff component, two wells: the headers diff must carry the SAME
+    # banded muted backgrounds (unified AND side-by-side) and the side-by-side
+    # pane separator — never a private text-only rendering.
+    from rich.console import Console as RichConsole
+
+    from comparo.core.compare import CellDiff
+    from comparo.core.diff import FieldDiff
+    from comparo.core.diff import State
+    from comparo.core.loader import load_project
+    from comparo.core.models import Request
+    from comparo.tui.render import _headers_well
+
+    loaded = load_project(Path(__file__).parent.parent / "examples" / "sample-project")
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    fields = [
+        FieldDiff(
+            "$headers.x-api-version",
+            State.DRIFT,
+            "exact",
+            "2024-08 → 2025-01",
+            baseline="2024-08",
+            candidate="2025-01",
+        ),
+        FieldDiff(
+            "$headers.content-type",
+            State.SAME,
+            "exact",
+            "",
+            baseline="application/json",
+            candidate="application/json",
+        ),
+        FieldDiff("$headers.date", State.SKIP, "ignore", "volatile"),
+    ]
+    cell = CellDiff(request, "", fields)
+
+    def ansi(unified: bool) -> str:
+        console = RichConsole(width=100, force_terminal=True)
+        with console.capture() as capture:
+            well = _headers_well(cell, str, unified=unified, names=("stable", "canary"))
+            assert well is not None
+            console.print(well)
+        return capture.get()
+
+    for mode in (True, False):
+        rendered = ansi(mode)
+        assert "48;2;43;22;28" in rendered  # the muted DEL band (_DEL_BG #2b161c)
+        assert "48;2;18;42;32" in rendered  # the muted ADD band (_ADD_BG #122a20)
+        assert "x-api-version" in rendered
+        assert "⋯" in rendered  # the silenced header rides the same skip grammar
+    side = ansi(False)
+    assert "│" in side  # the pane separator, same as the body well
+    assert "stable" in side
+    assert "canary" in side
