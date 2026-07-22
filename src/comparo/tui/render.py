@@ -1186,6 +1186,12 @@ def _build_report_tree(
             shown = redact(mask_credential_header(str(key), str(value)))
             headers.add_leaf(Text.assemble((f"{redact(key)}: ", _DIM), (shown, _TEXT)))
         if not headers_only:
+            if response.events is not None:
+                # A streamed response: the chunks ARE the body — every event a
+                # foldable branch (envelope + parsed data), fully explorable.
+                events = node.add(Text(f"events · {len(response.events)}", style=_DIM), expand=True)
+                _events_into(events, response.events, redact)
+                return []
             body = node.add(Text("body", style=_DIM), expand=len(response.body) < 800)
             content_type = _content_type(response.headers)
             anchors = anchors_from_assertions(results, redact)
@@ -1641,6 +1647,41 @@ def _body_into(
         return
     for line in redact(text)[:4000].splitlines()[:200]:
         node.add_leaf(Text(line, style=_TEXT))
+
+
+def _events_into(
+    node: TreeNode[object], events: list[object], redact: Callable[[str], str] = str
+) -> None:
+    """Streamed chunks as foldable branches — every event explorable in place.
+
+    Each event opens to its envelope (id · event · retry) and its data, parsed
+    as JSON when it is JSON — the same grammar as the SSE facet, over the
+    already-parsed event list a streamed response carries.
+    """
+    for index, event in enumerate(events):
+        label = Text(f"{index + 1} ", style=_DIM)
+        name = _event_name(event)
+        label.append(redact(name), style=_ACCENT if name != "message" else _DIM)
+        if isinstance(event, dict) and event.get("id"):
+            label.append(f"  · id {redact(str(event['id']))}", style=_DIM)
+        branch = node.add(label, expand=len(events) <= 8)
+        if isinstance(event, dict):
+            if event.get("retry"):
+                branch.add_leaf(
+                    Text.assemble(
+                        ("retry: ", _DIM),
+                        (redact(str(event["retry"])), _TEXT),
+                        ("  · reconnect hint", _DIM),
+                    )
+                )
+            data = _event_data(event)
+            data_node = branch.add(Text("data", style=_DIM), expand=True)
+            if isinstance(data, str):
+                data_node.add_leaf(Text(_clip(redact(data), 200), style=_TEXT))
+            else:
+                _value_into(data_node, data, redact)
+        else:
+            _value_into(branch, event, redact)
 
 
 def _sse_into(node: TreeNode[object], text: str, redact: Callable[[str], str] = str) -> None:
@@ -4290,6 +4331,10 @@ def _stream_body_view(
         parts.append(row)
         if index == opened:
             parts.append(Padding(_event_expanded(index, left, right, redact), (0, 0, 0, 2)))
+    hint = Text("▸/▾ mark the opened event — ", style=_DIM)
+    hint.append("enter", style=f"bold {_ACCENT}")
+    hint.append(" on an event row in the card above opens it here", style=_DIM)
+    parts.append(hint)
     return Group(*parts)
 
 

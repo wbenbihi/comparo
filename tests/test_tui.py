@@ -2228,3 +2228,109 @@ def test_diff_inspect_wears_the_verdict_card_and_streams_are_navigable() -> None
             assert diff._outbound_shown
 
     asyncio.run(go())
+
+
+def test_stream_events_are_explorable_end_to_end_in_both_tabs() -> None:
+    # User report: events must be walkable. DIFF: enter on the index focuses
+    # the card, enter on an event row expands THAT event in the tail. RUN: a
+    # streamed response mounts its chunks as foldable branches in the tree.
+
+    from comparo.core.compare import CellDiff
+    from comparo.core.diff import FieldDiff
+    from comparo.core.diff import State
+    from comparo.core.execute import Execution
+    from comparo.core.http import HttpResponse
+    from comparo.core.models import Environment
+    from comparo.tui.app import DiffView
+    from comparo.tui.app import RunView
+    from comparo.tui.render import _run_key
+
+    loaded = load_project(SAMPLE)
+    request = next(o for o in loaded.objects.values() if isinstance(o, Request))
+    env = next(o for o in loaded.objects.values() if isinstance(o, Environment))
+    base_events: list[object] = [
+        {"event": "tick", "id": "41", "data": '{"seq": 1}'},
+        {"event": "tick", "id": "42", "data": '{"seq": 2}'},
+    ]
+    cand_events: list[object] = [
+        {"event": "tick", "id": "41", "data": '{"seq": 1}'},
+        {"event": "tick", "id": "42", "data": '{"seq": 9}'},
+    ]
+
+    async def go() -> None:
+        app = ComparoApp(loaded)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("3")
+            await pilot.pause()
+            diff = app.query_one(DiffView)
+            cell = CellDiff(
+                request,
+                "streamed",
+                [FieldDiff("$[1].data", State.DRIFT, "exact", "events differ")],
+                None,
+                baseline=Execution(
+                    request, env, "streamed", HttpResponse(200, [], b"", 5.0, base_events)
+                ),
+                candidate=Execution(
+                    request, env, "streamed", HttpResponse(200, [], b"", 5.0, cand_events)
+                ),
+            )
+            diff._cells = [cell]
+            diff._done = True
+            diff.query_one("#diff-mode", ContentSwitcher).current = "diff-results"
+            diff._regroup()
+            diff._populate_drift()
+            await pilot.pause()
+            # enter on the index row focuses the card's rows
+            drift_table = diff.query_one("#drift-table", DataTable)
+            drift_table.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            inspect = diff.query_one("#inspect-table", DataTable)
+            assert inspect.has_focus
+            # move to the SECOND event row (event 2 · index 1) and open it
+            evt_row = next(i for i, jump in enumerate(diff._inspect_jumps) if jump == "evt::1")
+            inspect.move_cursor(row=evt_row)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert diff._event_focus == 1  # THAT event opened, not the first
+            from rich.console import Console as RichConsole
+
+            console = RichConsole(width=120)
+            with console.capture() as capture:
+                console.print(diff.query_one("#compare-tail", Static).content)
+            tail = capture.get()
+            assert "@@ event 2 · data @@" in tail  # its per-event data diff
+            # RUN: the streamed response's chunks are foldable tree branches
+            await pilot.press("2")
+            await pilot.pause()
+            run = app.query_one(RunView)
+            plan = run._plan()
+            target = plan[0]
+            key = _run_key(*target)
+            run._state[key] = "ok"
+            run._exec[key] = Execution(
+                target[0], env, target[1].key, HttpResponse(200, [], b"", 5.0, base_events)
+            )
+            run._results[key] = []
+            run.query_one("#run-mode", ContentSwitcher).current = "running"
+            run._focus, run._focus_cell = target
+            run._view = "details"
+            run._populate_details(*target)
+            await pilot.pause()
+            tree = run.query_one("#detail-tree", Tree)
+            labels: list[str] = []
+
+            def walk(node: object) -> None:
+                labels.append(str(node.label))  # type: ignore[attr-defined]
+                for child in node.children:  # type: ignore[attr-defined]
+                    walk(child)
+
+            walk(tree.root)
+            joined = "\n".join(labels)
+            assert "events · 2" in joined  # the chunks branch exists
+            assert "id 41" in joined  # each event opens to its envelope
+            assert "seq" in joined  # ...and its parsed data
+
+    asyncio.run(go())
