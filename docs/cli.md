@@ -244,7 +244,7 @@ comparo import openapi SPEC [--output DIR] [--name NAME]
 | OpenAPI | → comparo |
 | --- | --- |
 | `servers` | an **Environment** each (two or more become a `diffPairs` entry) |
-| `paths` + operations | a **Request** each (method, path, query, body stub, 2xx status + schema `$ref`) |
+| `paths` + operations | a **Request** each (method, path, query, body stub, 2xx status + schema `$use`) |
 | `components.schemas` | a **Schema** each |
 | `securitySchemes` | an **auth** stub — bearer / basic / apiKey as a `$secret` reference |
 

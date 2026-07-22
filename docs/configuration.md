@@ -37,10 +37,11 @@ Every example below is drawn from or is consistent with the runnable
   - [Casts](#casts)
   - [Whole-value vs embedded](#whole-value-vs-embedded)
   - [The secret-priority rule](#the-secret-priority-rule)
-- [References and sigils](#references-and-sigils)
-  - [`$ref` — object reference](#ref--object-reference)
-  - [`$val` — instance value injection](#val--instance-value-injection)
-  - [`$secret`, `$env`, `$file`, `$literal` — value sigils](#secret-env-file-literal--value-sigils)
+- [Directives](#directives)
+  - [`$use` — object include](#use--object-include-structural)
+  - [`$val` / `$var` — inject an instance or a variable](#val--var--inject-an-instance-or-a-variable)
+  - [`$secret` / `$env` / `$file` / `$literal` / `$from` — value sources](#secret--env--file--literal--from--value-sources)
+  - [Masking is keyed off `secrets:`](#masking-is-keyed-off-secrets-not-the-directive)
 - [Secrets and masking](#secrets-and-masking)
   - [Declaring secrets](#declaring-secrets)
   - [Secret sources](#secret-sources)
@@ -154,10 +155,10 @@ The kind-specific body. Each kind is documented under [Object kinds](#object-kin
   reads every `*.yaml` beneath it. Either way it is **one object per file**.
 - Objects are indexed by `metadata.id`. A missing `id` (on a non-`Project` kind), a
   **duplicate `id`**, or a **second `Project` manifest** is an error.
-- Every `$ref` and `$val` target is checked against the index. A dangling reference is a hard
+- Every `$use` and `$val` target is checked against the index. A dangling reference is a hard
   error and the loader offers a **near-miss suggestion** — either the closest known id
   (`did you mean 'diff.lenient'?`) or an id with the *same segments in a different order*. A
-  `$ref` that is clearly a JSON-Schema pointer (it starts with `#` or contains `/`, e.g.
+  `$use`/`$val` target that looks like a JSON pointer (it starts with `#` or contains `/`, e.g.
   `#/$defs/Money`) is your own payload, not a comparo id, and is left untouched.
 - Once the tree resolves cleanly, a final pass validates every **profile attachment slot** — a
   request's `diff` / `assert`, an ExecutionProfile's `profiles`, the project default `diff`, and
@@ -228,7 +229,7 @@ error) and are consumed by the run engine, the reporters, and the front-ends.
 | data         | `data`         | Path to the object tree, relative to this file (e.g. `.comparo` or `.`).           |
 | environments | `environments` | Default environment and named diff pairs — see below.                             |
 | run          | `run`          | Execution defaults such as `concurrency` and `retry`.                             |
-| diff         | `diff`         | Global default comparison profile (a `$ref` / inline / list under `default`).     |
+| diff         | `diff`         | Global default comparison profile (a `$use` / inline / list under `default`).     |
 | selection    | `selection`    | Default headless selection, e.g. `tags`.                                          |
 | report       | `report`       | Saved-report `dir` and Markdown-export `output` directory — see below.            |
 | redaction    | `redaction`    | Redaction options, e.g. `stringMatchBackstop`.                                    |
@@ -275,7 +276,7 @@ spec:
   # Global default comparison profile; a request may override it with its own `diff:`.
   diff:
     default:
-      $ref: diff.lenient
+      $use: diff.lenient
 
   # Headless default selection.
   selection:
@@ -341,7 +342,7 @@ An HTTP request, optionally expanded across one or more matrices.
 | -------- | ----------- | ------------------------------------------- | -------- | ------------------------------------------------- |
 | request  | `request`   | [outbound request](#the-outbound-request)   | yes      | The HTTP request to send.                         |
 | response | `response`  | [expected response](#the-expected-response) | no       | The response expectations to check.               |
-| matrix   | `matrix`    | list of `$ref` to `Matrix`                  | no       | Matrices this request is expanded across.         |
+| matrix   | `matrix`    | list of `$use` to `Matrix`                  | no       | Matrices this request is expanded across.         |
 | timeout  | `timeout`   | [Duration](#duration)                       | no       | Overrides the environment timeout for this request. |
 
 #### The outbound request
@@ -421,10 +422,10 @@ parsed JSON body (or raw bytes when it is not JSON).
 | Field      | YAML key    | Type    | Required | Description                                                          |
 | ---------- | ----------- | ------- | -------- | ------------------------------------------------------------------- |
 | status     | `status`    | integer | no       | Expected HTTP status; checked when present.                         |
-| schema     | `schema`    | any     | no       | A `$ref` to a `Schema` object; the body is JSON-Schema-validated.   |
-| diff       | `diff`      | any     | no       | A `DiffProfile` as a `$ref`, inline spec, or a list (composed); overrides the project default. |
+| schema     | `schema`    | any     | no       | A `$use` to a `Schema` object; the body is JSON-Schema-validated.   |
+| diff       | `diff`      | any     | no       | A `DiffProfile` as a `$use`, inline spec, or a list (composed); overrides the project default. |
 | streaming  | `streaming` | boolean | no       | Whether the response is streamed (SSE / JSON stream), diffed as its ordered event sequence. |
-| assertions | `assert`    | any     | no       | One or more `AssertionProfile`s (`$ref`, inline, or a list) to check. |
+| assertions | `assert`    | any     | no       | One or more `AssertionProfile`s (`$use`, inline, or a list) to check. |
 
 ```yaml
 apiVersion: comparo/v1
@@ -439,7 +440,7 @@ metadata:
 spec:
   # Run once per locale; each case is merged into request.query (see matrix.locales).
   matrix:
-    - $ref: matrix.locales
+    - $use: matrix.locales
   request:
     method: POST
     endpoint: /anything
@@ -453,9 +454,9 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.anything-echo
+      $use: schema.anything-echo
     diff:
-      $ref: diff.lenient
+      $use: diff.lenient
 ```
 
 ### Schema
@@ -495,7 +496,7 @@ spec:
         - "null"
 ```
 
-A request references a schema via `response.schema: { $ref: schema.<id> }`. The response body
+A request references a schema via `response.schema: { $use: schema.<id> }`. The response body
 is parsed as JSON and validated against `spec`; a non-JSON body or a validation failure is
 reported as a failed `schema` check.
 
@@ -627,16 +628,16 @@ spec:
   default: exact
 ```
 
-#### Attaching a profile: `$ref`, inline, or a composing list
+#### Attaching a profile: `$use`, inline, or a composing list
 
 Every profile slot — a request's `response.diff` / `response.assert`, the project default
 `diff.default`, and an ExecutionProfile's `profiles.diff` / `profiles.assert` — accepts the
 **same three shapes**:
 
 ```yaml
-# 1. a $ref to a standalone object
+# 1. a $use to a standalone object
 diff:
-  $ref: diff.lenient
+  $use: diff.lenient
 
 # 2. an inline spec, written in place (no separate object needed)
 diff:
@@ -647,7 +648,7 @@ diff:
 
 # 3. a list that composes — later entries add to earlier ones
 assert:
-  - $ref: assert.http-ok      # the shared contract
+  - $use: assert.http-ok      # the shared contract
   - rules:                    # plus a couple of inline rules
       - target: body:$.args.currency
         op: equals
@@ -656,7 +657,7 @@ assert:
 
 A list of diff profiles concatenates their `rules`, and the **last** entry's `default` wins.
 Assertion profiles concatenate their rules (and everything they `include`). A slot that fails to
-resolve — a missing `$ref`, a wrong-kind target, or an invalid inline spec — is a **hard load
+resolve — a missing `$use`, a wrong-kind target, or an invalid inline spec — is a **hard load
 error**, never a silently-empty profile: an empty rule set passes every gate, so swallowing it
 would be a false green.
 
@@ -669,7 +670,7 @@ A composable set of **response assertions** — environment-agnostic checks that
 | Field   | YAML key  | Type                        | Required | Description                                  |
 | ------- | --------- | --------------------------- | -------- | -------------------------------------------- |
 | rules   | `rules`   | list of assertion rules     | no       | The checks (see below).                      |
-| include | `include` | list of `$ref`              | no       | Other AssertionProfiles to compose in first. |
+| include | `include` | list of `$use`              | no       | Other AssertionProfiles to compose in first. |
 
 Each rule is `{target, op, value, severity}`:
 
@@ -684,7 +685,7 @@ Each rule is `{target, op, value, severity}`:
     and `[index]` elements, e.g. `body:$.items[0].id`).
 - **op** — `equals`, `matches` (a regex searched in the value), `lt` / `lte` / `gt` / `gte`,
   `between` (`value: [min, max]`), `oneOf` (`value` is a list), `exists`, `contains`, and
-  `schema` (validate the target against a `Schema` `$ref` or an inline JSON Schema).
+  `schema` (validate the target against a `Schema` `$use` or an inline JSON Schema).
 - **severity** — `error` (default, blocks the gate) or `warn` (advisory; counted but never
   fails the gate).
 
@@ -717,7 +718,7 @@ metadata:
   id: assert.pricing
 spec:
   include:
-    - $ref: assert.http-ok        # compose the baseline contract
+    - $use: assert.http-ok        # compose the baseline contract
   rules:
     - target: body:$.args.currency
       op: equals
@@ -829,59 +830,70 @@ a declared secret: the whole header is masked in the TUI and scrubbed from repor
 
 ---
 
-## References and sigils
+## Directives
 
-A **sigil** is a single-key mapping whose key begins with `$`. Two families exist: structural
-references (`$ref`, `$val`) that point at another object, and value sigils (`$secret`, `$env`,
-`$file`, `$literal`) that produce a value in place.
+A **directive** is a single-key mapping whose key begins with `$`, resolved by the one
+[resolution engine](architecture.md). Two families:
 
-Both `$ref` and `$val` targets are validated at load time against the object index, with
-near-miss suggestions on failure.
+- **Value directives** produce a value in place and resolve **anywhere** a value can appear — a
+  request/instance header, body, or query, an environment header, a health check, or a
+  `secrets:` source. There is no per-location restriction: `$val`, `$var`, `$secret`, `$env`,
+  `$file`, `$literal`, and `$from`.
+- **Structural directive** — `$use` — includes another *object* into a typed slot (a matrix,
+  schema, or diff/assertion profile). Validated at load time against the object index, with
+  near-miss suggestions on failure.
 
-### `$ref` — object reference
+The `${...}` string grammar (below) is the in-string form of a variable/secret reference; `$var`
+is its whole-value dict form.
 
-Points at another object by its `metadata.id`. Used in structural positions rather than as a
-value hole:
+### `$use` — object include (structural)
 
-- `Request.spec.matrix` entries — `- $ref: matrix.locales`
-- `Request.spec.response.schema` — `$ref: schema.anything-echo`
-- `Request.spec.response.diff` — `$ref: diff.lenient`
-- `Project.spec.diff.default` — `$ref: diff.lenient`
+Includes another object by its `metadata.id` into a structural slot:
 
-The referenced object is looked up and consumed by the relevant subsystem (matrix expansion,
-schema validation, diffing).
+- `Request.spec.matrix` entries — `- $use: matrix.locales`
+- `Request.spec.response.schema` — `$use: schema.anything-echo`
+- `Request.spec.response.diff` / `Project.spec.diff.default` — `$use: diff.lenient`
+- `AssertionProfile.spec.include` — `- $use: assert.http-ok`
 
-### `$val` — instance value injection
+`$use` is **not** a comparo directive — it is reserved for its JSON-Schema meaning inside a
+`schema:` body, so the two never collide in one file.
 
-Injects an [`Instance`](#instance)'s `spec.value` at this position, then resolves it in place.
-Used to share a value — most often a header list — across requests:
+### `$val` / `$var` — inject an instance or a variable
+
+- `$val: <instance-id>` injects an [`Instance`](#instance)'s `spec.value` here, then resolves it
+  in place (carrying an **instance** provenance) — most often a shared header list.
+- `$var: <name>` is the whole-value reference to an environment variable: the dict form of
+  `${name}`. It yields the typed value and can sit inside a `$from` list.
 
 ```yaml
 request:
   headers:
-    $val: instance.default-headers
+    $val: instance.default-headers   # a shared header set
+  query:
+    region: { $var: DEFAULT_REGION } # a variable, as a value
 ```
 
-Injected values carry an **instance** provenance and their inner `${...}` / sigils are
-resolved as if written inline.
+Both are **secret-first**: if the referenced name is declared in `secrets:`, `$var`/`${name}`
+mask in the display sink like any secret.
 
-### `$secret`, `$env`, `$file`, `$literal` — value sigils
+### `$secret` / `$env` / `$file` / `$literal` / `$from` — value sources
 
-These produce a value directly. Their behavior depends on where they appear — inside an
-[`Environment.spec.secrets`](#secret-sources) source definition, or inline in a request /
-instance value tree:
+These resolve to a **real value wherever they appear** — the same behaviour inline in a request
+as inside a `secrets:` source. Masking is **not** the directive's job (see
+[masking](#masking-is-keyed-off-secrets-not-the-directive) below).
 
-| Sigil      | Inline in a value tree                                                        | Masked in display? |
-| ---------- | ----------------------------------------------------------------------------- | ------------------ |
-| `$secret`  | The value of a declared secret by name (`$secret: API_TOKEN`).                | Yes                |
-| `$env`     | Sources a secret from an OS environment variable; treated as tainted.         | Yes                |
-| `$file`    | Sources a secret from a file; treated as tainted.                             | Yes                |
-| `$literal` | The value verbatim — **not** interpolated and **not** masked.                 | No                 |
+| Directive       | Resolves to                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `$secret: NAME` | The declared secret `NAME` — masked in display, the real value in execute.               |
+| `$env: VAR`     | The OS environment variable `VAR`.                                                        |
+| `$file: PATH`   | A file's contents (relative to the project root, whitespace-stripped, **root-confined**). |
+| `$literal: X`   | `X` verbatim — never interpolated (the escape hatch for a literal `${...}`).             |
+| `$from: [ … ]`  | A list of the above tried in order; the first that resolves wins.                        |
 
-`$literal` is the escape hatch for a value that must be passed through untouched (for example a
-string that literally contains `${...}`). `$secret`, `$env`, and `$file` are all tainted: in
-the display sink they render as the mask (`••••••`); in the execute sink `$secret` resolves the
-declared secret's real value.
+An unset inline `$env`/`$file` degrades to `""` in the display sink (a preview never crashes) and
+fails the run in the execute sink (a request cannot be sent without the value). A `$from` chain
+skips only a **benign** absence (an unset `$env`); an **anomalous** source — an unreadable or
+root-escaping `$file` — fails closed and is never swallowed by a later fallback.
 
 ---
 
@@ -921,12 +933,12 @@ from:
 | `$env: VAR`       | The OS environment variable `VAR`. Errors if it is unset.                          |
 | `$literal: value` | A constant string. Useful for dummy/demo values.                                   |
 | `$file: path`     | The contents of a file (relative to the project root), whitespace-stripped. The path is **confined to the project root** — one that escapes it (`../…`) is an error. |
-| `from: [ ... ]`   | A list of source definitions tried in order; the first that resolves wins.         |
+| `$from: [ ... ]`  | A list of source definitions tried in order; the first that resolves wins.         |
 
 ```yaml
 secrets:
   API_TOKEN:
-    from:
+    $from:
       - $env: COMPARO_DEMO_TOKEN
       - $file: .secrets/token
       - $literal: local-demo-token
@@ -940,17 +952,32 @@ never an error.
 
 Resolution runs in one of two sinks:
 
-- **Display sink** (default — the TUI, snapshots, reports): every secret renders as the mask,
-  `••••••`. Real values never leave the process.
-- **Execute sink** (sending the request): `$secret` and `${SECRET_NAME}` resolve to the real
-  value so the request can be sent.
+- **Display sink** (default — the TUI, snapshots, reports): a declared secret renders as the mask,
+  `••••••`, and the real value is never consulted.
+- **Execute sink** (sending the request): declared secrets resolve to their real value so the
+  request can be sent.
 
-Values remember their **origin** — `literal`, `variable`, `secret`, `instance`, `matrix`, or
-`file` — and `secret` and `file` origins are *tainted*: masked in display and never persisted.
-The `redaction.stringMatchBackstop` safety net — masking any string equal to a known secret
-value even if it arrived through an untainted path — is **always on**: it is a security floor
-that cannot be disabled (setting it `false` is accepted but never turns masking off, since doing
-so would write a server-echoed secret to disk). The key is retained for forward-compatibility.
+### Masking is keyed off `secrets:`, not the directive
+
+A value is masked because it is a **declared secret**, never because of the directive that
+produced it. Two mechanisms, both keyed off the `secrets:` declaration:
+
+- **By name (secret-first).** A reference to a declared secret name — `$secret: NAME`,
+  `$var: NAME`, or `${NAME}` — masks in the display sink and resolves the real value in execute.
+  This ordering wins even if the same name is also a variable, so a secret can never be surfaced
+  by writing it as a plain `${NAME}`.
+- **By value (the floor).** The redactor masks any string equal to a declared secret's value,
+  wherever it appears — including a value that arrived through an inline `$env`/`$file`, or one a
+  server echoed back into a response. This `redaction.stringMatchBackstop` floor is **always on**
+  and cannot be disabled (setting it `false` is accepted but never turns masking off, since that
+  would write a secret to disk); the key is retained for forward-compatibility.
+
+So `$env`/`$file`/`$literal`/`$from` resolve their real value everywhere; whether it is then
+masked depends only on whether that value is a declared secret. **It is your responsibility to
+declare a sensitive value under `secrets:`** — an inline `$env` to a value you never declare is
+shown as-is. Values remember their **origin** — `literal`, `variable`, `secret`, `instance`,
+`matrix`, `env`, or `file` — and only a `secret` origin is *tainted* (masked in display and
+scrubbed from snapshots); `env`/`file` resolve real values and rely on the floor.
 
 ---
 

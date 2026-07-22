@@ -142,10 +142,10 @@ diagnostics-collecting passes, so one run surfaces every problem at once:
    and decoded into a typed model (`msgspec.convert(..., strict=True)`).
 2. **Id indexing** — objects are indexed by `metadata.id`; a duplicate id or a
    second `Project` manifest is a diagnostic.
-3. **Reference checking** — every `$ref`/`$val` target in the raw tree is checked
+3. **Reference checking** — every `$use`/`$val` target in the raw tree is checked
    against the known ids. A dangling reference is a *hard error* with a near-miss
    suggestion (`did you mean '…'?`), never a silent degradation. (A JSON-Schema
-   `$ref` — one that starts with `#` or contains `/` — is the user's own payload
+   pointer — one that starts with `#` or contains `/` — is the user's own JSON-Schema payload
    and is left alone.)
 4. **Profile-slot validation** — once the tree resolves cleanly, every profile
    attachment slot (a request's `diff`/`assert`, an `ExecutionProfile.profiles`,
@@ -155,27 +155,28 @@ diagnostics-collecting passes, so one run surfaces every problem at once:
    set, which would pass every gate. A non-empty `spec.plugins` block is rejected
    here too, since the plugin system does not exist yet.
 
-Crucially, the loader **does not fill** `$ref`, `$val`, or `${...}`. It leaves
+Crucially, the loader **does not fill** `$use`, `$val`, or `${...}`. It leaves
 them as holes in the tree. It only proves they *could* be filled. The result is a
 `LoadedProject`: the manifest plus every object indexed by id.
 
 ### Stage 2 — the Resolver fills holes for one environment
 
 `core/resolve.py` is the by-reference sink. A `Resolver` is bound to a
-`LoadedProject`, one chosen `Environment`, and a `Sink`. Walking a request tree it
-fills:
+`LoadedProject`, one chosen `Environment`, and a `Sink`. It keeps only the
+request-shaped tree-walk — matrix injection (see
+[`matrix.py`](#the-comparocore-module-map)), environment/request header merge, and
+auth override — and delegates **every** hole and string to the one resolution engine
+in `core/resolution.py`, which fills:
 
-- `${NAME}` interpolation holes (delegated to `core/interpolation.py`), which
-  support required (`${NAME}`), optional (`${NAME?}`), default
+- `${...}` interpolation — required (`${NAME}`), optional (`${NAME?}`), default
   (`${NAME | fallback}`), and typed-cast (`${NAME:int}`) forms;
-- `$val` — inline a reusable `Instance` value;
-- `$literal` — an escape hatch for a literal object;
-- `$secret` / `$env` / `$file` — a secret reference.
+- `$val` / `$var` — inline a reusable `Instance` value, or reference a variable;
+- `$secret` / `$env` / `$file` / `$literal` / `$from` — value sources that resolve
+  their real value **anywhere** they appear, not only inside `secrets:`.
 
-It also injects matrix cases (see [`matrix.py`](#the-comparocore-module-map)) and
-merges environment-level headers with request headers. The output is a
-`ResolvedRequest` — concrete method, URL, headers, query, body — plus a
-provenance `trail`.
+The output is a `ResolvedRequest` — concrete method, URL, headers, query, body —
+plus a provenance `trail`. The engine is path- and provenance-aware, so one `$val`
+cycle guard covers the whole walk.
 
 ### The two sinks: DISPLAY and EXECUTE
 
@@ -186,25 +187,26 @@ The same walk produces two different results depending on the sink:
 | `Sink.DISPLAY` (default) | `True` | the mask `••••••` | Explorer, `render`, `curl` preview, export |
 | `Sink.EXECUTE` | `False` | the **real** value, resolved lazily | the HTTP engine (`execute.py`, `health.py`) |
 
-In the **DISPLAY** sink, a secret is replaced by the mask string and its position
-is recorded in the provenance trail, so a human can see *that* a secret is there
-without ever seeing its value. In the **EXECUTE** sink, `core/secrets.py`'s
-`ExecuteSecrets` resolves the real value on demand from its source — `$env`,
-`$literal`, `$file`, or an ordered `from` fallback list — and **caches** it. Lazy
-resolution means a secret that is declared but unavailable only fails a run if
-something actually uses it.
+In the **DISPLAY** sink, a declared secret is replaced by the mask string and its
+position is recorded in the provenance trail, so a human can see *that* a secret is
+there without ever seeing its value — `ExecuteSecrets` is never even instantiated.
+In the **EXECUTE** sink, `core/resolution.py`'s `ExecuteSecrets` resolves the real
+value on demand from its source — `$env`, `$literal`, `$file`, or an ordered `$from`
+fallback — and **caches** it. Lazy resolution means a declared-but-unavailable
+secret only fails a run if something actually uses it.
 
-### Taint-based masking
+### Masking is keyed off the `secrets:` declaration
 
-Masking is not a string search bolted on at the end; it is a property carried by
-every resolved value. `core/provenance.py` defines an `Origin` enum
-(`LITERAL`, `VARIABLE`, `SECRET`, `INSTANCE`, `MATRIX`, `FILE`) and a `tainted`
-property: a value whose origin is `SECRET` or `FILE` "must be masked and never
-persisted." Two consequences follow:
+Masking is keyed off *what is declared secret*, never off the directive that produced
+a value. `core/provenance.py`'s `Origin` enum (`LITERAL`, `VARIABLE`, `SECRET`,
+`INSTANCE`, `MATRIX`, `ENV`, `FILE`) marks only `SECRET` as `tainted` — masked in
+display and never persisted. `$env`/`$file` resolve real values and are **not**
+tainted; they are masked only when their value is itself a declared secret, caught by
+the floor below. Two mechanisms enforce it:
 
-- **Interpolation is secret-first.** In `interpolation.py`, a `${NAME}` whose
-  name is a secret in the environment resolves as a secret *even when written as a
-  plain variable* — so a secret can never be surfaced by aliasing it.
+- **Secret-first by name.** In `resolution.py`, a `${NAME}`, `$var: NAME`, or
+  `$secret: NAME` whose name is declared resolves as a secret *even when the name is
+  also a variable* — so a secret can never be surfaced by aliasing it.
 - **A string-match backstop scrubs echoes too.** Drift and assertion *details*
   are built from real EXECUTE-sink responses, and a server can echo a secret
   straight back into a body it drifts on. So `core/redaction.py` defines a
@@ -265,12 +267,11 @@ redacted input.
 | Module | Role |
 | --- | --- |
 | `models.py` | Typed `msgspec` structs for every object kind, sharing a Kubernetes-style envelope (`apiVersion` / `kind` / `metadata` / `spec`). Framework fields forbid unknown keys; payload positions are `Any` and validated later. Exposes the tagged union `Object` — now including `AssertionProfile` and `ExecutionProfile`. |
-| `loader.py` | Loads a directory of YAML into a `LoadedProject` in diagnostics-collecting passes (parse + envelope, id indexing, reference checking, then profile-slot validation); keeps `$ref`/`$val`/`${...}` as holes; dangling references and unresolvable profile slots are hard errors with near-miss hints. |
+| `loader.py` | Loads a directory of YAML into a `LoadedProject` in diagnostics-collecting passes (parse + envelope, id indexing, reference checking, then profile-slot validation); keeps `$use`/`$val`/`${...}` as holes; dangling references and unresolvable profile slots are hard errors with near-miss hints. |
 | `diagnostics.py` | `Diagnostic` (file, message, line, hint) and `LoadError`, which carries every problem found in one load. |
-| `refs.py` | `resolve_specs`: the one resolver for a profile attachment slot — a `$ref`, an inline spec, or a list that composes — shared by the diff and assertion slots. An unresolvable slot is a hard error, never a silent empty rule set. |
-| `interpolation.py` | The `${...}` grammar — required / optional / default / typed-cast — resolved *secret-first* against an environment `Context`. |
-| `secrets.py` | `ExecuteSecrets`: lazily resolves declared secrets from `$env` / `$literal` / `$file` / `from` sources and caches them, for the EXECUTE sink; `$file` paths are confined to the project root. |
-| `resolve.py` | Environment selection and pairing, plus the `Resolver` that fills holes into a `ResolvedRequest` (method, URL, headers, query, body, `bodyType`, `auth`, `cookies`, `streaming`) under the DISPLAY or EXECUTE `Sink`. A matrix whose target is `request.path` fills `${...}` placeholders in the endpoint here. |
+| `refs.py` | `resolve_specs`: the one resolver for a profile attachment slot — a `$use`, an inline spec, or a list that composes — shared by the diff and assertion slots. An unresolvable slot is a hard error, never a silent empty rule set. |
+| `resolution.py` | The one home for value resolution: the `${...}` grammar (required / optional / default / typed-cast, *secret-first*), the `$val` / `$var` / `$secret` / `$literal` / `$env` / `$file` / `$from` directive `Engine`, and the `ExecuteSecrets` source backend (`$env` / `$literal` / `$file`, root-confined, lazily cached). Masking is keyed off the `secrets:` declaration. |
+| `resolve.py` | Environment selection and pairing, plus the `Resolver` that keeps the request-shaped tree-walk (matrix injection, header merge, auth override) and delegates every hole/string to the `resolution.py` `Engine`, producing a `ResolvedRequest` (method, URL, headers, query, body, `bodyType`, `auth`, `cookies`, `streaming`) under the DISPLAY or EXECUTE `Sink`. A matrix whose target is `request.path` fills `${...}` placeholders in the endpoint here. |
 | `provenance.py` | `Origin` (with the `tainted` property) and `Trail` — the single fact that drives masking, scrubbing, and diff explanations. |
 | `matrix.py` | Expands a request across its referenced matrices into one `MatrixCell` per combination (cartesian product), each with a stable `key`; applies an ExecutionProfile's per-matrix `include` / `exclude` / `override` scope. |
 | `streams.py` | Parses a streamed response body back into its ordered records — the full SSE envelope (`id` · `event` · joined `data` · `retry`, per the SSE processing model; a trailing unterminated event is deliberately kept so a timed-out stream still diffs whatever arrived), or the JSON objects of a chunked stream — so a stream is diffed as a sequence, not flattened to bytes. This is THE stream parse: the Run tab's renderer and the diff's per-event comparison consume the same output, so the tabs can never disagree about what an event contains. |
