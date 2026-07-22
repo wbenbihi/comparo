@@ -106,21 +106,26 @@ def _env_with_secret(source: object) -> Environment:
     )
 
 
-def test_redactor_fails_closed_when_a_declared_secret_file_becomes_unreadable(
+def test_redactor_fails_closed_when_a_declared_secret_file_is_unreadable(
     tmp_path: Path,
 ) -> None:
-    # H-3: the string-match backstop is a floor. If a declared $file was readable
-    # (so its value may already be in a server-echoed response) and then can't be
-    # read at redaction time, we must NOT quietly return a smaller value set —
-    # that would let the secret slip into a report/archive. It must fail loudly.
-    file = tmp_path / "token.txt"
-    file.write_text("in-tree-secret\n", encoding="utf-8")
-    env = _env_with_secret({"$file": "token.txt"})
-    assert "in-tree-secret" in environment_secret_values(env, tmp_path)
+    # H-3: the string-match backstop is a floor. If a declared $file EXISTS but cannot
+    # be read at redaction time (its value may already be in a server-echoed response),
+    # we must NOT quietly return a smaller value set — it must fail loudly.
+    readable = tmp_path / "token.txt"
+    readable.write_text("in-tree-secret\n", encoding="utf-8")
+    assert "in-tree-secret" in environment_secret_values(
+        _env_with_secret({"$file": "token.txt"}), tmp_path
+    )
 
-    file.unlink()
+    # a directory in a file slot exists-but-unreadable → anomalous → fail closed
+    (tmp_path / "blocked").mkdir()
     with pytest.raises(SecretError):
-        environment_secret_values(env, tmp_path)
+        environment_secret_values(_env_with_secret({"$file": "blocked"}), tmp_path)
+
+    # a merely-ABSENT declared file is benign: the value was never available, so the
+    # redactor drops it instead of crashing the whole build.
+    assert environment_secret_values(_env_with_secret({"$file": "gone.txt"}), tmp_path) == set()
 
 
 def test_redactor_skips_an_unset_env_secret(

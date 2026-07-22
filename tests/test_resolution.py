@@ -54,9 +54,11 @@ def test_var_is_secret_first_masked_in_display_real_in_execute() -> None:
     assert trail[0].tainted
 
 
-def test_var_missing_name_raises() -> None:
+def test_var_missing_name_degrades_in_display_raises_in_execute() -> None:
+    shown, _ = resolve_value({"$var": "NOPE"}, _ctx())
+    assert shown == ""  # a preview degrades, never crashes
     with pytest.raises(InterpolationError, match="required variable 'NOPE'"):
-        resolve_value({"$var": "NOPE"}, _ctx())
+        resolve_value({"$var": "NOPE"}, _ctx(execute=True))
 
 
 # ── inline $env / $file resolve real values everywhere ──────────────────────
@@ -138,19 +140,22 @@ def test_literal_passes_through_verbatim_without_resolving() -> None:
 
 
 def test_val_cycle_is_detected() -> None:
-    ctx = _ctx(instances={"a": {"$val": "b"}, "b": {"$val": "a"}})
+    store: dict[str, object] = {"a": {"$val": "b"}, "b": {"$val": "a"}}
     with pytest.raises(InterpolationError, match="cycle"):
-        resolve_value({"$val": "a"}, ctx)
+        resolve_value({"$val": "a"}, _ctx(execute=True, instances=store))
+    # a cycle in the display sink degrades rather than crashing a preview
+    shown, _ = resolve_value({"$val": "a"}, _ctx(instances=store))
+    assert shown == ""
 
 
 def test_val_shares_one_cycle_guard_across_a_nested_tree() -> None:
     # A single engine guards the whole walk, so a $val reached twice on separate
     # branches is fine, but a genuine loop is caught wherever it closes.
-    ctx = _ctx(instances={"leaf": "L", "self": {"loop": {"$val": "self"}}})
-    val, _ = resolve_value([{"$val": "leaf"}, {"$val": "leaf"}], ctx)
+    store: dict[str, object] = {"leaf": "L", "self": {"loop": {"$val": "self"}}}
+    val, _ = resolve_value([{"$val": "leaf"}, {"$val": "leaf"}], _ctx(instances=store))
     assert val == ["L", "L"]  # same instance twice, no false cycle
     with pytest.raises(InterpolationError, match="cycle"):
-        resolve_value({"$val": "self"}, ctx)
+        resolve_value({"$val": "self"}, _ctx(execute=True, instances=store))
 
 
 def test_unknown_sigil_passes_through_untouched() -> None:

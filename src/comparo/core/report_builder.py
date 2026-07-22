@@ -264,7 +264,8 @@ _NOT_JSON = object()
 def _parse_json(body: bytes) -> object:
     try:
         return json.loads(body)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
+        # Non-JSON or a pathologically deep body is treated as not-JSON (raw bytes).
         return _NOT_JSON
 
 

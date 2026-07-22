@@ -34,12 +34,18 @@ def test_undeclared_secret_is_unavailable(tmp_path: Path) -> None:
         _ = secrets["MISSING"]
 
 
-def test_unreadable_file_is_anomalous_not_unavailable(tmp_path: Path) -> None:
-    # A declared $file we cannot read is *anomalous*: it raises a plain SecretError,
-    # NOT the benign SecretUnavailableError — so the redactor fails closed on it.
-    secrets = ExecuteSecrets({"API": {"$file": "does-not-exist.txt"}}, tmp_path)
+def test_missing_file_is_benign_but_unreadable_is_anomalous(tmp_path: Path) -> None:
+    # A merely-ABSENT $file is BENIGN (SecretUnavailableError) — never available this
+    # session — so a $from chain skips it and the redactor drops it without crashing.
+    absent = ExecuteSecrets({"API": {"$file": "does-not-exist.txt"}}, tmp_path)
+    with pytest.raises(SecretUnavailableError):
+        _ = absent["API"]
+    # An EXISTS-but-unreadable $file (here a directory in a file slot) is ANOMALOUS: a
+    # plain SecretError, so the redactor fails closed on it.
+    (tmp_path / "adir").mkdir()
+    unreadable = ExecuteSecrets({"API": {"$file": "adir"}}, tmp_path)
     with pytest.raises(SecretError) as exc:
-        _ = secrets["API"]
+        _ = unreadable["API"]
     assert not isinstance(exc.value, SecretUnavailableError)
 
 

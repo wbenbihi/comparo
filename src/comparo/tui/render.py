@@ -109,6 +109,7 @@ from comparo.tui.tokens import _DIFF_BG
 from comparo.tui.tokens import _DIM
 from comparo.tui.tokens import _DOCS_URL
 from comparo.tui.tokens import _DRIFT
+from comparo.tui.tokens import _ENTITY_GLYPH
 from comparo.tui.tokens import _GATE_COLOR
 from comparo.tui.tokens import _HEALTH_COLOR
 from comparo.tui.tokens import _HELP_ERROR_GLOBAL
@@ -175,7 +176,10 @@ __all__ = [
     "_diff_slug",
     "_diff_unified",
     "_diffprofile_detail",
+    "_edge_table",
     "_edges",
+    "_entity_ref",
+    "_env_pair_count",
     "_environment_detail",
     "_environments",
     "_envs_label",
@@ -200,27 +204,35 @@ __all__ = [
     "_fmt_bytes",
     "_gate_banner",
     "_git_legend",
+    "_glyph_color",
     "_graph",
     "_header_rows",
     "_help_body",
     "_help_row",
     "_hole_str",
     "_hunk_band",
+    "_incoming",
+    "_instance_detail",
     "_is_remote",
     "_json",
     "_keys_bar",
+    "_kind_legend",
     "_kind_of",
     "_leaf",
     "_matches",
-    "_matrix_head",
+    "_matrix_axes",
+    "_matrix_detail",
+    "_matrix_merged",
     "_matrix_summary",
     "_object_detail",
     "_ok_report",
     "_outbound_diff_view",
     "_outbound_header",
+    "_outgoing",
     "_p50",
     "_pad_cells",
     "_pair",
+    "_ph",
     "_project_detail",
     "_project_leaf",
     "_raw_detail_into",
@@ -228,6 +240,7 @@ __all__ = [
     "_record_detail",
     "_record_kind",
     "_record_markdown",
+    "_referencing",
     "_rel_dir",
     "_relative_age",
     "_render_provenance",
@@ -253,7 +266,10 @@ __all__ = [
     "_running_table",
     "_save_run",
     "_scalar",
+    "_schema_detail",
+    "_schema_shape",
     "_seg_toggle",
+    "_selected_request_ids",
     "_selfcheck_rows",
     "_settings_about",
     "_settings_appearance",
@@ -271,6 +287,7 @@ __all__ = [
     "_sv",
     "_table",
     "_title",
+    "_tree_filter_hint",
     "_unified_rows",
     "_value_child",
     "_value_into",
@@ -346,47 +363,120 @@ def _default_environment(project: LoadedProject) -> Environment | None:
         return None
 
 
+#: The kind legend under the tree — every entity glyph in its color, in the
+#: mockup's order (env · req · inst · matrix · schema · diff · assert · exec).
+_LEGEND_ORDER: tuple[tuple[type, str], ...] = (
+    (Environment, "env"),
+    (Request, "req"),
+    (Instance, "inst"),
+    (Matrix, "matrix"),
+    (Schema, "schema"),
+    (DiffProfile, "diff"),
+    (AssertionProfile, "assert"),
+    (ExecutionProfile, "exec"),
+)
+
+
+def _glyph_color(obj: object) -> tuple[str, str]:
+    """The ``(glyph, color)`` for an object's kind — the one entity grammar.
+
+    The tree leaves, detail titles, and reverse-edge tables all speak it.
+    """
+    kind = type(obj)
+    return _ENTITY_GLYPH.get(kind, "·"), _KIND_COLOR.get(kind, _TEXT)
+
+
+def _entity_ref(project: LoadedProject, identifier: str, *, bold: bool = False) -> Text:
+    """``<glyph> <name>`` for a referenced object, in its kind color.
+
+    The shared "which kind is this" token — every reverse-edge table ("used by",
+    "attached to", "composes") renders its targets through this, so the kind
+    color language never forks between the tree, the detail, and the graph.
+    """
+    obj = project.objects.get(identifier)
+    if obj is None:
+        return Text(identifier, style=_DIM)
+    glyph, color = _glyph_color(obj)
+    name = str(getattr(obj.metadata, "name", None) or identifier)
+    return Text.assemble((f"{glyph} ", color), (name, f"bold {color}" if bold else color))
+
+
+def _kind_legend() -> Text:
+    """The Explorer tree's glyph legend — one line, every kind in its color."""
+    text = Text(no_wrap=True)
+    for index, (kind, label) in enumerate(_LEGEND_ORDER):
+        if index:
+            text.append("  ")
+        text.append(f"{_ENTITY_GLYPH[kind]} {label}", style=_KIND_COLOR[kind])
+    return text
+
+
+def _tree_filter_hint(query: str) -> Table:
+    """The tree's ``/ filter…`` strip — query (or placeholder) plus a right hint.
+
+    The ``name · kind · tag`` hint is right-aligned; ``.filterrow`` draws the border.
+    """
+    table = Table(box=None, show_header=False, expand=True, pad_edge=False, padding=0)
+    table.add_column(ratio=1, no_wrap=True)
+    table.add_column(justify="right", no_wrap=True)
+    left = Text("/ ", style=f"bold {_ACCENT}")
+    left.append(query if query else "filter…", style=_TEXT_HI if query else _DIM)
+    table.add_row(left, Text("name · kind · tag", style=_DIM))
+    return table
+
+
 def _branch(label: str, count: int) -> Text:
-    return Text.assemble((f"{label}  ", f"bold {_LABEL}"), (f"{count}", _DIM))
+    return Text.assemble((label.upper(), f"bold {_LABEL}"), (f" · {count}", _DIM))
+
+
+def _matrix_axes(request: Request) -> str:
+    """The short names of the matrices a request expands across.
+
+    Renders as the matrix-axis indicator in the tree leaf.
+    """
+    names = []
+    for reference in request.spec.matrix or []:
+        identifier = _ref_id(reference)
+        if identifier:
+            names.append(identifier.split(".")[-1])
+    return " ".join(names)
 
 
 def _leaf(obj: object, *, health: Health = Health.UNKNOWN, default: bool = False) -> Text:
     metadata = getattr(obj, "metadata", None)
     name = str(getattr(metadata, "name", "?"))
+    glyph, color = _glyph_color(obj)
     row = Text()
     if isinstance(obj, Environment):
+        # The ● glyph doubles as the health dot, so health state (not the flat
+        # kind color) tints it — the dot IS the last-probe signal.
         row.append("● ", style=_HEALTH_COLOR[health])
         row.append(name, style=_TEXT_HI if default else _TEXT)
         if _is_remote(obj):
             row.append("  live", style=f"bold {_DANGER}")
         if default:
             row.append("  default", style=f"bold {_ACCENT}")
-    elif isinstance(obj, Matrix):
-        row.append(name, style=_AXIS)
-        row.append(f"  ×{len(obj.spec.values)}", style=_DIM)
-    elif isinstance(obj, Request):
-        row.append(name, style=_TEXT)
-        if obj.spec.matrix:
-            row.append("  matrix", style=_AXIS)
-    elif isinstance(obj, ExecutionProfile):
-        row.append("▸ ", style=_ACCENT)
+        return row
+    row.append(f"{glyph} ", style=color)
+    if isinstance(obj, Request):
         row.append(name, style=_TEXT_HI)
-        row.append("  enter to run", style=_DIM)
-    elif isinstance(obj, AssertionProfile):
+        row.append(f"  {obj.spec.request.method}", style=_ACCENT)
+        axes = _matrix_axes(obj)
+        if axes:
+            row.append(f"  × {axes}", style=_AXIS)
+    elif isinstance(obj, Matrix):
         row.append(name, style=_TEXT)
-        count = len(obj.spec.rules or [])
-        if count:
-            row.append(f"  ×{count}", style=_DIM)
+        row.append(f"  · {len(obj.spec.values)} values", style=_DIM)
     else:
         row.append(name, style=_TEXT)
     return row
 
 
-def _project_leaf(manifest: Project) -> Text:
+def _project_leaf(manifest: Project, count: int) -> Text:
     row = Text()
     row.append("◆ ", style=_ACCENT)
     row.append(str(manifest.metadata.name or "project"), style=f"bold {_TEXT_HI}")
-    row.append("  project", style=_DIM)
+    row.append(f"  · {count} objects", style=_DIM)
     return row
 
 
@@ -448,7 +538,14 @@ def _matches(obj: object, kind: type, needle: str) -> bool:
 def _title(obj: object, tag: str) -> Text:
     metadata = getattr(obj, "metadata", None)
     identifier = str(getattr(metadata, "id", "") or getattr(metadata, "name", ""))
-    return Text.assemble((identifier, f"bold {_ACCENT}"), ("   ", ""), (tag, _AXIS))
+    title = Text()
+    if type(obj) in _ENTITY_GLYPH:
+        glyph, colour = _glyph_color(obj)
+        title.append(f"{glyph} ", style=colour)
+    title.append(identifier, style=f"bold {_ACCENT}")
+    title.append("   ")
+    title.append(tag, style=_AXIS)
+    return title
 
 
 def _description(obj: object) -> Text:
@@ -475,27 +572,30 @@ def _request_detail(
     )
     head.append("  ")
     head.append(redact(outbound.endpoint if raw else resolved.url), style=_TEXT_HI)
+    head.append("   ")
+    head.append_text(seg_pill(("raw", "resolved"), "raw" if raw else "resolved"))
     parts.append(head)
     if request.metadata.description:
-        parts.append(Text(f"\n{request.metadata.description}", style=_DIM))
-    tags = request.metadata.tags or []
+        parts.append(Text(request.metadata.description, style=_DIM))
+    spec_rows: list[tuple[str, Text | str]] = [
+        ("id", Text(request.metadata.id or request.metadata.name, style=_TEXT_HI))
+    ]
+    if request.metadata.tags:
+        spec_rows.append(("tags", Text(" · ".join(request.metadata.tags), style=_AXIS)))
     matrices = _matrix_summary(project, request.spec.matrix)
-    meta = Text()
-    if tags:
-        meta.append("\ntags       ", style=_LABEL)
-        meta.append(" · ".join(tags), style=_AXIS)
     if matrices:
-        meta.append("\nmatrix     ", style=_LABEL)
-        meta.append(matrices, style=_AXIS)
-    parts.append(meta)
-    headers = Text("\n\nHEADERS", style=_LABEL)
-    for key, rendered in _header_rows(outbound.headers, resolved.headers, raw=raw, redact=redact):
-        headers.append(f"\n  {key:<18}", style=_DIM)
-        headers.append(rendered)
-    parts.append(headers)
+        spec_rows.append(("matrix", Text(matrices, style=_AXIS)))
+    parts.append(spec_table(spec_rows))
+    header_rows = _header_rows(outbound.headers, resolved.headers, raw=raw, redact=redact)
+    if header_rows:
+        headers = _ph(f"headers · {len(header_rows)}")
+        for key, rendered in header_rows:
+            headers.append(f"\n  {key:<18}", style=_DIM)
+            headers.append(rendered)
+        parts.append(headers)
     query_source = (outbound.query or {}) if raw else resolved.query
     if query_source:
-        query = Text("\n\nQUERY", style=_LABEL)
+        query = _ph(f"query · {len(query_source)}")
         for key, value in query_source.items():
             shown = _hole_str(value) if raw else str(value)
             query.append(f"\n  {redact(key):<18}", style=_DIM)
@@ -503,17 +603,20 @@ def _request_detail(
         parts.append(query)
     body_source = outbound.body if raw else resolved.body
     if body_source is not None:
-        parts.append(Text("\n\nBODY", style=_LABEL))
+        parts.append(_ph("body"))
         parts.append(_json(body_source, redact))
     response = request.spec.response
     if response is not None:
-        section = Text("\n\nRESPONSE", style=_LABEL)
+        section = _ph("response")
         if response.status:
             section.append("\n  status   ", style=_DIM)
             section.append(str(response.status), style=_TEXT)
-        for name, reference in (("schema", response.schema), ("diff", response.diff)):
-            identifier = _ref_id(reference)
-            if identifier:
+        for name, value in (
+            ("schema", response.schema),
+            ("diff", response.diff),
+            ("assert", response.assertions),
+        ):
+            for identifier in _ref_ids(value):
                 section.append(f"\n  {name:<9}", style=_DIM)
                 section.append(identifier, style=_TEXT)
         parts.append(section)
@@ -562,97 +665,184 @@ def _hole_str(value: object) -> str:
     return str(value)
 
 
-def _object_detail(obj: object, redact: Callable[[str], str] = str) -> RenderableType:
+def _object_detail(
+    obj: object, redact: Callable[[str], str] = str, *, project: LoadedProject | None = None
+) -> RenderableType:
     if isinstance(obj, Environment):
-        return _environment_detail(obj, None, redact)
+        return _environment_detail(obj, None, redact, project=project)
     if isinstance(obj, Matrix):
-        return Group(_matrix_head(obj, redact), _json(obj.spec.values, redact))
+        return _matrix_detail(obj, redact, project=project)
     if isinstance(obj, DiffProfile):
-        return _diffprofile_detail(obj, redact)
+        return _diffprofile_detail(obj, redact, project=project)
     if isinstance(obj, AssertionProfile):
-        return _assertion_profile_detail(obj, redact)
+        return _assertion_profile_detail(obj, redact, project=project)
     if isinstance(obj, ExecutionProfile):
-        return _execution_profile_detail(obj, redact)
+        return _execution_profile_detail(obj, redact, project=project)
     if isinstance(obj, Schema):
-        return _json(obj.spec, redact)
+        return _schema_detail(obj, redact, project=project)
     if isinstance(obj, Instance):
         return _json(obj.spec.value, redact)
     return Text(str(obj), style=_TEXT)
 
 
+def _ph(label: str, hint: str = "") -> Text:
+    """A section header — the mockup's ``.ph``: a small bold label plus a dim hint.
+
+    Carries a leading blank line so Group-stacked sections separate cleanly.
+    """
+    text = Text("\n")
+    text.append(label, style=f"bold {_LABEL}")
+    if hint:
+        text.append(f"   {hint}", style=_DIM)
+    return text
+
+
+def _edge_table(
+    header: tuple[str, str], rows: list[tuple[RenderableType, RenderableType | str]]
+) -> Table:
+    """A two-column reverse-edge table on the shared ``record_table`` chrome."""
+    table = record_table()
+    table.add_column(header[0])
+    table.add_column(header[1])
+    for left, right in rows:
+        table.add_row(left, Text(right, style=_DIM) if isinstance(right, str) else right)
+    return table
+
+
 def _assertion_profile_detail(
-    profile: AssertionProfile, redact: Callable[[str], str] = str
+    profile: AssertionProfile,
+    redact: Callable[[str], str] = str,
+    *,
+    project: LoadedProject | None = None,
 ) -> Group:
     spec = profile.spec
     parts: list[RenderableType] = []
     if profile.metadata.description:
         parts.append(Text(profile.metadata.description, style=_DIM))
-    for reference in spec.include or []:
-        line = Text("\ninclude    ", style=_LABEL)
-        line.append(_ref_id(reference) or _hole_str(reference), style=_ACCENT)
-        parts.append(line)
-    rules = Text("\n\nRULES", style=_LABEL)
+    includes = [rid for reference in (spec.include or []) for rid in _ref_ids(reference)]
+    if includes:
+        inc = Text()
+        for index, rid in enumerate(includes):
+            if index:
+                inc.append("  ·  ", style=_DIM)
+            inc.append_text(_entity_ref(project, rid) if project else Text(rid, style=_SAME))
+        parts.append(spec_table([("includes", inc)]))
+    parts.append(_ph("Rules — the check-row grammar, unevaluated"))
+    rules = Text()
+    error_count = warn_count = 0
     for rule in spec.rules or []:
-        tint = _WARN if rule.severity == "warn" else _TEXT
+        warn = rule.severity == "warn"
+        tint = _WARN if warn else _TEXT_HI
         # A rule's expected value can equal a declared secret (asserting against a
         # credential); mask it here as the label/detail sinks do.
-        rules.append(f"\n  {redact(rule.target):<24}", style=_TEXT_HI)
-        rules.append(f"{rule.op:<8}", style=_AXIS)
+        rules.append(f"{redact(rule.target)} {rule.op}", style=tint)
         if rule.value is not None:
-            rules.append(_sv(rule.value, redact), style=tint)
-        if rule.severity == "warn":
-            rules.append("   warn", style=_WARN)
+            rules.append(f" {_sv(rule.value, redact)}", style=tint)
+        rules.append(f"  · {rule.severity}\n", style=_WARN if warn else _DIM)
+        warn_count += warn
+        error_count += not warn
     parts.append(rules)
-    parts.append(Text("\n\nRuns on both environments.", style=_DIM))
+    parts.append(
+        stat_chips(
+            [
+                StatChip("rules", len(spec.rules or []), _TEXT_HI),
+                StatChip("error", error_count, _DRIFT),
+                StatChip("~ warn", warn_count, _WARN),
+            ]
+        )
+    )
+    if project is not None:
+        target = profile.metadata.id or profile.metadata.name
+        rows: list[tuple[RenderableType, RenderableType | str]] = []
+        for source, relation in _incoming(project, target):
+            if relation != "assert":
+                continue
+            via = (
+                "response.assert $use"
+                if isinstance(project.objects.get(source), Request)
+                else "execution assert factor"
+            )
+            rows.append((_entity_ref(project, source, bold=True), via))
+        if rows:
+            parts.append(_ph("Attached to"))
+            parts.append(_edge_table(("object", "via"), rows))
     return Group(*parts)
 
 
 def _execution_profile_detail(
-    profile: ExecutionProfile, redact: Callable[[str], str] = str
+    profile: ExecutionProfile,
+    redact: Callable[[str], str] = str,
+    *,
+    project: LoadedProject | None = None,
 ) -> Group:
     spec = profile.spec
     parts: list[RenderableType] = []
     if profile.metadata.description:
         parts.append(Text(profile.metadata.description, style=_DIM))
     envs = spec.environments
-    body = Text()
-    if envs is not None:
-        body.append("\nbaseline   ", style=_LABEL)
-        body.append(f"{redact(envs.baseline or '—')}", style=_SAME)
+    rows: list[tuple[str, Text | str]] = [
+        ("id", Text(profile.metadata.id or profile.metadata.name, style=_TEXT_HI))
+    ]
+    if envs is not None and (envs.baseline or envs.candidate):
+        pair = Text(redact(envs.baseline or "—"), style=_SAME)
         if envs.candidate:
-            body.append("\ncandidate  ", style=_LABEL)
-            body.append(redact(envs.candidate), style=_DRIFT)
+            pair.append("  ⇄  ", style=_DIM)
+            pair.append(redact(envs.candidate), style=_SAME)
+        rows.append(("pair", pair))
     select = spec.select
     if select is not None and (select.tags or select.requests):
-        body.append("\nselect     ", style=_LABEL)
-        chosen = list(select.tags or []) + list(select.requests or [])
-        body.append(" · ".join(redact(item) for item in chosen), style=_AXIS)
+        chosen = Text()
+        pieces = [f"tag:{tag}" for tag in (select.tags or [])] + list(select.requests or [])
+        chosen.append(" · ".join(redact(piece) for piece in pieces), style=_AXIS)
+        rows.append(("select", chosen))
     check = spec.check
-    body.append("\nchecks     ", style=_LABEL)
     do_assert = check.assertions if check is not None else True
     do_diff = check.diff if check is not None else True
-    body.append("assert " + ("on" if do_assert else "off"), style=_SAME if do_assert else _DIM)
-    body.append("  ·  ", style=_DIM)
-    body.append("diff " + ("on" if do_diff else "off"), style=_SAME if do_diff else _DIM)
-    parts.append(body)
-    profiles = spec.profiles
-    for key, block in (
-        ("assert", profiles.assert_ if profiles else None),
-        ("diff", profiles.diff if profiles else None),
-    ):
-        for reference in block if isinstance(block, list) else ([block] if block else []):
-            line = Text(f"\n{key:<10} ", style=_LABEL)
-            line.append(_ref_id(reference) or "inline", style=_ACCENT)
-            parts.append(line)
-    if isinstance(spec.matrix, dict) and spec.matrix:
-        matrix = Text("\n\nMATRIX SCOPE", style=_LABEL)
-        for name, scope in spec.matrix.items():
-            matrix.append(f"\n  {name}  ", style=_TEXT_HI)
-            for verb, cases in (("+", scope.include), ("−", scope.exclude), ("~", scope.override)):
-                for case in cases or []:
-                    matrix.append(f"{verb}{_sv(case, redact)} ", style=_DIM)
-        parts.append(matrix)
-    parts.append(Text("\n\npress enter to run this execution", style=f"bold {_ACCENT}"))
+    checks = Text(f"assertions {'✓' if do_assert else '✗'}", style=_SAME if do_assert else _DIM)
+    checks.append("  ·  ", style=_DIM)
+    checks.append(f"diff {'✓' if do_diff else '✗'}", style=_SAME if do_diff else _DIM)
+    rows.append(("check", checks))
+    parts.append(spec_table(rows))
+    if project is not None:
+        selected = _selected_request_ids(project, profile)
+        env_count = sum(1 for env in ((envs.baseline, envs.candidate) if envs else ()) if env)
+        parts.append(
+            stat_chips(
+                [
+                    StatChip("selects", len(selected), _TEXT_HI),
+                    StatChip("envs", env_count, _TEXT_HI),
+                ]
+            )
+        )
+        parts.append(_ph("Composes", "everything this profile pulls together"))
+        composes: list[tuple[RenderableType, RenderableType | str]] = []
+        if envs is not None and (envs.baseline or envs.candidate):
+            pair = Text()
+            for env in (envs.baseline, envs.candidate):
+                if not env:
+                    continue
+                if pair.plain:
+                    pair.append(" · ", style=_DIM)
+                pair.append_text(
+                    _entity_ref(project, env, bold=True)
+                    if project.objects.get(env)
+                    else Text(f"● {redact(env)}", style=f"bold {_SAME}")
+                )
+            composes.append((pair, "the pair to assert + diff"))
+        if selected:
+            requests = Text(f"◆ {len(selected)} requests", style=f"bold {_KIND_COLOR[Request]}")
+            composes.append((requests, "the plan (selection)"))
+        profiles = spec.profiles
+        if profiles is not None:
+            for rid in _ref_ids(profiles.diff):
+                composes.append((_entity_ref(project, rid, bold=True), "the diff factor"))
+            for rid in _ref_ids(profiles.assert_):
+                composes.append((_entity_ref(project, rid, bold=True), "the assertion factor"))
+        if composes:
+            parts.append(_edge_table(("object", "role"), composes))
+    cli = Text("$ ", style=_DIM)
+    cli.append(f"comparo exec {profile.metadata.id or profile.metadata.name}", style=_ACCENT)
+    parts.append(cli)
     return Group(*parts)
 
 
@@ -662,98 +852,337 @@ def _environment_detail(
     redact: Callable[[str], str] = str,
     *,
     checked: str | None = None,
-) -> Text:
+    project: LoadedProject | None = None,
+) -> Group:
     spec = env.spec
-    text = Text()
     remote = _is_remote(env)
-    text.append("baseUrl    ", style=_LABEL)
+    parts: list[RenderableType] = []
+    marker = Text()
+    if remote:
+        marker.append(" LIVE ", style=f"bold {_INK} on {_DANGER}")
+        marker.append("  non-loopback host — requests hit a real server", style=_DIM)
+    else:
+        marker.append("loopback → local  ·  no live badge", style=_DIM)
+    parts.append(marker)
+    if env.metadata.description:
+        parts.append(Text(env.metadata.description, style=_DIM))
+    rows: list[tuple[str, Text | str]] = []
     # base_url can embed a credential (https://user:<secret>@host); a variable's
     # value can equal a declared secret (the untainted vector) — mask both.
-    text.append(f"{redact(spec.base_url)}", style=_ACCENT)
-    text.append("   live\n" if remote else "   local\n", style=_DANGER if remote else _DIM)
+    rows.append(("baseUrl", Text(redact(spec.base_url), style=_ACCENT)))
     if spec.timeout is not None:
-        text.append("timeout    ", style=_LABEL)
-        text.append(f"connect {spec.timeout.connect} · read {spec.timeout.read}\n", style=_TEXT)
-    for section, mapping in (("VARIABLES", spec.variables), ("SECRETS", spec.secrets)):
-        if mapping:
-            text.append(f"\n{section}\n", style=_LABEL)
-            for key in mapping:
-                text.append(f"  {redact(key):<22}", style=_DIM)
-                text.append(
-                    "••••••\n" if section == "SECRETS" else f"{redact(str(mapping[key]))}\n",
-                    style=_DRIFT if section == "SECRETS" else _TEXT,
-                )
+        rows.append(("timeouts", f"connect {spec.timeout.connect} · read {spec.timeout.read}"))
+    if spec.variables:
+        variables = Text()
+        for index, (key, value) in enumerate(spec.variables.items()):
+            if index:
+                variables.append("  ·  ", style=_DIM)
+            variables.append(redact(str(key)), style=_TEXT_HI)
+            variables.append(f"={redact(str(value))}", style=_TEXT)
+        rows.append(("vars", variables))
+    if spec.secrets:
+        secrets = Text()
+        for index, key in enumerate(spec.secrets):
+            if index:
+                secrets.append("  ·  ", style=_DIM)
+            secrets.append(redact(str(key)), style=_DRIFT)
+        secrets.append("   resolved, never shown", style=_DIM)
+        rows.append(("secrets", secrets))
+    parts.append(spec_table(rows))
+    if project is not None:
+        requests = sum(1 for obj in project.objects.values() if isinstance(obj, Request))
+        parts.append(
+            stat_chips(
+                [
+                    StatChip("used by", requests, _TEXT_HI),
+                    StatChip("in pairs", _env_pair_count(project, env), _TEXT_HI),
+                ]
+            )
+        )
     if spec.health:
-        text.append("\nHEALTH", style=_LABEL)
-        if report is not None:
-            text.append(f"   {report.status.value}", style=_HEALTH_COLOR[report.status])
+        parts.append(_ph("Health — manual, point-in-time", "h re-checks"))
         # EXP-23: health is a point-in-time probe you trigger — never fired on
         # focus, since that would hammer a live env on every cursor move. Show
         # how fresh the last probe is (or that there isn't one) and how to re-run.
         if checked is not None:
             age = _relative_age(checked)
-            text.append(
-                f"   checked {age} ago · press h to re-check" if age else "   press h to re-check",
-                style=_DIM,
-            )
+            fresh = f"checked {age} ago · press h to re-check" if age else "press h to re-check"
         else:
-            text.append("   not checked yet · press h", style=_DIM)
-        text.append("\n", style=_LABEL)
+            fresh = "not checked yet · press h"
+        status = Text(fresh, style=_DIM)
+        if report is not None:
+            status = Text(f"{report.status.value}   ", style=_HEALTH_COLOR[report.status])
+            status.append(fresh, style=_DIM)
+        parts.append(status)
         outcomes = {result.endpoint: result for result in (report.results if report else [])}
+        health = record_table()
+        health.add_column("probe")
+        health.add_column("outcome")
+        health.add_column("detail")
         for check in spec.health:
+            probe = Text(f"{check.method} {redact(check.endpoint)}", style=_TEXT_HI)
             result = outcomes.get(check.endpoint)
             if result is None:
-                text.append(f"  ○ {check.method} {redact(check.endpoint)}\n", style=_DIM)
+                health.add_row(probe, Text("○ not run", style=_DIM), "")
             else:
-                glyph, colour = ("✓", _SAME) if result.ok else ("✗", _DRIFT)
-                text.append(f"  {glyph} {check.method} {redact(check.endpoint)}", style=colour)
-                text.append(f"   {redact(result.detail)}\n", style=_DIM)
-    return text
+                label, colour = ("✓ up", _SAME) if result.ok else ("✗ down", _DRIFT)
+                health.add_row(probe, Text(label, style=colour), Text(redact(result.detail), _DIM))
+        parts.append(health)
+    return Group(*parts)
 
 
-def _matrix_head(matrix: Matrix, redact: Callable[[str], str] = str) -> Text:
+def _env_pair_count(project: LoadedProject, env: Environment) -> int:
+    """How many manifest diff-pairs name this environment as baseline or candidate."""
+    manifest = project.project
+    environments = manifest.spec.environments if manifest is not None else None
+    if environments is None or not environments.diff_pairs:
+        return 0
+    identifiers = {env.metadata.id, env.metadata.name}
+    return sum(
+        1 for pair in environments.diff_pairs if identifiers & {pair.baseline, pair.candidate}
+    )
+
+
+def _matrix_detail(
+    matrix: Matrix, redact: Callable[[str], str] = str, *, project: LoadedProject | None = None
+) -> Group:
     spec = matrix.spec
-    text = Text()
-    text.append("target   ", style=_LABEL)
-    text.append(f"{redact(spec.target)}\n", style=_TEXT)
-    text.append("mode     ", style=_LABEL)
-    text.append(f"{spec.mode}\n", style=_TEXT)
-    text.append(f"\nVALUES  ×{len(spec.values)}\n", style=_LABEL)
+    parts: list[RenderableType] = []
+    if matrix.metadata.description:
+        parts.append(Text(matrix.metadata.description, style=_DIM))
+    parts.append(
+        spec_table(
+            [
+                ("target", Text(redact(spec.target), style=_TEXT_HI)),
+                ("mode", spec.mode),
+                ("expands", Text(f"{len(spec.values)} cells", style=_TEXT_HI)),
+            ]
+        )
+    )
+    parts.append(_ph("Values — the cases this matrix generates"))
+    values = record_table()
+    values.add_column("#")
+    values.add_column("case")
+    values.add_column("merged")
+    for index, case in enumerate(spec.values, start=1):
+        rendered = " · ".join(f"{key}={redact(str(value))}" for key, value in case.items())
+        values.add_row(
+            str(index),
+            Text(rendered, style=_AXIS),
+            Text(_matrix_merged(spec.target, case, redact), style=_DIM),
+        )
+    parts.append(values)
+    if project is not None:
+        target = matrix.metadata.id or matrix.metadata.name
+        users = _referencing(project, target, "matrix")
+        parts.append(
+            stat_chips(
+                [
+                    StatChip("values", len(spec.values), _TEXT_HI),
+                    StatChip("attached to", len(users), _TEXT_HI),
+                ]
+            )
+        )
+        if users:
+            parts.append(_ph("Attached to"))
+            parts.append(
+                _edge_table(
+                    ("request", "via"),
+                    [(_entity_ref(project, uid, bold=True), "spec.matrix $use") for uid in users],
+                )
+            )
+    return Group(*parts)
+
+
+def _matrix_merged(target: str, case: dict[str, object], redact: Callable[[str], str] = str) -> str:
+    """A matrix case as the value it merges into the target position."""
+    leaf = target.split(".")[-1]
+    pairs = ", ".join(f"{key}={redact(str(value))}" for key, value in case.items())
+    if leaf == "query":
+        return "?" + "&".join(f"{key}={redact(str(value))}" for key, value in case.items())
+    return f"{leaf} {pairs}"
+
+
+def _schema_detail(
+    schema: Schema, redact: Callable[[str], str] = str, *, project: LoadedProject | None = None
+) -> Group:
+    spec = schema.spec
+    required = spec.get("required") or []
+    parts: list[RenderableType] = []
+    if schema.metadata.description:
+        parts.append(Text(schema.metadata.description, style=_DIM))
+    requires = Text(", ".join(str(name) for name in required) or "—", style=_TEXT_HI)
+    parts.append(spec_table([("type", str(spec.get("type", "object"))), ("requires", requires)]))
+    parts.append(_ph("Shape — the required tree"))
+    parts.append(_schema_shape(spec))
+    if project is not None:
+        target = schema.metadata.id or schema.metadata.name
+        users = _referencing(project, target, "schema")
+        parts.append(
+            stat_chips(
+                [
+                    StatChip("required", len(required), _TEXT_HI),
+                    StatChip("used by", len(users), _TEXT_HI),
+                ]
+            )
+        )
+        if users:
+            via = "response.schema $use → body op:schema"
+            parts.append(_ph("Used by", "validated as a body:schema assertion"))
+            parts.append(
+                _edge_table(
+                    ("request", "via"),
+                    [(_entity_ref(project, uid, bold=True), via) for uid in users],
+                )
+            )
+    return Group(*parts)
+
+
+def _schema_shape(spec: dict[str, object], *, indent: int = 0, text: Text | None = None) -> Text:
+    """The JSON Schema's required tree as an indented outline."""
+    text = Text() if text is None else text
+    pad = "  " * indent
+    node_type = str(spec.get("type", "object"))
+    raw_required = spec.get("required")
+    required = set(raw_required) if isinstance(raw_required, list) else set()
+    text.append(f"{pad}{node_type}", style=_DIM)
+    if required:
+        text.append("  required:", style=_WARN)
+        text.append(f"[{', '.join(sorted(str(name) for name in required))}]", style=_TEXT_HI)
+    text.append("\n")
+    properties = spec.get("properties")
+    if isinstance(properties, dict):
+        for name, sub in properties.items():
+            sub = sub if isinstance(sub, dict) else {}
+            nested = isinstance(sub.get("properties"), dict)
+            text.append(f"{pad}  {'▾' if nested else ' '} {name}: ", style=_DIM)
+            text.append(str(sub.get("type", "any")), style=_TEXT_HI)
+            if name in required:
+                text.append("  required", style=_WARN)
+            text.append("\n")
+            if nested:
+                _schema_shape(sub, indent=indent + 2, text=text)
     return text
 
 
-def _diffprofile_detail(profile: DiffProfile, redact: Callable[[str], str] = str) -> Text:
+def _instance_detail(
+    instance: Instance,
+    value: object,
+    redact: Callable[[str], str] = str,
+    *,
+    raw: bool = False,
+    project: LoadedProject | None = None,
+) -> Group:
+    parts: list[RenderableType] = []
+    if instance.metadata.description:
+        parts.append(Text(instance.metadata.description, style=_DIM))
+    parts.append(
+        spec_table([("id", Text(instance.metadata.id or instance.metadata.name, style=_TEXT_HI))])
+    )
+    parts.append(_ph("Raw value" if raw else "Resolved value", "r flips raw ⇄ resolved"))
+    parts.append(_json(value, redact))
+    if project is not None:
+        target = instance.metadata.id or instance.metadata.name
+        users = _referencing(project, target, "value")
+        parts.append(stat_chips([StatChip("injected into", len(users), _TEXT_HI)]))
+        if users:
+            parts.append(_ph("Injected into", "via $val"))
+            parts.append(
+                _edge_table(
+                    ("request", "at"),
+                    [
+                        (_entity_ref(project, uid, bold=True), "request.headers { $val }")
+                        for uid in users
+                    ],
+                )
+            )
+    return Group(*parts)
+
+
+#: The DIFF mode glyphs the rules-index grammar uses (matches the Diff results tab).
+_DIFF_MODE_GLYPH: dict[str, str] = {
+    "ignore": "◌",
+    "tolerance": "±",
+    "exact": "=",
+    "shape": "≈",
+    "type": "≈",
+}
+
+
+def _diffprofile_detail(
+    profile: DiffProfile,
+    redact: Callable[[str], str] = str,
+    *,
+    project: LoadedProject | None = None,
+) -> Group:
     spec = profile.spec
-    text = Text()
-    text.append("default  ", style=_LABEL)
-    text.append(f"{spec.default}\n", style=_MODE.get(spec.default, _TEXT))
-    if spec.rules:
-        text.append("\nRULES\n", style=_LABEL)
-        for rule in spec.rules:
-            text.append(f"  {redact(rule.path):<30}", style=_TEXT)
-            text.append(f"{rule.mode}\n", style=_MODE.get(rule.mode, _TEXT))
-    return text
+    parts: list[RenderableType] = []
+    if profile.metadata.description:
+        parts.append(Text(profile.metadata.description, style=_DIM))
+    default = Text(spec.default, style=_MODE.get(spec.default, _TEXT))
+    parts.append(spec_table([("default", default)]))
+    parts.append(_ph("Rules — the DIFF rules-index grammar"))
+    rules = Text()
+    ignore_count = tolerance_count = 0
+    for rule in spec.rules or []:
+        glyph = _DIFF_MODE_GLYPH.get(rule.mode, "=")
+        colour = _MODE.get(rule.mode, _TEXT)
+        rules.append(f"{glyph} {redact(rule.path)}", style=colour)
+        rules.append(f"  {rule.mode}", style=_DIM)
+        if rule.tolerance is not None:
+            rules.append(f" ±{rule.tolerance}", style=colour)
+        rules.append("\n")
+        ignore_count += rule.mode == "ignore"
+        tolerance_count += rule.mode == "tolerance"
+    parts.append(rules)
+    parts.append(
+        stat_chips(
+            [
+                StatChip("rules", len(spec.rules or []), _TEXT_HI),
+                StatChip("◌ ignore", ignore_count, _SKIP),
+                StatChip("± tolerance", tolerance_count, _WARN),
+            ]
+        )
+    )
+    if project is not None:
+        target = profile.metadata.id or profile.metadata.name
+        rows: list[tuple[RenderableType, RenderableType | str]] = []
+        for source, relation in _incoming(project, target):
+            if relation == "default-diff":
+                default = Text("project default", style=f"bold {_TEXT_HI}")
+                rows.append((default, "spec.diff.default"))
+            elif relation == "diff":
+                via = (
+                    "response.diff $use"
+                    if isinstance(project.objects.get(source), Request)
+                    else "execution diff factor"
+                )
+                rows.append((_entity_ref(project, source, bold=True), via))
+        if rows:
+            parts.append(_ph("Used by"))
+            parts.append(_edge_table(("object", "via"), rows))
+    return Group(*parts)
 
 
-def _render_provenance(trail: list[Trail], redact: Callable[[str], str] = str) -> Text:
+def _render_provenance(trail: list[Trail], redact: Callable[[str], str] = str) -> RenderableType:
     if not trail:
         return Text("all literal — nothing resolved", style=_DIM)
-    text = Text()
+    table = record_table()
+    table.add_column("value")
+    table.add_column("source")
     for entry in trail:
         colour = _DRIFT if entry.tainted else _AXIS
         # A MATRIX-origin trail detail is a case_key (``token=<value>``) that can
         # carry a declared secret; the backstop is a no-op on ref-name details.
-        text.append(f"{redact(entry.path):<22}", style=_TEXT)
-        text.append("← ", style=_DIM)
-        text.append(redact(entry.detail), style=colour)
+        source = Text(redact(entry.detail), style=colour)
         if entry.tainted:
-            text.append("  · masked", style=_DIM)
+            source.append("  · masked", style=_DIM)
         elif entry.origin is Origin.VARIABLE:
-            text.append("  · variable", style=_DIM)
+            source.append("  · variable", style=_DIM)
         elif entry.origin is Origin.INSTANCE:
-            text.append("  · instance", style=_DIM)
-        text.append("\n")
-    return text
+            source.append("  · instance", style=_DIM)
+        table.add_row(Text(redact(entry.path), style=_TEXT), source)
+    return table
 
 
 def _help_body(screen: str) -> Text:
@@ -828,25 +1257,87 @@ def _sigil_refs(spec: object, sigil: str) -> set[str]:
 
 
 def _edges(project: LoadedProject) -> list[tuple[str, str, str]]:
-    """Return ``(request_id, relation, target_id)`` links out of every request."""
+    """Return every ``(source_id, relation, target_id)`` reference in the project.
+
+    Spans requests, execution profiles, and the manifest — the one edge model the
+    Explorer's reverse-edge tables ("used by", "attached to", "injected into",
+    "composes") and the reference graph both read. A pure walk over
+    ``project.objects`` + the manifest — no resolution, no I/O.
+    """
     edges: list[tuple[str, str, str]] = []
+    for obj in project.objects.values():
+        if isinstance(obj, Request):
+            source = obj.metadata.id or obj.metadata.name
+            for target in _ref_ids(obj.spec.matrix):
+                edges.append((source, "matrix", target))
+            response = obj.spec.response
+            if response is not None:
+                for relation, value in (
+                    ("schema", response.schema),
+                    ("diff", response.diff),
+                    ("assert", response.assertions),
+                ):
+                    for target in _ref_ids(value):
+                        edges.append((source, relation, target))
+            for target in sorted(_sigil_refs(obj.spec, "$val")):
+                edges.append((source, "value", target))
+        elif isinstance(obj, ExecutionProfile):
+            source = obj.metadata.id or obj.metadata.name
+            environments = obj.spec.environments
+            if environments is not None:
+                for env in (environments.baseline, environments.candidate):
+                    if env:
+                        edges.append((source, "env", env))
+            profiles = obj.spec.profiles
+            if profiles is not None:
+                for target in _ref_ids(profiles.diff):
+                    edges.append((source, "diff", target))
+                for target in _ref_ids(profiles.assert_):
+                    edges.append((source, "assert", target))
+            for target in _selected_request_ids(project, obj):
+                edges.append((source, "select", target))
+    manifest = project.project
+    if manifest is not None:
+        source = manifest.metadata.id or manifest.metadata.name or "project"
+        if isinstance(manifest.spec.diff, dict):
+            for target in _ref_ids(manifest.spec.diff.get("default")):
+                edges.append((source, "default-diff", target))
+        env_config = manifest.spec.environments
+        if env_config is not None and env_config.default:
+            edges.append((source, "default-env", env_config.default))
+    return edges
+
+
+def _selected_request_ids(project: LoadedProject, profile: ExecutionProfile) -> list[str]:
+    """The request ids an execution selects — by explicit id or shared tag."""
+    select = profile.spec.select
+    if select is None:
+        return []
+    ids = set(select.requests or [])
+    tags = set(select.tags or [])
+    selected: list[str] = []
     for obj in project.objects.values():
         if not isinstance(obj, Request):
             continue
-        source = obj.metadata.id or obj.metadata.name
-        for reference in obj.spec.matrix or []:
-            target = _ref_id(reference)
-            if target:
-                edges.append((source, "matrix", target))
-        response = obj.spec.response
-        if response is not None:
-            for relation, reference in (("schema", response.schema), ("diff", response.diff)):
-                target = _ref_id(reference)
-                if target:
-                    edges.append((source, relation, target))
-        for target in sorted(_sigil_refs(obj.spec, "$val")):
-            edges.append((source, "value", target))
-    return edges
+        identifier = obj.metadata.id or obj.metadata.name
+        if identifier in ids or (tags & set(obj.metadata.tags or [])):
+            selected.append(identifier)
+    return selected
+
+
+def _incoming(project: LoadedProject, target_id: str) -> list[tuple[str, str]]:
+    """``(source_id, relation)`` for every edge pointing AT ``target_id``."""
+    return [(src, rel) for src, rel, dst in _edges(project) if dst == target_id]
+
+
+def _outgoing(project: LoadedProject, source_id: str) -> list[tuple[str, str]]:
+    """``(relation, target_id)`` for every edge leaving ``source_id``."""
+    return [(rel, dst) for src, rel, dst in _edges(project) if src == source_id]
+
+
+def _referencing(project: LoadedProject, target_id: str, relation: str) -> list[str]:
+    """The source ids that reference ``target_id`` through ``relation``."""
+    return [src for src, rel in _incoming(project, target_id) if rel == relation]
 
 
 def _short(project: LoadedProject, identifier: str) -> str:

@@ -92,14 +92,24 @@ Screen {
     width: 36;
     height: 1fr;
     margin-right: 1;
-    padding: 0;
+    padding: 1 1;
+}
+
+#tree-filter {
+    width: 1fr;
 }
 
 #tree {
+    height: 1fr;
     background: transparent;
-    padding: 1 1;
+    padding: 0;
     overflow-x: hidden;
     scrollbar-size-vertical: 1;
+}
+
+#tree-legend {
+    height: auto;
+    padding-top: 1;
 }
 
 #tree > .tree--guides,

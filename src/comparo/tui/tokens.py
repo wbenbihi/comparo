@@ -34,6 +34,7 @@ __all__ = [
     "_DIM",
     "_DOCS_URL",
     "_DRIFT",
+    "_ENTITY_GLYPH",
     "_ENV_KEYS",
     "_ERROR_KEYS",
     "_EXEC_CELL_KEYS",
@@ -415,6 +416,20 @@ _KIND_COLOR: dict[type, str] = {
     DiffProfile: _WARN,
     AssertionProfile: _SAME,
     ExecutionProfile: _ACCENT,
+}
+
+#: Per-kind glyph for the Explorer tree, detail titles, and reverse-edge tables —
+#: the one visual language for "which kind is this" (paired with _KIND_COLOR).
+#: Glyphs disambiguate the shared greens/blues (env/instance/assert, schema/exec).
+_ENTITY_GLYPH: dict[type, str] = {
+    Environment: "●",
+    Request: "◆",
+    Matrix: "▦",
+    Schema: "⬡",
+    Instance: "◈",
+    DiffProfile: "±",
+    AssertionProfile: "⊨",
+    ExecutionProfile: "▶",
 }
 
 _HEALTH_COLOR: dict[Health, str] = {

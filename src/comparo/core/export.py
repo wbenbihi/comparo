@@ -111,6 +111,7 @@ def _entry(
 def _redact_body(body: bytes, redact: Callable[[str], str]) -> object:
     try:
         payload = json.loads(body)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
+        # Non-JSON or a pathologically deep body falls back to redacting raw bytes.
         return redact(body.decode("utf-8", "replace"))
     return redact_tree(payload, redact)

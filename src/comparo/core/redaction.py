@@ -150,9 +150,13 @@ def _encoded_forms(value: str) -> set[str]:
         forms.add(variant)
         for ensure_ascii in (False, True):
             forms.add(json.dumps(variant, ensure_ascii=ensure_ascii)[1:-1])
-        forms.add(urllib.parse.quote(variant))  # path-encoded (leaves "/" as-is)
-        forms.add(urllib.parse.quote(variant, safe=""))  # fully encoded ("/" -> %2F)
-        forms.add(urllib.parse.quote_plus(variant))  # form-encoded (" " -> "+")
+        # ``errors="surrogateescape"`` re-encodes a non-UTF-8 env secret (decoded by
+        # os.environ with surrogateescape) back to its wire bytes instead of raising
+        # UnicodeEncodeError and crashing the whole redactor build.
+        quoted = urllib.parse.quote(variant, errors="surrogateescape")
+        forms.add(quoted)  # path-encoded (leaves "/" as-is)
+        forms.add(urllib.parse.quote(variant, safe="", errors="surrogateescape"))  # "/" -> %2F
+        forms.add(urllib.parse.quote_plus(variant, errors="surrogateescape"))  # " " -> "+"
     return forms
 
 

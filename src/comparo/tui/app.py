@@ -168,8 +168,9 @@ from comparo.tui.render import _gate_composition
 from comparo.tui.render import _governing_path
 from comparo.tui.render import _graph
 from comparo.tui.render import _help_body
-from comparo.tui.render import _json
+from comparo.tui.render import _instance_detail
 from comparo.tui.render import _keys_bar
+from comparo.tui.render import _kind_legend
 from comparo.tui.render import _leaf
 from comparo.tui.render import _matches
 from comparo.tui.render import _object_detail
@@ -211,6 +212,7 @@ from comparo.tui.render import _seg_toggle
 from comparo.tui.render import _settings_body
 from comparo.tui.render import _sv
 from comparo.tui.render import _title
+from comparo.tui.render import _tree_filter_hint
 from comparo.tui.render import drifted_event_indices
 from comparo.tui.render import raw_exchange_text
 from comparo.tui.replay import ReplayRecord
@@ -374,9 +376,11 @@ class ExplorerView(Horizontal):
         self._default_env_id = environment.metadata.id if environment is not None else None
 
     def compose(self) -> ComposeResult:
-        """Yield the tree and the detail/context panels."""
+        """Yield the tree (filter · tree · legend) and the detail/context panels."""
         with Vertical(id="tree-panel", classes="panel"):
+            yield Static(_tree_filter_hint(""), id="tree-filter", classes="filterrow")
             yield Tree("project", id="tree")
+            yield Static(_kind_legend(), id="tree-legend")
         with Vertical(id="detail"):
             with VerticalScroll(id="detail-panel", classes="panel hero"):
                 yield Static(id="detail-content")
@@ -409,6 +413,7 @@ class ExplorerView(Horizontal):
             The number of objects left visible.
         """
         self.filter_query = query
+        self.query_one("#tree-filter", Static).update(_tree_filter_hint(query))
         return self._populate(query)
 
     def toggle_raw(self) -> None:
@@ -500,7 +505,9 @@ class ExplorerView(Horizontal):
         total = 0
         manifest = self.project.project
         if manifest is not None and _matches(manifest, Project, needle):
-            first_leaf = tree.root.add_leaf(_project_leaf(manifest), data=manifest)
+            first_leaf = tree.root.add_leaf(
+                _project_leaf(manifest, len(self.project.objects)), data=manifest
+            )
             total += 1
         for label, kind in _KINDS:
             objects: list[object] = [
@@ -585,6 +592,7 @@ class ExplorerView(Horizontal):
                     self.health_reports.get(env_id),
                     _app_redact(self),
                     checked=self.health_checked.get(env_id),
+                    project=self.project,
                 )
             )
             context.border_title = "DESCRIPTION"
@@ -600,9 +608,12 @@ class ExplorerView(Horizontal):
             detail.border_title = _title(obj, "INSTANCE")
             detail.border_subtitle = self._resolve_subtitle()
             self._set_detail(
-                _json(
+                _instance_detail(
+                    obj,
                     obj.spec.value if self.raw else value,
                     _app_redact(self),
+                    raw=self.raw,
+                    project=self.project,
                 )
             )
             titled, content = (
@@ -615,7 +626,7 @@ class ExplorerView(Horizontal):
         else:
             detail.border_title = _title(obj, type(obj).__name__.upper())
             detail.border_subtitle = ""
-            self._set_detail(_object_detail(obj, _app_redact(self)))
+            self._set_detail(_object_detail(obj, _app_redact(self), project=self.project))
             context.border_title = "DESCRIPTION"
             self._set_context(_description(obj))
         self._update_footer(obj)

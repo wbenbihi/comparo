@@ -23,6 +23,11 @@ class Origin(enum.Enum):
     #: real value is resolved and sent whole in the execute sink; the marker is a
     #: rendering artifact, never persisted as if it were the value.
     ELIDED = "elided"
+    #: A value the display sink could not resolve (an unset required ``${VAR}``, a
+    #: ``$val`` cycle, an unreadable inline ``$file``). It degraded to ``""`` so a
+    #: preview never crashes; the trail records it so a caller (``comparo render``)
+    #: can report it instead of silently succeeding.
+    UNRESOLVED = "unresolved"
 
     @property
     def tainted(self) -> bool:

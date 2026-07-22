@@ -35,12 +35,12 @@ from comparo.core.loader import load_project
 from comparo.core.models import Environment
 from comparo.core.models import ExecutionProfile
 from comparo.core.models import Request
+from comparo.core.provenance import Origin
 from comparo.core.redaction import Redactor
 from comparo.core.report import diff_passed
 from comparo.core.report_builder import record_from_diff
 from comparo.core.report_builder import record_from_execution
 from comparo.core.report_record import ReportRecord
-from comparo.core.resolution import InterpolationError
 from comparo.core.resolution import SecretError
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import ResolvedRequest
@@ -305,14 +305,18 @@ def render(
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE) from error
-    try:
-        resolved = Resolver(loaded, environment).resolve_request(obj)
-    except (InterpolationError, SecretError) as error:
-        # A required ${VAR} unset (or a bad cast / unresolvable secret) is a config
-        # error, not a crash — surface it cleanly instead of a traceback (M-3).
-        typer.secho(f"could not resolve '{request_id}': {error}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE) from error
-    _print_resolved(resolved, environment.metadata.name, Redactor.for_project(loaded).text)
+    resolved = Resolver(loaded, environment).resolve_request(obj)
+    # The display sink degrades an unresolved value (a required ${VAR} unset, a bad
+    # cast, a $val cycle) rather than crashing; render is the command that reports it.
+    unresolved = [trail for trail in resolved.trail if trail.origin is Origin.UNRESOLVED]
+    if unresolved:
+        typer.secho(
+            f"could not resolve '{request_id}': {unresolved[0].detail}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(_EXIT_USAGE)
+    _print_resolved(resolved, environment.metadata.name, _redactor(loaded))
 
 
 @app.command(name="run")
@@ -392,7 +396,7 @@ def exec_profile(
     except EnvironmentSelectionError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE) from error
-    redact = Redactor.for_project(loaded).text
+    redact = _redactor(loaded)
     _print_execution(result, redact)
     _emit_reports(
         loaded,
@@ -490,7 +494,7 @@ def diff(
         typer.secho("no requests to diff", fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE)
     results = asyncio.run(_diff(loaded, base_env, candidate_env, requests))
-    redact = Redactor.for_project(loaded).text
+    redact = _redactor(loaded)
     if not results:
         typer.secho(
             "nothing to diff — every selected request expanded to zero cells",
@@ -601,6 +605,20 @@ def _open_project(config: Path) -> LoadedProject:
         return load_project(config)
     except LoadError as error:
         _print_load_error(error)
+        raise typer.Exit(_EXIT_USAGE) from error
+
+
+def _redactor(loaded: LoadedProject) -> Callable[[str], str]:
+    """Build the project's secret mask, exiting cleanly if a declared secret is unreadable.
+
+    A declared secret backed by an unreadable/root-escaping ``$file`` fails closed —
+    the mask cannot be built, so we must not proceed and risk leaking it — but that
+    is a config error to report, not a raw traceback.
+    """
+    try:
+        return Redactor.for_project(loaded).text
+    except SecretError as error:
+        typer.secho(f"could not build the secret mask: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE) from error
 
 
@@ -1034,7 +1052,7 @@ def _print_results(loaded: LoadedProject, results: list[Execution], environment_
     a declared 200 is red and fails the gate.
     """
     typer.secho(f"run · {environment_name}", bold=True)
-    redact = Redactor.for_project(loaded).text
+    redact = _redactor(loaded)
     ok_all = True
     for execution in results:
         identifier = execution.request.metadata.id or execution.request.metadata.name
