@@ -175,3 +175,77 @@ def test_inline_env_value_that_is_a_declared_secret_is_masked_by_the_floor(
     val, _ = resolve_value({"$env": "COMPARO_SHARED"}, _ctx(execute=True))
     assert val == "the-real-secret"  # the engine resolves real
     assert "the-real-secret" not in redact(str(val))  # the floor masks it
+
+
+# ── audit regressions: display-sink degradation, error-shape, origin, depth ─
+
+
+def test_display_degrades_a_missing_inline_file_but_execute_fails_closed(tmp_path: Path) -> None:
+    # The display sink now reads disk for inline $file; a missing/unreadable file
+    # must degrade a PREVIEW to "" (never crash the Explorer/report/export), while
+    # the execute sink still fails closed — a request cannot be sent without it.
+    node = {"$file": "does-not-exist.txt"}
+    shown, _ = resolve_value(node, _ctx(root=tmp_path))
+    assert shown == ""
+    with pytest.raises(SecretError):
+        resolve_value(node, _ctx(execute=True, root=tmp_path))
+
+
+def test_display_degrades_a_root_escaping_file_but_execute_fails_closed(tmp_path: Path) -> None:
+    root = tmp_path / "proj"
+    root.mkdir()
+    (tmp_path / "outside.txt").write_text("x", encoding="utf-8")
+    node = {"$file": "../outside.txt"}
+    shown, _ = resolve_value(node, _ctx(root=root))
+    assert shown == ""  # an escaping file degrades in display, never crashes
+    with pytest.raises(SecretError, match="escapes"):
+        resolve_value(node, _ctx(execute=True, root=root))
+
+
+def test_display_degrades_a_malformed_from_but_execute_fails_closed() -> None:
+    node = {"$from": "not-a-list"}
+    shown, _ = resolve_value(node, _ctx())
+    assert shown == ""
+    with pytest.raises(SecretError):
+        resolve_value(node, _ctx(execute=True))
+
+
+def test_unsupported_source_error_never_reprs_the_value(tmp_path: Path) -> None:
+    # A fail-closed "unsupported source" error is displayed AND persisted (health
+    # detail, Execution.error). It must never embed a declared secret's plaintext —
+    # only the shape (dict keys / type name).
+    from comparo.core.resolution import ExecuteSecrets
+
+    secret = "sk-live-realtoken"
+    for source in ({"oops": secret}, {"$from": [secret]}):
+        secrets = ExecuteSecrets({"TOKEN": source}, tmp_path)
+        with pytest.raises(SecretError) as exc:
+            _ = secrets["TOKEN"]
+        assert secret not in str(exc.value)  # never the plaintext value
+        assert "unsupported source shape" in str(exc.value)
+
+
+def test_from_via_file_records_file_origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A $from that resolves through its $file candidate must record FILE provenance,
+    # not the ENV of a skipped earlier candidate.
+    monkeypatch.delenv("COMPARO_MISS_F", raising=False)
+    (tmp_path / "tok.txt").write_text("v\n", encoding="utf-8")
+    val, trail = resolve_value(
+        {"$from": [{"$env": "COMPARO_MISS_F"}, {"$file": "tok.txt"}]},
+        _ctx(execute=True, root=tmp_path),
+    )
+    assert val == "v"
+    assert trail[0].origin is Origin.FILE
+
+
+def test_deeply_nested_value_raises_a_caught_error_not_recursionerror() -> None:
+    # A pathological deep value tree must raise InterpolationError (caught by the
+    # execute/health handlers), never an uncaught RecursionError that aborts the run.
+    node: dict[str, object] = {}
+    cursor = node
+    for _ in range(500):
+        child: dict[str, object] = {}
+        cursor["k"] = child
+        cursor = child
+    with pytest.raises(InterpolationError):
+        resolve_value(node, _ctx())

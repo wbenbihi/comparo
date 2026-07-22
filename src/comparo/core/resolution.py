@@ -135,7 +135,7 @@ def _file_source(relative: object, root: Path | None) -> str:
         raise SecretError(message) from error
 
 
-def resolve_source(source: object, root: Path | None) -> str:
+def resolve_source(source: object, root: Path | None) -> tuple[str, Origin]:
     """Resolve a ``{$env|$file|$literal|$from: …}`` source dict to a real value.
 
     The one backend shared by the ``secrets:`` block (:class:`ExecuteSecrets`)
@@ -148,7 +148,9 @@ def resolve_source(source: object, root: Path | None) -> str:
         root: The project root, for confining ``$file``.
 
     Returns:
-        The resolved value as a string.
+        ``(value, origin)`` — the resolved value and which concrete source
+        produced it (``ENV`` / ``FILE`` / ``LITERAL``; for a ``$from`` chain, the
+        winning candidate's origin).
 
     Raises:
         SecretUnavailableError: If the source is absent (unset env, exhausted chain).
@@ -156,16 +158,16 @@ def resolve_source(source: object, root: Path | None) -> str:
     """
     if isinstance(source, dict):
         if "$env" in source:
-            return _env_source(str(source["$env"]))
+            return _env_source(str(source["$env"])), Origin.ENV
         if "$literal" in source:
-            return str(source["$literal"])
+            return str(source["$literal"]), Origin.LITERAL
         if "$file" in source:
-            return _file_source(source["$file"], root)
+            return _file_source(source["$file"], root), Origin.FILE
         candidates = source.get("$from")
         if isinstance(candidates, list):
             for candidate in candidates:
                 try:
-                    return resolve_source(candidate, root)
+                    return resolve_source(candidate, root)  # (value, origin) of the winner
                 except SecretUnavailableError:
                     # A benign absence — try the next source. An anomalous
                     # SecretError (unreadable/escaping $file) propagates and fails
@@ -173,8 +175,11 @@ def resolve_source(source: object, root: Path | None) -> str:
                     continue
             message = "no source in '$from' resolved"
             raise SecretUnavailableError(message)
-    message = f"unsupported source: {source!r}"
-    raise SecretError(message)
+    # Shape-only diagnostic — NEVER repr the source: a $literal candidate (or a
+    # malformed value) may be a declared secret, and this error is displayed and
+    # persisted (health CheckResult.detail, Execution.error).
+    shape = sorted(map(str, source)) if isinstance(source, dict) else type(source).__name__
+    raise SecretError(f"unsupported source shape: {shape}")
 
 
 @dataclasses.dataclass(slots=True)
@@ -198,9 +203,10 @@ class ExecuteSecrets:
             message = f"no secret named '{name}'"
             raise SecretUnavailableError(message)
         try:
-            value = resolve_source(self.sources[name], self.root)
+            value, _origin = resolve_source(self.sources[name], self.root)
         except SecretError as error:
-            # Re-stamp the anonymous backend error with the secret's name.
+            # Re-stamp the anonymous backend error with the secret's name. The
+            # backend never reprs a value, so this carries no plaintext.
             cls = type(error)
             raise cls(f"secret '{name}': {error}") from error
         self._cache[name] = value
@@ -322,6 +328,12 @@ def _join(path: str, key: object) -> str:
     return f"{path}.{key}" if path else str(key)
 
 
+#: Cap on value-tree nesting, so a runaway structure raises a caught
+#: ``InterpolationError`` rather than an uncaught ``RecursionError`` (mirrors the
+#: redactor's depth cap). Real configs nest a handful of levels deep.
+_MAX_DEPTH = 200
+
+
 class Engine:
     """Resolves a value tree against a :class:`Context`, holes and all.
 
@@ -335,23 +347,34 @@ class Engine:
         """Bind the engine to *context* and start an empty trail + cycle guard."""
         self.context = context
         self._resolving: set[str] = set()
+        self._depth = 0
         self.trail: list[Trail] = []
 
     def value(self, node: object, path: str = "") -> object:
         """Resolve *node* (string, hole, dict, or list); record trail as a side effect."""
-        if isinstance(node, str):
-            part = interpolate(node, self.context)
-            if part.origin is not Origin.LITERAL and part.detail is not None:
-                self.trail.append(Trail(path, part.origin, part.detail))
-            return part.value
-        if isinstance(node, dict):
-            spot = hole(node)
-            if spot is not None:
-                return self.reference(spot[0], spot[1], path)
-            return {key: self.value(val, _join(path, key)) for key, val in node.items()}
-        if isinstance(node, list):
-            return [self.value(item, f"{path}[{index}]") for index, item in enumerate(node)]
-        return node
+        self._depth += 1
+        try:
+            if self._depth > _MAX_DEPTH:
+                # A runaway nesting (a pathological value tree, or a $val chain the
+                # static cycle check missed) would otherwise raise an uncaught
+                # RecursionError that escapes the execute/health handlers and aborts
+                # the whole run. Raise a caught error so only this value degrades.
+                raise InterpolationError("value nesting too deep")
+            if isinstance(node, str):
+                part = interpolate(node, self.context)
+                if part.origin is not Origin.LITERAL and part.detail is not None:
+                    self.trail.append(Trail(path, part.origin, part.detail))
+                return part.value
+            if isinstance(node, dict):
+                spot = hole(node)
+                if spot is not None:
+                    return self.reference(spot[0], spot[1], path)
+                return {key: self.value(val, _join(path, key)) for key, val in node.items()}
+            if isinstance(node, list):
+                return [self.value(item, f"{path}[{index}]") for index, item in enumerate(node)]
+            return node
+        finally:
+            self._depth -= 1
 
     def reference(self, sigil: str, target: object, path: str) -> object:
         """Resolve one ``{$sigil: target}`` hole at *path*, recording its trail."""
@@ -396,21 +419,23 @@ class Engine:
         """Resolve an inline ``$env``/``$file``/``$from`` to its real value.
 
         Masking is not the directive's job — the value is real, and the redactor's
-        floor masks it iff it is a declared secret. A benign absence degrades to an
-        empty string in the display sink (a preview must not crash on an unset
-        var); in the execute sink it fails, because the request cannot be sent
-        without the value. An anomalous source always fails closed.
+        floor masks it iff it is a declared secret. The **execute** sink fails
+        closed on ANY bad source (absent, unreadable, root-escaping, malformed),
+        because a request cannot be sent without the value. The **display** sink
+        degrades every such failure to an empty string: a preview reads from disk /
+        env now (unlike the old mask-only path) and must never crash the Explorer,
+        report tree, or export on a missing file or a malformed ``$from``.
         """
-        origin = Origin.FILE if sigil == "$file" else Origin.ENV
         # A ``$env``/``$file`` target is a var name / path (safe to show); a ``$from``
         # target is a list that may carry a ``$literal`` secret fallback, so never
         # render it — the detail is the directive alone.
         detail = "$from" if sigil == "$from" else f"{sigil}:{target}"
         try:
-            value: object = resolve_source({sigil: target}, self.context.root)
-        except SecretUnavailableError:
+            value, origin = resolve_source({sigil: target}, self.context.root)
+        except SecretError:
             if not self.context.mask_secrets:  # execute sink: cannot send without it
                 raise
+            origin = Origin.FILE if sigil == "$file" else Origin.ENV
             value = ""  # display sink: degrade, never crash a preview
         self.trail.append(Trail(path, origin, detail))
         return value
