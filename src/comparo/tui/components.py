@@ -250,6 +250,29 @@ def verdict_box_header(rows: list[CheckRow], total: int | None = None) -> Text:
     return head
 
 
+def check_row_cells(row: CheckRow) -> tuple[Text, Text, Text]:
+    """One rule row as THREE columns — ``(rule, source, evidence)`` cells.
+
+    The DataTable costume of the verdict card (a focusable table) needs per-column
+    cells rather than the wrapped lines ``check_row_lines`` builds; both are the
+    same grammar over ``_ROW_MARKS``, so the row glyph/label/suffix rules can
+    never fork between the Static box and the table.
+    """
+    glyph, color = _ROW_MARKS.get(row.state, ("·", _DIM))
+    rule = Text(f"{glyph} ", style=f"bold {color}")
+    rule.append(row.label, style=_TEXT_HI if row.state == "broke" else _TEXT)
+    if row.state == "warn_broke":
+        rule.append("  · warn", style=_DIM)
+    elif row.state == "warn_held":
+        rule.append("  · warn · held", style=_DIM)
+    source = Text(row.provenance, style=_DIM)
+    if row.evidence:
+        evidence = Text(row.evidence, style=_DRIFT if row.state == "broke" else _WARN)
+    else:
+        evidence = Text(row.detail, style=_DIM)
+    return rule, source, evidence
+
+
 def check_row_lines(row: CheckRow, *, indent: int = 2) -> list[Text]:
     """One rule row in the verdict-box grammar — the single implementation.
 
