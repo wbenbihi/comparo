@@ -19,6 +19,10 @@ class Origin(enum.Enum):
     MATRIX = "matrix"
     FILE = "file"
     ENV = "env"
+    #: A large value replaced by a hash+size marker in the display sink only. The
+    #: real value is resolved and sent whole in the execute sink; the marker is a
+    #: rendering artifact, never persisted as if it were the value.
+    ELIDED = "elided"
 
     @property
     def tainted(self) -> bool:

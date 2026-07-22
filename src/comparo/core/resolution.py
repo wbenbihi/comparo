@@ -20,6 +20,7 @@ value everywhere; whether that value is then masked is the project's call.
 """
 
 import dataclasses
+import hashlib
 import os
 import re
 from collections.abc import Callable
@@ -143,6 +144,23 @@ def _file_source(relative: object, root: Path | None) -> str:
 #: ``$from`` chain (:func:`resolve_source`), so a runaway structure raises a caught
 #: error rather than an uncaught ``RecursionError``. Real configs nest a handful deep.
 _MAX_DEPTH = 200
+
+#: A resolved string this many bytes or larger is replaced by a hash+size marker in
+#: the DISPLAY sink, so a megabyte-scale value (a base64 blob, a generated body)
+#: never reaches the terminal renderer and freezes it. The execute sink is untouched.
+_DISPLAY_ELIDE_BYTES = 4096
+
+_UNITS = ("B", "KiB", "MiB", "GiB")
+
+
+def _human_bytes(size: int) -> str:
+    """Render *size* bytes as a short human string, e.g. ``1.0 MiB``."""
+    value = float(size)
+    for unit in _UNITS:
+        if value < 1024 or unit == _UNITS[-1]:
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"  # pragma: no cover
 
 
 def resolve_source(source: object, root: Path | None, _depth: int = 0) -> tuple[str, Origin]:
@@ -384,17 +402,39 @@ class Engine:
                 part = interpolate(node, self.context)
                 if part.origin is not Origin.LITERAL and part.detail is not None:
                     self.trail.append(Trail(path, part.origin, part.detail))
-                return part.value
+                return self._display_elide(part.value, path)
             if isinstance(node, dict):
                 spot = hole(node)
                 if spot is not None:
-                    return self.reference(spot[0], spot[1], path)
+                    return self._display_elide(self.reference(spot[0], spot[1], path), path)
                 return {key: self.value(val, _join(path, key)) for key, val in node.items()}
             if isinstance(node, list):
                 return [self.value(item, f"{path}[{index}]") for index, item in enumerate(node)]
             return node
         finally:
             self._depth -= 1
+
+    def _display_elide(self, value: object, path: str) -> object:
+        """Replace a large string with a hash+size marker — display sink only.
+
+        A megabyte value (a base64 blob, a generated body) would freeze the
+        terminal renderer, so the display sink shows a compact, self-describing
+        artifact instead: a size and a truncated sha256 that identifies the value
+        (equal values render identically) without revealing it — sha256 is one-way,
+        so this is safe even when the value is a declared secret. The execute sink
+        (real send, curl copy) never elides — it keeps the value whole. A declared
+        secret referenced by name is already the small mask here, so it never
+        reaches this path; only a large inline value does.
+        """
+        if not self.context.mask_secrets or not isinstance(value, str):
+            return value
+        raw = value.encode("utf-8", "surrogatepass")
+        if len(raw) < _DISPLAY_ELIDE_BYTES:
+            return value
+        size = _human_bytes(len(raw))
+        digest = hashlib.sha256(raw).hexdigest()[:12]
+        self.trail.append(Trail(path, Origin.ELIDED, f"elided {size} · sha256:{digest}"))
+        return f"«elided · {size} · sha256:{digest} · display-only, sent whole»"
 
     def reference(self, sigil: str, target: object, path: str) -> object:
         """Resolve one ``{$sigil: target}`` hole at *path*, recording its trail."""

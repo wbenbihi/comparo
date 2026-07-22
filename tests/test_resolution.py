@@ -299,3 +299,63 @@ def test_malformed_declared_source_is_benign_so_the_redactor_skips_it(tmp_path: 
     with pytest.raises(SecretUnavailableError) as exc:
         _ = ExecuteSecrets({"TOKEN": {"$from": [{"sk-live-SECRET": 1}]}}, tmp_path)["TOKEN"]
     assert "sk-live-SECRET" not in str(exc.value)
+
+
+# ── large-value elision: display-only, sent whole ───────────────────────────
+
+
+def test_large_value_is_elided_in_display_but_sent_whole_in_execute() -> None:
+    from comparo.core.resolution import _DISPLAY_ELIDE_BYTES
+
+    blob = "A" * (_DISPLAY_ELIDE_BYTES * 4)
+    node = {"image": blob, "small": "hi"}
+
+    shown, trail = resolve_value(node, _ctx())
+    assert isinstance(shown, dict)
+    assert blob not in str(shown)  # the megabyte never reaches the renderer
+    assert shown["small"] == "hi"  # small values untouched
+    assert "display-only, sent whole" in str(shown["image"])  # clearly a rendering artifact
+    assert "sha256:" in str(shown["image"])
+    assert any(t.origin is Origin.ELIDED for t in trail)
+    assert not any(t.tainted for t in trail)  # an elision marker is not a secret
+
+    whole, _ = resolve_value(node, _ctx(execute=True))
+    assert isinstance(whole, dict)
+    assert whole["image"] == blob  # the execute sink sends the exact bytes
+
+
+def test_elision_hash_is_stable_and_distinguishing() -> None:
+    from comparo.core.resolution import _DISPLAY_ELIDE_BYTES
+
+    n = _DISPLAY_ELIDE_BYTES * 2
+
+    def elide(char: str) -> object:
+        shown, _ = resolve_value({"x": char * n}, _ctx())
+        assert isinstance(shown, dict)
+        return shown["x"]
+
+    assert elide("B") == elide("B")  # equal values render identically (diff-correct)
+    assert elide("B") != elide("C")  # different values differ (unlike head-truncation)
+
+
+def test_a_named_secret_is_masked_not_elided_even_when_large() -> None:
+    from comparo.core.resolution import _DISPLAY_ELIDE_BYTES
+
+    big = "s" * (_DISPLAY_ELIDE_BYTES * 3)
+    # secret-first masks it to the small mask BEFORE the size check, so it never elides
+    shown, _ = resolve_value({"$secret": "BIG"}, _ctx(secret_names=frozenset({"BIG"})))
+    assert shown == "••••••"
+    # in execute the real (large) secret is sent whole
+    real, _ = resolve_value(
+        {"$secret": "BIG"},
+        _ctx(execute=True, secret_names=frozenset({"BIG"}), secret_values={"BIG": big}),
+    )
+    assert real == big
+
+
+def test_large_inline_file_is_elided_in_display(tmp_path: Path) -> None:
+    from comparo.core.resolution import _DISPLAY_ELIDE_BYTES
+
+    (tmp_path / "blob.b64").write_text("Z" * (_DISPLAY_ELIDE_BYTES * 2), encoding="utf-8")
+    shown, _ = resolve_value({"$file": "blob.b64"}, _ctx(root=tmp_path))
+    assert "display-only, sent whole" in str(shown)  # a huge $file preview is elided too
