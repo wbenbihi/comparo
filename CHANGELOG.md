@@ -1,6 +1,917 @@
 # CHANGELOG
 
 
+## v0.2.0 (2026-07-22)
+
+### Bug Fixes
+
+- **ci**: Pass the version input through env, and scrub .gitignore comments
+  ([`2d345c1`](https://github.com/wbenbihi/comparo/commit/2d345c1685cc018896fd83193e38c0ce2bf00ca3))
+
+S-3. The install step interpolated ${{ inputs.version }} straight into the bash `run:` line — a
+  crafted version input could inject shell. Pass it through `env:` (VERSION) and reference
+  "$VERSION", matching the diff step's pattern.
+
+S-6. Rewrite the .gitignore comments that named a private NDA engagement and the internal
+  code-health report into neutral descriptions, so the public repo does not disclose them.
+
+- **cli**: Fail closed when a run expands to zero cells
+  ([`12da68c`](https://github.com/wbenbihi/comparo/commit/12da68c914f75b58b6dc68dfc9e043cd8a0a2ff4))
+
+M-1. `comparo run` seeded its gate with ok_all=True and returned it, so a run whose selected
+  requests all expanded to zero matrix cells (an empty `matrix.values`) verified nothing yet exited
+  0 with a green gate. Guard the empty plan at the command (exit non-zero with a message) and make
+  _print_results fail closed on an empty result set, mirroring diff_passed / ExecutionResult.passed.
+
+- **cli**: Report an unresolved variable in render instead of crashing
+  ([`0060b9b`](https://github.com/wbenbihi/comparo/commit/0060b9b1f05941ca3b2b941ed16dfd10240fb17c))
+
+M-3. `comparo render` called resolve_request without a guard, so a required ${VAR} left unset raised
+  InterpolationError straight out of the command as a traceback. Catch
+  InterpolationError/SecretError and surface a clean message with a non-zero exit, like the other
+  commands.
+
+- **execute**: Capture a malformed URL as a cell error, not a run abort
+  ([`a11c3c5`](https://github.com/wbenbihi/comparo/commit/a11c3c53d21a2c064be839f20a8031a780c812fe))
+
+M-4. build_request runs before the try, so an httpx.InvalidURL from a malformed resolved URL
+  propagated out of send() and aborted the whole gather — one bad URL killed every other cell's
+  result. Move build_request inside the try and catch httpx.InvalidURL alongside httpx.HTTPError, so
+  a bad URL becomes this cell's captured error like any other transport failure.
+
+- **execute**: Drop an unset optional instead of sending "None"
+  ([`0fe0ba8`](https://github.com/wbenbihi/comparo/commit/0fe0ba87f4fa08d1a45626f7c9ba7860998de732))
+
+M-2. A header/query/cookie whose value resolved to None — an unset ${VAR?} — was stringified to the
+  literal "None" and sent on the wire (and serialized into the report). Omit any None-valued header,
+  query param, or cookie both at send time (httpx_client) and in the outbound record
+  (report_builder), so an unset optional is simply absent, as intended.
+
+- **execute**: Fail closed on a response body over the size cap
+  ([`6ab30d0`](https://github.com/wbenbihi/comparo/commit/6ab30d02f4e76b1b87c58dc8bb453459ae9880ee))
+
+S-1. A body exceeding the 64 MB cap was silently truncated (the read broke and returned the prefix),
+  so a diff compared a cut-off body as if it were the whole response — hiding any regression past
+  the cap. Raise an HttpError instead, so the cell fails with a clear message rather than a
+  misleading same/drift verdict.
+
+- **loader**: Confine spec.data to the project root
+  ([`a8c9e52`](https://github.com/wbenbihi/comparo/commit/a8c9e52122968873a96cfcab1a312ef0b250ece7))
+
+S-2. spec.data was resolved and globbed without a containment check, so a `../..` or absolute path
+  made comparo scan and parse YAML from anywhere on disk. Refuse a data dir that escapes the project
+  root up front, before any glob, so nothing outside the project is ever read.
+
+- **redaction**: Build one redactor per project and fail closed on unreadable secrets
+  ([`955541a`](https://github.com/wbenbihi/comparo/commit/955541aed633936c57b205f7e46ffd93116e0696))
+
+H-3. The DISPLAY-sink redactor was rebuilt — re-reading every declared secret file — at ~35 render
+  sites per frame. Build it once as a cached_property on ComparoApp and route every site through
+  _app_redact, which now backs onto it.
+
+Also close the silent mask-shrink: environment_secret_values swallowed every SecretError, so a
+  declared $file that became unreadable at redaction time (after its value may already have been
+  echoed into a response) was quietly dropped from the mask. Split the taxonomy —
+  SecretUnavailableError marks a benign absence (an unset $env, an exhausted `from` chain) that is
+  safe to skip, while an unreadable or root-escaping $file now propagates and fails the render
+  loudly.
+
+- **redaction**: Cap redact_tree recursion depth
+  ([`ac60be1`](https://github.com/wbenbihi/comparo/commit/ac60be1b74ad7c06148b6d6664df247b1e150b03))
+
+M-5. A hostile server can send a pathologically deep body; redact_tree recursed without bound and
+  could overflow the stack. Cap the depth (200, matching the diff engine) and, past it,
+  stringify-and-redact the remaining subtree as one opaque leaf — so a deep payload can neither
+  crash the process nor slip through unmasked.
+
+- **tui**: Diff inspect fidelity — selectable rows, outlined wells, gate-tinted summary
+  ([`38e77fe`](https://github.com/wbenbihi/comparo/commit/38e77fe9226d0923dd991a7d2887ad5e0a621a05))
+
+The inspect panel gains its selectable inner rows: the broken rules on a cell, the per-cell record
+  of a rule, and a field's occurrences are now a real table you tab/enter into — enter on the index
+  drills into the rows, enter on a row jumps to its home pivot with the return crumb, esc steps
+  focus back out before it ever pops the jump. The rows wear the mockup's bordered-box look (red for
+  broken, green for a passed rule's record).
+
+Both wells get the rounded-outline chrome back — the response-headers well now matches the body well
+  (hunk band, banded -/+ rows, muted background, rounded border) and v flips BOTH between unified
+  and side-by-side. The outbound band explains itself ('we sent DIFFERENT requests — some drift may
+  be ours' / 'same request sent to both sides — any response drift is the service's') instead of a
+  bare press-o hint. The summary band's border now tints with the gate: green PASS, red FAIL, amber
+  ERROR.
+
+- **tui**: Drive the live run counter from real per-cell verdicts
+  ([`22ce143`](https://github.com/wbenbihi/comparo/commit/22ce143546f0dd32969d4fe3745d857cf4312831))
+
+H-1. The running view maintained a per-cell glyph array but only ever wrote "○/◐/●"
+  (pending/in-flight/done), while _running_body tallied "✓/✗" — so the live counter stuck at "0 ✓ 0
+  ✗", and the recently-finished log keyed its ✓/✗ off the drift string alone, painting an
+  errored-but-undrifted cell green.
+
+Carry the real verdict to the view: ExecutionProgress gains `ok` (from CellOutcome.ok — no error,
+  assertions hold, no drift) and the diff view computes `drifted or error`. Both now write "✓/✗"
+  into the glyph array, so the tally counts real passes and failures, and _RunningRow.failed drives
+  the log colour so an error or a failed assertion reads red, not only a drift.
+
+The counter test now drives real ExecutionProgress ticks end-to-end through ExecutionView instead of
+  asserting over synthetic glyphs.
+
+- **tui**: Fix execution enter/d/esc navigation and clarify the diff
+  ([`08615e9`](https://github.com/wbenbihi/comparo/commit/08615e9280fedb7dfa1102a6ff54fddbf11f60f0))
+
+The in-flow diff's back target was inferred from a stale `self._cell`, so drilling into a cell,
+  backing out to results, then pressing `d` and `esc` wrongly jumped into the old cell detail
+  instead of returning to the gate.
+
+- Track the sub-view `d` was opened from (`_diff_origin`) and return there exactly on `esc`. - Clear
+  the cell selection when returning to the results overview, so no stale selection can mislead the
+  back-stack. - Spell out the diff screen's scope and where `esc` lands in its subtitle.
+
+- **tui**: Render the headers well through the one diff component
+  ([`494485c`](https://github.com/wbenbihi/comparo/commit/494485cea3169a0f680f15472fdb309470403a63))
+
+The headers well hand-rolled its own diff: unified was close, but the side-by-side styled only the
+  text (no full-width bands — the washed-out look), and neither had the pane separator. Header
+  drifts now become the shared diff-line shape and render through _diff_unified /
+  _diff_side_by_side, so both wells carry the same banded muted backgrounds, the ⋯ skip grammar, the
+  env-named pane headers, and the hairline separator. A regression test pins the shared component by
+  checking the actual band colors in ANSI output for both layouts.
+
+- **tui**: Scope the run-report detail to the selected request
+  ([`7b19525`](https://github.com/wbenbihi/comparo/commit/7b195255a42b88945eb6e015e04ddc7b206c75e5))
+
+The Run report's DETAIL panel leaked every request's data into the selected request's view, so
+  navigating the request list up/down never changed what mattered:
+
+- The "checks" section rendered the record-wide assertion roll-up (record.baseline_assertions) —
+  every request's checks at once, e.g. hundreds of "status equals 200". Project per-cell baseline
+  assertions onto ReplayCell and scope the checks to the selected request's cell. - The request
+  object showed only method + path; project the outbound request's headers and body so the "request"
+  subtree is actually filled. - The HTTP method ignored the shared method palette (hardcoded green);
+  render it as a coloured badge via _method_badge / _METHOD, matching the rest of the UI.
+
+- **tui**: The event-sequence diff follows the unified/side-by-side toggle
+  ([`a0ce45e`](https://github.com/wbenbihi/comparo/commit/a0ce45e2ce1126c07902f3ce209e674a95461ea0))
+
+The stream (SSE) per-event data diff always rendered unified — v flipped the JSON/headers wells but
+  left the events stacked. Thread unified + the env names through _stream_body_view ->
+  _event_expanded so the opened event's data diff draws two named panes in side-by-side, exactly
+  like the body well; the non-JSON data case now routes through the same renderer too, so it honors
+  the toggle as well. Live and replay callers both pass the flag.
+
+- **tui**: Tighten the Run/Diff summary bar spacing and honor the method palette
+  ([`bd1a9d4`](https://github.com/wbenbihi/comparo/commit/bd1a9d4e2d709e5821f190cf37551faac97520ba))
+
+Two spacing bugs pushed the summary bar and left a gap: - the Diff CSS selector bundled
+  #diff-mode/#diff-results/#diff-running into the padding:1 0 0 0 that was meant only for
+  #diff-prepare, so the results pane inherited TWO extra top rows — the summary bar sat at y=6
+  instead of y=4. Scope the centering+padding to #diff-prepare only (mirroring Run) and give the
+  panes height:1fr. - both summary bars carried margin-bottom:1, a dead row between the bar and the
+  columns. Drop it — the gap below is now 0.
+
+And the RUN requests table hardcoded _ACCENT for every HTTP method instead of the shared _METHOD
+  palette (GET green · POST blue · PUT amber · DELETE red) that Diff and Explorer already use —
+  fixed in both the wide and compact rows.
+
+### Chores
+
+- Dead-code removal and small robustness fixes
+  ([`4993eb8`](https://github.com/wbenbihi/comparo/commit/4993eb8a399278e58e999105aa2d8b835423a641))
+
+- Remove the never-called redaction.identity (callers pass str). - Drop the unreachable
+  unknown-format branch in _write_reports (_emit_reports already rejects unknown formats). - Load
+  .yml object files, not only .yaml. - `schema -o` creates the output's parent directory instead of
+  crashing. - save_user_config writes atomically (temp file + rename) so a crash mid-write can't
+  leave a corrupt config on disk.
+
+- Sync uv.lock with the 0.1.0 version bump
+  ([`9665639`](https://github.com/wbenbihi/comparo/commit/9665639880ce8afd5c1b1817ba25004561ec99b0))
+
+- **schema**: Regenerate the shipped config schema for report.retention
+  ([`b97bdf9`](https://github.com/wbenbihi/comparo/commit/b97bdf92a32e8c8e3e4885ffdbc6a393dbe8b47f))
+
+### Documentation
+
+- Correct the Environment cookie note and the action pin
+  ([`a036e11`](https://github.com/wbenbihi/comparo/commit/a036e11eff501a371c47cc22436e7bf3fb091e9d))
+
+- Cookies are a Request-level field, not an Environment one — drop them from the Environment row in
+  the README object table. - Pin the GitHub Action example to @main with a note to switch to a
+  released tag, since no v1 tag exists yet (pre-alpha).
+
+- Replace the code health report with the post-remediation re-audit
+  ([`cc4fe31`](https://github.com/wbenbihi/comparo/commit/cc4fe311fcc4dc47ad0100d15db69005e117a562))
+
+The remediation branch was independently re-verified finding by finding (wire-level repros, Textual
+  Pilot). Overall grade moves C -> B+; the report now carries the prior-findings ledger, the four
+  remaining A-grade blockers, and a phased roadmap.
+
+- **examples**: Add the results showcase — every state on two local servers
+  ([`05a7b91`](https://github.com/wbenbihi/comparo/commit/05a7b914e5b5490134a432c78f3b8fd57f542300))
+
+examples/showcase runs two deliberately-different servers (serve.py, stdlib only) and a project that
+  exercises every state of the results screens: the flagship taxRate drift across three matrix
+  plans, a header drift, a tolerance-absorbed total, volatile built-ins, a user header rule, a
+  deliberately unused rule, a drifting event stream, an immediate transport error (a truncated
+  response, not a slow timeout), a $status drift, clean cells, the ⊘ roster, an always-breaking warn
+  advisory for the Run tab, and HTML/binary bodies for the outline and hex renderers. The README
+  maps each state to where to look.
+
+- **examples**: Exhaustive local-server showcase for every result state
+  ([`b00e02e`](https://github.com/wbenbihi/comparo/commit/b00e02ee20e52cd7fba117b41ac72f097c90f8ad))
+
+Rebuild the showcase on a deterministic two-server serve.py (baseline :8091, candidate :8092) so
+  every Diff, Run, and Execution state is reproducible offline — public services could not produce
+  errors, $status flips, binary drift, or the redaction echo on demand.
+
+- serve.py: 21 routes, one per scenario; deterministic bodies (the only volatile fields exist to be
+  silenced), a truncate-and-hangup trick for transport errors, an SSE feed exercising the full
+  envelope with a drifted and a dropped event, and /whoami echoing the Bearer secret for the
+  never-leak demo - 21 requests covering: value/type/shape/header/$status/stream/HTML/binary drift,
+  tolerance absorbed vs broken, outbound-differs, one- and both-side transport errors, clean,
+  not-run; and for Run: assertion FAIL with a body anchor, schema pass/fail, warn advisory
+  broke/held, latency regression, header-target and composed-profile provenance, redaction -
+  assert.base + assert.order (include composition), schema.health/.contract, the diff profile's
+  silences (nonce, x-build-id) + tolerance bands + one unused rule, matrix.plans, and
+  execution.release-gate (assert both + diff) - README maps every state to the request that shows
+  it, three tables
+
+Verified live: diff 9 same · 12 drift · 2 error (gate FAIL), exec 6 cells · 4 drift (gate FAIL), and
+  the echoed secret is masked everywhere — the raw value never reaches a report or export, only the
+  mask does.
+
+- **examples**: Showcase runs on public services — no local server
+  ([`3af3406`](https://github.com/wbenbihi/comparo/commit/3af3406845ac78db4d9b05ce045f9aa810b36310))
+
+Both environments point at httpbin.org; each injects its own variables (TAX_RATE, API_VERSION,
+  STATUS, DELAY), so every drift is one we sent — the outbound band's story told with real
+  infrastructure. sse.dev rides as a third environment for the SSE renderer on the Run tab. serve.py
+  is gone; nothing to start, nothing to forget.
+
+- **tui**: Note the call ledger and real-mode replay in the Report tab
+  ([`092cec9`](https://github.com/wbenbihi/comparo/commit/092cec9fadcde6a0ed784b5b6139e081187a1058))
+
+### Features
+
+- **archive**: Bound the saved-report archive with spec.report.retention
+  ([`20fa2e7`](https://github.com/wbenbihi/comparo/commit/20fa2e7364c5e62625a041b308850d8565b10e05))
+
+The .reports archive grew without limit. Add a `retention` knob to ReportConfig and pass it as
+  `keep` to save_record on every TUI save path, so the archive is pruned to the newest N records on
+  write (unlimited when unset). The prune mechanism already existed; this wires it to config.
+
+- **cli**: Distinct exit codes for gate failure vs usage error
+  ([`aaec5ac`](https://github.com/wbenbihi/comparo/commit/aaec5acb2d8dded2d01c7523779106902bc179f3))
+
+CI could not tell a real regression from a broken setup — both exited 1. Split them: exit 1 is now a
+  *gate failure* (the command ran but a diff drifted / an assertion failed / a cell errored), and
+  exit 2 is a *usage / config error* (the project won't load, an env/profile/request is unknown, an
+  argument won't resolve, an unknown report format, or an empty plan). Docs and tests updated.
+
+- **core**: Capture structured diff data and both executions per cell
+  ([`2037113`](https://github.com/wbenbihi/comparo/commit/20371134ed513fd60fe623afa12da761e74aaaf8))
+
+Groundwork for the v1 report, which must replay each cell in full. Three additive enrichments, all
+  redacted at report-build time (they hold live secrets in memory):
+
+- FieldDiff gains baseline/candidate (the raw before/after values) and rule (the governing
+  DiffRule.path), populated at every construction site in diff.py and compare.py (_status_field
+  included). - AssertionResult gains expected/actual, threaded through the shared result closure so
+  every op records the declared expectation and observed value. - Execution gains resolved (the
+  exact request sent, None on resolve failure); CellDiff and CellOutcome each gain
+  baseline/candidate Executions, so both sides' request+response are reachable at build time even
+  with no diff run.
+
+- **core**: Capture wire metadata and move the outbound diff into core
+  ([`e4a6bce`](https://github.com/wbenbihi/comparo/commit/e4a6bcee82a99c8d6cfa38f41e2e5c81853b8e71))
+
+HttpResponse records the HTTP version and reason phrase (a raw exchange can now render its true
+  status line), and Execution records how many transport attempts were made and under which retry
+  policy — the error panel's 'gave up after 3 (exponential x3)' line becomes data, not guess.
+
+The outbound request diff moves from the TUI into core/outbound.py, typed against a structural
+  protocol so the same implementation serves the live pair (ResolvedRequests) and report replay
+  (serialized outbound records). Bodies now diff structurally, redact-first, through the same tree
+  walker as response bodies — an injected secret masks to the same glyph on both sides and never
+  reads as drift.
+
+- **core**: Lock gate precedence and share the verdict vocabulary
+  ([`193a768`](https://github.com/wbenbihi/comparo/commit/193a76882a0984ef6d88fdbadd0c84b69cf2bec3))
+
+Add comparo.core.outcomes — the single vocabulary both rule systems speak: CheckOutcome
+  (held/broke/silenced/absent/error), Provenance with one display grammar, CheckTally, and Verdict +
+  combine() implementing the locked precedence: FAIL whenever any rule broke anywhere; ERROR only
+  when errors are the only failure; judging nothing fails closed.
+
+Reorder every gate to that precedence (diff_gate was ERROR-first) and add run_gate/execution_gate
+  beside it. Assertions auto-failed against a response-less side were never judged, so they now
+  count toward the cell's error, not the gate's broken rules. Also fixes the latent empty-run PASS:
+  all three kinds fail closed on an empty selection, and the report-format doc no longer contradicts
+  the code.
+
+- **core**: Make the report record fully replayable — inventories, whole bodies, one verdict
+  vocabulary
+  ([`54668c1`](https://github.com/wbenbihi/comparo/commit/54668c19901459babe694c5422fd6b7e68da010a))
+
+The one pre-alpha schema edit. The record now carries everything the three Results indexes need,
+  with no repetition: rule inventories stored once at record level (diff rules with their parameters
+  and provenance, assertion rules with severity/label/owner, each with per-CELL outcome tallies) and
+  referenced by id from every field and assertion row; SAME fields serialized path-only (values
+  recovered by lookup — re-diffing redacted bodies is unsound, stored verdicts are authoritative);
+  the summary split into field counts and cell-verdict counts, never mixed.
+
+Cell verdicts collapse to pass|fail|error (+not_run roster, +advisory for green cells with a broken
+  warn — never on failed cells). Sides carry attempts and the retry policy; responses carry the HTTP
+  version and reason phrase and exactly one body representation: parsed JSON, events,
+  redacted-then-truncated text, or a binary digest. Both the hex head AND the sha256 drop when any
+  text view of the whole body trips the redactor — no hex side channel, no digest oracle
+  (review-caught: the head check originally truncated first and missed non-ASCII secrets). The
+  outbound layer serializes per cell via core outbound_diffs, which now masks credential headers by
+  NAME (review-caught blocker: undeclared Authorization/Cookie values wrote to disk in clear); the
+  provenance trail rides on every outbound request.
+
+Tallies count one unit each (review-caught: assertion inventories counted sides as cells, phantom
+  candidate sides inflated notAsserted); replay repeats stored labels verbatim and gives unjudged
+  rows their own state; reporters read the cell-level error. The doctor canary now drives the
+  outbound layer with a differing undeclared credential, the bodyText/binary/trail/reason/cell-error
+  channels, and checks the marker in hex so a head regression cannot hide. docs/report-format.md
+  rewritten to match.
+
+- **core**: Parse the full SSE envelope per the processing model
+  ([`5af2f0a`](https://github.com/wbenbihi/comparo/commit/5af2f0aaab7ce39f1c0aeb16db5befa9c8d90ef7))
+
+parse_sse now follows the SSE spec precisely: any line ending, a leading BOM stripped, colon-less
+  lines as empty-valued fields, exactly one leading space stripped, later non-data fields
+  overwriting earlier ones, ids containing NUL ignored, and only a truly empty line dispatching. One
+  deliberate divergence, now documented: a trailing unterminated event is kept, so a stream cut by
+  the idle/total timeout still diffs whatever arrived.
+
+This is THE stream parse — the Run tab's renderer and the diff's per-event comparison consume the
+  same output (stated in the module and the architecture doc), so the tabs can never disagree about
+  what an event contains.
+
+- **core**: Retire the lossy Check adapter and evaluate assertions once
+  ([`cd9c611`](https://github.com/wbenbihi/comparo/commit/cd9c611640a0a1421e25353c7fbbdf1a231cfedc))
+
+The Run tab now renders full AssertionResults from the single evaluation made when each cell ran —
+  the screen, the saved run file, and the archived report consume the same objects (action_save's
+  re-evaluation is gone and pinned by test). Warn-severity rules reach the screen for the first
+  time, as amber ~ advisories that never fail the run. checks.py is deleted; its invariants (H19
+  inline schema, M-a response.assert parity) move to the assertion-pipeline tests.
+
+Composition returns SourcedAssertions: every rule carries an AssertRef — target/op/severity/label
+  plus provenance (owning profile id, or the request for inline sugar) with a stable within-block
+  index (inline blocks index continuously so identities never collide). Evaluation stamps the ref
+  onto every result, mirroring the diff engine's RuleRef. The run path now dedupes
+  layered/diamond-include rules exactly like the execution planner, first occurrence keeping its
+  provenance.
+
+A dead cell is never judged: no response means no rule ran — the tree shows the synthesized
+  reachable row alone (always LAST, per the run-results spec) instead of painting every rule as
+  broken, and the run export carries the transport error, not fake failures. The saved-run JSON
+  serializes results at full fidelity (label/target/op/severity/ expected/actual, all redacted; the
+  doctor canary proves label masking). Docs: architecture table and graph, tui.md Run copy.
+
+- **core**: Thread rule identity through the diff and compare the whole exchange
+  ([`3adfe50`](https://github.com/wbenbihi/comparo/commit/3adfe5058af9f79254d2c94ee8456d4bd3484655))
+
+Every FieldDiff now carries a RuleRef — the declared path, mode, and provenance (profile / inline /
+  default / synthetic) of the rule that governed it — threaded from resolve_sources through
+  composition and the walker, so rule ↔ field ↔ cell traceability lives in the data.
+
+Response headers join the comparison as the $headers namespace: partitioned by literal prefix like
+  $status (immune to body-field collisions), names case-folded (rules match in any casing),
+  duplicates joined per RFC 9110 with set-cookie kept as a list, credential values masked before the
+  diff ever sees them, and built-in overridable ignores for clock, counter, framing, and
+  correlation-id headers so identical environments stay green out of the box.
+
+Cells gain a rule-outcome ledger: every effective rule — including the $status synthetic, shadowed
+  overrides, and both catch-alls — grades broke / silenced / held / absent per cell, with error
+  cells inconclusive. unused_rules() folds by written identity across compositions to name typo'd
+  paths without false positives. $status now honours the same later-loaded-wins tie-break as every
+  other rule.
+
+The redactor registers case-folded secret forms (a secret reflected as a header name reaches sinks
+  lowercased) and the doctor's leak check is now case-insensitive, with its scenario renamed off the
+  marker word and a folded-canary field proving the new namespace masks. The live compare panel
+  renders envelope drifts as a before/after card instead of an empty body well until the Results
+  rework lands.
+
+- **loader**: Reject a $val instance cycle at validate time
+  ([`2183a2b`](https://github.com/wbenbihi/comparo/commit/2183a2b5ae43142c4ca1c62d434b31386bb895c8))
+
+validate loads but never resolves, so a $val cycle (A → B → A) reported a false green and only blew
+  up on the first run. Detect the cycle statically over the Instance $val graph and surface it as a
+  load diagnostic naming the chain. Also pins, with a test, that $literal shields a $ref-shaped
+  payload (returned verbatim, never resolved or interpolated).
+
+- **report**: Add the versioned report record, schema, and schema --report
+  ([`94b1032`](https://github.com/wbenbihi/comparo/commit/94b10323809e7c6f1345e13adf58e69f35040c04))
+
+The single JSON artifact comparo writes for every run, diff, and execution — one kind-discriminated
+  record carrying the resolved outbound request AND the response per side, structured field diffs,
+  and per-side assertions, so a saved report replays in full offline. schemaVersion is a stored
+  constant 1 (the first published format — pre-alpha, no migration story); unknown fields are
+  tolerated on read so an additive field never breaks an older reader.
+
+Adds core/report_record.py (the msgspec structs), report_schema() + `comparo schema --report` to
+  emit the record's JSON Schema, and docs/report-format.md.
+
+- **report**: Build v1 records from run/diff/execution results
+  ([`de8f879`](https://github.com/wbenbihi/comparo/commit/de8f8797adc40e78d2df37fa5845e299ec507e69))
+
+report_builder.record_from_{diff,execution,run} — the one result→record pipeline. It reads the
+  in-memory objects the engine now keeps (each cell's two Executions: the exact request sent and the
+  full response received, plus the structured diff and assertions) and projects them into the report
+  record.
+
+Redaction happens here, unconditionally: url, headers, query, body, cookies, JSON paths, names,
+  selection, and error text are all masked, credential-bearing headers by name, and an auth value is
+  always the mask glyph. An empty run fails closed.
+
+- **tui**: Add a baseline-vs-candidate call ledger to the diff replay
+  ([`f01dce6`](https://github.com/wbenbihi/comparo/commit/f01dce699060a131a4a1bea85525fcbd410c5aff))
+
+4C. The saved-diff replay now shows a CALL LEDGER above the body diff — status, latency, and size
+  for both sides with the Δ — using the two sides' response metrics the v1 record already carries
+  (the view-model now projects the candidate side's status/latency/size too). It renders only for a
+  two-sided cell; a run has no candidate side, so the ledger is omitted.
+
+- **tui**: Add the diff field-drill card (enter)
+  ([`1a8f2e6`](https://github.com/wbenbihi/comparo/commit/1a8f2e61f2b6a1056dc1dbfad33c78896f75cb53))
+
+The Diff tab had no field-drill state — enter on a drifted field did nothing. Add the mockup's
+  d-drill: enter opens a focused card in a new #diff-drill sub-view that tells the whole story of
+  one drift on one screen —
+
+- state and the mode that made it a drift, with prose (exact / shape / tolerance); - how many cells
+  it drifts on, with their matrix variants, and the silencing rule (or "none"); - a
+  baseline→candidate table with value AND type; - the EXACT ignore-rule YAML that i would write, so
+  silencing is never a hidden act.
+
+esc returns to the results index; i silences from the card too.
+
+- **tui**: Add the single-implementation components layer
+  ([`6eb23d2`](https://github.com/wbenbihi/comparo/commit/6eb23d21272db61b6627f169cbc188a77c80f943))
+
+tui/components.py is the layer the duplication audit demanded: the summary strip (one slot, two
+  costumes), the verdict pill and the locked glyph grammar (✓ ✗ ! ~ ⊘ ◐ ·), the progress-bar
+  primitive, the segmented pill (render's copy now delegates), the filter row, the verdict box with
+  its N-of-M auditable header and two-line broken rows, the rule-record chrome (spec table + stat
+  chips), the error panel, the index-pane frame, and the cross-view NavStack — each exactly once,
+  consuming plain view-models both live objects and a saved ReportRecord can build. Provenance
+  display speaks one grammar, with the TUI's single divergence: synthetics read 'built-in' so a user
+  never hunts their profiles for a rule comparo made up.
+
+The hard rule is stated in the module and the architecture doc: a view never defines a private
+  renderer for a concept that lives here. Dependency order: tokens ← components ← render ← app.
+
+- **tui**: Diff a streamed response as an event sequence, not a blob
+  ([`6001a93`](https://github.com/wbenbihi/comparo/commit/6001a9304374d2c35ee99bbee3a678f626956ed4))
+
+When a diff cell's response is streamed (chunked/SSE, so the executions carry per-side events), the
+  live compare panel rendered the event array as one git-style body blob — the exact anti-pattern
+  the mockup rejects.
+
+Detect a streamed cell in _show_field via the executions' response events and route it to a new
+  _stream_body_view: a numbered per-event ✓/✗ strip ("✓1 · ✓2 · ✗3 — 1 of 3 events drift") over the
+  aligned per-event table, so the eye lands on exactly which event diverged. The call ledger and
+  outbound layers still sit above it.
+
+- **tui**: Fold execution results into the gate-ledger layout
+  ([`f22a920`](https://github.com/wbenbihi/comparo/commit/f22a920473bfd921ac23a089ce349668095a6c0a))
+
+Rebuild the Execution results screen to the mockup's top-down order and delete the duplication that
+  buried the verdict:
+
+- Lead with a gate-verdict banner (✗ GATE FAIL · exit 1 · which of the three dimensions are red),
+  its border echoing pass/fail. - Render the gate composition directly beneath it as three
+  side-by-side dimension panels (baseline ∧ candidate assertions ∧ diff), each a tally + PASS/FAIL,
+  rolled up to one verdict — instead of a stacked AND table buried at the bottom. - Delete the two
+  standalone assertion-list panels (#exec-assert-base/cand and _render_results_assertions);
+  per-assertion detail already lives in the cell-detail screen. This removes the assert tally that
+  was being rendered four times on one screen. - Extend the per-cell row to the full triplet: cell ·
+  baseline · candidate · diff · verdict-with-reason (FAIL (assert + diff)), with a header row. -
+  Drop the redundant _exec_gate_body prose narrative that restated the ledger, and the now-unused
+  _exec_assert_rows import.
+
+- **tui**: Fold the outbound diff into a two-layer compare panel
+  ([`8f1d173`](https://github.com/wbenbihi/comparo/commit/8f1d1734651453db9235fe82d3ae7290181a52d2))
+
+Rework the single-slot compare panel into two layers: a persistent OUTBOUND header above the
+  response-body diff, collapsed to a one-line summary by default and expanded to the full request
+  diff with `o`. The header reuses the resolved requests already captured on the executed cell, so
+  there is no re-resolve — no live-secret exposure and no interpolation cost on cursor moves — and
+  every value stays redacted.
+
+Drop the old `o`-as-separate-mode overlay that replaced the field diff, along with the now-dead
+  `_current_cell_diff` helper and the cursor-move reset; the expand/collapse state now persists
+  across rows.
+
+- **tui**: Give the outbound layer a source attribution and a verdict
+  ([`e4d5827`](https://github.com/wbenbihi/comparo/commit/e4d58271f8ad61cde9e52f8f68d2651ce5c0eb8a))
+
+The outbound layer was a flat − baseline / + candidate dump with a hedged "may be explained by what
+  you send". Rework it to answer the triage question decisively:
+
+- Tag every differing field with the config surface it came from (env · base url, env · query var,
+  env · auth, env · injected body value), via a new _outbound_diffs source element. - State the
+  verdict plainly: the outbound differs, so some response drift is ours — fix is config, not the
+  service (vs. "identical → the drift is the service's").
+
+Values stay on their own full-width lines so a long URL never wraps mid -token in the narrow compare
+  panel; the source is tagged inline per field.
+
+- **tui**: Make streamed events explorable in both tabs
+  ([`a50dd26`](https://github.com/wbenbihi/comparo/commit/a50dd268a7fd7d3d9b0464b9516904c296cbafbc))
+
+- RUN: a streamed response's chunks now mount in the evidence tree as foldable per-event branches
+  (envelope + parsed data) — previously the tree rendered the empty body bytes and showed nothing to
+  explore - DIFF: the stream tail carries a hint naming the interaction (enter on an event row opens
+  it in place); an end-to-end pilot test drives the real key sequence — index enter → card focus →
+  event row enter → that event's data diff in the tail — in both tabs
+
+- **tui**: Make the execution in-flow diff show the real compare panel
+  ([`9f2e958`](https://github.com/wbenbihi/comparo/commit/9f2e9584543c8b717053d9c3d368b5200eeaaa35))
+
+The `d` diff was a bare stack of body diffs — redundant with the cell detail and unable to answer
+  "is this drift ours or the service's". Give each drifted cell the same three layers as the Diff
+  tab's compare panel:
+
+- a CALL LEDGER (status/latency/size + Δ), so a latency/size regression shows even when the bodies
+  match; - the OUTBOUND request diff with its source column and verdict, so the drift is traced to
+  our env config or the service; - the response body diff (as before), under a banner explaining the
+  view.
+
+Refactor _outbound_diff_view / _outbound_header to take env names instead of Environment objects so
+  both the Diff tab and the Execution in-flow diff reuse them; move the "press o to collapse" hint
+  into the toggle wrapper.
+
+- **tui**: Make the execution launch panel a spec sheet
+  ([`ecc3823`](https://github.com/wbenbihi/comparo/commit/ecc38238370c8b50ac1ac04b74e2e31a570dd34f))
+
+The Setup panel showed a mode pill and a plan preview but never explained, in the profile's own
+  terms, what the run actually checks. Rework it into the mockup's read-only spec sheet:
+
+- "asserts" — on both environments, the status/schema sugar per request plus any composed assertion
+  profiles (named). - "diffs" — the pair and the diff profiles it composes (named). - selection math
+  extended to cells × envs = calls. - the gate formula up front (baseline asserts ∧ candidate
+  asserts ∧ diff), so the verdict's composition is legible before you press enter.
+
+- **tui**: Match the results screens to the mockups — cards, tables, pills
+  ([`b0dab31`](https://github.com/wbenbihi/comparo/commit/b0dab31a02ede7006121d1c0ebd446899123c021))
+
+The mockups in docs/design are the acceptance spec; this round closes the gaps the user called out
+  across both results screens, plus the review findings against it.
+
+DIFF - o actually toggles the outbound layer (the binding existed, the action did not) and the band
+  is documented: did we even send the same request? - the verdict phrase lives INSIDE the red/green
+  card (the inspect table's border title); a clean cell gets an auditable green card listing every
+  held and silenced rule - rule records and field occurrences are headered tables with REQUEST and
+  VARIANT as separate columns, no tone border, a visible scrollbar - the call ledger wears the
+  mockup's table chrome with env-named headers - a streamed cell lists every event as a selectable
+  row: enter expands it in place with its SSE envelope and a real per-event data diff; the ✓/✗ marks
+  come from the ENGINE's judged fields, never raw equality (a silenced-only difference stays ✓),
+  replay reads the saved drift paths - the side-by-side well gains a hairline pane separator, banded
+  so the recessed background stays contiguous
+
+RUN - the detail is restructured to the mockup stack: call line, then the verdict card as a
+  FOCUSABLE table (tab into it; enter on a rule opens its record in the rules pivot; N-of-M phrase
+  on the card border), then the evidence tree; dead cells get the error card (verbatim error,
+  attempts, retry, the kept masked request) — no fake N-of-M claim - the requests table matches
+  state 2 (verdict, request + method + payload type + matrix marker, cells strip, assertions rollup,
+  P50, ⊘ rows for deselected requests) and swaps to the compact nested index when drilled - variants
+  show ✓ PASS / ✗ FAIL / ! ERROR; the rules record is a real DataTable (request · variant · outcome
+  · expected · got) - / filters on any attribute — method, payload, status, case, state words (fail,
+  error, warn, pass) — on both tabs
+
+SHARED - one bordered filter-row component showing the ACTIVE query; joined-then -quieted seg pill
+  (dim segments, hairline separators, accent active); pill-shaped stat chips; record_table = the
+  mockup's hairline table chrome; DataTable backgrounds normalized to the panels
+
+Review rounds (13 agents total) confirmed and fixed: two secret leaks (the SSE event NAME is server
+  data — now redacted in both sinks), the record table clipping rows invisibly, stream verdicts
+  re-judged at display time, facet chrome divergence (card only on all, raw bare), the headerless
+  rules pivot, event-0 treated as unfocused, live cells cropped by stale column widths, cellrow keys
+  made opaque against ::-bearing ids, and the focused-table repopulate echo discarding the drilled
+  cell.
+
+The showcase example runs against public services again and now covers every RUN state too:
+  assert.order breaks deterministically on Checkout, Legacy quote times out everywhere, the README
+  maps each state.
+
+- **tui**: Name the ignore rule that skipped a field in the drift drill
+  ([`615db40`](https://github.com/wbenbihi/comparo/commit/615db407e5f472fd5119af10f3b5b75106819baf))
+
+4C. A skipped field's sub-row read a generic "volatile"; now that FieldDiff carries the governing
+  DiffRule.path, it names the exact rule ("ignored by $.ts"), so a green cell says out loud which
+  profile rule chose not to check the field.
+
+- **tui**: Payload renderers — anchored evidence tree, real HTML outline, honest binary view
+  ([`b32b1df`](https://github.com/wbenbihi/comparo/commit/b32b1dffaf120bdb67efc09631129a4a43ff4852))
+
+The evidence tree now pins verdicts INTO the body: a held rule shows a green ✓ at its field, a
+  broken rule a red ✗ naming the rule at the exact site it points to, and a missing required field
+  renders as a red synthetic node where it should have been — never a detached message. The
+  broken-anchor registry in render order backs n/p hopping.
+
+The HTML renderer becomes an outline, not tag soup: title, headings with their levels, landmark
+  sections, table shapes, quoted text content, and a contains-assertion's needle highlighted at its
+  site — scripts and styles elided with a count. Binary bodies render honest bytes: content-type ·
+  size · magic · the load-bearing sha256 line · a hex head with offset and ascii columns, buildable
+  live and from a saved record, withheld together under the same whole-body dual-view fail-closed
+  rule the record uses (now shared from redaction.py). Undecodable bodies route here instead of
+  mojibake lines.
+
+The raw facet prints the true status line (HTTP/1.1 200 OK) from the captured wire metadata; the SSE
+  facet shows the full envelope — the spec-default *message* for unnamed events, 'no id', and retry
+  labeled as the reconnect hint — and the per-event verdict strip reads the shared glyph map.
+
+- **tui**: Polish the diff prepare checklist
+  ([`7842915`](https://github.com/wbenbihi/comparo/commit/7842915f59b76993083c0854a16ecc21acee6b8f))
+
+Two mockup touches on the d-prepare screen: mark a streaming request in the checklist, and replace
+  the "up to 4 in parallel" aside with the "0 writes — nothing is written until you run" reassurance
+  the mockup leads with.
+
+- **tui**: Rebuild the Diff Results screen around the three indexes
+  ([`c0762a6`](https://github.com/wbenbihi/comparo/commit/c0762a645678eeadfb4a515174efb3215e14df36))
+
+One result set, three pivots, cycled with r: requests (cells with the locked glyphs — ✓ clean, ✗
+  rule broke, ! error, ⊘ not run), rules (every effective rule's record: broken red on top, then
+  passed, ignored, and unused — a typo'd path finally has a face), and fields (one row per broken
+  path, however many cells it hit). The old two-mode drift index, the skip-group machinery, and the
+  full-screen field-drill state are deleted — the fields pivot's triage card replaces the drill.
+
+The inspect panel reads in triage order: call ledger → the verdict box naming which rules broke (the
+  auditable N-of-M header, evidence lines) → the response-headers well → the body (git well for
+  JSON, the event sequence for streams, the error panel with attempts and retry policy for dead
+  cells; clean sections collapse to one-line stubs). enter jumps across pivots — cell ↔ its broken
+  rule, field → its cell — with a 'from X — esc returns' crumb on the NavStack; esc pops the jump
+  before it ever means back-to-Prepare. / filters the active index, f collapses it to broken rows,
+  n/p hop between red rows.
+
+The summary bar speaks the locked gate precedence (FAIL when any rule broke; ERROR only when errors
+  are the only failure) through the shared verdict pill. Footers and the help screen match per
+  pivot; tui.md rewritten to the new contract.
+
+- **tui**: Rebuild the RUN results screen on the shared components
+  ([`907753d`](https://github.com/wbenbihi/comparo/commit/907753d130f273ce9765f7175c2994ca924e6228))
+
+The last workstream of the unified RUN+DIFF rework: RunView now composes the components layer end to
+  end.
+
+- summary strip wears the two costumes: bar + cell tally while running, the run_gate verdict pill
+  with a gate-tinted border when finished - requests table snaps worst-first (fail, error, advisory,
+  pass) when the run completes; o flips back to plan order - r pivots the left column to the
+  assertion-rules index: one row per written rule (AssertRef fold) with a per-cell glyph strip,
+  provenance, and a broke/enforced count; enter opens the rule record (spec rows, stat chips, every
+  cell it belongs to) and a record row jumps to that cell's detail - the detail's checks section
+  speaks the verdict-box grammar via the shared check_row_lines (N-of-M header, two-line broken
+  rows, reachable last); a dead cell replaces the box with the error panel — no fake N-of-M claim -
+  a JSON response body mounts the anchored evidence tree; n/p hop between the broken anchors
+  (forcing the tree line rebuild so a first reveal lands) - y copies the raw exchange through the
+  redactor with credential headers masked by name — the clipboard is a sink like any other - cell
+  glyphs unified on the one grammar: unreachable is ! (error), advisory is ~, ✗ stays reserved for
+  rules that actually broke — tables, strips, and the rules index all render through cell_glyph -
+  dead cells join every rule record as '! never evaluated' instead of vanishing; inline rules name
+  their owning request in provenance - spurious table-rebuild highlight echoes are gated on table
+  focus, so a finished-run resort or a cross-pivot jump can no longer clobber the open detail
+
+- **tui**: Render a streamed response as a numbered event sequence
+  ([`aac5f05`](https://github.com/wbenbihi/comparo/commit/aac5f0597ca1e2a35f59223756e0abdcafb85b26))
+
+4C. A saved streamed diff now replays as a numbered event sequence — each event aligned baseline vs
+  candidate with a per-event ✓ (same) / ✗ (drifted) and a "—" where one side ran short — so the eye
+  lands on exactly which event in the stream diverged. The record already carries response.events;
+  the view-model now projects them per side.
+
+- **tui**: Render the live run as a per-plan, per-side table
+  ([`590a090`](https://github.com/wbenbihi/comparo/commit/590a090fdd75c790cf853c68a43249e3bc7bb2fd))
+
+Replace the flat progress strip (a bar + one in-flight line + a last-6 log + an anonymous glyph row)
+  with a persistent table over the whole plan, matching the d-running / e-running mockups:
+
+- Every planned cell is a row, seeded "queued" up front, that flips ○ queued → ◐ in flight → ✓/✗
+  finished and fills its two side columns (status · latency) as it lands. - For an execution each
+  side also carries its live assert tally (4/0), and a STATE column names the failing dimension
+  (assert ✗ / diff ✗ / assert + diff); the Diff tab shows same/drift. - Core: ExecutionProgress
+  gains a queued seed phase (started=False) and per-side finish data (candidate_status, per-side
+  assert pass/fail); run_execution emits a queued tick per plan cell before the run. - Both view
+  drivers now keep a list[_RunningRow] keyed by plan index instead of separate glyph/current/recent
+  state.
+
+- **tui**: Reorient the diff "rules" index to the silencing rules
+  ([`63c4e17`](https://github.com/wbenbihi/comparo/commit/63c4e170c51f08eee51a9d8c7e83013ae1c45d51))
+
+Toggling the drift index to "broken rules" re-listed the drifted fields (the same data as "grouped
+  by field", just different columns). Rebuild it around what the view is actually for: the
+  DiffProfile rules that silenced something.
+
+- _populate_rules now lists one row per fired ignore/tolerance rule, with how many fields and
+  requests it silenced, keyed rule::<rule>. - Selecting a rule opens _show_rule → _rule_detail: the
+  rule's mode, why it exists, and every field path it hid with its source request — so a skip is
+  auditable, never a silent pass. - Rules mode selects the first rule on open; _render_row routes
+  rule:: rows.
+
+- **tui**: Show every execution cell as a triplet row
+  ([`1985d86`](https://github.com/wbenbihi/comparo/commit/1985d8688d9f2768147b21766c47daf125f3c35c))
+
+4C. The execution results table listed only the drifted cells; it now shows every cell as a triplet
+  row — verdict glyph · cell · both sides' assertion tallies · diff — so the whole run reads at a
+  glance and a passing cell is as visible as a failing one. Enter still drills into the highlighted
+  cell's detail (now indexed over all outcomes).
+
+- **tui**: Show the execution gate as an AND-composition ledger
+  ([`18d3f1d`](https://github.com/wbenbihi/comparo/commit/18d3f1de5003395a078832a384725c4bfb790ae7))
+
+4C. The gate panel now leads with a gate-composition ledger — one aligned table listing each factor
+  (baseline assertions, candidate assertions, diff) with its verdict and the ∧ rollup to the gate —
+  so it reads at a glance which factor blocks the run. An assertion-only failure (no drift) is no
+  longer hidden behind a single gate glyph.
+
+- **tui**: Wire the call ledger into the live compare and cell views
+  ([`e9547ea`](https://github.com/wbenbihi/comparo/commit/e9547eac1d6ba92fdd9536fc15abcbc31d61905f))
+
+The call ledger (baseline vs candidate status/latency/size + Δ) rendered only in the saved-report
+  replay path; the live Diff compare panel and the Execution cell-detail screen never showed it, so
+  a latency/size regression was invisible until a report was reopened.
+
+- Extract the ledger renderer (_ledger_table) and add _executions_ledger, which reads the metrics
+  straight off the two executions carried on a live cell; _call_ledger (replay) and
+  _live_call_ledger now share it. - Diff compare panel is now three layers — call ledger → outbound
+  → body (mockup d-results); the ledger sits above the response diff. - Execution cell detail leads
+  its left stack with a CALL LEDGER panel (hidden when there is no candidate side). - Flag a slower
+  candidate's latency Δ in warn colour.
+
+### Refactoring
+
+- **archive**: Persist and replay the v1 report record
+  ([`a134a2f`](https://github.com/wbenbihi/comparo/commit/a134a2f9d2056923beaa8a9b9041253df943fc7e))
+
+The archive now stores the whole msgspec ReportRecord (request + response per side, structured field
+  diffs, per-side assertions) — save/load/list/prune encode/decode it directly, keyed by
+  metadata.id. The old flat SavedRecord and its record_from_* builders are gone; the TUI save paths
+  build the record through report_builder (passing the real Environment/ExecutionProfile/Execution
+  objects).
+
+The Report tab reads the record through a new view-model (tui/replay.project): it flattens the
+  nested record into the per-record / per-request / per-cell shape the replay helpers want, and —
+  crucially — carries the real FieldDiffRecords so the body diff renders the true profile mode
+  instead of fabricating "exact" (M-6).
+
+doctor's "saved reports" sink now writes the real v1 record to disk (the old and v1 sinks are one),
+  so it is 9/9 again. Tests reworked to the new builder + record.
+
+- **compare**: Drop CellDiff's now-dead response-metadata fields
+  ([`1aeb798`](https://github.com/wbenbihi/comparo/commit/1aeb798348d24ddd3746ab0765873765fe65f6f5))
+
+With the archive retired, nothing reads CellDiff.status / latency_ms / size_bytes / response_headers
+  off a live cell — the saved-replay detail tree reads them from the record's ResponseRecord via the
+  view-model instead. Remove the four fields and the locals that fed them; the live Diff view still
+  uses baseline_body / candidate_body and the threaded Executions.
+
+- **execution**: Extract the plan builder from run_execution
+  ([`5cc353f`](https://github.com/wbenbihi/comparo/commit/5cc353fc57eefc2fdb920bca27ccee4c662f076c))
+
+M-11. Lift the request→cell plan expansion out of run_execution into a focused _build_plan helper,
+  so the orchestrator reads as setup → build plan → run cells → assemble result. The per-cell
+  coroutine stays a closure (it legitimately captures the clients, limits, and progress callback).
+  No behaviour change.
+
+- **loader**: Decompose the 144-line _check_profiles
+  ([`693845f`](https://github.com/wbenbihi/comparo/commit/693845fabd641b1e915164d8a8755a7fcd5f8ed4))
+
+M-11. _check_profiles held five nested closures plus the dispatch loop. Lift the five validators
+  (_check_spec / _check_includes / _check_inline_assertions / _check_matrix_refs / _check_val_kinds)
+  to focused module-level functions, leaving _check_profiles as the ~40-line dispatch. Behaviour is
+  unchanged (loader/refs tests green).
+
+- **redaction**: Unify the two body redactors into redact_tree
+  ([`f8de436`](https://github.com/wbenbihi/comparo/commit/f8de436fe105fc8d917de8321d9be3ba070603dc))
+
+archive._redact_body and export._redact_value were byte-identical recursive tree redactors (mask
+  object keys and string values alike). Move the single implementation to redaction.redact_tree —
+  the one home for request/response body, events, and the upcoming FieldDiff / AssertionResult value
+  redaction — and point both call sites at it. No behaviour change (M-9).
+
+- **report**: Make the CI reporters project from the v1 record
+  ([`45bcb2a`](https://github.com/wbenbihi/comparo/commit/45bcb2ae74c8034890b523be8ea15a999909c96f))
+
+The reporters (JUnit, SARIF, JSON, Markdown) now consume the one ReportRecord the archive stores, so
+  a CI report can never disagree with a replayed one (M-8). A finding is a drifted field or a failed
+  error-severity assertion; the JSON reporter emits the whole record. `comparo diff`/`exec --report`
+  build the record via report_builder and derive record_from_execution's env refs from the outcomes.
+
+Deletes the now-dead intermediate model: report.RunReport / CellReport / DriftEntry / build_report,
+  execution.build_execution_report, and the app's write-only last_report. report.py keeps only the
+  diff-gate arithmetic. The doctor reporter sinks render from the record too; still 10/10.
+
+- **tui**: Decouple the crash handler from Textual privates
+  ([`8d8d634`](https://github.com/wbenbihi/comparo/commit/8d8d634e8236a68eb407dd0afdd5c9a031c262ec))
+
+M-10. The crash handler set self._return_code / self._exception / self._exception_event by hand —
+  Textual internals that could be renamed on a version bump. Replace them with the public
+  App.exit(return_code=1, message=…), which does the same bookkeeping and shows the redacted crash
+  report as the exit message. Not re-raising is deliberate: we surface the redacted report, never
+  the raw traceback.
+
+- **tui**: Delete the orphaned _drift_change helper
+  ([`71c6747`](https://github.com/wbenbihi/comparo/commit/71c67475719dadacaa44f2bcb43f71ff89baf776))
+
+The per-cell triplet swap (7f89fde) replaced the drift-table "change" column with _exec_triplet,
+  leaving _drift_change with no callers in src/. Remove it and its export; the drift-path redaction
+  it guarded is still covered by _cell_verdict and _diff_body_view in the same test.
+
+- **tui**: Fold this session's verdict-card dups back into components
+  ([`efe82f6`](https://github.com/wbenbihi/comparo/commit/efe82f63c4bcadb934db1d3a0351b62d8ca3466c))
+
+Post-audit cleanup of one-implementation regressions introduced while building the RUN verdict card,
+  so Execution/Report compose the real components instead of inheriting a fork:
+
+- add check_row_cells(row) -> (rule, source, evidence) to components, built on the shared
+  _ROW_MARKS, and consume it from RunView._populate_checks — the DataTable costume no longer defines
+  a private glyph map or restates the warn-suffix rules (the audit found the broke-label styling had
+  already forked between check_row_lines and _populate_checks) - retire _run_value by giving the
+  canonical _sv a width parameter; the rule record's expected/got cells now use the one
+  redact-then-clip formatter
+
+458 tests; the check-row grammar is pinned by a new component test.
+
+- **tui**: One summary bar for RUN and DIFF
+  ([`b3f8897`](https://github.com/wbenbihi/comparo/commit/b3f88970fc7c6dd63cc62b23cd6e00686af115d2))
+
+The two summary bars had diverged — Diff had a background, the SUMMARY title and worded counts with
+  an env selector on the right; Run had icons, the run id, and no framing. Rationalize them onto one
+  component.
+
+- new components.summary_bar(segments, env, ident, gate, detail, save_key): split details as icon ·
+  count · word (✓ 4 same), a │ separator, the id, the gate verdict pill, an extra detail, the save
+  hint, and the env aligned right — the exact structure the user specified - both tabs now build it
+  and frame it identically: #run-progress becomes a .panel with the SUMMARY border title and the
+  gate-tinted border, matching #diff-progress (which was already that shape) - Run keeps its ~ warns
+  segment and 'run <id>'; Diff gains the ◌ ignore (silenced-field) count and keeps 'baseline ⇄
+  candidate'; the redundant Diff drift-count detail is dropped so the save hint fits -
+  summary_strip_running/finished are no longer used by any view (summary_bar is THE live summary);
+  left in place for the Report/Execution rebuild
+
+- **tui**: Replace star-imports with explicit imports (re-arm F405)
+  ([`8362702`](https://github.com/wbenbihi/comparo/commit/83627026ed18ac4af94c30d2f29ede929cb8a181))
+
+app.py re-exported comparo.tui.render and comparo.tui.tokens via `import *` under a file-wide `#
+  ruff: noqa: F405`, which disarmed undefined-name analysis over the TUI. Replace them with explicit
+  imports of the 74 render + 43 tokens names app.py actually uses, redirect the tests that pulled
+  those helpers from app.py to import them from render/tokens where they live, and drop the pragma.
+  No behaviour change.
+
+- **tui**: Reuse the core request selector instead of a verbatim copy
+  ([`7bd090c`](https://github.com/wbenbihi/comparo/commit/7bd090c43091f2bd1e22d2173e6cb8294fb18881))
+
+M-7. render.py carried _exec_selected_requests, a byte-for-byte copy of execution._select (a
+  profile's select tags/ids → requests). Promote the core one to a public select_requests and call
+  it from render, deleting the duplicate so the selection logic lives in exactly one place.
+
+### Testing
+
+- Align openapi/resolve tests with distinct exit codes and load-time cycle check
+  ([`5c160f7`](https://github.com/wbenbihi/comparo/commit/5c160f78c7e5705aee9a18901bd93cf01f27d758))
+
+Follow-ups to the exit-code split and the load-time $val-cycle check: the openapi import errors are
+  usage errors (exit 2), and the $val-cycle test now builds the cyclic project past the loader
+  (which rejects it up front) to still exercise the resolver's own fail-closed protection.
+
+- **doctor**: Gate the v1 report record with a never-leak canary sink
+  ([`6718b75`](https://github.com/wbenbihi/comparo/commit/6718b75ccd3b9c47b685ed2d67a956d1f6a10ebb))
+
+Adds a saved-reports-v1 sink to the doctor self-check that pushes the canary through the whole new
+  surface — the outbound request (url, query, a credential header, body, cookies, the always-masked
+  auth block), the response body and event stream, the structured FieldDiff, and both sides'
+  AssertionResult expected/actual — then serializes the diff and run records and asserts the canary
+  is absent. This is the gate the report builder's redaction must clear. Now 10/10 sinks.
+
+- **render**: Add a dedicated test for the render helpers
+  ([`1b9effc`](https://github.com/wbenbihi/comparo/commit/1b9effce2eec4a5299a64578a9acc5b96e610a4d))
+
+render.py had no dedicated test despite being the largest module. Cover the pure helpers
+  (_fmt_bytes, _relative_age, _pad_cells, _req_short, _run_label, _assert_tally /
+  _assert_count_text), the reading-pane and saved-diff body well, and — as a direct M-6 regression
+  guard — _field_from_record, which reconstructs a live FieldDiff from the saved record's real
+  state/mode rather than a fabricated "exact".
+
+- **render**: Pin truecolor so the band-color assertions hold in CI
+  ([`0c144c7`](https://github.com/wbenbihi/comparo/commit/0c144c744ce402336ae59c6a4166ad4d5c24cb7c))
+
+The event-sequence and headers-well diff tests assert the muted DEL/ADD band backgrounds (`48;2;…`
+  truecolor sequences). Their Console set force_terminal=True but left the color system
+  auto-detected, so it resolved to truecolor locally (COLORTERM=truecolor) yet downgraded to
+  256-color on CI — where `48;2;43;22;28` never appears and both tests failed. Force
+  color_system="truecolor" so the assertion is deterministic regardless of the runner's terminal.
+  Verified by running the full suite with COLORTERM unset and TERM=xterm-256color.
+
+- **tui**: Pin the outbound band's self-explanatory copy
+  ([`36554fc`](https://github.com/wbenbihi/comparo/commit/36554fc4efec2e1d82ac0f10f93ae6ba80b7e9c5))
+
+
 ## v0.1.0 (2026-07-18)
 
 ### Bug Fixes
