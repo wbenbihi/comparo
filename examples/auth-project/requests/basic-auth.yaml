@@ -26,5 +26,5 @@ spec:
     status: 200
     # A composing list: both profiles' rules apply, http-ok first.
     assert:
-      - $ref: assert.http-ok
-      - $ref: assert.authenticated
+      - $use: assert.http-ok
+      - $use: assert.authenticated

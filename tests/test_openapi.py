@@ -149,7 +149,7 @@ def test_endpoints_bodies_and_response_schema_ref(tmp_path: Path) -> None:
     assert get_user.spec.request.endpoint == "/users/${id}"
     assert get_user.spec.response is not None
     assert get_user.spec.response.status == 200
-    assert get_user.spec.response.schema == {"$ref": "schema.user"}
+    assert get_user.spec.response.schema == {"$use": "schema.user"}
 
     # A query parameter becomes a query entry with its example/default value.
     assert list_users.spec.request.query == {"limit": 20}

@@ -20,4 +20,4 @@ spec:
   response:
     status: 200
     diff:
-      $ref: diff.strict
+      $use: diff.strict

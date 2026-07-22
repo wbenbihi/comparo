@@ -20,4 +20,4 @@ spec:
   response:
     status: 401
     diff:
-      $ref: diff.volatile
+      $use: diff.volatile

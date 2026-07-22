@@ -137,7 +137,7 @@ def compare_cell(
         project: The loaded project (for the request's diff profile).
         baseline: The baseline execution.
         candidate: The candidate execution, or ``None`` if it is missing.
-        diff_override: An execution-level diff profile ($ref/inline/list) that
+        diff_override: An execution-level diff profile ($use/inline/list) that
             composes on top of the request/project profile, or ``None``.
 
     Returns:

@@ -25,6 +25,6 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.echo-write
+      $use: schema.echo-write
     diff:
-      $ref: diff.echo-args
+      $use: diff.echo-args

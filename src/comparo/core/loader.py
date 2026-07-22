@@ -2,7 +2,7 @@
 
 Loading has three passes, all diagnostics-collecting so one run surfaces every
 problem at once: parse + envelope validation, id indexing, and reference
-resolution. A dangling ``$ref``/``$val`` is a hard error with a near-miss
+resolution. A dangling ``$use``/``$val`` is a hard error with a near-miss
 suggestion — the loader never silently degrades.
 """
 
@@ -22,7 +22,7 @@ from comparo.core.diagnostics import LoadError
 from comparo.core.models import Object
 from comparo.core.models import Project
 
-_REF_SIGILS = ("$ref", "$val")
+_REF_SIGILS = ("$use", "$val")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -275,8 +275,8 @@ def _check_references(
 ) -> None:
     for entry in entries:
         for reference in _find_references(entry.raw):
-            # A JSON Schema / OpenAPI ``$ref`` (``#/$defs/…``, ``other.json#/…``)
-            # is the user's own payload, not a comparo object id — leave it be.
+            # A path-like ``$use``/``$val`` target (a ``#/…`` or ``/`` JSON pointer)
+            # is never a comparo object id — leave it for the user's own payload.
             if reference.target.startswith("#") or "/" in reference.target:
                 continue
             if reference.target not in known:
@@ -308,23 +308,23 @@ def _check_spec(
 def _check_includes(
     loaded: LoadedProject, diagnostics: list[Diagnostic], file: Path, includes: object
 ) -> None:
-    # Each include must be a {$ref: id} pointing at an AssertionProfile; a bare
+    # Each include must be a {$use: id} pointing at an AssertionProfile; a bare
     # string or wrong-kind ref would be silently dropped at runtime (false green).
     from comparo.core.models import AssertionProfile
 
     for entry in includes if isinstance(includes, list) else []:
-        ref = entry.get("$ref") if isinstance(entry, dict) else None
+        ref = entry.get("$use") if isinstance(entry, dict) else None
         target = loaded.objects.get(ref) if isinstance(ref, str) else None
         if not isinstance(ref, str):
             diagnostics.append(
-                Diagnostic(file, f"assertion include is not a {{$ref: id}}: {entry!r}")
+                Diagnostic(file, f"assertion include is not a {{$use: id}}: {entry!r}")
             )
         elif not isinstance(target, AssertionProfile):
             what = f"a {type(target).__name__}" if target is not None else "an unknown id"
             diagnostics.append(
                 Diagnostic(
                     file,
-                    f"assertion include $ref '{ref}' resolves to {what}, not an AssertionProfile",
+                    f"assertion include $use '{ref}' resolves to {what}, not an AssertionProfile",
                 )
             )
 
@@ -336,26 +336,26 @@ def _check_inline_assertions(
     # (attached to a request/execution) has no object, so validate its include here
     # too — else its wrong-kind includes load clean and vanish.
     for item in value if isinstance(value, list) else [value]:
-        if isinstance(item, dict) and "$ref" not in item:
+        if isinstance(item, dict) and "$use" not in item:
             _check_includes(loaded, diagnostics, file, item.get("include"))
 
 
 def _check_matrix_refs(
     loaded: LoadedProject, diagnostics: list[Diagnostic], file: Path, refs: object
 ) -> None:
-    # A request's matrix entry must be a {$ref: id} pointing at a Matrix; a bare
+    # A request's matrix entry must be a {$use: id} pointing at a Matrix; a bare
     # string or wrong-kind ref is silently dropped at runtime (coverage vanishes).
     from comparo.core.models import Matrix
 
     for entry in refs if isinstance(refs, list) else []:
-        ref = entry.get("$ref") if isinstance(entry, dict) else None
+        ref = entry.get("$use") if isinstance(entry, dict) else None
         target = loaded.objects.get(ref) if isinstance(ref, str) else None
         if not isinstance(ref, str):
-            diagnostics.append(Diagnostic(file, f"matrix entry is not a {{$ref: id}}: {entry!r}"))
+            diagnostics.append(Diagnostic(file, f"matrix entry is not a {{$use: id}}: {entry!r}"))
         elif not isinstance(target, Matrix):
             what = f"a {type(target).__name__}" if target is not None else "an unknown id"
             diagnostics.append(
-                Diagnostic(file, f"matrix $ref '{ref}' resolves to {what}, not a Matrix")
+                Diagnostic(file, f"matrix $use '{ref}' resolves to {what}, not a Matrix")
             )
 
 

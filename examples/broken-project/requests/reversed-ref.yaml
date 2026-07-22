@@ -13,4 +13,4 @@ spec:
     # ERROR: the segments are right but reversed — it should be `schema.order`,
     # not `order.schema`. The loader detects the same-segments case and says so.
     schema:
-      $ref: order.schema
+      $use: order.schema

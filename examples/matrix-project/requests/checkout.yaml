@@ -12,7 +12,7 @@ metadata:
     - checkout
 spec:
   matrix:
-    - $ref: matrix.tiers
+    - $use: matrix.tiers
   request:
     method: POST
     endpoint: /anything

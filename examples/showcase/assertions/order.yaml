@@ -11,7 +11,7 @@ metadata:
     anchors), and the x-request-id warn holds too — a `~ · held` line.
 spec:
   include:
-    - $ref: assert.base
+    - $use: assert.base
   rules:
     # The deterministic FAIL: serve.py echoes the posted total, 240.0.
     - target: body:$.order.total

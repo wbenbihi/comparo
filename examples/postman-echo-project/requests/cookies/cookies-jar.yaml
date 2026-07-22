@@ -34,4 +34,4 @@ spec:
           op: equals
           value: cart-42
     diff:
-      $ref: diff.cookies
+      $use: diff.cookies

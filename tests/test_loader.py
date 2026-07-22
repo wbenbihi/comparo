@@ -63,7 +63,7 @@ def test_mistyped_execution_profiles_key_is_rejected(tmp_path: Path) -> None:
         "metadata:\n  name: Gate\n  id: exec.gate\n"
         "spec:\n"
         "  environments:\n    baseline: environment.stable\n"
-        "  profiles:\n    asert:\n      $ref: assert.contract\n",  # typo: asert
+        "  profiles:\n    asert:\n      $use: assert.contract\n",  # typo: asert
     )
     with pytest.raises(LoadError):
         load_project(tmp_path)
@@ -84,7 +84,7 @@ def test_wrong_kind_assertion_include_is_rejected(tmp_path: Path) -> None:
         "profile.yaml",
         "apiVersion: comparo/v1\nkind: AssertionProfile\n"
         "metadata:\n  name: Composed\n  id: assert.composed\n"
-        "spec:\n  include:\n    - $ref: request.probe\n",  # a Request, not an AssertionProfile
+        "spec:\n  include:\n    - $use: request.probe\n",  # a Request, not an AssertionProfile
     )
     with pytest.raises(LoadError) as caught:
         load_project(tmp_path)
@@ -143,7 +143,7 @@ def test_dangling_ref_suggests_near_miss(tmp_path: Path) -> None:
         "requests/r.yaml",
         "apiVersion: comparo/v1\nkind: Request\n"
         "metadata:\n  name: R\n  id: request.r\n"
-        "spec:\n  matrix:\n    - $ref: matrix.models.chat\n"
+        "spec:\n  matrix:\n    - $use: matrix.models.chat\n"
         "  request:\n    method: GET\n    endpoint: /x\n",
     )
     with pytest.raises(LoadError) as caught:

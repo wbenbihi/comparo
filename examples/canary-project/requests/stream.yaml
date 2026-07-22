@@ -19,5 +19,5 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.echo-get
+      $use: schema.echo-get
     streaming: true

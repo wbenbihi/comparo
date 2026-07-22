@@ -12,7 +12,7 @@ metadata:
 spec:
   # Run once per locale; each case is merged into request.query (see matrix.locales).
   matrix:
-    - $ref: matrix.locales
+    - $use: matrix.locales
   request:
     method: POST
     endpoint: /anything
@@ -26,6 +26,6 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.anything-echo
+      $use: schema.anything-echo
     diff:
-      $ref: diff.lenient
+      $use: diff.lenient

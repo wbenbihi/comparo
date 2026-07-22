@@ -13,4 +13,4 @@ spec:
     # ERROR: typo — the schema id is `schema.order`, not `schema.ordr`. The
     # loader flags the dangling $ref and suggests the near-miss.
     schema:
-      $ref: schema.ordr
+      $use: schema.ordr

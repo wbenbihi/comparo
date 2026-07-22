@@ -3169,11 +3169,11 @@ def _exec_plan_line(
 
 
 def _ref_ids(value: object) -> list[str]:
-    """Extract the referenced ids from a free-form ``$ref``/id/list profile value."""
+    """Extract the referenced ids from a free-form ``$use``/id/list profile value."""
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
-        ref = value.get("$ref")
+        ref = value.get("$use")
         return [ref] if isinstance(ref, str) else []
     if isinstance(value, list):
         return [rid for item in value for rid in _ref_ids(item)]

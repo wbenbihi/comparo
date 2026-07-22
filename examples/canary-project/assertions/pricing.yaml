@@ -10,7 +10,7 @@ metadata:
     not the assertion's. currency and apiVersion, by contrast, must not move.
 spec:
   include:
-    - $ref: assert.http-ok
+    - $use: assert.http-ok
   rules:
     - target: body:$.args.currency
       op: equals

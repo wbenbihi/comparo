@@ -26,9 +26,9 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.echo-write
+      $use: schema.echo-write
     diff:
-      $ref: diff.pricing
+      $use: diff.pricing
     # A POST has no query args, so it carries only the universal HTTP contract.
     assert:
-      $ref: assert.http-ok
+      $use: assert.http-ok

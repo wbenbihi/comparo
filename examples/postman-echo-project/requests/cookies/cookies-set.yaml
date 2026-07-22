@@ -21,4 +21,4 @@ spec:
   response:
     status: 302
     diff:
-      $ref: diff.volatile
+      $use: diff.volatile

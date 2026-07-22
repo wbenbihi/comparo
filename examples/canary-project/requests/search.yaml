@@ -13,8 +13,8 @@ metadata:
     - smoke
 spec:
   matrix:
-    - $ref: matrix.locales
-    - $ref: matrix.tiers
+    - $use: matrix.locales
+    - $use: matrix.tiers
   request:
     method: GET
     endpoint: /get
@@ -26,6 +26,6 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.echo-get
+      $use: schema.echo-get
     diff:
-      $ref: diff.echo-args
+      $use: diff.echo-args

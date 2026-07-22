@@ -16,7 +16,7 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.slideshow
+      $use: schema.slideshow
     # /json is static, so it should match exactly across environments.
     diff:
-      $ref: diff.strict
+      $use: diff.strict

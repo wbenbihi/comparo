@@ -13,7 +13,7 @@ metadata:
     - matrix
 spec:
   matrix:
-    - $ref: matrix.params
+    - $use: matrix.params
   request:
     method: GET
     endpoint: /get
@@ -24,6 +24,6 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.echo-get
+      $use: schema.echo-get
     diff:
-      $ref: diff.echo-args
+      $use: diff.echo-args

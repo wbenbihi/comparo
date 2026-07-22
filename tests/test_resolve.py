@@ -29,7 +29,7 @@ def test_matrix_injects_into_the_endpoint_path(tmp_path: Path) -> None:
     (tmp_path / "req.yaml").write_text(
         "apiVersion: comparo/v1\nkind: Request\n"
         "metadata:\n  name: Status\n  id: request.status\n"
-        "spec:\n  matrix:\n    - $ref: matrix.codes\n"
+        "spec:\n  matrix:\n    - $use: matrix.codes\n"
         "  request:\n    method: GET\n    endpoint: /status/${code}\n",
         encoding="utf-8",
     )
@@ -313,8 +313,8 @@ def test_a_val_cycle_is_a_captured_error_not_a_recursion_crash() -> None:
 
 
 def test_literal_shields_a_ref_shaped_payload() -> None:
-    # $literal returns its payload verbatim — a nested $ref-shaped dict must be sent
-    # as data, not resolved as a reference (else a literal `{"$ref": ...}` body would
+    # $literal returns its payload verbatim — a nested $use-shaped dict must be sent
+    # as data, not resolved as a reference (else a literal `{"$use": ...}` body would
     # be silently rewritten).
     import msgspec
 
@@ -328,7 +328,7 @@ def test_literal_shields_a_ref_shaped_payload() -> None:
                     "method": "POST",
                     "endpoint": "/x",
                     "body": {
-                        "$literal": {"$ref": "diffprofile.nope", "keep": "${NOT_INTERPOLATED}"}
+                        "$literal": {"$use": "diffprofile.nope", "keep": "${NOT_INTERPOLATED}"}
                     },
                 }
             },
@@ -338,6 +338,6 @@ def test_literal_shields_a_ref_shaped_payload() -> None:
     loaded = load_project(SAMPLE)
     env = select_environment(loaded, "local")
     resolved = Resolver(loaded, env, Sink.EXECUTE).resolve_request(request)
-    # The whole payload is passed through untouched — the $ref is not resolved and
+    # The whole payload is passed through untouched — the $use is not resolved and
     # the ${...} inside a literal is not interpolated.
-    assert resolved.body == {"$ref": "diffprofile.nope", "keep": "${NOT_INTERPOLATED}"}
+    assert resolved.body == {"$use": "diffprofile.nope", "keep": "${NOT_INTERPOLATED}"}

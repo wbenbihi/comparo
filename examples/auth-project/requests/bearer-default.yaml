@@ -22,4 +22,4 @@ spec:
     status: 200
     # A single $ref (contrast with the composing list on request.basic-auth).
     assert:
-      $ref: assert.bearer-present
+      $use: assert.bearer-present

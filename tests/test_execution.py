@@ -103,7 +103,7 @@ def _project(root: Path, *, status: int = 200, matrix: bool = False) -> None:
         "spec:\n"
     )
     if matrix:
-        probe += "  matrix:\n    - $ref: matrix.tiers\n"
+        probe += "  matrix:\n    - $use: matrix.tiers\n"
     probe += f"  request:\n    method: GET\n    endpoint: /get\n  response:\n    status: {status}\n"
     _write(root, "probe.yaml", probe)
     if matrix:

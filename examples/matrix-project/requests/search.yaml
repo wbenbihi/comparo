@@ -12,8 +12,8 @@ metadata:
     - catalog
 spec:
   matrix:
-    - $ref: matrix.locales
-    - $ref: matrix.tiers
+    - $use: matrix.locales
+    - $use: matrix.tiers
   request:
     method: GET
     endpoint: /anything

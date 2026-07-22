@@ -208,7 +208,7 @@ def request_rules(request: Request) -> list[SourcedAssertion]:
 def profiles_to_rules(
     project: LoadedProject, refs: object, request: str | None = None, start: int = 0
 ) -> list[SourcedAssertion]:
-    """Flatten one or more AssertionProfiles (``$ref`` or inline) into rules.
+    """Flatten one or more AssertionProfiles (``$use`` or inline) into rules.
 
     *refs* is a ``response.assert`` / execution ``profiles.assert`` slot: a single
     reference, an inline spec, or a list of either. Each resolved profile's

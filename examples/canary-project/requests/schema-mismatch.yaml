@@ -20,4 +20,4 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.echo-strict
+      $use: schema.echo-strict

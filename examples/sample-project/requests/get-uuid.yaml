@@ -17,4 +17,4 @@ spec:
     status: 200
     # The lenient profile ignores $.uuid, so a fresh value per call is not a regression.
     diff:
-      $ref: diff.lenient
+      $use: diff.lenient

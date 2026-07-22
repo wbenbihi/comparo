@@ -19,4 +19,4 @@ spec:
   response:
     status: 200
     diff:
-      $ref: diff.volatile
+      $use: diff.volatile

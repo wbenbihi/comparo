@@ -869,7 +869,7 @@ Field names are **camelCase** (`baseUrl`, not `base_url`). The kinds:
 
 ## References and secrets
 
-- `$ref: <id>` — link to another object by its `metadata.id`.
+- `$use: <id>` — link to another object by its `metadata.id`.
 - `$val: <instance-id>` — inject the value of an Instance by reference.
 - `$secret: NAME` — a secret declared in the environment. **Never write a real secret
   value in these files.** Declare it once under an Environment's `secrets` (sourced from
@@ -914,8 +914,8 @@ Field names are **camelCase** (`baseUrl`, not `base_url`). The kinds:
         headers:
           Authorization: "Bearer ${API_TOKEN}"   # API_TOKEN is a $secret in the env
       response:
-        schema: { $ref: schema.user }
-        diff: { $ref: diffprofile.user }
+        schema: { $use: schema.user }
+        diff: { $use: diffprofile.user }
 
 Do not invent fields. When unsure, consult `comparo schema` or let `comparo validate`
 correct you.

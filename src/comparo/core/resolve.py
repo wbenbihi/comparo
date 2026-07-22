@@ -1,6 +1,6 @@
 """Resolve a request against an environment into a concrete, masked tree.
 
-This is the by-reference sink: the loader keeps ``$ref``/``$val``/``${...}`` as
+This is the by-reference sink: the loader keeps ``$use``/``$val``/``${...}`` as
 holes, and the resolver fills them for a chosen environment. The display sink
 (the default) masks secrets and records a provenance trail; the execute sink
 (injecting real secret values) arrives with the HTTP engine in a later milestone.

@@ -14,4 +14,4 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.slideshow
+      $use: schema.slideshow

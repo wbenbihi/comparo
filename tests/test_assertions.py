@@ -119,7 +119,7 @@ def test_include_composes_rules(tmp_path: Path) -> None:
         "apiVersion: comparo/v1\nkind: AssertionProfile\n"
         "metadata:\n  name: Derived\n  id: assert.derived\n"
         "spec:\n"
-        "  include:\n    - $ref: assert.base\n"
+        "  include:\n    - $use: assert.base\n"
         "  rules:\n    - target: status\n      op: equals\n      value: 200\n",
         encoding="utf-8",
     )
@@ -200,7 +200,7 @@ def test_request_response_rules_includes_the_assert_block(tmp_path: Path) -> Non
         "apiVersion: comparo/v1\nkind: Request\n"
         "metadata:\n  name: Get\n  id: request.get\n"
         "spec:\n  request:\n    method: GET\n    endpoint: /x\n"
-        "  response:\n    assert:\n      $ref: assert.body\n",
+        "  response:\n    assert:\n      $use: assert.body\n",
         encoding="utf-8",
     )
     (tmp_path / "env.yaml").write_text(
@@ -281,7 +281,7 @@ def _run_contract_fixture() -> tuple[LoadedProject, Request, Environment]:
             "metadata": {"name": "Checkout", "id": "request.checkout"},
             "spec": {
                 "request": {"method": "POST", "endpoint": "/checkout"},
-                "response": {"status": 200, "schema": {"$ref": "schema.order"}},
+                "response": {"status": 200, "schema": {"$use": "schema.order"}},
             },
         },
         type=Object,
@@ -352,7 +352,7 @@ def test_a_transport_error_fails_every_rule_with_the_error_detail() -> None:
 
 def test_an_inline_schema_is_enforced_like_a_ref(tmp_path: Path) -> None:
     # H19: the run path must validate an inline response.schema, not only a
-    # {$ref} — otherwise a request shows green in the TUI and red in CI.
+    # {$use} — otherwise a request shows green in the TUI and red in CI.
     request = msgspec.convert(
         {
             "apiVersion": "comparo/v1",
@@ -398,7 +398,7 @@ def test_response_assert_profiles_gate_the_run_path_with_provenance(tmp_path: Pa
         "apiVersion: comparo/v1\nkind: Request\n"
         "metadata:\n  name: Get\n  id: request.get\n"
         "spec:\n  request:\n    method: GET\n    endpoint: /x\n"
-        "  response:\n    assert:\n      $ref: assert.body\n",
+        "  response:\n    assert:\n      $use: assert.body\n",
         encoding="utf-8",
     )
     (tmp_path / "env.yaml").write_text(
@@ -473,14 +473,14 @@ def test_a_diamond_include_evaluates_once_on_the_run_path(tmp_path: Path) -> Non
         (tmp_path / f"{name}.yaml").write_text(
             "apiVersion: comparo/v1\nkind: AssertionProfile\n"
             f"metadata:\n  name: {name.upper()}\n  id: assert.{name}\n"
-            "spec:\n  include:\n    - $ref: assert.d\n",
+            "spec:\n  include:\n    - $use: assert.d\n",
             encoding="utf-8",
         )
     (tmp_path / "request.yaml").write_text(
         "apiVersion: comparo/v1\nkind: Request\n"
         "metadata:\n  name: R\n  id: request.r\n"
         "spec:\n  request:\n    method: GET\n    endpoint: /x\n"
-        "  response:\n    assert:\n      - $ref: assert.b\n      - $ref: assert.c\n",
+        "  response:\n    assert:\n      - $use: assert.b\n      - $use: assert.c\n",
         encoding="utf-8",
     )
     (tmp_path / "env.yaml").write_text(

@@ -21,7 +21,7 @@ spec:
       backoff: constant
   diff:
     default:
-      $ref: diff.showcase
+      $use: diff.showcase
   redaction:
     # Mask anything equal to a declared secret value, even if it arrives untainted.
     stringMatchBackstop: true

@@ -21,4 +21,4 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.authenticated
+      $use: schema.authenticated

@@ -93,7 +93,7 @@ class Response(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
     schema: Any = None
     diff: Any = None
     streaming: bool | None = None
-    #: One or more AssertionProfiles ($ref or inline) — the ``assert`` key.
+    #: One or more AssertionProfiles ($use or inline) — the ``assert`` key.
     assertions: Any = msgspec.field(default=None, name="assert")
 
 
@@ -208,7 +208,7 @@ class ProjectSpec(msgspec.Struct, rename="camel", forbid_unknown_fields=True):
 
     Interiors are strict structs so a mistyped key (``defualt``, ``concurency``)
     is a hard load error, not a silently-ignored setting. ``diff`` stays ``Any``
-    because it holds ``$ref``/inline profile holes; ``plugins`` is gated by a
+    because it holds ``$use``/inline profile holes; ``plugins`` is gated by a
     dedicated load error.
     """
 

@@ -12,7 +12,7 @@ metadata:
     - smoke
 spec:
   matrix:
-    - $ref: matrix.plans
+    - $use: matrix.plans
   request:
     method: GET
     endpoint: /get
@@ -25,9 +25,9 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.echo-get
+      $use: schema.echo-get
     diff:
-      $ref: diff.echo-args
+      $use: diff.echo-args
     # The pricing contract (which composes in HTTP OK) — evaluated on both envs.
     assert:
-      $ref: assert.pricing
+      $use: assert.pricing

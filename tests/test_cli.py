@@ -259,7 +259,7 @@ def test_run_fails_closed_when_the_plan_expands_to_zero_cells(tmp_path: Path) ->
     )
     (tmp_path / "req.yaml").write_text(
         "apiVersion: comparo/v1\nkind: Request\nmetadata: {name: R, id: request.r}\n"
-        "spec:\n  matrix:\n    - $ref: matrix.empty\n  request: {method: GET, endpoint: /x}\n",
+        "spec:\n  matrix:\n    - $use: matrix.empty\n  request: {method: GET, endpoint: /x}\n",
         encoding="utf-8",
     )
     config = str(tmp_path / "comparo.yaml")

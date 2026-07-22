@@ -666,7 +666,7 @@ def _response(
     if isinstance(resolved, dict):
         schema_id = _response_schema_id(resolved, schema_ids)
         if schema_id is not None:
-            body["schema"] = {"$ref": schema_id}
+            body["schema"] = {"$use": schema_id}
     return body
 
 

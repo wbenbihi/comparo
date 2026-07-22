@@ -1157,7 +1157,7 @@
     },
     "ProjectSpec": {
       "title": "ProjectSpec",
-      "description": "The body of the root ``Project`` manifest.\n\nInteriors are strict structs so a mistyped key (``defualt``, ``concurency``)\nis a hard load error, not a silently-ignored setting. ``diff`` stays ``Any``\nbecause it holds ``$ref``/inline profile holes; ``plugins`` is gated by a\ndedicated load error.",
+      "description": "The body of the root ``Project`` manifest.\n\nInteriors are strict structs so a mistyped key (``defualt``, ``concurency``)\nis a hard load error, not a silently-ignored setting. ``diff`` stays ``Any``\nbecause it holds ``$use``/inline profile holes; ``plugins`` is gated by a\ndedicated load error.",
       "type": "object",
       "properties": {
         "data": {

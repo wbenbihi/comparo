@@ -22,6 +22,6 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.time-object
+      $use: schema.time-object
     diff:
-      $ref: diff.strict
+      $use: diff.strict

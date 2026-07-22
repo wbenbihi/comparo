@@ -1,4 +1,4 @@
-"""Tests for inline-or-$ref attachment resolution."""
+"""Tests for inline-or-$use attachment resolution."""
 
 from pathlib import Path
 
@@ -23,7 +23,7 @@ def _loaded(tmp_path: Path) -> LoadedProject:
 
 def test_resolve_ref(tmp_path: Path) -> None:
     loaded = _loaded(tmp_path)
-    specs = resolve_specs(loaded, {"$ref": "diff.strict"}, DiffProfileSpec)
+    specs = resolve_specs(loaded, {"$use": "diff.strict"}, DiffProfileSpec)
     assert len(specs) == 1
     assert specs[0].default == "exact"
 
@@ -42,7 +42,7 @@ def test_resolve_list_mixes_ref_and_inline(tmp_path: Path) -> None:
     loaded = _loaded(tmp_path)
     specs = resolve_specs(
         loaded,
-        [{"$ref": "diff.strict"}, {"default": "shape"}],
+        [{"$use": "diff.strict"}, {"default": "shape"}],
         DiffProfileSpec,
     )
     assert [spec.default for spec in specs] == ["exact", "shape"]
@@ -60,7 +60,7 @@ def test_resolve_fails_loud_on_unresolvable(tmp_path: Path) -> None:
     with pytest.raises(SpecResolutionError):
         resolve_specs(loaded, "nonsense", DiffProfileSpec)  # bare string
     with pytest.raises(SpecResolutionError):
-        resolve_specs(loaded, {"$ref": "diff.missing"}, DiffProfileSpec)  # dangling ref
+        resolve_specs(loaded, {"$use": "diff.missing"}, DiffProfileSpec)  # dangling ref
     with pytest.raises(SpecResolutionError):
         resolve_specs(loaded, {"rule": []}, DiffProfileSpec)  # inline typo of "rules"
 

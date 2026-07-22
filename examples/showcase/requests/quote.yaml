@@ -12,7 +12,7 @@ metadata:
     - pricing
 spec:
   matrix:
-    - $ref: matrix.plans
+    - $use: matrix.plans
   request:
     method: GET
     endpoint: /quote

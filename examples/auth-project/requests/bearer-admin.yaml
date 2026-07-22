@@ -22,4 +22,4 @@ spec:
   response:
     status: 200
     assert:
-      $ref: assert.bearer-present
+      $use: assert.bearer-present

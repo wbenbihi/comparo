@@ -16,7 +16,7 @@ metadata:
     - path
 spec:
   matrix:
-    - $ref: matrix.status-codes
+    - $use: matrix.status-codes
   request:
     method: GET
     endpoint: /status/${code}

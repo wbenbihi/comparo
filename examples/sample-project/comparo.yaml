@@ -24,7 +24,7 @@ spec:
   # Global default comparison profile; a request may override it with its own `diff:`.
   diff:
     default:
-      $ref: diff.lenient
+      $use: diff.lenient
 
   # Headless default selection.
   selection:

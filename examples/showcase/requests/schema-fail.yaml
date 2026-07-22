@@ -18,4 +18,4 @@ spec:
   response:
     status: 200
     schema:
-      $ref: schema.contract
+      $use: schema.contract
