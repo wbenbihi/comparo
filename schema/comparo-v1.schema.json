@@ -55,17 +55,38 @@
         "kind": {
           "enum": [
             "Environment"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "Environment"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "Local",
+              "id": "environment.local"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The environment body.",
+          "examples": [
+            {
+              "baseUrl": "http://localhost:8080"
+            }
+          ],
           "$ref": "#/$defs/EnvironmentSpec"
         }
       },
@@ -83,9 +104,19 @@
       "type": "object",
       "properties": {
         "name": {
+          "description": "Human-readable label shown in the TUI and reports.",
+          "examples": [
+            "Local",
+            "Get user"
+          ],
           "type": "string"
         },
         "id": {
+          "description": "Stable, unique identity other objects reference. Omitted only on Project.",
+          "examples": [
+            "environment.local",
+            "request.get-user"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -97,6 +128,10 @@
           "default": null
         },
         "description": {
+          "description": "Free-text explanation of what this object is for.",
+          "examples": [
+            "Local dev environment"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -108,6 +143,13 @@
           "default": null
         },
         "tags": {
+          "description": "Labels for the manifest's default selection and matrix filtering.",
+          "examples": [
+            [
+              "smoke",
+              "auth"
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -133,9 +175,21 @@
       "type": "object",
       "properties": {
         "baseUrl": {
+          "description": "Base URL every request endpoint is joined to.",
+          "examples": [
+            "http://localhost:8080",
+            "https://api.example.com"
+          ],
           "type": "string"
         },
         "timeout": {
+          "description": "Per-request timeout budget for this environment.",
+          "examples": [
+            {
+              "connect": "5s",
+              "read": "30s"
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -147,6 +201,14 @@
           "default": null
         },
         "secrets": {
+          "description": "Declared secrets by name; the value is a source ($env/$file/$literal/$from).",
+          "examples": [
+            {
+              "API_TOKEN": {
+                "$env": "COMPARO_TOKEN"
+              }
+            }
+          ],
           "anyOf": [
             {
               "type": "object"
@@ -158,6 +220,12 @@
           "default": null
         },
         "variables": {
+          "description": "Named string values referenced as ${NAME} or {$var: NAME}.",
+          "examples": [
+            {
+              "region": "us-east-1"
+            }
+          ],
           "anyOf": [
             {
               "type": "object",
@@ -172,6 +240,15 @@
           "default": null
         },
         "headers": {
+          "description": "Headers applied to every request unless it overrides them.",
+          "examples": [
+            [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -186,6 +263,15 @@
           "default": null
         },
         "health": {
+          "description": "Readiness probes run by `comparo health` and the TUI.",
+          "examples": [
+            [
+              {
+                "method": "GET",
+                "endpoint": "/health"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -200,6 +286,12 @@
           "default": null
         },
         "auth": {
+          "description": "Default Basic/Bearer auth applied to every request unless it sets its own.",
+          "examples": [
+            {
+              "bearer": "${API_TOKEN}"
+            }
+          ],
           "default": null
         }
       },
@@ -214,6 +306,10 @@
       "type": "object",
       "properties": {
         "connect": {
+          "description": "Time allowed to establish the connection.",
+          "examples": [
+            "5s"
+          ],
           "anyOf": [
             {
               "type": "string",
@@ -226,6 +322,10 @@
           "default": null
         },
         "read": {
+          "description": "Time allowed to read the full response.",
+          "examples": [
+            "30s"
+          ],
           "anyOf": [
             {
               "type": "string",
@@ -238,6 +338,10 @@
           "default": null
         },
         "streamIdle": {
+          "description": "Max gap allowed between two streamed chunks.",
+          "examples": [
+            "10s"
+          ],
           "anyOf": [
             {
               "type": "string",
@@ -250,6 +354,10 @@
           "default": null
         },
         "streamMax": {
+          "description": "Hard cap on the total duration of a streamed response.",
+          "examples": [
+            "5m"
+          ],
           "anyOf": [
             {
               "type": "string",
@@ -271,12 +379,26 @@
       "type": "object",
       "properties": {
         "key": {
+          "description": "The header name.",
+          "examples": [
+            "Authorization",
+            "Content-Type"
+          ],
           "type": "string"
         },
         "value": {
+          "description": "The value: a literal, a ${...} string, or a directive hole.",
+          "examples": [
+            "application/json",
+            "Bearer ${API_TOKEN}"
+          ],
           "default": null
         },
         "description": {
+          "description": "Free-text note (kept from an OpenAPI import).",
+          "examples": [
+            "The bearer token"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -288,10 +410,18 @@
           "default": null
         },
         "required": {
+          "description": "Whether the header is required (documentation, from an import).",
+          "examples": [
+            true
+          ],
           "type": "boolean",
           "default": false
         },
         "type": {
+          "description": "A hint for the value's type (from an OpenAPI import).",
+          "examples": [
+            "string"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -314,12 +444,30 @@
       "type": "object",
       "properties": {
         "method": {
+          "description": "HTTP method for the readiness probe.",
+          "examples": [
+            "GET"
+          ],
           "type": "string"
         },
         "endpoint": {
+          "description": "Path (joined to baseUrl) to probe.",
+          "examples": [
+            "/health",
+            "/status/200"
+          ],
           "type": "string"
         },
         "headers": {
+          "description": "Extra headers to send with the probe.",
+          "examples": [
+            [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -348,17 +496,41 @@
         "kind": {
           "enum": [
             "Request"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "Request"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "Get user",
+              "id": "request.get-user"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The request body.",
+          "examples": [
+            {
+              "request": {
+                "method": "GET",
+                "endpoint": "/users"
+              }
+            }
+          ],
           "$ref": "#/$defs/RequestSpec"
         }
       },
@@ -376,9 +548,22 @@
       "type": "object",
       "properties": {
         "request": {
+          "description": "The outbound HTTP request.",
+          "examples": [
+            {
+              "method": "GET",
+              "endpoint": "/users"
+            }
+          ],
           "$ref": "#/$defs/HttpRequest"
         },
         "response": {
+          "description": "The expected response \u2014 schema, diff profile, assertions.",
+          "examples": [
+            {
+              "status": 200
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -390,6 +575,14 @@
           "default": null
         },
         "matrix": {
+          "description": "Matrices ({$use: matrix.x}) this request is expanded across.",
+          "examples": [
+            [
+              {
+                "$use": "matrix.locales"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array"
@@ -401,6 +594,12 @@
           "default": null
         },
         "timeout": {
+          "description": "A per-request timeout override.",
+          "examples": [
+            {
+              "read": "60s"
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -423,12 +622,28 @@
       "type": "object",
       "properties": {
         "method": {
+          "description": "The HTTP method.",
+          "examples": [
+            "GET",
+            "POST"
+          ],
           "type": "string"
         },
         "endpoint": {
+          "description": "Path (joined to baseUrl); may carry ${...} holes.",
+          "examples": [
+            "/users/${USER_ID}"
+          ],
           "type": "string"
         },
         "query": {
+          "description": "Query parameters as a name\u2192value map.",
+          "examples": [
+            {
+              "page": "1",
+              "limit": "20"
+            }
+          ],
           "anyOf": [
             {
               "type": "object"
@@ -440,6 +655,12 @@
           "default": null
         },
         "headers": {
+          "description": "A list of Header objects or a {Name: value} map ({$val: id} injects a shared set).",
+          "examples": [
+            {
+              "$val": "instance.default-headers"
+            }
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -457,9 +678,20 @@
           "default": null
         },
         "body": {
+          "description": "The request body (shape depends on bodyType).",
+          "examples": [
+            {
+              "name": "Ada"
+            }
+          ],
           "default": null
         },
         "bodyType": {
+          "description": "How the body is encoded: json (default), form, or raw.",
+          "examples": [
+            "json",
+            "form"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -471,9 +703,24 @@
           "default": null
         },
         "auth": {
+          "description": "Basic/Bearer auth for this request; overrides the environment default.",
+          "examples": [
+            {
+              "basic": {
+                "username": "u",
+                "password": "${PW}"
+              }
+            }
+          ],
           "default": null
         },
         "cookies": {
+          "description": "Cookies to send, as a name\u2192value map.",
+          "examples": [
+            {
+              "session": "${SESSION}"
+            }
+          ],
           "anyOf": [
             {
               "type": "object"
@@ -497,6 +744,10 @@
       "type": "object",
       "properties": {
         "status": {
+          "description": "The expected HTTP status code.",
+          "examples": [
+            200
+          ],
           "anyOf": [
             {
               "type": "integer"
@@ -508,12 +759,28 @@
           "default": null
         },
         "schema": {
+          "description": "A Schema to validate the body against ($use: schema.x or inline JSON Schema).",
+          "examples": [
+            {
+              "$use": "schema.user"
+            }
+          ],
           "default": null
         },
         "diff": {
+          "description": "A DiffProfile ($use/inline/list) overriding the project default comparison.",
+          "examples": [
+            {
+              "$use": "diff.lenient"
+            }
+          ],
           "default": null
         },
         "streaming": {
+          "description": "Whether the response is streamed (SSE / chunked).",
+          "examples": [
+            true
+          ],
           "anyOf": [
             {
               "type": "boolean"
@@ -525,6 +792,12 @@
           "default": null
         },
         "assert": {
+          "description": "AssertionProfiles ($use/inline/list) checked on the response \u2014 the `assert` key.",
+          "examples": [
+            {
+              "$use": "assert.http-ok"
+            }
+          ],
           "default": null
         }
       },
@@ -539,17 +812,41 @@
         "kind": {
           "enum": [
             "Schema"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "Schema"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "User",
+              "id": "schema.user"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The JSON Schema body.",
+          "examples": [
+            {
+              "type": "object",
+              "required": [
+                "id"
+              ]
+            }
+          ],
           "type": "object"
         }
       },
@@ -569,17 +866,40 @@
         "kind": {
           "enum": [
             "Instance"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "Instance"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "Default headers",
+              "id": "instance.default-headers"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The reusable value.",
+          "examples": [
+            {
+              "value": {
+                "Accept": "application/json"
+              }
+            }
+          ],
           "$ref": "#/$defs/InstanceSpec"
         }
       },
@@ -597,6 +917,12 @@
       "type": "object",
       "properties": {
         "value": {
+          "description": "The reusable value injected wherever {$val: this-id} appears.",
+          "examples": [
+            {
+              "Accept": "application/json"
+            }
+          ],
           "default": null
         }
       },
@@ -611,17 +937,43 @@
         "kind": {
           "enum": [
             "Matrix"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "Matrix"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "Locales",
+              "id": "matrix.locales"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The matrix body.",
+          "examples": [
+            {
+              "target": "request.query",
+              "values": [
+                {
+                  "locale": "en-US"
+                }
+              ]
+            }
+          ],
           "$ref": "#/$defs/MatrixSpec"
         }
       },
@@ -639,16 +991,35 @@
       "type": "object",
       "properties": {
         "target": {
+          "description": "Where each case is injected: request.query, request.body, or request.path.",
+          "examples": [
+            "request.query"
+          ],
           "type": "string",
           "pattern": "^(request\\.)?(query|body|path)$"
         },
         "values": {
+          "description": "The cases; the cartesian product across matrices is expanded.",
+          "examples": [
+            [
+              {
+                "locale": "en-US"
+              },
+              {
+                "locale": "fr-FR"
+              }
+            ]
+          ],
           "type": "array",
           "items": {
             "type": "object"
           }
         },
         "mode": {
+          "description": "merge updates the target container with each case; replace substitutes it.",
+          "examples": [
+            "merge"
+          ],
           "enum": [
             "merge",
             "replace"
@@ -656,6 +1027,10 @@
           "default": "merge"
         },
         "createPath": {
+          "description": "Create missing intermediate objects along the target path.",
+          "examples": [
+            true
+          ],
           "type": "boolean",
           "default": false
         }
@@ -674,17 +1049,38 @@
         "kind": {
           "enum": [
             "DiffProfile"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "DiffProfile"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "Lenient",
+              "id": "diff.lenient"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The diff profile body.",
+          "examples": [
+            {
+              "default": "exact"
+            }
+          ],
           "$ref": "#/$defs/DiffProfileSpec"
         }
       },
@@ -702,6 +1098,10 @@
       "type": "object",
       "properties": {
         "default": {
+          "description": "The comparison mode for any path not matched by a rule.",
+          "examples": [
+            "exact"
+          ],
           "enum": [
             "exact",
             "ignore",
@@ -711,6 +1111,15 @@
           ]
         },
         "rules": {
+          "description": "Path-scoped overrides of the default mode.",
+          "examples": [
+            [
+              {
+                "path": "$.timestamp",
+                "mode": "ignore"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -736,9 +1145,19 @@
       "type": "object",
       "properties": {
         "path": {
+          "description": "The JSON path this rule scopes ($ is the body root; $headers.x, $status too).",
+          "examples": [
+            "$.data.items[*].id",
+            "$headers.date"
+          ],
           "type": "string"
         },
         "mode": {
+          "description": "How this path is compared.",
+          "examples": [
+            "ignore",
+            "tolerance"
+          ],
           "enum": [
             "exact",
             "ignore",
@@ -748,9 +1167,19 @@
           ]
         },
         "schema": {
+          "description": "A JSON Schema for `mode: shape` structural comparison.",
+          "examples": [
+            {
+              "type": "number"
+            }
+          ],
           "default": null
         },
         "arrayLength": {
+          "description": "For arrays: compare length exactly or tolerantly.",
+          "examples": [
+            "exact"
+          ],
           "anyOf": [
             {
               "enum": [
@@ -765,6 +1194,10 @@
           "default": null
         },
         "tolerance": {
+          "description": "Absolute numeric tolerance for `mode: tolerance`.",
+          "examples": [
+            0.01
+          ],
           "anyOf": [
             {
               "type": "number"
@@ -790,17 +1223,44 @@
         "kind": {
           "enum": [
             "AssertionProfile"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "AssertionProfile"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "HTTP OK",
+              "id": "assert.http-ok"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The assertion profile body.",
+          "examples": [
+            {
+              "rules": [
+                {
+                  "target": "$status",
+                  "op": "equals",
+                  "value": 200
+                }
+              ]
+            }
+          ],
           "$ref": "#/$defs/AssertionProfileSpec"
         }
       },
@@ -818,6 +1278,16 @@
       "type": "object",
       "properties": {
         "rules": {
+          "description": "The assertions this profile checks.",
+          "examples": [
+            [
+              {
+                "target": "$status",
+                "op": "equals",
+                "value": 200
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -832,6 +1302,14 @@
           "default": null
         },
         "include": {
+          "description": "Other AssertionProfiles ({$use: id}) composed in first.",
+          "examples": [
+            [
+              {
+                "$use": "assert.http-ok"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array"
@@ -852,15 +1330,34 @@
       "type": "object",
       "properties": {
         "target": {
+          "description": "What to assert on: $status, $headers.x, or a body path $.a.b.",
+          "examples": [
+            "$status",
+            "$.data.total"
+          ],
           "type": "string"
         },
         "op": {
+          "description": "The operator: equals, lt/lte/gt/gte, between, oneOf, exists, contains, schema.",
+          "examples": [
+            "equals",
+            "lte"
+          ],
           "type": "string"
         },
         "value": {
+          "description": "The expected value for the operator.",
+          "examples": [
+            200,
+            999
+          ],
           "default": null
         },
         "severity": {
+          "description": "error fails the gate; warn is advisory.",
+          "examples": [
+            "error"
+          ],
           "enum": [
             "error",
             "warn"
@@ -882,17 +1379,41 @@
         "kind": {
           "enum": [
             "ExecutionProfile"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "ExecutionProfile"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name, id, description, tags.",
+          "examples": [
+            {
+              "name": "Release gate",
+              "id": "execution.release-gate"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The execution plan body.",
+          "examples": [
+            {
+              "environments": {
+                "baseline": "stable",
+                "candidate": "canary"
+              }
+            }
+          ],
           "$ref": "#/$defs/ExecutionProfileSpec"
         }
       },
@@ -910,6 +1431,14 @@
       "type": "object",
       "properties": {
         "select": {
+          "description": "Which requests to run (by tag and/or id).",
+          "examples": [
+            {
+              "tags": [
+                "release"
+              ]
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -921,6 +1450,18 @@
           "default": null
         },
         "matrix": {
+          "description": "Per-matrix scoping, keyed by matrix id.",
+          "examples": [
+            {
+              "matrix.tiers": {
+                "include": [
+                  {
+                    "tier": "free"
+                  }
+                ]
+              }
+            }
+          ],
           "anyOf": [
             {
               "type": "object",
@@ -935,6 +1476,13 @@
           "default": null
         },
         "environments": {
+          "description": "Baseline and (optional) candidate environments.",
+          "examples": [
+            {
+              "baseline": "stable",
+              "candidate": "canary"
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -946,6 +1494,13 @@
           "default": null
         },
         "check": {
+          "description": "Which checks to compute (assertions, diff).",
+          "examples": [
+            {
+              "assertions": true,
+              "diff": true
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -957,6 +1512,14 @@
           "default": null
         },
         "profiles": {
+          "description": "Diff/assert profile overrides for this execution.",
+          "examples": [
+            {
+              "diff": {
+                "$use": "diff.strict"
+              }
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -968,6 +1531,14 @@
           "default": null
         },
         "report": {
+          "description": "Report overrides for this execution (same shape as Project.report).",
+          "examples": [
+            {
+              "formats": [
+                "junit"
+              ]
+            }
+          ],
           "default": null
         }
       },
@@ -980,6 +1551,12 @@
       "type": "object",
       "properties": {
         "tags": {
+          "description": "Run requests carrying any of these tags.",
+          "examples": [
+            [
+              "release"
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -994,6 +1571,12 @@
           "default": null
         },
         "requests": {
+          "description": "Run these request ids.",
+          "examples": [
+            [
+              "request.checkout"
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1017,6 +1600,14 @@
       "type": "object",
       "properties": {
         "include": {
+          "description": "Keep only cases matching these.",
+          "examples": [
+            [
+              {
+                "tier": "free"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1031,6 +1622,14 @@
           "default": null
         },
         "exclude": {
+          "description": "Drop cases matching these.",
+          "examples": [
+            [
+              {
+                "region": "eu"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1045,6 +1644,14 @@
           "default": null
         },
         "override": {
+          "description": "Add extra cases for this execution.",
+          "examples": [
+            [
+              {
+                "tier": "enterprise"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1068,6 +1675,10 @@
       "type": "object",
       "properties": {
         "baseline": {
+          "description": "The baseline environment name or id.",
+          "examples": [
+            "stable"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -1079,6 +1690,10 @@
           "default": null
         },
         "candidate": {
+          "description": "The candidate environment; its presence enables the diff.",
+          "examples": [
+            "canary"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -1099,10 +1714,18 @@
       "type": "object",
       "properties": {
         "assertions": {
+          "description": "Whether to evaluate response assertions.",
+          "examples": [
+            true
+          ],
           "type": "boolean",
           "default": true
         },
         "diff": {
+          "description": "Whether to diff baseline vs candidate.",
+          "examples": [
+            true
+          ],
           "type": "boolean",
           "default": true
         }
@@ -1116,9 +1739,21 @@
       "type": "object",
       "properties": {
         "diff": {
+          "description": "A DiffProfile ($use/inline/list) applied for this execution.",
+          "examples": [
+            {
+              "$use": "diff.strict"
+            }
+          ],
           "default": null
         },
         "assert": {
+          "description": "AssertionProfiles ($use/inline/list) applied for this execution \u2014 the `assert` key.",
+          "examples": [
+            {
+              "$use": "assert.release"
+            }
+          ],
           "default": null
         }
       },
@@ -1133,17 +1768,37 @@
         "kind": {
           "enum": [
             "Project"
+          ],
+          "description": "The object kind \u2014 selects the shape of `spec`.",
+          "examples": [
+            "Project"
           ]
         },
         "apiVersion": {
+          "description": "Always comparo/v1.",
+          "examples": [
+            "comparo/v1"
+          ],
           "enum": [
             "comparo/v1"
           ]
         },
         "metadata": {
+          "description": "Name and optional description/tags (no id on Project).",
+          "examples": [
+            {
+              "name": "my-api"
+            }
+          ],
           "$ref": "#/$defs/Meta"
         },
         "spec": {
+          "description": "The manifest body \u2014 run-wide defaults.",
+          "examples": [
+            {
+              "data": ".comparo"
+            }
+          ],
           "$ref": "#/$defs/ProjectSpec"
         }
       },
@@ -1161,6 +1816,11 @@
       "type": "object",
       "properties": {
         "data": {
+          "description": "Directory the object YAML lives in, relative to the manifest.",
+          "examples": [
+            ".comparo",
+            "."
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -1172,6 +1832,12 @@
           "default": null
         },
         "environments": {
+          "description": "The default environment and named diff pairs.",
+          "examples": [
+            {
+              "default": "environment.local"
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -1183,6 +1849,12 @@
           "default": null
         },
         "run": {
+          "description": "Run-wide concurrency and retry defaults.",
+          "examples": [
+            {
+              "concurrency": 8
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -1194,9 +1866,25 @@
           "default": null
         },
         "diff": {
+          "description": "The project-wide default DiffProfile ($use/inline/list) under `default`.",
+          "examples": [
+            {
+              "default": {
+                "$use": "diff.strict"
+              }
+            }
+          ],
           "default": null
         },
         "selection": {
+          "description": "Default request selection for headless run/diff.",
+          "examples": [
+            {
+              "tags": [
+                "smoke"
+              ]
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -1208,6 +1896,15 @@
           "default": null
         },
         "report": {
+          "description": "Reporter, output, and archive defaults.",
+          "examples": [
+            {
+              "formats": [
+                "junit"
+              ],
+              "dir": ".reports"
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -1219,6 +1916,12 @@
           "default": null
         },
         "redaction": {
+          "description": "Redaction options (the value floor is always on).",
+          "examples": [
+            {
+              "stringMatchBackstop": true
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -1230,6 +1933,10 @@
           "default": null
         },
         "plugins": {
+          "description": "Reserved \u2014 configuring it is currently a hard load error.",
+          "examples": [
+            null
+          ],
           "default": null
         }
       },
@@ -1242,6 +1949,10 @@
       "type": "object",
       "properties": {
         "default": {
+          "description": "The environment used when none is given.",
+          "examples": [
+            "environment.local"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -1253,6 +1964,16 @@
           "default": null
         },
         "diffPairs": {
+          "description": "Named baseline/candidate pairs for diffing.",
+          "examples": [
+            [
+              {
+                "name": "canary",
+                "baseline": "stable",
+                "candidate": "canary"
+              }
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1276,12 +1997,24 @@
       "type": "object",
       "properties": {
         "name": {
+          "description": "The pair's name, selected with --pair.",
+          "examples": [
+            "prod-vs-staging"
+          ],
           "type": "string"
         },
         "baseline": {
+          "description": "The baseline environment name or id.",
+          "examples": [
+            "environment.prod"
+          ],
           "type": "string"
         },
         "candidate": {
+          "description": "The candidate environment name or id.",
+          "examples": [
+            "environment.staging"
+          ],
           "type": "string"
         }
       },
@@ -1300,6 +2033,10 @@
         "concurrency": {
           "anyOf": [
             {
+              "description": "In-flight request cap (\u2265 1).",
+              "examples": [
+                8
+              ],
               "type": "integer",
               "minimum": 1
             },
@@ -1310,6 +2047,13 @@
           "default": null
         },
         "retry": {
+          "description": "Retry policy for transport failures.",
+          "examples": [
+            {
+              "attempts": 3,
+              "backoff": "exponential"
+            }
+          ],
           "anyOf": [
             {
               "type": "null"
@@ -1332,6 +2076,10 @@
         "attempts": {
           "anyOf": [
             {
+              "description": "Max attempts per request (\u2265 1).",
+              "examples": [
+                3
+              ],
               "type": "integer",
               "minimum": 1
             },
@@ -1342,6 +2090,10 @@
           "default": null
         },
         "backoff": {
+          "description": "How the delay grows between attempts.",
+          "examples": [
+            "exponential"
+          ],
           "anyOf": [
             {
               "enum": [
@@ -1366,6 +2118,12 @@
       "type": "object",
       "properties": {
         "tags": {
+          "description": "Only run requests carrying any of these tags.",
+          "examples": [
+            [
+              "smoke"
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1380,6 +2138,12 @@
           "default": null
         },
         "requests": {
+          "description": "Only run these request ids.",
+          "examples": [
+            [
+              "request.get-user"
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1403,6 +2167,15 @@
       "type": "object",
       "properties": {
         "formats": {
+          "description": "Reporters to write on a headless run.",
+          "examples": [
+            [
+              "junit",
+              "sarif",
+              "json",
+              "markdown"
+            ]
+          ],
           "anyOf": [
             {
               "type": "array",
@@ -1417,6 +2190,10 @@
           "default": null
         },
         "output": {
+          "description": "Directory for written report artifacts.",
+          "examples": [
+            "reports"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -1428,6 +2205,10 @@
           "default": null
         },
         "dir": {
+          "description": "Directory the replayable report archive is kept in.",
+          "examples": [
+            ".reports"
+          ],
           "anyOf": [
             {
               "type": "string"
@@ -1439,6 +2220,10 @@
           "default": null
         },
         "retention": {
+          "description": "How many saved reports to keep (newest first); null keeps all.",
+          "examples": [
+            50
+          ],
           "anyOf": [
             {
               "type": "integer"
@@ -1459,6 +2244,10 @@
       "type": "object",
       "properties": {
         "stringMatchBackstop": {
+          "description": "Forward-compat flag only \u2014 the value-match floor is always on and cannot be disabled.",
+          "examples": [
+            true
+          ],
           "anyOf": [
             {
               "type": "boolean"

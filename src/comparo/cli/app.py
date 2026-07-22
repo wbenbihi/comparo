@@ -867,14 +867,24 @@ Field names are **camelCase** (`baseUrl`, not `base_url`). The kinds:
 - **ExecutionProfile** — one run that asserts BOTH environments and diffs the pair, gated.
 - **Project** — the manifest (`comparo.yaml`): data dir, environments, concurrency.
 
-## References and secrets
+## Directives and secrets
 
-- `$use: <id>` — link to another object by its `metadata.id`.
-- `$val: <instance-id>` — inject the value of an Instance by reference.
-- `$secret: NAME` — a secret declared in the environment. **Never write a real secret
-  value in these files.** Declare it once under an Environment's `secrets` (sourced from
-  `$env` or `$file`) and reference it by name. comparo masks declared secrets everywhere.
-- `$file: path` — read a value from a file (confined to the project root).
+A **directive** is a single-key `$`-mapping. `$use` includes another object; the rest
+produce a value and resolve **anywhere** a value appears (a header, body, query, or a
+`secrets:` source):
+
+- `$use: <id>` — include another object by its `metadata.id` (a matrix, schema, or
+  diff/assertion profile). This is the structural include; `$ref` is left for JSON-Schema.
+- `$val: <instance-id>` — inject an Instance's value; `$var: NAME` — reference a variable.
+- `$secret: NAME` — reference a secret declared in the environment by name.
+- `$env: VAR` / `$file: path` / `$literal: X` — value sources (`$file` is root-confined).
+- `$from: [ ... ]` — try a list of sources in order; the first that resolves wins.
+
+**Never write a real secret value in these files.** Declare it once under an Environment's
+`secrets:` (sourced from `$env`/`$file`, e.g. `TOKEN: {$from: [{$env: T}, {$literal: dev}]}`)
+and reference it by name. Masking is keyed off the `secrets:` declaration, not the directive:
+a value is masked because it is declared secret (secret-first by name, plus an always-on
+value floor) — so declare anything sensitive.
 
 ## `${...}` interpolation (inside strings)
 
