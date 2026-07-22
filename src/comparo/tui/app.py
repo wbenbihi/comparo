@@ -1470,7 +1470,8 @@ class RunView(Vertical):
         row = Text(no_wrap=True)
         row.append(glyph, style=f"bold {colour}")
         row.append(f" {request.metadata.name}", style=f"bold {_TEXT_HI}")
-        row.append(f" {request.spec.request.method}", style=_ACCENT)
+        method = request.spec.request.method
+        row.append(f" {method}", style=_METHOD.get(method, _DIM))
         payload = ""
         for cell in cells:
             execution = self._exec.get(_run_key(request, cell))
@@ -2027,7 +2028,8 @@ class RunView(Vertical):
                     payload = _payload_label(_content_type(execution.response.headers))
         p50 = f"{sorted(latencies)[len(latencies) // 2]:.0f}ms" if latencies else "—"
         name = Text(request.metadata.name, style=_TEXT_HI)
-        name.append(f" {request.spec.request.method}", style=_ACCENT)
+        method = request.spec.request.method
+        name.append(f" {method}", style=_METHOD.get(method, _DIM))
         if payload:
             name.append(f" {payload}", style=_ACCENT if payload == "sse" else _DIM)
         if len(cells) > 1:
