@@ -162,3 +162,21 @@ def test_check_row_lines_is_the_one_row_grammar() -> None:
     assert len(check_row_lines(held)) == 1
     # the verdict box renders through the same lines — the grammar cannot fork
     assert "✗ total <= 100" in _plain(verdict_box([broken, held]))
+
+
+def test_check_row_cells_shares_the_row_mark_grammar() -> None:
+    # The DataTable costume of the verdict card must speak the ONE grammar —
+    # same glyphs/suffixes as check_row_lines, just split into three cells.
+    from comparo.tui.components import check_row_cells
+
+    broke = CheckRow("total <= 100", "broke", provenance="profile asserts.q", evidence="got 240")
+    rule, source, evidence = check_row_cells(broke)
+    assert "✗ total <= 100" in _plain(rule)
+    assert "profile asserts.q" in _plain(source)
+    assert "got 240" in _plain(evidence)
+    held = CheckRow("status == 200", "held", provenance="inline", detail="200")
+    rule, _, evidence = check_row_cells(held)
+    assert "✓ status == 200" in _plain(rule)
+    assert "200" in _plain(evidence)  # held rows show the detail, not evidence
+    warn = CheckRow("latency <= 300ms", "warn_broke", evidence="412ms")
+    assert "· warn" in _plain(check_row_cells(warn)[0])

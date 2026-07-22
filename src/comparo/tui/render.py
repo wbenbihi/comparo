@@ -1244,11 +1244,6 @@ def _payload_label(content_type: str) -> str:
     return ct.rsplit("/", 1)[-1][:6]
 
 
-def _run_value(value: object, redact: Callable[[str], str] = str) -> str:
-    """An expected/actual value as one clipped, redacted record-table cell."""
-    return _clip(redact(json.dumps(value, ensure_ascii=False, default=str)), 36)
-
-
 def _json_body(body: bytes, content_type: str) -> object | None:
     """The body parsed as JSON when it is JSON — the ``_body_into`` routing rule."""
     text = body.decode("utf-8", "replace")
@@ -1945,11 +1940,11 @@ def _diff_field(
     return Group(*parts)
 
 
-def _sv(value: object, redact: Callable[[str], str] = str) -> str:
+def _sv(value: object, redact: Callable[[str], str] = str, width: int = 60) -> str:
     # Redact BEFORE truncating, so a long secret's prefix can never survive the
-    # 60-char clip on its way to the screen.
-    rendered = redact(json.dumps(value, ensure_ascii=False))
-    return rendered if len(rendered) <= 60 else f"{rendered[:57]}..."
+    # clip on its way to the screen.
+    rendered = redact(json.dumps(value, ensure_ascii=False, default=str))
+    return rendered if len(rendered) <= width else f"{rendered[: width - 3]}..."
 
 
 def _clip(text: str, limit: int = 80) -> str:

@@ -115,6 +115,7 @@ from comparo.tui.components import StatChip
 from comparo.tui.components import TallySegment
 from comparo.tui.components import cell_glyph
 from comparo.tui.components import cell_mark
+from comparo.tui.components import check_row_cells
 from comparo.tui.components import filter_row
 from comparo.tui.components import provenance_suffix
 from comparo.tui.components import seg_pill
@@ -204,13 +205,13 @@ from comparo.tui.render import _run_check_rows
 from comparo.tui.render import _run_inspect_head
 from comparo.tui.render import _run_key
 from comparo.tui.render import _run_label
-from comparo.tui.render import _run_value
 from comparo.tui.render import _running_row_from_progress
 from comparo.tui.render import _running_table
 from comparo.tui.render import _RunningRow
 from comparo.tui.render import _save_run
 from comparo.tui.render import _seg_toggle
 from comparo.tui.render import _settings_body
+from comparo.tui.render import _sv
 from comparo.tui.render import _title
 from comparo.tui.render import drifted_event_indices
 from comparo.tui.render import raw_exchange_text
@@ -1674,9 +1675,9 @@ class RunView(Vertical):
                 expected = Text("—", style=_DIM)
                 got = Text("never evaluated", style=_DIM)
             else:
-                expected = Text(_run_value(result.expected, redact), style=_TEXT)
+                expected = Text(_sv(result.expected, redact, 36), style=_TEXT)
                 got = Text(
-                    _run_value(result.actual, redact) if result.actual is not None else "—",
+                    _sv(result.actual, redact, 36) if result.actual is not None else "—",
                     style=_DRIFT if state == "fail" else _TEXT,
                 )
             table.add_row(
@@ -1787,33 +1788,9 @@ class RunView(Vertical):
         checks.add_column("RULE", key="rule")
         checks.add_column("SOURCE", key="source")
         checks.add_column("EVIDENCE", key="evidence")
-        marks = {
-            "held": ("✓", _SAME),
-            "warn_held": ("✓", _SAME),
-            "broke": ("✗", _DRIFT),
-            "warn_broke": ("~", _WARN),
-            "error": ("!", _WARN),
-        }
         for offset, (row, _) in enumerate(rows):
-            glyph, colour = marks.get(row.state, ("·", _DIM))
-            label = Text(
-                f"{glyph} {row.label}", style=f"bold {colour}" if row.state == "broke" else colour
-            )
-            if row.state == "warn_broke":
-                label.append("  · warn", style=_DIM)
-            if row.state == "warn_held":
-                label.append("  · warn · held", style=_DIM)
-            evidence = (
-                Text(row.evidence, style=_DRIFT if row.state == "broke" else _WARN)
-                if row.evidence
-                else Text(row.detail, style=_DIM)
-            )
-            checks.add_row(
-                label,
-                Text(row.provenance, style=_DIM),
-                evidence,
-                key=f"check::{offset}",
-            )
+            # The one check-row grammar — no private glyph map here.
+            checks.add_row(*check_row_cells(row), key=f"check::{offset}")
 
     def _open_rule_record(self, ref: AssertRef) -> None:
         """Jump from a verdict-card row to that rule's record in the rules pivot."""
