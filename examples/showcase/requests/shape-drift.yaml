@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: User profile
+  id: request.shape-drift
+  description: >-
+    The shape drift, both directions at once: the candidate LOSES $.user.plan
+    (missing key) and GAINS $.user.betaFlags (extra key). Two "missing on one
+    side" rows, one per direction.
+  tags:
+    - drift
+spec:
+  request:
+    method: GET
+    endpoint: /profile
+  response:
+    status: 200

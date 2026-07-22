@@ -1,0 +1,21 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Config echo
+  id: request.outbound
+  description: >-
+    /echo-config answers identically on both sides — it just echoes the query.
+    But each environment injects its own TAX_RATE, so the responses drift at
+    $.received.taxRate because WE sent different requests: the OUTBOUND band
+    reads "we sent DIFFERENT requests", and `o` shows the config surface
+    (query · env var) responsible.
+  tags:
+    - outbound
+spec:
+  request:
+    method: GET
+    endpoint: /echo-config
+    query:
+      taxRate: ${TAX_RATE}
+  response:
+    status: 200

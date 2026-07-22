@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Service fee
+  id: request.tolerance-broken
+  description: >-
+    Tolerance BROKEN: /fees answers 12.5 vs 14.0 against the same-sized ±0.01
+    band on $.totals.fee — the delta blows through the band, so the cell
+    drifts with `12.5 → 14.0 (±0.01)`.
+  tags:
+    - pricing
+spec:
+  request:
+    method: GET
+    endpoint: /fees
+  response:
+    status: 200

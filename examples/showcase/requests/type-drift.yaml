@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Inventory count
+  id: request.type-drift
+  description: >-
+    The type drift: /inventory returns count as the number 3 on baseline and
+    the string "3" on the candidate — same rendered digits, different JSON
+    type. The field row reads `type int → str`.
+  tags:
+    - drift
+spec:
+  request:
+    method: GET
+    endpoint: /inventory
+  response:
+    status: 200

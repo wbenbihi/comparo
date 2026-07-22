@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Express lane
+  id: request.latency
+  description: >-
+    /slow-lane answers with an identical body, but the candidate sleeps 300 ms.
+    The DIFF cell stays same on the body while the call ledger shows the latency
+    regression (Δ +~300 ms); on a candidate RUN the inline warn rule
+    latency <= 150ms BREAKS as an advisory (~) that never fails the gate.
+  tags:
+    - perf
+spec:
+  request:
+    method: GET
+    endpoint: /slow-lane
+  response:
+    status: 200
+    assert:
+      rules:
+        - target: latency
+          op: lte
+          value: 150ms
+          severity: warn

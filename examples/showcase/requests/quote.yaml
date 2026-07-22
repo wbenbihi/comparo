@@ -4,9 +4,10 @@ metadata:
   name: Price quote
   id: request.quote
   description: >-
-    The flagship drift: each environment injects its own TAX_RATE into the
-    query, httpbin echoes it back, and $.args.taxRate drifts on every plan —
-    one bug across three cells. The outbound band says the drift is OURS.
+    The flagship drift, ×3 plans via matrix.plans: the candidate bumps the
+    price by 6.0 (number drift) and the taxRate from "0.20" to "0.25" (string
+    drift) on every plan — one bug across three cells, collapsed to one row in
+    the fields pivot. Its volatile $.meta.nonce is silenced by a diff rule.
   tags:
     - pricing
 spec:
@@ -14,16 +15,14 @@ spec:
     - $ref: matrix.plans
   request:
     method: GET
-    endpoint: /get
-    query:
-      taxRate: ${TAX_RATE}
+    endpoint: /quote
   response:
     status: 200
+    # Inline assert block — rules whose provenance is this request, not a profile.
     assert:
       rules:
-        - target: body:$.args.plan
+        - target: body:$.quote.plan
           op: exists
-        - target: latency
-          op: lte
-          value: 5ms
-          severity: warn    # the ~ advisory — breaks almost always, never gates
+        - target: body:$.quote.currency
+          op: equals
+          value: USD

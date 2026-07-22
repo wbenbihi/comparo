@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Schema
+metadata:
+  name: Contract (strict)
+  id: schema.contract
+  description: >-
+    Requires contract.renewsOn, which /contract never returns — the schema
+    check that FAILS (on both environments) while the status stays 200 and the
+    diff stays clean: reachable, identical, and still wrong.
+spec:
+  type: object
+  required:
+    - contract
+  properties:
+    contract:
+      type: object
+      required:
+        - id
+        - renewsOn
+      properties:
+        id:
+          type: string
+        renewsOn:
+          type: string

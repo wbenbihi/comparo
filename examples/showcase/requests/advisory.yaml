@@ -1,0 +1,24 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: SLO probe
+  id: request.advisory
+  description: >-
+    /slo sleeps 300 ms on EVERY side, so its warn rule latency <= 150ms breaks
+    no matter which environment runs it — the ~ advisory tier, visible at every
+    altitude (cell strip, summary counts, saved report) while the gate stays
+    green. The amber "attention, not failure" family.
+  tags:
+    - perf
+spec:
+  request:
+    method: GET
+    endpoint: /slo
+  response:
+    status: 200
+    assert:
+      rules:
+        - target: latency
+          op: lte
+          value: 150ms
+          severity: warn

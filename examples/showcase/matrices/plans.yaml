@@ -3,7 +3,10 @@ kind: Matrix
 metadata:
   name: Plans
   id: matrix.plans
-  description: Quote every pricing plan — three cells per quote request.
+  description: >-
+    Quote every pricing plan — three cells for the one Price quote request, so
+    the same drift appears on every plan and the fields pivot collapses it to
+    one row (one bug, not three).
 spec:
   target: request.query
   mode: merge

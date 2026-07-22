@@ -3,8 +3,9 @@ kind: Project
 metadata:
   name: results-showcase
   description: >-
-    Every state of the Diff AND Run results against public services
-    (httpbin.org, sse.dev) — no local server needed.
+    Every state of the Diff, Run, and Execution results screens, produced
+    deterministically by two local servers (python examples/showcase/serve.py,
+    ports 8091/8092). The README maps each state to the request that shows it.
 spec:
   data: .
   environments:
@@ -21,3 +22,6 @@ spec:
   diff:
     default:
       $ref: diff.showcase
+  redaction:
+    # Mask anything equal to a declared secret value, even if it arrives untainted.
+    stringMatchBackstop: true

@@ -1,0 +1,19 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: API version header
+  id: request.header-drift
+  description: >-
+    The header drift: /version's body is identical, but the candidate answers
+    with x-quote-version: 2025-01 against the baseline's 2024-08 — the drift
+    lives at $headers.x-quote-version, in the headers well. (The per-side
+    x-build-id on every response is deliberately silenced by a user rule; this
+    one is not.)
+  tags:
+    - drift
+spec:
+  request:
+    method: GET
+    endpoint: /version
+  response:
+    status: 200

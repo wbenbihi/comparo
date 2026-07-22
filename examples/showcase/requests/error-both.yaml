@@ -1,0 +1,17 @@
+apiVersion: comparo/v1
+kind: Request
+metadata:
+  name: Dead endpoint
+  id: request.error-both
+  description: >-
+    /dead truncates on BOTH sides — the both-sides error cell. ! ERROR with no
+    response to judge on either environment; every rule records "! error ·
+    never evaluated", and the verdict is ERROR, never a broken ✗.
+  tags:
+    - errors
+spec:
+  request:
+    method: GET
+    endpoint: /dead
+  response:
+    status: 200

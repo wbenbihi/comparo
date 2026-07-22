@@ -3,14 +3,26 @@ kind: Environment
 metadata:
   name: baseline
   id: environment.baseline
-  description: httpbin.org with the stable configuration.
+  description: The stable release — serve.py's :8091 side, the diff baseline.
 spec:
-  baseUrl: https://httpbin.org
+  baseUrl: http://127.0.0.1:8091
   timeout:
-    connect: 5s
-    read: 15s
+    connect: 2s
+    read: 5s
+  secrets:
+    # The redaction demo: /whoami echoes this token back in a body field and a
+    # response header, and every display sink shows •••••• instead. Sourced from
+    # the environment when present, else an obviously-fake literal so the
+    # example runs out of the box. Declared in BOTH environments so the key-set
+    # matches and the header's taint never flips.
+    SHOWCASE_TOKEN:
+      from:
+        - $env: COMPARO_SHOWCASE_TOKEN
+        - $literal: shhh-showcase-secret
   variables:
+    # The candidate flips this; /echo-config sends it in the query, so the drift
+    # there is OURS — the OUTBOUND band reads "we sent DIFFERENT requests".
     TAX_RATE: "0.20"
-    API_VERSION: 2024-08
-    STATUS: "200"
-    DELAY: "0"
+  health:
+    - method: GET
+      endpoint: /health

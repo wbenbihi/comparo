@@ -1,0 +1,22 @@
+apiVersion: comparo/v1
+kind: ExecutionProfile
+metadata:
+  name: Release gate
+  id: execution.release-gate
+  description: >-
+    The Execution tab's launchable plan: replay the pricing surface against
+    baseline AND candidate, assert both sides, and diff the pair. Six cells
+    (Price quote ×3 plans, Rounded total, Service fee, Checkout) — the gate
+    fails on the quote drift, the broken fee band, and Checkout's deliberate
+    total == 999, while Rounded total stays clean. Launch it headless with
+    `comparo exec execution.release-gate` or from the TUI.
+spec:
+  select:
+    tags:
+      - pricing
+  environments:
+    baseline: baseline
+    candidate: candidate
+  check:
+    assertions: true
+    diff: true

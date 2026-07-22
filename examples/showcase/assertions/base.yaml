@@ -1,0 +1,20 @@
+apiVersion: comparo/v1
+kind: AssertionProfile
+metadata:
+  name: JSON service contract
+  id: assert.base
+  description: >-
+    The composable base profile: a JSON content type, and a generous latency
+    advisory that always holds. assert.order pulls it in with `include`, so the
+    rules index shows composed provenance — these rows attribute to assert.base
+    even when evaluated through assert.order.
+spec:
+  rules:
+    - target: contentType
+      op: matches
+      value: application/json
+    # A warn that HELD: localhost answers far inside five seconds.
+    - target: latency
+      op: lt
+      value: 5s
+      severity: warn
