@@ -5506,7 +5506,10 @@ class ComparoApp(App[None]):
         once a project is loaded; use ``_app_redact`` at sites that tolerate none.
         """
         assert self.project is not None
-        return Redactor.for_project(self.project)
+        # best_effort: an interactive preview must never crash if a declared secret's
+        # $file is unreadable — the value was never resolvable, so never sent/echoed.
+        # Persisted sinks (save/export) fail closed via the strict default elsewhere.
+        return Redactor.for_project(self.project, best_effort=True)
 
     def _handle_exception(self, error: Exception) -> None:
         """On an unhandled crash, show a redacted report with a prefilled issue.

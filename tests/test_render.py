@@ -7,6 +7,7 @@ from rich.console import Console
 
 from comparo.core.assertions import AssertionResult
 from comparo.core.diff import State
+from comparo.core.loader import LoadedProject
 from comparo.core.report_record import FieldDiffRecord
 from comparo.tui.render import _assert_count_text
 from comparo.tui.render import _assert_tally
@@ -924,3 +925,101 @@ def test_headers_well_is_the_same_diff_component_as_the_body_well() -> None:
     assert "│" in side  # the pane separator, same as the body well
     assert "stable" in side
     assert "canary" in side
+
+
+def _showcase() -> LoadedProject:
+    from comparo.core.loader import load_project
+
+    return load_project(Path(__file__).parent.parent / "examples" / "showcase")
+
+
+def test_explorer_tree_leaves_carry_kind_glyphs() -> None:
+    """Every kind's tree leaf leads with its entity glyph, in its own color."""
+    from comparo.core.models import DiffProfile
+    from comparo.core.models import ExecutionProfile
+    from comparo.core.models import Matrix
+    from comparo.core.models import Request
+    from comparo.core.models import Schema
+    from comparo.tui.render import _leaf
+
+    project = _showcase()
+    glyphs = {Request: "◆", Matrix: "▦", Schema: "⬡", DiffProfile: "±", ExecutionProfile: "▶"}
+    for kind, glyph in glyphs.items():
+        obj = next(o for o in project.objects.values() if isinstance(o, kind))
+        assert _plain(_leaf(obj)).lstrip().startswith(glyph)
+
+
+def test_explorer_kind_legend_covers_every_kind() -> None:
+    from comparo.tui.render import _kind_legend
+
+    legend = _plain(_kind_legend())
+    for token in (
+        "● env",
+        "◆ req",
+        "◈ inst",
+        "▦ matrix",
+        "⬡ schema",
+        "± diff",
+        "⊨ assert",
+        "▶ exec",
+    ):
+        assert token in legend
+
+
+def test_explorer_matrix_detail_lists_values_and_reverse_edge() -> None:
+    from comparo.core.models import Matrix
+    from comparo.tui.render import _object_detail
+
+    project = _showcase()
+    matrix = next(o for o in project.objects.values() if isinstance(o, Matrix))
+    rendered = _plain(_object_detail(matrix, project=project))
+    assert "Values" in rendered
+    assert "?plan=" in rendered  # the merged-query column
+    assert "Attached to" in rendered
+    assert "spec.matrix $use" in rendered  # the reverse edge to the referencing request
+
+
+def test_explorer_schema_detail_shows_required_tree_and_users() -> None:
+    from comparo.core.models import Schema
+    from comparo.tui.render import _object_detail
+
+    project = _showcase()
+    schema = next(o for o in project.objects.values() if isinstance(o, Schema))
+    rendered = _plain(_object_detail(schema, project=project))
+    assert "required" in rendered
+    assert "Used by" in rendered
+
+
+def test_explorer_diff_profile_uses_mode_glyphs_and_used_by() -> None:
+    from comparo.core.models import DiffProfile
+    from comparo.tui.render import _object_detail
+
+    project = _showcase()
+    profile = next(o for o in project.objects.values() if isinstance(o, DiffProfile))
+    rendered = _plain(_object_detail(profile, project=project))
+    assert "◌" in rendered or "±" in rendered  # rules-index mode glyphs
+    assert "rules" in rendered  # the stat chips
+    assert "Used by" in rendered
+    assert "project default" in rendered  # the manifest default-diff reverse edge
+
+
+def test_explorer_execution_profile_composes_and_cli_hint() -> None:
+    from comparo.core.models import ExecutionProfile
+    from comparo.tui.render import _object_detail
+
+    project = _showcase()
+    profile = next(o for o in project.objects.values() if isinstance(o, ExecutionProfile))
+    rendered = _plain(_object_detail(profile, project=project))
+    assert "Composes" in rendered
+    assert "the pair to assert + diff" in rendered
+    assert "comparo exec" in rendered  # the equivalent CLI
+
+
+def test_explorer_edges_span_executions_and_manifest() -> None:
+    from comparo.tui.render import _edges
+
+    relations = {relation for _, relation, _ in _edges(_showcase())}
+    # requests, execution profiles, and the manifest all contribute edges now
+    assert {"matrix", "schema", "assert"} <= relations  # request-sourced
+    assert "select" in relations  # execution-sourced
+    assert "default-diff" in relations  # manifest-sourced

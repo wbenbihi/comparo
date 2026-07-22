@@ -16,6 +16,7 @@ from pathlib import Path
 from comparo.core.loader import LoadedProject
 from comparo.core.models import Environment
 from comparo.core.resolution import ExecuteSecrets
+from comparo.core.resolution import SecretError
 from comparo.core.resolution import SecretUnavailableError
 
 #: What a redacted secret becomes — the same glyph the DISPLAY sink uses.
@@ -103,8 +104,17 @@ def redact_tree(value: object, redact: Callable[[str], str], _depth: int = 0) ->
     return value
 
 
-def environment_secret_values(environment: Environment, root: Path) -> set[str]:
-    """One environment's resolved secret values (``$file`` sources confined to *root*)."""
+def environment_secret_values(
+    environment: Environment, root: Path, *, best_effort: bool = False
+) -> set[str]:
+    """One environment's resolved secret values (``$file`` sources confined to *root*).
+
+    With ``best_effort`` (the ephemeral display sink, e.g. the TUI), a declared secret
+    that cannot be read *now* is skipped rather than raised — it was never resolvable,
+    so it was never sent or echoed, and crashing an interactive UI is worse. For a
+    persisted sink (a report/archive/export) ``best_effort`` is false and the read
+    fails closed, so a secret that may have been sent is never dropped from the mask.
+    """
     values: set[str] = set()
     sources = environment.spec.secrets or {}
     secrets = ExecuteSecrets(dict(sources), root)
@@ -112,25 +122,27 @@ def environment_secret_values(environment: Environment, root: Path) -> set[str]:
         try:
             value = secrets[name]
         except SecretUnavailableError:
-            # The source is simply absent (unset $env, exhausted `from` chain): the
-            # value was never available this session, so a response cannot have
-            # echoed it. Skipping it does not shrink the mask over a live secret.
+            # The source is simply absent (unset $env, missing file, exhausted
+            # `$from`): the value was never available this session, so a response
+            # cannot have echoed it. Skipping it does not shrink the mask.
             continue
-        # Any other SecretError — an unreadable or root-escaping $file, i.e. a
-        # declared secret we cannot read *now* though it may have been sent — is
-        # fatal: fail closed rather than silently drop it from the mask and risk
-        # writing that secret to a report or the archive.
+        except SecretError:
+            # An anomalous read (an unreadable/root-escaping $file). Persisted sinks
+            # fail closed; the ephemeral display degrades rather than crash.
+            if best_effort:
+                continue
+            raise
         if value:
             values.add(value)
     return values
 
 
-def secret_values(project: LoadedProject) -> set[str]:
+def secret_values(project: LoadedProject, *, best_effort: bool = False) -> set[str]:
     """Every environment's resolved secret values (a superset masked everywhere)."""
     values: set[str] = set()
     for obj in project.objects.values():
         if isinstance(obj, Environment):
-            values |= environment_secret_values(obj, project.root)
+            values |= environment_secret_values(obj, project.root, best_effort=best_effort)
     return values
 
 
@@ -179,7 +191,7 @@ class Redactor:
         return cls(tuple(sorted(forms, key=len, reverse=True)))
 
     @classmethod
-    def for_project(cls, project: LoadedProject) -> "Redactor":
+    def for_project(cls, project: LoadedProject, *, best_effort: bool = False) -> "Redactor":
         """Build a redactor over every resolved secret value in *project*.
 
         The string-match backstop is a security *floor*: it is ALWAYS active for
@@ -188,8 +200,12 @@ class Redactor:
         ``spec.redaction.stringMatchBackstop``. The config key is accepted for
         forward-compatibility but can never turn masking off, because doing so
         would write a server-echoed secret to disk.
+
+        With ``best_effort`` (the ephemeral TUI display), a declared secret that
+        cannot be read now is skipped so the UI never crashes; persisted sinks leave
+        it false so an unreadable declared secret fails closed.
         """
-        return cls.from_values(secret_values(project))
+        return cls.from_values(secret_values(project, best_effort=best_effort))
 
     def text(self, text: str) -> str:
         """Return *text* with every known secret value replaced by the mask."""

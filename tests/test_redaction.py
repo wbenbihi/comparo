@@ -127,6 +127,15 @@ def test_redactor_fails_closed_when_a_declared_secret_file_is_unreadable(
     # redactor drops it instead of crashing the whole build.
     assert environment_secret_values(_env_with_secret({"$file": "gone.txt"}), tmp_path) == set()
 
+    # best_effort (the ephemeral TUI display) degrades even the anomalous read rather
+    # than crash — the value was never resolvable, so never sent or echoed.
+    assert (
+        environment_secret_values(
+            _env_with_secret({"$file": "blocked"}), tmp_path, best_effort=True
+        )
+        == set()
+    )
+
 
 def test_redactor_skips_an_unset_env_secret(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
