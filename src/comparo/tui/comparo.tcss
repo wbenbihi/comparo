@@ -178,26 +178,23 @@ Screen {
     color: $text-muted;
 }
 
-/* RUNNING — a compact progress line over dynamic Miller columns. */
+/* RUNNING — the shared SUMMARY bar (identical framing to Diff): a bordered
+   panel with the SUMMARY title, its border tinted by the gate. */
 #run-progress {
-    height: 1;
-    padding: 0 2;
+    height: 3;
+    padding: 0 1;
     margin: 0;
 }
 
-/* The finished strip borrows the diff summary's gate tint — one grammar. */
 #run-progress.gate-pass {
-    height: 3;
     border: round $success;
 }
 
 #run-progress.gate-fail {
-    height: 3;
     border: round $error;
 }
 
 #run-progress.gate-error {
-    height: 3;
     border: round $warning;
 }
 

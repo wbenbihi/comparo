@@ -180,3 +180,41 @@ def test_check_row_cells_shares_the_row_mark_grammar() -> None:
     assert "200" in _plain(evidence)  # held rows show the detail, not evidence
     warn = CheckRow("latency <= 300ms", "warn_broke", evidence="412ms")
     assert "· warn" in _plain(check_row_cells(warn)[0])
+
+
+def test_summary_bar_is_one_shape_for_run_and_diff() -> None:
+    # The ONE summary bar: split details (icon · count · word) → separator → id
+    # → gate pill → detail → save hint, env aligned right. Both tabs build it.
+    from comparo.tui.components import SummarySegment
+    from comparo.tui.components import summary_bar
+
+    segments = [
+        SummarySegment("✓", 4, "same", "#48a97f"),
+        SummarySegment("✗", 5, "drift", "#e0566b"),
+        SummarySegment("!", 1, "error", "#d99b3f"),
+        SummarySegment("◌", 87, "ignore", "#5c6878"),
+    ]
+    rendered = _plain(
+        summary_bar(
+            segments, "baseline A ⇄ candidate B", gate="FAIL", detail="1 also errored", save_key="s"
+        )
+    )
+    assert "✓ 4 same" in rendered  # icon BEFORE the number, then the word
+    assert "✗ 5 drift" in rendered
+    assert "◌ 87 ignore" in rendered
+    assert "│" in rendered  # the separator
+    assert "✗ FAIL" in rendered  # the gate pill
+    assert "press s to save" in rendered
+    assert "candidate B" in rendered  # the right-aligned env
+    # a RUN-style bar with an id and no ignore column, warns kept
+    run = _plain(
+        summary_bar(
+            [SummarySegment("✓", 5, "pass", "#48a97f"), SummarySegment("~", 1, "warns", "#d99b3f")],
+            "env staging",
+            ident="run 8c3e11",
+            gate="PASS",
+        )
+    )
+    assert "run 8c3e11" in run
+    assert "~ 1 warns" in run
+    assert "env staging" in run

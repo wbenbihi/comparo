@@ -203,6 +203,68 @@ def summary_strip_finished(
     return strip
 
 
+# ── the summary bar — the ONE bar RUN and DIFF share ──────────────────────────
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SummarySegment:
+    """One split-detail piece of the summary bar — ``✓ 4 same``.
+
+    The icon leads, then the count, then the word, so every tab reads the same
+    way. A zero-count segment stays (dimmed) so the shape never jumps.
+    """
+
+    icon: str
+    count: int
+    word: str
+    style: str
+
+
+def summary_bar(
+    segments: list[SummarySegment],
+    env: "Text | str" = "",
+    *,
+    ident: "Text | str" = "",
+    gate: str = "",
+    advisory: int = 0,
+    detail: str = "",
+    save_key: str = "",
+) -> RichTable:
+    """The one summary bar — RUN and DIFF build it, the host frames it.
+
+    Left cluster, in order: the split details (icon · count · word), a
+    separator, an id, the gate verdict pill, an extra detail, and the save
+    hint. Right, aligned: the environment. The host widget wears ``.panel``
+    with ``border_title = "SUMMARY"`` and a gate-tint class, so the background,
+    the SUMMARY label, and the tinted border are identical on both tabs.
+    """
+    left = Text(no_wrap=True)
+    for index, seg in enumerate(segments):
+        if index:
+            left.append(" · ", style=_DIM)
+        style = seg.style if seg.count else _DIM
+        left.append(f"{seg.icon} {seg.count} {seg.word}", style=style)
+    if ident or gate or detail or save_key:
+        left.append("   │   ", style=_DIM)
+    if ident:
+        left.append_text(Text.from_markup(ident) if isinstance(ident, str) else ident)
+        left.append(" ", style=_DIM)
+    if gate:
+        left.append_text(verdict_pill(gate, advisory=advisory))
+    if detail:
+        left.append(f"  {detail}", style=_DIM)
+    if save_key:
+        left.append("   press ", style=_DIM)
+        left.append(save_key, style=f"bold {_ACCENT}")
+        left.append(" to save", style=_DIM)
+    table = RichTable(box=None, expand=True, show_header=False, padding=0)
+    table.add_column(justify="left")
+    table.add_column(justify="right")
+    right = Text.from_markup(env) if isinstance(env, str) else env
+    table.add_row(left, right)
+    return table
+
+
 # ── verdict box ───────────────────────────────────────────────────────────────
 
 

@@ -112,7 +112,7 @@ from comparo.core.triage import silence
 from comparo.tui.components import NavEntry
 from comparo.tui.components import NavStack
 from comparo.tui.components import StatChip
-from comparo.tui.components import TallySegment
+from comparo.tui.components import SummarySegment
 from comparo.tui.components import cell_glyph
 from comparo.tui.components import cell_mark
 from comparo.tui.components import check_row_cells
@@ -121,10 +121,8 @@ from comparo.tui.components import provenance_suffix
 from comparo.tui.components import seg_pill
 from comparo.tui.components import spec_table
 from comparo.tui.components import stat_chips
-from comparo.tui.components import summary_strip_finished
-from comparo.tui.components import summary_strip_running
+from comparo.tui.components import summary_bar
 from comparo.tui.components import verdict_box_header
-from comparo.tui.components import verdict_pill
 from comparo.tui.render import _app_env
 from comparo.tui.render import _app_redact
 from comparo.tui.render import _assert_count_text
@@ -770,7 +768,7 @@ class RunView(Vertical):
                 yield Static(id="prepare-cta")
                 yield Static(id="prepare-cli", classes="cli-preview")
             with Vertical(id="running"):
-                yield Static(id="run-progress")
+                yield Static(id="run-progress", classes="panel")
                 with Horizontal(id="run-columns", classes="only-r"):
                     with Vertical(id="col-requests", classes="panel"):
                         yield Static(id="run-filter", classes="filterrow")
@@ -1981,36 +1979,40 @@ class RunView(Vertical):
         environment = self._run_env or _app_env(self)
         self._render_left_chrome("RULES" if self._pivot == "rules" else "REQUESTS")
         total, done, passed, advisory, failed, unreachable = self._cell_tally()
+        # Split details — icon · count · word, warns kept: the shared grammar.
         segments = [
-            TallySegment(passed, "✓", _SAME),
-            TallySegment(advisory, "~", _WARN),
-            TallySegment(failed, "✗", _DRIFT),
-            TallySegment(unreachable, "!", _WARN),
+            SummarySegment("✓", passed, "pass", _SAME),
+            SummarySegment("~", advisory, "warns", _WARN),
+            SummarySegment("✗", failed, "fail", _DRIFT),
+            SummarySegment("!", unreachable, "error", _WARN),
         ]
-        title = Text()
-        title.append("run ", style=_DIM)
-        title.append(self._run_id or "—", style=f"bold {_ACCENT}")
-        title.append(f"  {environment.metadata.name if environment else '—'}", style=_TEXT_HI)
+        ident = Text("run ", style=_DIM)
+        ident.append(self._run_id or "—", style=f"bold {_ACCENT}")
+        env = Text("env ", style=_DIM)
+        env.append(environment.metadata.name if environment else "—", style=f"bold {_TEXT_HI}")
         panel = self.query_one("#run-progress", Static)
+        panel.border_title = "SUMMARY"
         gate_class = ""
         if self._done:
-            # The finished costume: the same slot swaps the bar for the verdict.
             # ``unreachable`` cells are the run's errors — never counted as failed.
             gate = run_gate(failed, unreachable, total)
-            right = Text()
-            right.append_text(title)
-            right.append("   press ", style=_DIM)
-            right.append("s", style=f"bold {_ACCENT}")
-            right.append(" to save", style=_DIM)
-            strip = summary_strip_finished(gate.value, segments, right)
+            bar = summary_bar(
+                segments,
+                env,
+                ident=ident,
+                gate=gate.value,
+                advisory=advisory,
+                detail=f"{total} cells",
+                save_key="s",
+            )
             gate_class = {"PASS": "gate-pass", "FAIL": "gate-fail", "ERROR": "gate-error"}[
                 gate.value
             ]
         else:
-            strip = summary_strip_running(title, done, total, segments)
+            bar = summary_bar(segments, env, ident=ident, detail=f"{done}/{total} · running")
         for name in ("gate-pass", "gate-fail", "gate-error"):
             panel.set_class(name == gate_class, name)
-        panel.update(strip)
+        panel.update(bar)
         self.update_footer()
 
     # ── rows ─────────────────────────────────────────────────────────────────
@@ -3489,38 +3491,6 @@ class DiffView(Vertical):
             panel.update(Text("no diff pair configured", style=_WARN))
             return
         baseline, candidate = self._pair
-        bar = Table(box=None, expand=True, show_header=False, padding=0)
-        bar.add_column(justify="left")
-        bar.add_column(justify="right")
-        left = Text()
-        if self._cells:
-            same = sum(1 for c in self._cells if not c.drifted and c.error is None)
-            drift = sum(1 for c in self._cells if c.drifted)
-            errors = sum(1 for c in self._cells if c.error is not None)
-            # Tri-state axes stay colored regardless of count (bold only when live).
-            left.append(f"{same} same", style=f"bold {_SAME}")
-            left.append(" · ", style=_DIM)
-            left.append(f"{drift} drift", style=f"bold {_DRIFT}" if drift else _DRIFT)
-            left.append(" · ", style=_DIM)
-            left.append(f"{errors} error", style=f"bold {_WARN}" if errors else _WARN)
-            left.append("    │  ", style=_DIM)
-            left.append("gate ", style=_DIM)
-            # The locked precedence: FAIL when any rule broke; ERROR only when
-            # errors are the only failure — the same words the record stores.
-            gate = "FAIL" if drift else ("ERROR" if errors else "PASS")
-            left.append_text(verdict_pill(gate))
-            if gate == "FAIL":
-                noun = "drift" if drift == 1 else "drifts"
-                what = (
-                    f"{drift} untriaged {noun}" if not errors else f"{drift} drift · {errors} error"
-                )
-                left.append(f"  {what}", style=_DIM)
-            elif gate == "ERROR":
-                left.append(f"  {errors} cell(s) could not compare", style=_DIM)
-        else:
-            left.append("press ", style=_DIM)
-            left.append("x", style=f"bold {_ACCENT}")
-            left.append(" to diff the selected requests against both", style=_DIM)
         env = Text()
         env.append("baseline ", style=_DIM)
         env.append(baseline.metadata.name, style=f"bold {_TEXT_HI}")
@@ -3530,8 +3500,38 @@ class DiffView(Vertical):
         env.append(candidate.metadata.name, style=f"bold {_TEXT_HI}")
         env.append(" ●", style=_SAME)
         env.append("  ▾", style=_DIM)
-        bar.add_row(left, env)
-        panel.update(bar)
+        if not self._cells:
+            hint = Text("press ", style=_DIM)
+            hint.append("x", style=f"bold {_ACCENT}")
+            hint.append(" to diff the selected requests against both", style=_DIM)
+            table = Table(box=None, expand=True, show_header=False, padding=0)
+            table.add_column(justify="left")
+            table.add_column(justify="right")
+            table.add_row(hint, env)
+            panel.update(table)
+            return
+        same = sum(1 for c in self._cells if not c.drifted and c.error is None)
+        drift = sum(1 for c in self._cells if c.drifted)
+        errors = sum(1 for c in self._cells if c.error is not None)
+        silenced = sum(1 for c in self._cells for f in c.fields if f.state is State.SKIP)
+        segments = [
+            SummarySegment("✓", same, "same", _SAME),
+            SummarySegment("✗", drift, "drift", _DRIFT),
+            SummarySegment("!", errors, "error", _WARN),
+            SummarySegment("◌", silenced, "ignore", _SKIP),
+        ]
+        # The locked precedence: FAIL when any rule broke; ERROR only when errors
+        # are the only failure — the same words the record stores. The split
+        # details above already name the drift/error counts, so the detail slot
+        # only adds what they don't: the errors-and-drift mix, or "can't compare".
+        gate = "FAIL" if drift else ("ERROR" if errors else "PASS")
+        if gate == "FAIL" and errors:
+            detail = f"{errors} also errored"
+        elif gate == "ERROR":
+            detail = f"{errors} cell(s) could not compare"
+        else:
+            detail = ""
+        panel.update(summary_bar(segments, env, gate=gate, detail=detail, save_key="s"))
 
     def footer_keys(self) -> tuple[tuple[str, str], ...]:
         """The footer hints for the current state: PREPARE / RUNNING / RESULTS differ."""
