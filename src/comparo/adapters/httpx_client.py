@@ -95,7 +95,10 @@ class HttpxClient:
                 stream_max=timeout.stream_max,
                 total=total or None,
             )
-        except (httpx.HTTPError, httpx.InvalidURL) as error:
+        except (httpx.HTTPError, httpx.InvalidURL, UnicodeError) as error:
+            # UnicodeError: a non-UTF-8 $env value (surrogate-decoded by os.environ)
+            # in a header/URL/param can't be encoded onto the wire — fail this one
+            # request cleanly instead of letting it abort the whole run.
             message = f"{type(error).__name__}: {error}"
             raise HttpError(message) from error
         elapsed_ms = (time.perf_counter() - start) * 1000

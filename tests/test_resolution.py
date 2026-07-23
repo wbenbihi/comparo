@@ -320,7 +320,7 @@ def test_large_value_is_elided_in_display_but_sent_whole_in_execute() -> None:
     assert blob not in str(shown)  # the megabyte never reaches the renderer
     assert shown["small"] == "hi"  # small values untouched
     assert "display-only, sent whole" in str(shown["image"])  # clearly a rendering artifact
-    assert "sha256:" in str(shown["image"])
+    assert "fp:" in str(shown["image"])
     assert any(t.origin is Origin.ELIDED for t in trail)
     assert not any(t.tainted for t in trail)  # an elision marker is not a secret
 
@@ -364,3 +364,52 @@ def test_large_inline_file_is_elided_in_display(tmp_path: Path) -> None:
     (tmp_path / "blob.b64").write_text("Z" * (_DISPLAY_ELIDE_BYTES * 2), encoding="utf-8")
     shown, _ = resolve_value({"$file": "blob.b64"}, _ctx(root=tmp_path))
     assert "display-only, sent whole" in str(shown)  # a huge $file preview is elided too
+
+
+# ── round-4 hardening: $env non-string, $file FIFO/size, elision fingerprint ──
+
+
+def test_non_string_env_target_is_benign_without_reprising_the_secret(tmp_path: Path) -> None:
+    from comparo.core.resolution import SecretUnavailableError
+    from comparo.core.resolution import resolve_source
+
+    secret = "sk-live-nested"
+    with pytest.raises(SecretUnavailableError) as exc:
+        resolve_source({"$env": {"$literal": secret}}, tmp_path)
+    assert secret not in str(exc.value)  # the nested secret never lands in the error
+
+
+def test_fifo_file_is_rejected_not_hung(tmp_path: Path) -> None:
+    import os
+
+    from comparo.core.resolution import SecretError
+    from comparo.core.resolution import resolve_source
+
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)  # reading this would block forever
+    with pytest.raises(SecretError, match="not a regular file"):
+        resolve_source({"$file": "pipe"}, tmp_path)
+
+
+def test_oversized_file_is_rejected_before_it_ooms(tmp_path: Path) -> None:
+    from comparo.core.resolution import _MAX_FILE_BYTES
+    from comparo.core.resolution import SecretError
+    from comparo.core.resolution import resolve_source
+
+    big = tmp_path / "big"
+    big.write_bytes(b"x" * (_MAX_FILE_BYTES + 1))
+    with pytest.raises(SecretError, match="too large"):
+        resolve_source({"$file": "big"}, tmp_path)
+
+
+def test_elision_fingerprint_is_salted_not_a_raw_sha256() -> None:
+    import hashlib
+
+    from comparo.core.resolution import _DISPLAY_ELIDE_BYTES
+
+    blob = "Z" * (_DISPLAY_ELIDE_BYTES * 2)
+    shown, _ = resolve_value({"x": blob}, _ctx())
+    assert isinstance(shown, dict)
+    marker = str(shown["x"])
+    assert "fp:" in marker
+    assert hashlib.sha256(blob.encode()).hexdigest()[:12] not in marker  # not a bare sha256 oracle

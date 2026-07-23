@@ -23,6 +23,7 @@ import dataclasses
 import hashlib
 import os
 import re
+import stat
 from collections.abc import Callable
 from collections.abc import Mapping
 from pathlib import Path
@@ -144,6 +145,19 @@ def _file_source(relative: object, root: Path | None) -> str:
     if not path.is_relative_to(base):
         raise SecretError(f"$file path escapes the project root: {relative}")
     try:
+        info = path.stat()  # follows symlinks
+    except (FileNotFoundError, NotADirectoryError) as error:
+        raise SecretUnavailableError(f"$file not found: '{relative}'") from error
+    except OSError as error:
+        raise SecretError(f"cannot stat $file '{relative}'") from error
+    if not stat.S_ISREG(info.st_mode):
+        # A FIFO/socket/device would BLOCK forever on read; a directory is not a file.
+        # Reject before reading so a hostile source can't hang the TUI/redactor build.
+        raise SecretError(f"$file is not a regular file: '{relative}'")
+    if info.st_size > _MAX_FILE_BYTES:
+        # A multi-GB file would be slurped whole into memory (OOM); a real secret is small.
+        raise SecretError(f"$file too large ({info.st_size} bytes): '{relative}'")
+    try:
         return path.read_text(encoding="utf-8").strip()
     except (FileNotFoundError, NotADirectoryError) as error:
         # A merely-absent file is BENIGN, like an unset $env: never available this
@@ -153,6 +167,10 @@ def _file_source(relative: object, root: Path | None) -> str:
     except (OSError, ValueError, LookupError) as error:
         raise SecretError(f"cannot read $file '{relative}'") from error
 
+
+#: Cap on a ``$file`` secret's size — a real secret (token, key, cert) is small, so a
+#: multi-GB file is rejected before it is slurped into memory and OOMs the process.
+_MAX_FILE_BYTES = 16 * 1024 * 1024
 
 #: The source directives a ``secrets:`` value (or an inline ``$env``/``$file``/
 #: ``$from`` hole) may use — the allowlist for the shape diagnostic, so a malformed
@@ -164,10 +182,15 @@ _DIRECTIVE_KEYS = frozenset({"$env", "$file", "$literal", "$from"})
 #: error rather than an uncaught ``RecursionError``. Real configs nest a handful deep.
 _MAX_DEPTH = 200
 
-#: A resolved string this many bytes or larger is replaced by a hash+size marker in
-#: the DISPLAY sink, so a megabyte-scale value (a base64 blob, a generated body)
-#: never reaches the terminal renderer and freezes it. The execute sink is untouched.
+#: A resolved string this many bytes or larger is replaced by a fingerprint+size
+#: marker in the DISPLAY sink, so a megabyte-scale value (a base64 blob, a generated
+#: body) never reaches the terminal renderer and freezes it. The execute sink is untouched.
 _DISPLAY_ELIDE_BYTES = 4096
+
+#: A per-process random salt for the elision fingerprint, so the digest cannot be a
+#: precomputed / cross-session oracle to verify a guessed secret. Consistent within a
+#: process, so an in-session visual diff of two equal values still matches.
+_ELIDE_SALT = os.urandom(16)
 
 _UNITS = ("B", "KiB", "MiB", "GiB")
 
@@ -215,7 +238,12 @@ def resolve_source(
         raise SecretUnavailableError("$from nesting too deep")
     if isinstance(source, dict):
         if "$env" in source:
-            return _env_source(str(source["$env"]), env or {}), Origin.ENV
+            variable = source["$env"]
+            if not isinstance(variable, str):
+                # A nested hole (e.g. {$env: {$literal: secret}}) is malformed; never
+                # repr it — the value could be a secret — and treat it as unresolvable.
+                raise SecretUnavailableError("$env target is not a variable name")
+            return _env_source(variable, env or {}), Origin.ENV
         if "$literal" in source:
             return str(source["$literal"]), Origin.LITERAL
         if "$file" in source:
@@ -452,16 +480,16 @@ class Engine:
             self._depth -= 1
 
     def _display_elide(self, value: object, path: str) -> object:
-        """Replace a large string with a hash+size marker — display sink only.
+        """Replace a large string with a fingerprint+size marker — display sink only.
 
-        A megabyte value (a base64 blob, a generated body) would freeze the
-        terminal renderer, so the display sink shows a compact, self-describing
-        artifact instead: a size and a truncated sha256 that identifies the value
-        (equal values render identically) without revealing it — sha256 is one-way,
-        so this is safe even when the value is a declared secret. The execute sink
-        (real send, curl copy) never elides — it keeps the value whole. A declared
-        secret referenced by name is already the small mask here, so it never
-        reaches this path; only a large inline value does.
+        A megabyte value (a base64 blob, a generated body) would freeze the terminal
+        renderer, so the display sink shows a compact artifact instead: a size and a
+        short digest that identifies the value (equal values render identically) so a
+        visual diff still works. The digest is a **process-salted** sha256 — one-way
+        AND unpredictable across runs — so it cannot be a precomputed / cross-session
+        verification oracle even when the value happens to equal a declared secret.
+        The execute sink (real send, curl copy) never elides. A named secret is
+        already the small mask before this point, so only a large inline value elides.
         """
         if not self.context.mask_secrets or not isinstance(value, str):
             return value
@@ -469,9 +497,9 @@ class Engine:
         if len(raw) < _DISPLAY_ELIDE_BYTES:
             return value
         size = _human_bytes(len(raw))
-        digest = hashlib.sha256(raw).hexdigest()[:12]
-        self.trail.append(Trail(path, Origin.ELIDED, f"elided {size} · sha256:{digest}"))
-        return f"«elided · {size} · sha256:{digest} · display-only, sent whole»"
+        digest = hashlib.sha256(_ELIDE_SALT + raw).hexdigest()[:12]
+        self.trail.append(Trail(path, Origin.ELIDED, f"elided {size} · fp:{digest}"))
+        return f"«elided · {size} · fp:{digest} · display-only, sent whole»"
 
     def reference(self, sigil: str, target: object, path: str) -> object:
         """Resolve one ``{$sigil: target}`` hole at *path*, recording its trail."""

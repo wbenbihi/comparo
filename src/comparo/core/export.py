@@ -75,7 +75,13 @@ def _entry(
         "case": redact(entry.cell.key) if entry.cell.key else None,
         "method": resolved.method,
         "url": redact(resolved.url),
-        "requestHeaders": {redact(key): redact(str(value)) for key, value in resolved.headers},
+        # Credential headers (Authorization/Cookie/…) are masked by NAME too — their
+        # value may be a literal token that is not a declared secret, so the value
+        # floor alone would miss it, exactly as for the response headers below.
+        "requestHeaders": {
+            redact(str(key)): redact(mask_credential_header(str(key), str(value)))
+            for key, value in resolved.headers
+        },
         "requestBody": redact_tree(resolved.body, redact),
         "status": response.status if response else None,
         "durationMs": round(response.elapsed_ms, 1) if response else None,

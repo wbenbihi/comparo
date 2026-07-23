@@ -37,7 +37,10 @@ def save_record(directory: Path, record: ReportRecord, keep: int | None = None) 
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{record.metadata.id}.json"
     document = json.dumps(msgspec.to_builtins(record), indent=2, ensure_ascii=False)
-    path.write_text(document, encoding="utf-8")
+    # errors="replace": a non-declared value carrying non-UTF-8 bytes (a surrogate from
+    # os.environ) can't be written as UTF-8; replace it rather than crash the save with
+    # an uncaught UnicodeEncodeError. A declared secret is already masked by this point.
+    path.write_text(document, encoding="utf-8", errors="replace")
     if keep is not None:
         prune(directory, keep)
     return path

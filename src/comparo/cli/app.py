@@ -343,17 +343,20 @@ def render(
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(_EXIT_USAGE) from error
     resolved = Resolver(loaded, environment, cli_env=cli_env).resolve_request(obj)
+    redact = _redactor(loaded, cli_env=cli_env)
     # The display sink degrades an unresolved value (a required ${VAR} unset, a bad
     # cast, a $val cycle) rather than crashing; render is the command that reports it.
+    # The detail can echo the offending value (e.g. a failed cast), so redact it — a
+    # variable whose value equals a declared secret must not leak here.
     unresolved = [trail for trail in resolved.trail if trail.origin is Origin.UNRESOLVED]
     if unresolved:
         typer.secho(
-            f"could not resolve '{request_id}': {unresolved[0].detail}",
+            f"could not resolve '{request_id}': {redact(unresolved[0].detail)}",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(_EXIT_USAGE)
-    _print_resolved(resolved, environment.metadata.name, _redactor(loaded, cli_env=cli_env))
+    _print_resolved(resolved, environment.metadata.name, redact)
 
 
 @app.command(name="run")
