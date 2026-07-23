@@ -101,6 +101,7 @@ from comparo.core.report_builder import record_from_diff
 from comparo.core.report_builder import record_from_execution
 from comparo.core.report_builder import record_from_run
 from comparo.core.report_record import ReportRecord
+from comparo.core.resolution import InterpolationError
 from comparo.core.resolution import SecretError
 from comparo.core.resolve import EnvironmentSelectionError
 from comparo.core.resolve import Resolver
@@ -1090,6 +1091,11 @@ class RunView(Vertical):
             path = _save_run(self.project, environment, self._run_id, entries)
         except OSError as error:
             self.app.notify(str(error), title="Could not save", severity="error")
+            return
+        except SecretError as error:
+            # A declared secret's $file is unreadable: the strict export mask fails
+            # closed rather than write the run with a fail-open mask. Report, don't crash.
+            self.app.notify(str(error), title="Could not save run (fail closed)", severity="error")
             return
         # Also archive an assertions report so the run shows up in the Report tab.
         # Evaluate-once: the archived report gets the SAME result objects the
@@ -4593,7 +4599,7 @@ class CurlModal(ModalScreen[None]):
         """Copy the real (unmasked) curl to the clipboard."""
         try:
             command = self._curl(Sink.EXECUTE)
-        except SecretError as error:
+        except (SecretError, InterpolationError) as error:
             self.app.notify(str(error), title="Cannot copy", severity="error")
             return
         self.app.copy_to_clipboard(command)
@@ -5508,8 +5514,25 @@ class ComparoApp(App[None]):
         assert self.project is not None
         # best_effort: an interactive preview must never crash if a declared secret's
         # $file is unreadable — the value was never resolvable, so never sent/echoed.
-        # Persisted sinks (save/export) fail closed via the strict default elsewhere.
+        # Persisted sinks (save/export) fail closed via _persist_redact, NOT this one.
         return Redactor.for_project(self.project, best_effort=True)
+
+    def _persist_redact(self) -> Callable[[str], str] | None:
+        """A STRICT redactor for a persisted archive record, or ``None`` if it fails closed.
+
+        A saved report is a persisted sink, so it must not reuse the ephemeral display
+        redactor (``self.redactor``, best-effort): that one skips a declared secret it
+        could not read at build time, and if the same secret was later readable, sent,
+        and echoed, saving with it would write the echo to ``.reports`` unmasked. Build
+        a fresh strict redactor and, if a declared secret cannot be read, fail closed —
+        notify and refuse to save — rather than persist a fail-open mask.
+        """
+        assert self.project is not None
+        try:
+            return Redactor.for_project(self.project).text
+        except SecretError as error:
+            self.notify(str(error), title="Could not save report (fail closed)", severity="error")
+            return None
 
     def _handle_exception(self, error: Exception) -> None:
         """On an unhandled crash, show a redacted report with a prefilled issue.
@@ -5785,6 +5808,9 @@ class ComparoApp(App[None]):
         """Build a redacted report record for an execution, without saving it."""
         if self.project is None:
             return None
+        redact = self._persist_redact()
+        if redact is None:
+            return None
         record_id, created, tool, project, concurrency = self._record_env()
         return record_from_execution(
             profile,
@@ -5794,7 +5820,7 @@ class ComparoApp(App[None]):
             tool=tool,
             project=project,
             concurrency=concurrency,
-            redact=_app_redact(self),
+            redact=redact,
         )
 
     def save_execution_report(
@@ -5836,6 +5862,9 @@ class ComparoApp(App[None]):
         directory = self.archive_directory()
         if directory is None or self.project is None:
             return None
+        redact = self._persist_redact()
+        if redact is None:
+            return None
         record_id, created, tool, project, concurrency = self._record_env()
         record = record_from_diff(
             baseline,
@@ -5846,7 +5875,7 @@ class ComparoApp(App[None]):
             tool=tool,
             project=project,
             concurrency=concurrency,
-            redact=_app_redact(self),
+            redact=redact,
         )
         try:
             save_record(directory, record, keep=self._report_retention())
@@ -5862,6 +5891,9 @@ class ComparoApp(App[None]):
         directory = self.archive_directory()
         if directory is None or self.project is None:
             return None
+        redact = self._persist_redact()
+        if redact is None:
+            return None
         record_id, created, tool, project, concurrency = self._record_env()
         record = record_from_run(
             environment,
@@ -5871,7 +5903,7 @@ class ComparoApp(App[None]):
             tool=tool,
             project=project,
             concurrency=concurrency,
-            redact=_app_redact(self),
+            redact=redact,
         )
         try:
             save_record(directory, record, keep=self._report_retention())
