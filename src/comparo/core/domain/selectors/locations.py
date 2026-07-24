@@ -42,6 +42,7 @@ _BODY_SOURCES = frozenset({SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_
 _NATIVE_STREAM_SOURCES = frozenset(
     {
         SelectorSource.STREAM_EVENTS,
+        SelectorSource.STREAM_EVENT_DATA_JSON,
         SelectorSource.STREAM_RECORDS,
         SelectorSource.STREAM_CONTROLS,
     }
@@ -291,7 +292,8 @@ class StreamLocation(msgspec.Struct, frozen=True, kw_only=True):
     source: SelectorSource
     view_id: ViewId
     connection_segment: Count
-    record_index: Count
+    item_index: Count
+    category_index: Count
     nested_pointer: JsonPointer | None = None
     body_view: BodyViewKind | None = None
 
@@ -300,7 +302,10 @@ class StreamLocation(msgspec.Struct, frozen=True, kw_only=True):
         _require_owner_source(self.environment_execution_id, self.source)
         if type(self.view_id) is not ViewId:
             raise TypeError("stream location requires a ViewId")
-        if type(self.connection_segment) is not Count or type(self.record_index) is not Count:
+        if any(
+            type(index) is not Count
+            for index in (self.connection_segment, self.item_index, self.category_index)
+        ):
             raise TypeError("stream location indices must be Count values")
         if self.nested_pointer is not None and type(self.nested_pointer) is not JsonPointer:
             raise TypeError("nested stream pointer must be a JsonPointer")
@@ -308,6 +313,7 @@ class StreamLocation(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("stream location source is not stream compatible")
         if self.nested_pointer is not None and self.source not in {
             SelectorSource.STREAM_EVENTS,
+            SelectorSource.STREAM_EVENT_DATA_JSON,
             SelectorSource.STREAM_RECORDS,
         }:
             raise ValueError("only stream event or record locations can identify nested JSON")

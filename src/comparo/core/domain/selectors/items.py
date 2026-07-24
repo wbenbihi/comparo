@@ -16,6 +16,7 @@ from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.contracts import contract_accepts
 from comparo.core.domain.selectors.contracts import expression_accepts
+from comparo.core.domain.selectors.http_fields import HttpFieldPath
 from comparo.core.domain.selectors.model import derive_path_capabilities
 from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointerPath
@@ -42,27 +43,39 @@ class CompiledItemSelector(msgspec.Struct, frozen=True, kw_only=True):
 
     def __post_init__(self) -> None:
         """Require compatible typed input, path, output, and derived capabilities."""
-        if type(self.fingerprint) is not Fingerprint:
-            raise TypeError("item selector fingerprint must be a Fingerprint")
-        if type(self.input) is not ValueContract or type(self.output) is not ValueContract:
-            raise TypeError("item selector input and output must be ValueContract values")
-        if self.input.cardinality is not SelectorCardinality.EXACTLY_ONE:
-            raise ValueError("item selector input must describe exactly one current item")
-        if not is_selector_path(self.path):
-            raise TypeError("item selector path has an unsupported type")
-        if type(self.capabilities) is not SelectorCapabilities:
-            raise TypeError("item selector capabilities must be SelectorCapabilities")
-        if type(self.path) in {JsonPointerPath, JsonPathExpression, StaticFieldPath} and not (
-            contract_accepts(self.input, _JSON_CONTAINERS)
-        ):
-            raise ValueError("item selector paths require object or array input")
-        expected = derive_path_capabilities(self.path)
-        if self.capabilities != expected:
-            raise ValueError("item selector capabilities contradict the compiled path")
-        if self.output.cardinality is not self.capabilities.cardinality:
-            raise ValueError("item selector output cardinality contradicts its capabilities")
-        if type(self.path) is NoPath and self.output != self.input:
-            raise ValueError("NoPath item selectors must preserve their input contract")
+        _require_item_selector_components(self)
+        _require_item_selector_semantics(self)
+
+
+def _require_item_selector_components(selector: CompiledItemSelector) -> None:
+    """Validate the direct typed fields of an item selector."""
+    if type(selector.fingerprint) is not Fingerprint:
+        raise TypeError("item selector fingerprint must be a Fingerprint")
+    if type(selector.input) is not ValueContract or type(selector.output) is not ValueContract:
+        raise TypeError("item selector input and output must be ValueContract values")
+    if not is_selector_path(selector.path):
+        raise TypeError("item selector path has an unsupported type")
+    if type(selector.capabilities) is not SelectorCapabilities:
+        raise TypeError("item selector capabilities must be SelectorCapabilities")
+
+
+def _require_item_selector_semantics(selector: CompiledItemSelector) -> None:
+    """Validate path, capability, and output consistency."""
+    if selector.input.cardinality is not SelectorCardinality.EXACTLY_ONE:
+        raise ValueError("item selector input must describe exactly one current item")
+    if type(selector.path) is HttpFieldPath:
+        raise ValueError("HTTP field paths require an observation-rooted selector")
+    if type(selector.path) in {JsonPointerPath, JsonPathExpression, StaticFieldPath} and not (
+        contract_accepts(selector.input, _JSON_CONTAINERS)
+    ):
+        raise ValueError("item selector paths require object or array input")
+    expected = derive_path_capabilities(selector.path)
+    if selector.capabilities != expected:
+        raise ValueError("item selector capabilities contradict the compiled path")
+    if selector.output.cardinality is not selector.capabilities.cardinality:
+        raise ValueError("item selector output cardinality contradicts its capabilities")
+    if type(selector.path) is NoPath and selector.output != selector.input:
+        raise ValueError("NoPath item selectors must preserve their input contract")
 
 
 def is_singular_item_selector(selector: object) -> TypeGuard[CompiledItemSelector]:

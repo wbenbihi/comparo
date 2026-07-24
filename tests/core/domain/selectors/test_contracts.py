@@ -52,7 +52,6 @@ from comparo.core.domain.selectors.items import is_item_predicate
 from comparo.core.domain.selectors.items import is_singular_item_selector
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.model import derive_path_capabilities
-from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.paths import JsonPointerPath
 from comparo.core.domain.selectors.paths import NoPath
@@ -72,6 +71,7 @@ from comparo.core.domain.values import JsonInteger
 from comparo.core.domain.values import JsonNull
 from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
+from comparo.core.selection import compile_jsonpath
 
 
 def _fingerprint() -> Fingerprint:
@@ -430,11 +430,7 @@ def test_plural_item_selection_is_explicit() -> None:
     selector = CompiledItemSelector(
         fingerprint=_fingerprint(),
         input=_contract(ValueKind.ARRAY),
-        path=JsonPathExpression(
-            canonical="$[*]",
-            fingerprint=_fingerprint(),
-            capabilities=capabilities,
-        ),
+        path=compile_jsonpath("$[::-1]"),
         capabilities=capabilities,
         output=_contract(ValueKind.STRING, SelectorCardinality.ZERO_OR_MORE),
     )

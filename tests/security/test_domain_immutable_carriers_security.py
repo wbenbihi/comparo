@@ -14,7 +14,7 @@ import comparo.core.domain.expressions as expressions_module
 import comparo.core.domain.http.bodies as bodies_module
 import comparo.core.domain.http.retry_observation_validation as retry_observation_module
 import comparo.core.domain.http.timing_validation as timing_module
-import comparo.core.domain.selectors.model as selector_module
+import comparo.core.domain.selectors.selector_semantics as selector_module
 from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.http.policies import TimeoutPolicy
 from comparo.core.domain.identity import RunId
@@ -220,7 +220,7 @@ def test_semantic_lookup_tables_are_immutable_after_import() -> None:
     )
     frozen_sets = (
         bodies_module._JSON_VALUE_TYPES,
-        selector_module._BODY_SOURCES,
+        selector_module.BODY_SELECTOR_SOURCES,
         selector_module._JSON_VALUE_SOURCES,
         selector_module._SCALAR_SOURCES,
         selector_module._PLURAL_SOURCES,

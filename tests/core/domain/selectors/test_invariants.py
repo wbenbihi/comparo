@@ -22,6 +22,10 @@ from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.http.fields import CookieName
 from comparo.core.domain.http.fields import HeaderName
 from comparo.core.domain.http.fields import QueryName
+from comparo.core.domain.http.views import DecoderIdentity
+from comparo.core.domain.http.views import DecoderSpec
+from comparo.core.domain.http.views import ViewCompleteness
+from comparo.core.domain.http.views import ViewKind
 from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import EnvironmentExecutionId
@@ -36,6 +40,7 @@ from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
+from comparo.core.domain.selectors.jsonpath import JsonPathAst
 from comparo.core.domain.selectors.locations import AttemptLocation
 from comparo.core.domain.selectors.locations import BodyLocation
 from comparo.core.domain.selectors.locations import ExchangeLocation
@@ -71,6 +76,7 @@ from comparo.core.domain.selectors.results import SelectionMatch
 from comparo.core.domain.selectors.results import SelectionReady
 from comparo.core.domain.selectors.results import SelectionSourceUnavailable
 from comparo.core.domain.selectors.results import SelectionUnsupported
+from comparo.core.domain.selectors.results import SelectionViewProvenance
 from comparo.core.domain.selectors.results import SourceUnavailableReason
 from comparo.core.domain.selectors.results import is_selected_value
 from comparo.core.domain.selectors.sources import BodyViewKind
@@ -82,6 +88,7 @@ from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.values import JsonInteger
 from comparo.core.domain.values import JsonString
+from comparo.core.selection import compile_jsonpath
 from tests.core.domain.budget_origin_factories import default_budget_origin
 
 
@@ -95,6 +102,21 @@ def _field() -> StaticFieldPath:
 
 def _owner(value: int = 29) -> EnvironmentExecutionId:
     return EnvironmentExecutionId(value=UUID(int=value))
+
+
+def _json_view(location: JsonLocation) -> SelectionViewProvenance:
+    return SelectionViewProvenance(
+        view_id=location.view_id,
+        source=location.source,
+        requested=BodyViewKind.JSON,
+        decoder=DecoderSpec(
+            identity=DecoderIdentity(value="comparo.core/json@1"),
+            view=ViewKind.JSON,
+        ),
+        auto_selection=None,
+        media=None,
+        completeness=ViewCompleteness.FULL,
+    )
 
 
 def _capabilities() -> SelectorCapabilities:
@@ -129,18 +151,8 @@ def test_path_types_reject_invalid_direct_values() -> None:
         JsonPointer(value="not-rooted")
     with pytest.raises(TypeError):
         JsonPointerPath(pointer=cast("JsonPointer", ""))
-    with pytest.raises(ValueError, match="begin"):
-        JsonPathExpression(
-            canonical="users",
-            fingerprint=_fingerprint(),
-            capabilities=_capabilities(),
-        )
-    with pytest.raises(TypeError):
-        JsonPathExpression(
-            canonical="$",
-            fingerprint=cast("Fingerprint", "bad"),
-            capabilities=_capabilities(),
-        )
+    with pytest.raises(TypeError, match="JsonPathAst"):
+        JsonPathExpression(ast=cast("JsonPathAst", "bad"))
     assert is_selector_path(JsonPointerPath(pointer=JsonPointer(value="")))
     assert JsonPointer(value="/escaped~0tilde~1slash").value.endswith("slash")
     assert not is_selector_path("$")
@@ -327,24 +339,7 @@ def test_selector_source_path_view_and_capabilities_cannot_contradict() -> None:
             ),
             output=_output(SelectorCardinality.ZERO_OR_MORE),
         )
-    path_capabilities = SelectorCapabilities(
-        cardinality=SelectorCardinality.ZERO_OR_MORE,
-        access=SelectionAccess.INDEXED,
-        may_duplicate=True,
-        uses_descendant=True,
-        uses_filter=False,
-    )
-    json_path = JsonPathExpression(
-        canonical="$..id",
-        fingerprint=_fingerprint(),
-        capabilities=path_capabilities,
-    )
-    with pytest.raises(TypeError, match="JSONPath capabilities"):
-        JsonPathExpression(
-            canonical="$.id",
-            fingerprint=_fingerprint(),
-            capabilities=cast("SelectorCapabilities", "bad"),
-        )
+    json_path = compile_jsonpath("$..id")
     with pytest.raises(ValueError, match="contradict"):
         CompiledSelector(
             fingerprint=_fingerprint(),
@@ -432,7 +427,8 @@ def test_every_location_variant_is_concrete() -> None:
             source=SelectorSource.STREAM_RECORDS,
             view_id=view_id,
             connection_segment=Count(value=0),
-            record_index=Count(value=1),
+            item_index=Count(value=1),
+            category_index=Count(value=1),
             nested_pointer=JsonPointer(value="/delta"),
         ),
         ScenarioLocation(
@@ -562,7 +558,8 @@ def test_location_path_binding_rejects_narrower_or_inexact_coordinates() -> None
         source=SelectorSource.STREAM_EVENTS,
         view_id=ViewId(value=UUID(int=353)),
         connection_segment=Count(value=0),
-        record_index=Count(value=0),
+        item_index=Count(value=0),
+        category_index=Count(value=0),
         nested_pointer=pointer,
     )
     require_location_matches_selector(stream, stream_pointer_selector)
@@ -591,11 +588,7 @@ def test_location_path_binding_rejects_narrower_or_inexact_coordinates() -> None
     json_path_selector = CompiledSelector(
         fingerprint=_fingerprint(),
         source=SelectorSource.STREAM_EVENTS,
-        path=JsonPathExpression(
-            canonical="$..id",
-            fingerprint=_fingerprint(),
-            capabilities=json_path_capabilities,
-        ),
+        path=compile_jsonpath("$['id','id']"),
         capabilities=json_path_capabilities,
         output=_output(SelectorCardinality.ZERO_OR_MORE),
     )
@@ -628,11 +621,7 @@ def test_location_path_binding_rejects_narrower_or_inexact_coordinates() -> None
 
     json_path_body_selector = msgspec.structs.replace(
         whole_json_selector,
-        path=JsonPathExpression(
-            canonical="$.id",
-            fingerprint=_fingerprint(),
-            capabilities=plural,
-        ),
+        path=compile_jsonpath("$[*]"),
         capabilities=plural,
         output=_output(SelectorCardinality.ZERO_OR_MORE),
     )
@@ -804,7 +793,8 @@ def test_location_direct_construction_rejects_invalid_coordinates() -> None:
             source=SelectorSource.STREAM_RECORDS,
             view_id=cast("ViewId", "bad"),
             connection_segment=Count(value=0),
-            record_index=Count(value=0),
+            item_index=Count(value=0),
+            category_index=Count(value=0),
         )
     with pytest.raises(TypeError, match="indices"):
         StreamLocation(
@@ -812,7 +802,8 @@ def test_location_direct_construction_rejects_invalid_coordinates() -> None:
             source=SelectorSource.STREAM_RECORDS,
             view_id=ViewId(value=UUID(int=422)),
             connection_segment=cast("Count", 0),
-            record_index=Count(value=0),
+            item_index=Count(value=0),
+            category_index=Count(value=0),
         )
     with pytest.raises(TypeError, match="nested"):
         StreamLocation(
@@ -820,7 +811,8 @@ def test_location_direct_construction_rejects_invalid_coordinates() -> None:
             source=SelectorSource.STREAM_RECORDS,
             view_id=ViewId(value=UUID(int=423)),
             connection_segment=Count(value=0),
-            record_index=Count(value=0),
+            item_index=Count(value=0),
+            category_index=Count(value=0),
             nested_pointer=cast("JsonPointer", "bad"),
         )
 
@@ -965,7 +957,8 @@ def test_location_variants_reject_contradictory_sources_and_coordinates() -> Non
         source=SelectorSource.STREAM_RECORDS,
         view_id=view_id,
         connection_segment=Count(value=0),
-        record_index=Count(value=0),
+        item_index=Count(value=0),
+        category_index=Count(value=0),
     )
     with pytest.raises(ValueError, match="not stream compatible"):
         msgspec.structs.replace(stream, source=SelectorSource.RESPONSE_BODY)
@@ -1042,7 +1035,8 @@ def test_location_accessors_are_total_only_for_concrete_locations() -> None:
         source=SelectorSource.STREAM_RECORDS,
         view_id=view_id,
         connection_segment=Count(value=0),
-        record_index=Count(value=0),
+        item_index=Count(value=0),
+        category_index=Count(value=0),
     )
     assert location_body_view(json) is BodyViewKind.JSON
     assert location_body_view(view) is BodyViewKind.TEXT
@@ -1112,20 +1106,18 @@ def test_selection_result_variants_remain_distinct_and_validate_payloads() -> No
         resource=BudgetResource.JSON_NODES,
         stage=BudgetStage.DECODING,
     )
-    with pytest.raises(ValueError, match="selection stage"):
-        SelectionBudgetExceeded(
-            exhaustion=BudgetExceeded(
-                budget=decoding_budget,
-                attempted=Count(value=9),
-                effect=BudgetExhaustionEffect.EVALUATION_INCOMPLETE,
-            ),
-        )
+    decoding_exhaustion = BudgetExceeded(
+        budget=decoding_budget,
+        attempted=Count(value=9),
+        effect=BudgetExhaustionEffect.EVALUATION_INCOMPLETE,
+    )
+    assert SelectionBudgetExceeded(exhaustion=decoding_exhaustion).exhaustion == decoding_exhaustion
     evaluation_budget = msgspec.structs.replace(
         budget,
         resource=BudgetResource.DERIVED_VALUES,
         stage=BudgetStage.EVALUATION,
     )
-    with pytest.raises(ValueError, match="selection stage"):
+    with pytest.raises(ValueError, match="decoding or selection"):
         SelectionBudgetExceeded(
             exhaustion=BudgetExceeded(
                 budget=evaluation_budget,
@@ -1178,6 +1170,7 @@ def test_selection_matches_reject_invalid_public_and_sensitive_values() -> None:
         selector=selector,
         environment_execution_id=location.environment_execution_id,
         matches=(match,),
+        views=(_json_view(location),),
     ).matches == (match,)
     with pytest.raises(ValueError, match="cannot repeat a location"):
         SelectionReady(
@@ -1190,6 +1183,7 @@ def test_selection_matches_reject_invalid_public_and_sensitive_values() -> None:
             selector=selector,
             environment_execution_id=EnvironmentExecutionId(value=UUID(int=999)),
             matches=(match,),
+            views=(_json_view(location),),
         )
     duplicate_capabilities = SelectorCapabilities(
         cardinality=SelectorCardinality.ZERO_OR_MORE,
@@ -1201,11 +1195,7 @@ def test_selection_matches_reject_invalid_public_and_sensitive_values() -> None:
     duplicate_selector = CompiledSelector(
         fingerprint=_fingerprint(),
         source=SelectorSource.RESPONSE_BODY,
-        path=JsonPathExpression(
-            canonical="$..value",
-            fingerprint=_fingerprint(),
-            capabilities=duplicate_capabilities,
-        ),
+        path=compile_jsonpath("$['value','value']"),
         capabilities=duplicate_capabilities,
         output=_output(SelectorCardinality.ZERO_OR_MORE),
         body_view=BodyViewKind.JSON,
@@ -1216,6 +1206,7 @@ def test_selection_matches_reject_invalid_public_and_sensitive_values() -> None:
                 selector=duplicate_selector,
                 environment_execution_id=location.environment_execution_id,
                 matches=(match, match),
+                views=(_json_view(location),),
             ).matches
         )
         == 2

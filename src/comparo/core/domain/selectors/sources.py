@@ -36,6 +36,7 @@ class SelectorSource(DomainStrEnum):
     RESPONSE_ENDPOINT = "response.endpoint"
     RESPONSE_TLS = "response.tls"
     STREAM_EVENTS = "stream.events"
+    STREAM_EVENT_DATA_JSON = "stream.events.data-json"
     STREAM_RECORDS = "stream.records"
     STREAM_CONTROLS = "stream.controls"
     STREAM_TERMINATION = "stream.termination"

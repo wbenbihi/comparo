@@ -65,7 +65,6 @@ from comparo.core.domain.selectors.items import ItemEqualityPredicate
 from comparo.core.domain.selectors.items import ItemPredicateIdentity
 from comparo.core.domain.selectors.items import ItemPredicateKind
 from comparo.core.domain.selectors.model import CompiledSelector
-from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.paths import SelectorPath
@@ -75,6 +74,7 @@ from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonInteger
 from comparo.core.domain.values import JsonString
+from comparo.core.selection import compile_jsonpath
 
 
 def _fingerprint() -> Fingerprint:
@@ -110,15 +110,7 @@ def _selector(
     return CompiledSelector(
         fingerprint=_fingerprint(),
         source=source,
-        path=(
-            JsonPathExpression(
-                canonical="$[*]",
-                fingerprint=_fingerprint(),
-                capabilities=capabilities,
-            )
-            if plural
-            else NoPath()
-        ),
+        path=(compile_jsonpath("$[*]") if plural else NoPath()),
         capabilities=capabilities,
         output=_contract(kind, cardinality),
     )
@@ -138,14 +130,7 @@ def _item(
             uses_filter=False,
         )
         path: SelectorPath
-        if input_kind is output_kind:
-            path = NoPath()
-        else:
-            path = JsonPathExpression(
-                canonical="$.value",
-                fingerprint=_fingerprint(),
-                capabilities=capabilities,
-            )
+        path = NoPath() if input_kind is output_kind else compile_jsonpath("$")
     else:
         capabilities = SelectorCapabilities(
             cardinality=cardinality,
@@ -154,11 +139,7 @@ def _item(
             uses_descendant=False,
             uses_filter=False,
         )
-        path = JsonPathExpression(
-            canonical="$[*]",
-            fingerprint=_fingerprint(),
-            capabilities=capabilities,
-        )
+        path = compile_jsonpath("$[::-1]")
     return CompiledItemSelector(
         fingerprint=_fingerprint(),
         input=_contract(input_kind, SelectorCardinality.EXACTLY_ONE),

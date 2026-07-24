@@ -8,6 +8,10 @@ import msgspec
 import pytest
 
 from comparo.core.domain.diagnostics import DiagnosticCode
+from comparo.core.domain.http.views import DecoderIdentity
+from comparo.core.domain.http.views import DecoderSpec
+from comparo.core.domain.http.views import ViewCompleteness
+from comparo.core.domain.http.views import ViewKind
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import ViewId
 from comparo.core.domain.primitives import Fingerprint
@@ -16,13 +20,13 @@ from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.locations import JsonLocation
 from comparo.core.domain.selectors.model import CompiledSelector
-from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.paths import JsonPointerPath
 from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.results import SelectionDecodeFailure
 from comparo.core.domain.selectors.results import SelectionMatch
 from comparo.core.domain.selectors.results import SelectionReady
+from comparo.core.domain.selectors.results import SelectionViewProvenance
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectionAccess
 from comparo.core.domain.selectors.sources import SelectorCapabilities
@@ -33,6 +37,7 @@ from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.values import JsonInteger
 from comparo.core.domain.values import JsonString
+from comparo.core.selection import compile_jsonpath
 
 
 def _fingerprint() -> Fingerprint:
@@ -79,25 +84,29 @@ def _json_pointer_selector(pointer: JsonPointer) -> CompiledSelector:
     )
 
 
+def _json_view(location: JsonLocation) -> SelectionViewProvenance:
+    return SelectionViewProvenance(
+        view_id=location.view_id,
+        source=location.source,
+        requested=BodyViewKind.JSON,
+        decoder=DecoderSpec(
+            identity=DecoderIdentity(value="comparo.core/json@1"),
+            view=ViewKind.JSON,
+        ),
+        auto_selection=None,
+        media=None,
+        completeness=ViewCompleteness.FULL,
+    )
+
+
 def test_json_pointer_rejects_ambiguous_escapes() -> None:
     with pytest.raises(ValueError, match="escape"):
         JsonPointer(value="/users/~2")
 
 
 def test_jsonpath_retains_compiled_identity_and_capabilities() -> None:
-    capabilities = SelectorCapabilities(
-        cardinality=SelectorCardinality.ZERO_OR_MORE,
-        access=SelectionAccess.INDEXED,
-        may_duplicate=True,
-        uses_descendant=False,
-        uses_filter=False,
-        function_dependencies=("count",),
-    )
-    path = JsonPathExpression(
-        canonical="$.users[*].id",
-        fingerprint=_fingerprint(),
-        capabilities=capabilities,
-    )
+    path = compile_jsonpath("$.users[*].id")
+    capabilities = path.capabilities
     selector = CompiledSelector(
         fingerprint=_fingerprint(),
         source=SelectorSource.RESPONSE_BODY,
@@ -182,6 +191,7 @@ def test_sensitive_match_propagates_taint_and_fails_closed_at_serialization() ->
                 selector=_json_pointer_selector(location.pointer),
                 environment_execution_id=location.environment_execution_id,
                 matches=(match,),
+                views=(_json_view(location),),
             )
         )
     assert secret not in str(captured.value)

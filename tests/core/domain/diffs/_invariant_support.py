@@ -44,7 +44,6 @@ from comparo.core.domain.selectors.items import ItemPredicateIdentity
 from comparo.core.domain.selectors.items import ItemPredicateKind
 from comparo.core.domain.selectors.locations import ExchangeLocation
 from comparo.core.domain.selectors.model import CompiledSelector
-from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.paths import JsonPointerPath
 from comparo.core.domain.selectors.paths import NoPath
@@ -55,6 +54,7 @@ from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonString
+from comparo.core.selection import compile_jsonpath
 
 
 def _fingerprint() -> Fingerprint:
@@ -177,11 +177,7 @@ def _item_selector(
         uses_descendant=False,
         uses_filter=False,
     )
-    path = JsonPathExpression(
-        canonical="$.value",
-        fingerprint=_fingerprint(),
-        capabilities=capabilities,
-    )
+    path = compile_jsonpath("$")
     return CompiledItemSelector(
         fingerprint=_fingerprint(),
         input=ValueContract(
@@ -228,11 +224,7 @@ def _plural_item_selector() -> CompiledItemSelector:
         uses_descendant=False,
         uses_filter=False,
     )
-    path = JsonPathExpression(
-        canonical="$[*]",
-        fingerprint=_fingerprint(),
-        capabilities=capabilities,
-    )
+    path = compile_jsonpath("$[::-1]")
     return CompiledItemSelector(
         fingerprint=_fingerprint(),
         input=ValueContract(
