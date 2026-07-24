@@ -23,23 +23,13 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "msgspec>=0.19.0",
-  "ruamel.yaml>=0.18.0",
-  "httpx>=0.28.0",
-  "httpx-sse>=0.4.0",
-  "typer>=0.15.0",
-  "textual>=0.86.0",
-  "jsonschema>=4.23.0",
-  "packaging>=24.0",
+  "msgspec>=0.21.1",
 ]
 
 [project.urls]
 Homepage = "https://github.com/wbenbihi/comparo"
 Repository = "https://github.com/wbenbihi/comparo"
 Issues = "https://github.com/wbenbihi/comparo/issues"
-
-[project.scripts]
-comparo = "comparo.cli.app:run"
 
 [dependency-groups]
 dev = [
@@ -50,7 +40,6 @@ dev = [
   "import-linter>=2.1.0",
   "pre-commit>=4.0.0",
   "python-semantic-release>=9.15.0",
-  "types-jsonschema>=4.23.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -122,26 +111,26 @@ branch = true
 show_missing = true
 skip_covered = true
 
-# ── Architecture guard: core must not import interfaces/adapters ─────────────
+# ── Architecture guards ───────────────────────────────────────────────
 [tool.importlinter]
 root_package = "comparo"
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "Interfaces and adapters may depend on core; core depends on neither"
-type = "layers"
-layers = [
-  "comparo.cli",
-  "comparo.tui",
-  "comparo.adapters",
-  "comparo.core",
-]
-
-[[tool.importlinter.contracts]]
-name = "Core must not import an HTTP library directly"
+name = "The domain must not import adapter frameworks"
 type = "forbidden"
-source_modules = ["comparo.core"]
-forbidden_modules = ["httpx", "requests", "aiohttp", "urllib3", "httpcore"]
+source_modules = ["comparo.core.domain"]
+forbidden_modules = [
+  "aiohttp",
+  "httpcore",
+  "httpx",
+  "jsonschema",
+  "requests",
+  "ruamel",
+  "textual",
+  "typer",
+  "urllib3",
+]
 
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
