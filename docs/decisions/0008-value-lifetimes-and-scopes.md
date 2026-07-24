@@ -75,3 +75,11 @@ than resolved secret contents.
 - Long-running TUI sessions do not accidentally reuse values or secrets from an earlier run.
 - A baseline capture cannot enter a candidate request through a scope override.
 - Source failures do not trigger inconsistent fallback choices across uses in the same scope.
+
+## Implementation status
+
+Implemented in Step 6 on 2026-07-24. `RunContext`, the scope projector, single-flight provider
+caches, deterministic generator, explicit conversion service, and live sensitive-value registry
+enforce this decision. The public `$generate` syntax and Scenario `$step` capture provider remain
+deferred; their internal scope and provider seams are present without freezing an external plugin
+contract. See [Run-scoped values and secrets](../run-scoped-values.md).

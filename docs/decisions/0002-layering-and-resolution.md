@@ -298,12 +298,14 @@ Cycles are compile errors; JSON Schema recursion through `$ref` is separate. A V
 at the receiving runtime scope, so environment and future generated values retain their declared
 semantics.
 
-Future built-in directive names such as `$matrix`, `$generate`, `$step`, `$select`, `$transform`,
-`$patch`, and `$provider` fail as unsupported capabilities until implemented rather than passing
-as data. A future configuration version may define `$provider` dispatch with a namespaced,
-versioned ID, but ADR 0015 defines no public provider/plugin contract yet. ExecutionPolicy controls
-any such future availability. Shell execution, a general expression language, implicit network
-retrieval, and unregistered global directives are outside the value language.
+`$matrix` is implemented as a cell-scoped lookup into the exact Matrix bindings carried by the
+planned cell. Future built-in directive names such as `$generate`, `$step`, `$select`,
+`$transform`, `$patch`, and `$provider` fail as unsupported capabilities until implemented rather
+than passing as data. A future configuration version may define `$provider` dispatch with a
+namespaced, versioned ID, but ADR 0015 defines no public provider/plugin contract yet.
+ExecutionPolicy controls any such future availability. Shell execution, a general expression
+language, implicit network retrieval, and unregistered global directives are outside the value
+language.
 
 Generated values use an explicit scope. A run or cell value is created once and reused wherever
 that scope applies, including across compared Environments and repeated trials. Trial-,

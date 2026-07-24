@@ -25,6 +25,7 @@ networking, persistence, CLI, and TUI concerns are adapters around that core.
 - [Shared selector language](https://github.com/wbenbihi/comparo/blob/main/docs/selector-language.md)
 - [Versioned configuration compiler](https://github.com/wbenbihi/comparo/blob/main/docs/configuration-compiler.md)
 - [Deterministic run planner](https://github.com/wbenbihi/comparo/blob/main/docs/run-planner.md)
+- [Run-scoped values and secrets](https://github.com/wbenbihi/comparo/blob/main/docs/run-scoped-values.md)
 - [Accepted architecture decisions](https://github.com/wbenbihi/comparo/blob/main/docs/decisions/README.md)
 
 The canonical product promise, security boundary, configuration model, HTTP semantics, assertion

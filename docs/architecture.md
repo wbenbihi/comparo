@@ -1,9 +1,9 @@
 # Architecture
 
 Comparo is being rebuilt from a pure, immutable domain center outward. The current public source
-tree implements **Steps 1 through 5**: the internal language, shared selector and evaluation
-kernels, versioned configuration compiler, and deterministic admitted run planner. It is not yet a
-runnable CLI or TUI.
+tree implements **Steps 1 through 6**: the internal language, shared selector and evaluation
+kernels, versioned configuration compiler, deterministic admitted run planner, and run-scoped
+value/secrets boundary. It is not yet a runnable CLI or TUI.
 
 The accepted destination and implementation order are recorded in the
 [core refactor roadmap](core-refactor-roadmap.md). The exact Step 1 boundary is recorded in the
@@ -11,8 +11,9 @@ The accepted destination and implementation order are recorded in the
 [selector language](selector-language.md), and the evaluator boundary in the
 [pure evaluation kernel](core-evaluation-kernel.md). The external-language boundary is documented
 in the [versioned configuration compiler](configuration-compiler.md), and the planning boundary in
-the [deterministic run planner](run-planner.md). Product decisions live in the [architecture
-decision index](decisions/README.md).
+the [deterministic run planner](run-planner.md), and the live value boundary in
+[run-scoped values and secrets](run-scoped-values.md). Product decisions live in the
+[architecture decision index](decisions/README.md).
 
 ## Current package layout
 
@@ -37,6 +38,7 @@ src/comparo/
     ├── evaluation/       shared deterministic fact identity and strict value semantics
     ├── gates/            pure value-free release-policy reducer
     ├── planning/         pure precedence binding, Matrix planning, and admission
+    ├── resolution/       run-owned scopes, provider ports, caches, taint, and conversion
     └── selection/        pure parser, compiler, snapshot, evaluator, and accounting kernel
 ```
 
@@ -62,7 +64,8 @@ versioned configuration frontend
   -> CLI / TUI / CI reporters
 ```
 
-The domain, pure evaluation kernels, versioned compiler, and planner exist today. Domain modules
+The domain, pure evaluation kernels, versioned compiler, planner, and run-scoped resolver exist
+today. Domain modules
 cannot import adapter frameworks, HTTP client libraries, YAML or schema libraries, CLI/TUI
 frameworks, filesystem APIs,
 networking APIs, serialization helpers, ambient environment access, clocks, randomness, or task
@@ -70,7 +73,9 @@ schedulers. Architecture tests also enforce acyclic internal imports, frozen/fin
 `msgspec.Struct` records, closed field types, immutable module constants, secret-safe containers,
 and cohesive module size. The core compiler cannot import the filesystem/YAML adapter, version
 frontends remain independent of canonical compiler stages, and planning cannot import adapters,
-ambient state, schedulers, clocks, or randomness.
+ambient state, schedulers, clocks, or randomness. Resolution may coordinate async work, but it
+uses injected file, external-value, generation, YAML-decoder, and clock ports; its dependency
+allowlist rejects ambient environment, filesystem, network, parser, and adapter imports.
 
 Selection accepts a closed immutable snapshot containing an observation and values already
 resolved by storage adapters. It performs no I/O or decoding. Its explicit import allowlist,
@@ -87,8 +92,11 @@ stricter AST-enforced dependency allowlists and cohesion limits.
 The compiler consumes neutral source-located documents and emits an exact `CompiledProject` with
 linked references and unresolved typed expressions. The planner consumes that graph plus typed
 invocation and external authority, then emits a compact `RunPlan` with exact cardinality, budget
-provenance, stable identity, and a secret-free fingerprint. Later resolution and runtime stages
-must consume these products rather than reinterpreting YAML or recomputing precedence.
+provenance, stable identity, and a secret-free fingerprint. Resolution consumes the prepared run,
+immutable Environment/Matrix snapshots, and injected effects. It evaluates expressions without
+reinterpreting YAML or recomputing precedence, caches exact source/scope reads, and returns closed
+typed outcomes with value-free provenance. The later runtime must consume these products rather
+than rebuild them.
 
 ## Domain responsibilities
 
@@ -124,7 +132,9 @@ complete immutable intent, effective policy authority, plan or runtime coordinat
 separate secret-egress, mutation, or delegated-DNS approvals. Canonical resource exhaustion binds
 the exact dimension, derivation, effect, and concrete scope.
 
-Live observations are not persistence artifacts. A future explicit sanitization boundary will
+The run-scoped sensitivity registry now retains every sealed resolution result, and
+`resolve_for_wire` pairs a value with a sanitizer snapshot that already contains its taint. Live
+observations are still not persistence artifacts. Step 9's explicit sanitization boundary will
 compile them into a versioned `RunArtifact`; reporters must consume that safe artifact rather than
 serializing live domain graphs.
 

@@ -239,6 +239,10 @@ Exit criteria:
 
 ## Step 6: run-scoped values and secrets
 
+Status: completed on 2026-07-24. The implemented scope lattice, provider boundary, caching,
+conversion, generation, and sensitivity lifecycle are documented in
+[Run-scoped values and secrets](run-scoped-values.md).
+
 Introduce explicit scopes:
 
 ```text
@@ -252,11 +256,11 @@ fallback chains, secret managers, deterministic generators, and later scenario c
 
 Exit criteria:
 
-- A source is read at most once per declared scope.
-- A value sent on the wire is registered in the same snapshot used for sanitization.
-- Cell-scoped generated values are reused across compared environments.
-- Resolution errors identify their source location without printing sensitive data.
-- Secret-source rotation and concurrent resolution have regression tests.
+- A source is read at most once per declared scope: complete.
+- A value sent on the wire is registered in the same snapshot used for sanitization: complete.
+- Cell-scoped generated values are reused across compared environments: complete.
+- Resolution errors identify their source location without printing sensitive data: complete.
+- Secret-source rotation and concurrent resolution have regression tests: complete.
 
 ## Step 7: runtime with a fake transport
 

@@ -178,8 +178,8 @@ a project and errors.
 
 A successful `CompiledProject` contains one Project plus canonically ordered resources. It has no
 YAML backend nodes, directive mappings, unlinked resource strings, arbitrary operation names, or
-filesystem paths. Runtime value sources remain typed expression nodes because Step 6 resolves
-them at the correct run scope.
+filesystem paths. Runtime value sources remain typed expression nodes and Step 6 resolves them at
+the correct run scope without re-reading configuration.
 
 Static execution fields required before resolution include subject and Environment topology,
 Matrix attachments, positive trial and maximum-attempt counts, and typed planning-budget maps.
