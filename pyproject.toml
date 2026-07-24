@@ -271,6 +271,28 @@ forbidden_modules = [
   "yaml",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Run-scoped resolution must use injected effects"
+type = "forbidden"
+source_modules = ["comparo.core.resolution"]
+forbidden_modules = [
+  "comparo.configuration",
+  "aiohttp",
+  "httpcore",
+  "httpx",
+  "os",
+  "pathlib",
+  "random",
+  "requests",
+  "ruamel",
+  "secrets",
+  "textual",
+  "time",
+  "typer",
+  "urllib3",
+  "yaml",
+]
+
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

@@ -9,28 +9,14 @@ from collections.abc import Coroutine
 from typing import Any
 from typing import cast
 
-from comparo.core.domain.expression_types import ConversionType
-from comparo.core.domain.expression_types import InterpolationMode
-from comparo.core.domain.expressions import ArrayExpr
-from comparo.core.domain.expressions import ConvertExpr
-from comparo.core.domain.expressions import ExpressionSegment
-from comparo.core.domain.expressions import FallbackExpr
 from comparo.core.domain.expressions import FileExpr
-from comparo.core.domain.expressions import InterpolationExpr
-from comparo.core.domain.expressions import LiteralExpr
-from comparo.core.domain.expressions import LiteralTextSegment
 from comparo.core.domain.expressions import LookupExpr
-from comparo.core.domain.expressions import ObjectExpr
-from comparo.core.domain.expressions import OptionalExpr
-from comparo.core.domain.expressions import SensitiveLiteralExpr
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.domain.provenance import ResolutionSource
-from comparo.core.domain.provenance import ResolutionStep
-from comparo.core.domain.provenance import ValueProviderIdentity
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.scopes import RuntimeScope
 from comparo.core.domain.scopes import run_scope_of
@@ -41,30 +27,16 @@ from comparo.core.domain.sensitivity import is_sensitive_value
 from comparo.core.domain.sensitivity import stable_taint_origin_union
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
-from comparo.core.domain.values import Blocked
-from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import Error
-from comparo.core.domain.values import JsonArray
-from comparo.core.domain.values import JsonObject
-from comparo.core.domain.values import JsonObjectMember
 from comparo.core.domain.values import JsonString
-from comparo.core.domain.values import JsonValue
-from comparo.core.domain.values import Missing
 from comparo.core.domain.values import Present
 from comparo.core.domain.values import ResolutionErrorCode
-from comparo.core.domain.values import ResolutionResult
 from comparo.core.domain.values import ResolvedValue
-from comparo.core.domain.values import Unavailable
-from comparo.core.domain.values import UnavailableReason
-from comparo.core.domain.values import is_json_value
 from comparo.core.planning.models import DefinitionHandle
 from comparo.core.planning.models import PreparedRun
 from comparo.core.planning.models import is_definition_handle
 from comparo.core.resolution.cache import SingleFlightCache
 from comparo.core.resolution.control import RunCancellation
-from comparo.core.resolution.conversions import ConversionError
-from comparo.core.resolution.conversions import convert
-from comparo.core.resolution.conversions import trim_bytes
 from comparo.core.resolution.generation import DeterministicGenerator
 from comparo.core.resolution.models import CellInputs
 from comparo.core.resolution.models import EnvironmentSnapshot
@@ -86,23 +58,18 @@ from comparo.core.resolution.ports import ExternalValueProvider
 from comparo.core.resolution.ports import FileValueProvider
 from comparo.core.resolution.ports import GeneratedValueProvider
 from comparo.core.resolution.ports import RunClock
-from comparo.core.resolution.provenance import COMPOSITE_PROVIDER
-from comparo.core.resolution.provenance import CONVERSION_PROVIDER
 from comparo.core.resolution.provenance import ENV_PROVIDER
-from comparo.core.resolution.provenance import FALLBACK_PROVIDER
-from comparo.core.resolution.provenance import INTERPOLATION_PROVIDER
-from comparo.core.resolution.provenance import LITERAL_PROVIDER
 from comparo.core.resolution.provenance import MATRIX_PROVIDER
 from comparo.core.resolution.provenance import NAMESPACE_PROVIDER
-from comparo.core.resolution.provenance import OPTIONAL_PROVIDER
-from comparo.core.resolution.provenance import SENSITIVE_LITERAL_PROVIDER
 from comparo.core.resolution.provenance import blocked
 from comparo.core.resolution.provenance import error
-from comparo.core.resolution.provenance import missing
 from comparo.core.resolution.provenance import present
 from comparo.core.resolution.provenance import resolution_source
 from comparo.core.resolution.provenance import unavailable
 from comparo.core.resolution.registry import SensitiveValueRegistry
+from comparo.core.resolution.resolver import ExpressionResolver
+from comparo.core.resolution.resolver import LookupToken
+from comparo.core.resolution.resolver import ResolutionResultT
 from comparo.core.resolution.scopes import concrete_scope
 from comparo.core.resolution.scopes import environment_scope
 from comparo.core.resolution.snapshots import environment_snapshot
@@ -111,8 +78,8 @@ from comparo.core.resolution.snapshots import namespace_binding
 from comparo.core.resolution.snapshots import validate_environment_snapshots
 
 _ACCESS = SensitiveValueAccess(purpose="value-resolution")
-type _Result = ResolutionResult[ResolvedValue]
-type _LookupToken = tuple[ValueNamespace, SymbolPath, RuntimeScope]
+type _Result = ResolutionResultT
+type _LookupToken = LookupToken
 type _FileKey = tuple[FileExpr, RuntimeScope]
 type _ExternalKey = tuple[ExternalProviderSource, RuntimeScope]
 type _GenerationKey = tuple[GenerationSpec, RuntimeScope]
@@ -133,6 +100,7 @@ class RunContext:
         "_generator",
         "_prepared",
         "_registry",
+        "_resolver",
         "_run",
         "_safety",
         "_secure_generator",
@@ -175,6 +143,7 @@ class RunContext:
         self._safety = safety
         self._cancellation = RunCancellation()
         self._registry = SensitiveValueRegistry(self._run)
+        self._resolver = ExpressionResolver(self)
         self._file_cache: SingleFlightCache[_FileKey, ProviderOutcome] = SingleFlightCache()
         self._external_cache: SingleFlightCache[_ExternalKey, ProviderOutcome] = SingleFlightCache()
         self._generation_cache: SingleFlightCache[_GenerationKey, ProviderOutcome] = (
@@ -195,7 +164,7 @@ class RunContext:
     async def resolve(self, expression: ValueExpression, target: ResolutionTarget) -> _Result:
         """Resolve an expression without permitting ambient state or inferred conversion."""
         self._validate_call(expression, target)
-        return await self._resolve(expression, target, ())
+        return await self._resolver.resolve(expression, target)
 
     async def resolve_for_wire(
         self,
@@ -354,60 +323,31 @@ class RunContext:
         del exc_info
         await self.close()
 
-    async def _resolve(  # noqa: C901 - exhaustive dispatch over the closed expression union
-        self,
-        expression: ValueExpression,
-        target: ResolutionTarget,
-        stack: tuple[_LookupToken, ...],
-    ) -> _Result:
-        result: _Result
-        if self._cancellation.cancelled:
-            result = self._terminal_error(
-                expression,
-                target,
-                ResolutionErrorCode.CANCELLED,
-                NAMESPACE_PROVIDER,
-            )
-        elif type(expression) is LiteralExpr:
-            result = self._terminal_present(expression, target, expression.value, LITERAL_PROVIDER)
-        elif type(expression) is SensitiveLiteralExpr:
-            result = self._terminal_present(
-                expression,
-                target,
-                cast("SensitiveValue[ResolvedValue]", expression.value),
-                SENSITIVE_LITERAL_PROVIDER,
-            )
-        elif type(expression) is LookupExpr:
-            result = await self._lookup(expression, target, stack)
-        elif type(expression) is FileExpr:
-            result = await self._file(expression, target, stack)
-        elif type(expression) is FallbackExpr:
-            result = await self._fallback(expression, target, stack)
-        elif type(expression) is OptionalExpr:
-            result = await self._optional(expression, target, stack)
-        elif type(expression) is ConvertExpr:
-            result = await self._conversion(expression, target, stack)
-        elif type(expression) is ArrayExpr:
-            result = await self._array(expression, target, stack)
-        elif type(expression) is ObjectExpr:
-            result = await self._object(expression, target, stack)
-        else:
-            result = await self._interpolation(expression, target, stack)
-        if type(result) is Present:
-            await self._registry.register(result, symbol=target.symbol, scope=target.scope)
-        return result
+    @property
+    def resolution_cancelled(self) -> bool:
+        """Expose cancellation to the provider-independent expression resolver."""
+        return self._cancellation.cancelled
 
-    async def _lookup(
+    async def register_resolution(
+        self,
+        result: Present[ResolvedValue],
+        target: ResolutionTarget,
+    ) -> None:
+        """Retain one resolved sensitive value until this run closes."""
+        await self._registry.register(result, symbol=target.symbol, scope=target.scope)
+
+    async def resolve_lookup(
         self,
         expression: LookupExpr,
         target: ResolutionTarget,
         stack: tuple[_LookupToken, ...],
     ) -> _Result:
+        """Resolve one namespace dependency against this run's immutable snapshots."""
         dependency = expression.dependency
         token = (dependency.namespace, dependency.symbol, target.scope)
         provider = NAMESPACE_PROVIDER
         if token in stack:
-            return self._terminal_error(expression, target, ResolutionErrorCode.CYCLE, provider)
+            return self._resolver.error(expression, target, ResolutionErrorCode.CYCLE, provider)
         if dependency.namespace is ValueNamespace.ENV:
             return await self._environment_lookup(expression, target)
         if dependency.namespace is ValueNamespace.MATRIX:
@@ -415,7 +355,7 @@ class RunContext:
             found = matrix_binding(target.cell_inputs, dependency.symbol)
             production_scope = concrete_scope(dependency.available_at, target.scope)
             if found is None or production_scope is None:
-                return self._terminal_unavailable(expression, target, provider)
+                return self._resolver.unavailable(expression, target, provider)
             bound_expression, _ = found
         elif dependency.namespace in {
             ValueNamespace.VARIABLES,
@@ -429,23 +369,23 @@ class RunContext:
                 target.scope,
             )
             if found_binding is None:
-                return self._terminal_unavailable(expression, target, provider)
+                return self._resolver.unavailable(expression, target, provider)
             bound_expression = found_binding.expression
             production_scope = found_binding.production_scope
         else:
-            return self._terminal_unavailable(expression, target, provider)
+            return self._resolver.unavailable(expression, target, provider)
         source_target = ResolutionTarget(
             symbol=dependency.symbol,
             scope=production_scope,
             namespace=dependency.namespace,
             cell_inputs=_scope_cell_inputs(target, production_scope),
         )
-        resolved = await self._resolve(bound_expression, source_target, (*stack, token))
+        resolved = await self._resolver.resolve(bound_expression, source_target, (*stack, token))
         if type(resolved) is Present:
             value = resolved.value
             if dependency.namespace is ValueNamespace.SECRETS:
                 value = _sensitive(value, _taint_origin("secret", dependency.symbol))
-            return self._terminal_present(expression, target, value, provider)
+            return self._resolver.present(expression, target, value, provider)
         return resolved
 
     async def _environment_lookup(
@@ -455,7 +395,7 @@ class RunContext:
     ) -> _Result:
         environment = environment_scope(target.scope)
         if environment is None:
-            return self._terminal_error(
+            return self._resolver.error(
                 expression,
                 target,
                 ResolutionErrorCode.INVALID_SOURCE,
@@ -467,8 +407,8 @@ class RunContext:
             None,
         )
         if entry is None:
-            return self._terminal_unavailable(expression, target, snapshot.provider)
-        return self._terminal_present(
+            return self._resolver.unavailable(expression, target, snapshot.provider)
+        return self._resolver.present(
             expression,
             target,
             entry.value,
@@ -476,19 +416,20 @@ class RunContext:
             environment,
         )
 
-    async def _file(
+    async def resolve_file(
         self,
         expression: FileExpr,
         target: ResolutionTarget,
         stack: tuple[_LookupToken, ...],
     ) -> _Result:
-        path_result = await self._resolve(expression.path, target, stack)
+        """Resolve one policy-bound file expression through the injected adapter."""
+        path_result = await self._resolver.resolve(expression.path, target, stack)
         if type(path_result) is not Present:
             return path_result
         path = path_result.value
         if is_sensitive_value(path):
             if path.payload_type is not JsonString:
-                return self._terminal_error(
+                return self._resolver.error(
                     expression, target, ResolutionErrorCode.INVALID_SOURCE, NAMESPACE_PROVIDER
                 )
             typed_path: JsonString | SensitiveValue[JsonString] = cast(
@@ -497,12 +438,12 @@ class RunContext:
         elif type(path) is JsonString:
             typed_path = path
         else:
-            return self._terminal_error(
+            return self._resolver.error(
                 expression, target, ResolutionErrorCode.INVALID_SOURCE, NAMESPACE_PROVIDER
             )
         provider = self._file_provider
         if provider is None:
-            return self._terminal_error(
+            return self._resolver.error(
                 expression, target, ResolutionErrorCode.INVALID_SOURCE, NAMESPACE_PROVIDER
             )
         request = FileReadRequest(
@@ -537,192 +478,12 @@ class RunContext:
         )
         if type(result) is not Present or expression.conversion is None:
             return result
-        return self._convert_result(
+        return self._resolver.convert_result(
             result,
             expression.conversion,
             expression,
             target,
             provider.identity,
-        )
-
-    async def _fallback(
-        self,
-        expression: FallbackExpr,
-        target: ResolutionTarget,
-        stack: tuple[_LookupToken, ...],
-    ) -> _Result:
-        attempts: list[ResolutionStep] = []
-        for source_expression in expression.sources:
-            result = await self._resolve(source_expression, target, stack)
-            if type(result) is Unavailable:
-                attempts.extend(result.provenance.steps)
-                continue
-            return _prepend_unavailable(result, tuple(attempts), target)
-        source = self._expression_source(expression, target, FALLBACK_PROVIDER)
-        return unavailable(
-            UnavailableReason.NOT_PROVIDED,
-            symbol=target.symbol,
-            scope=target.scope,
-            source=source,
-            namespace=target.namespace,
-            unavailable_steps=tuple(attempts),
-        )
-
-    async def _optional(
-        self,
-        expression: OptionalExpr,
-        target: ResolutionTarget,
-        stack: tuple[_LookupToken, ...],
-    ) -> _Result:
-        result = await self._resolve(expression.source, target, stack)
-        if type(result) is not Unavailable:
-            return result
-        return missing(
-            symbol=target.symbol,
-            scope=target.scope,
-            source=self._expression_source(expression, target, OPTIONAL_PROVIDER),
-            namespace=target.namespace,
-            unavailable_steps=result.provenance.steps,
-        )
-
-    async def _conversion(
-        self,
-        expression: ConvertExpr,
-        target: ResolutionTarget,
-        stack: tuple[_LookupToken, ...],
-    ) -> _Result:
-        result = await self._resolve(expression.source, target, stack)
-        if type(result) is not Present:
-            return result
-        return self._convert_result(
-            result,
-            expression.target,
-            expression,
-            target,
-            CONVERSION_PROVIDER,
-        )
-
-    async def _array(
-        self,
-        expression: ArrayExpr,
-        target: ResolutionTarget,
-        stack: tuple[_LookupToken, ...],
-    ) -> _Result:
-        values: list[JsonValue] = []
-        origins: tuple[TaintOriginId, ...] = ()
-        for index, item in enumerate(expression.items):
-            child = _child_target(target, f"item-{index}")
-            result = await self._resolve(item, child, stack)
-            if type(result) is not Present:
-                return result
-            value, item_origins = _revealed(result.value)
-            if not is_json_value(value):
-                return self._terminal_error(
-                    expression, target, ResolutionErrorCode.CONVERSION_FAILED, COMPOSITE_PROVIDER
-                )
-            values.append(value)
-            origins = stable_taint_origin_union(origins, item_origins)
-        array = JsonArray(items=tuple(values))
-        return self._terminal_present(
-            expression,
-            target,
-            _with_origins(array, origins),
-            COMPOSITE_PROVIDER,
-        )
-
-    async def _object(
-        self,
-        expression: ObjectExpr,
-        target: ResolutionTarget,
-        stack: tuple[_LookupToken, ...],
-    ) -> _Result:
-        members: list[JsonObjectMember] = []
-        origins: tuple[TaintOriginId, ...] = ()
-        for member in expression.members:
-            child = _child_target(target, member.name)
-            result = await self._resolve(member.expression, child, stack)
-            if type(result) is Missing:
-                continue
-            if type(result) is not Present:
-                return result
-            value, item_origins = _revealed(result.value)
-            if not is_json_value(value):
-                return self._terminal_error(
-                    expression, target, ResolutionErrorCode.CONVERSION_FAILED, COMPOSITE_PROVIDER
-                )
-            members.append(JsonObjectMember(name=member.name, value=value))
-            origins = stable_taint_origin_union(origins, item_origins)
-        value = JsonObject(members=tuple(members))
-        return self._terminal_present(
-            expression,
-            target,
-            _with_origins(value, origins),
-            COMPOSITE_PROVIDER,
-        )
-
-    async def _interpolation(
-        self,
-        expression: InterpolationExpr,
-        target: ResolutionTarget,
-        stack: tuple[_LookupToken, ...],
-    ) -> _Result:
-        if expression.mode is InterpolationMode.WHOLE_VALUE:
-            whole_segment = cast("ExpressionSegment", expression.segments[0])
-            result = await self._resolve(whole_segment.expression, target, stack)
-            if type(result) is not Present:
-                return result
-            return self._terminal_present(expression, target, result.value, INTERPOLATION_PROVIDER)
-        parts: list[str] = []
-        origins: tuple[TaintOriginId, ...] = ()
-        for current_segment in expression.segments:
-            if type(current_segment) is LiteralTextSegment:
-                parts.append(current_segment.value)
-                continue
-            result = await self._resolve(current_segment.expression, target, stack)
-            if type(result) is not Present:
-                return result
-            value, item_origins = _revealed(result.value)
-            try:
-                rendered = convert(value, ConversionType.STRING)
-            except ConversionError:
-                return self._terminal_error(
-                    expression,
-                    target,
-                    ResolutionErrorCode.CONVERSION_FAILED,
-                    INTERPOLATION_PROVIDER,
-                )
-            parts.append(cast("JsonString", rendered).value)
-            origins = stable_taint_origin_union(origins, item_origins)
-        text = JsonString(value="".join(parts))
-        return self._terminal_present(
-            expression,
-            target,
-            _with_origins(text, origins),
-            INTERPOLATION_PROVIDER,
-        )
-
-    def _convert_result(
-        self,
-        result: Present[ResolvedValue],
-        target_type: ConversionType,
-        expression: ValueExpression,
-        target: ResolutionTarget,
-        provider: ValueProviderIdentity,
-    ) -> _Result:
-        value, origins = _revealed(result.value)
-        if type(expression) is FileExpr and type(value) is BytesValue:
-            value = trim_bytes(value, expression.trim)
-        try:
-            converted = convert(value, target_type)
-        except ConversionError:
-            return self._terminal_error(
-                expression, target, ResolutionErrorCode.CONVERSION_FAILED, provider
-            )
-        return self._terminal_present(
-            expression,
-            target,
-            _with_origins(converted, origins),
-            provider,
         )
 
     async def _provider_call[KeyT](
@@ -800,54 +561,6 @@ class RunContext:
             namespace=target.namespace,
         )
 
-    def _terminal_present(
-        self,
-        expression: ValueExpression,
-        target: ResolutionTarget,
-        value: ResolvedValue | SensitiveValue[ResolvedValue],
-        provider: ValueProviderIdentity,
-        production_scope: RuntimeScope | None = None,
-    ) -> Present[ResolvedValue]:
-        if target.namespace is ValueNamespace.SECRETS and not is_sensitive_value(value):
-            value = SensitiveValue(
-                cast("ResolvedValue", value),
-                origins=(_taint_origin("secret", target.symbol),),
-            )
-        return present(
-            value,
-            symbol=target.symbol,
-            scope=target.scope,
-            source=self._expression_source(expression, target, provider, production_scope),
-            namespace=target.namespace,
-        )
-
-    def _terminal_unavailable(
-        self,
-        expression: ValueExpression,
-        target: ResolutionTarget,
-        provider: ValueProviderIdentity,
-    ) -> Unavailable:
-        return unavailable(
-            UnavailableReason.NOT_DEFINED,
-            symbol=target.symbol,
-            scope=target.scope,
-            source=self._expression_source(expression, target, provider),
-            namespace=target.namespace,
-        )
-
-    def _terminal_error(
-        self,
-        expression: ValueExpression,
-        target: ResolutionTarget,
-        code: ResolutionErrorCode,
-        provider: ValueProviderIdentity,
-    ) -> Error:
-        return self._error_for_source(
-            source=self._expression_source(expression, target, provider),
-            target=target,
-            code=code,
-        )
-
     def _error_for_source(
         self,
         *,
@@ -860,21 +573,6 @@ class RunContext:
             symbol=target.symbol,
             scope=target.scope,
             source=source,
-            namespace=target.namespace,
-        )
-
-    @staticmethod
-    def _expression_source(
-        expression: ValueExpression,
-        target: ResolutionTarget,
-        provider: ValueProviderIdentity,
-        production_scope: RuntimeScope | None = None,
-    ) -> ResolutionSource:
-        return resolution_source(
-            symbol=target.symbol,
-            provider=provider,
-            configuration=expression.provenance,
-            scope=production_scope or target.scope,
             namespace=target.namespace,
         )
 
@@ -900,15 +598,6 @@ def _validate_provider_collection(providers: tuple[ExternalValueProvider, ...]) 
         raise ValueError("external provider identities must be unique")
 
 
-def _child_target(target: ResolutionTarget, segment: str) -> ResolutionTarget:
-    return ResolutionTarget(
-        symbol=SymbolPath(segments=(*target.symbol.segments, segment)),
-        scope=target.scope,
-        namespace=target.namespace,
-        cell_inputs=target.cell_inputs,
-    )
-
-
 def _scope_cell_inputs(
     target: ResolutionTarget,
     scope: RuntimeScope,
@@ -922,23 +611,6 @@ def _scope_cell_inputs(
         ).cell_inputs
     except ValueError:
         return None
-
-
-def _revealed(
-    value: ResolvedValue | SensitiveValue[ResolvedValue],
-) -> tuple[ResolvedValue, tuple[TaintOriginId, ...]]:
-    if is_sensitive_value(value):
-        return cast("ResolvedValue", value.reveal(access=_ACCESS)), value.origins
-    return cast("ResolvedValue", value), ()
-
-
-def _with_origins(
-    value: ResolvedValue,
-    origins: tuple[TaintOriginId, ...],
-) -> ResolvedValue | SensitiveValue[ResolvedValue]:
-    if not origins:
-        return value
-    return SensitiveValue(value, origins=origins)
 
 
 def _sensitive(
@@ -957,48 +629,3 @@ def _sensitive(
 def _taint_origin(prefix: str, symbol: SymbolPath) -> TaintOriginId:
     digest = hashlib.sha256(".".join(symbol.segments).encode()).hexdigest()[:24]
     return TaintOriginId(value=f"{prefix}/{digest}")
-
-
-def _prepend_unavailable(
-    result: Present[ResolvedValue] | Missing | Error | Blocked,
-    steps: tuple[ResolutionStep, ...],
-    target: ResolutionTarget,
-) -> _Result:
-    if not steps:
-        return result
-    terminal = result.provenance.steps[-1].source
-    namespace = target.namespace
-    if type(result) is Present:
-        return present(
-            result.value,
-            symbol=target.symbol,
-            scope=target.scope,
-            source=terminal,
-            namespace=namespace,
-            unavailable_steps=steps,
-        )
-    if type(result) is Missing:
-        return missing(
-            symbol=target.symbol,
-            scope=target.scope,
-            source=terminal,
-            namespace=namespace,
-            unavailable_steps=steps,
-        )
-    if type(result) is Error:
-        return error(
-            result.code,
-            symbol=target.symbol,
-            scope=target.scope,
-            source=terminal,
-            namespace=namespace,
-            unavailable_steps=steps,
-        )
-    return blocked(
-        result.code,
-        symbol=target.symbol,
-        scope=target.scope,
-        source=terminal,
-        namespace=namespace,
-        unavailable_steps=steps,
-    )
