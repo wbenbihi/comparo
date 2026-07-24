@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "comparo"
 version = "0.2.0"
-description = "HTTP regression & diff testing across environments — TUI, headless CLI, and CI."
+description = "Typed core domain contracts for HTTP regression and diff testing across environments."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
@@ -24,7 +24,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "msgspec>=0.21.1",
+  "msgspec>=0.21.1,<1",
 ]
 
 [project.urls]
@@ -34,6 +34,7 @@ Issues = "https://github.com/wbenbihi/comparo/issues"
 
 [dependency-groups]
 dev = [
+  "hatchling==1.27.0",
   "hypothesis>=6.135.0",
   "ruff>=0.9.0",
   "mypy>=1.14.0",
@@ -41,11 +42,54 @@ dev = [
   "pytest-cov>=6.0.0",
   "import-linter>=2.1.0",
   "pre-commit>=4.0.0",
-  "python-semantic-release>=9.15.0",
+  "python-semantic-release==10.6.1",
+]
+
+[tool.hatch.build]
+# Defense in depth for both wheels and source distributions. VCS ignore rules remove known local
+# state; release verification compares concrete archive members with the reviewed Git index.
+ignore-vcs = false
+exclude = [
+  "/**/__pycache__",
+  "/**/*.py[cod]",
+  "/**/.env*",
+  "/**/*.pem",
+  "/**/*.key",
+  "/**/*.p12",
+  "/**/*.pfx",
+  "/**/*.credentials",
+  "/**/*-secret.*",
+  "/**/.claude/**",
+  "/**/.codex/**",
+  "/**/.agents/**",
+  "/**/.hypothesis/**",
+  "/**/.pytest_cache/**",
+  "/**/.mypy_cache/**",
+  "/**/.ruff_cache/**",
+  "/**/.coverage*",
+  "/**/htmlcov/**",
+  "/**/reports/**",
+  "/**/.reports/**",
+  "/**/runs/**",
+  "/**/internal*/**",
+  "/**/*deprecated*/**",
+  "/**/*.ignore.*",
+  "/**/*.deprecated.*",
+  "/.gitignore",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/comparo"]
+
+[tool.hatch.build.targets.sdist]
+# The sdist is an installation artifact, not a repository snapshot. Tests, working documentation,
+# editor state, agent state, and deprecated sources are deliberately absent.
+include = [
+  "/src/comparo",
+  "/README.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
 
 # ── Lint & format ───────────────────────────────────────────────────────────
 [tool.ruff]
@@ -153,7 +197,7 @@ forbidden_modules = [
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 commit_parser = "conventional"
-build_command = "pip install uv && uv build"
+build_command = "uv lock --upgrade-package comparo && git add uv.lock && uv build"
 # Pre-1.0: keep every release in the 0.x line. allow_zero_version keeps 0.x
 # versions (never forcing a 1.0.0 minimum), and major_on_zero = false means even
 # a breaking change bumps the minor (0.x -> 0.(x+1)) instead of leaping to 1.0.0

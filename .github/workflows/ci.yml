@@ -14,15 +14,16 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: "3.13"
+          version: "0.11.21"
 
       - name: Sync dependencies
         run: uv sync --frozen
@@ -43,25 +44,36 @@ jobs:
         run: uv run --frozen lint-imports
 
       - name: Tests
-        run: uv run --frozen pytest --cov --cov-report=term-missing
+        run: uv run --frozen python -m pytest --cov --cov-report=term-missing
 
       - name: Build distributions
         run: uv build
 
+      - name: Verify distribution members
+        run: >-
+          uv run --frozen python -m tests.architecture.distribution_members
+          dist/comparo-*.tar.gz dist/comparo-*.whl
+
+      - name: Verify distribution integrity
+        run: |
+          gzip --test dist/comparo-*.tar.gz
+          unzip -t dist/comparo-*.whl
+
   compatibility:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: ${{ matrix.python-version }}
+          version: "0.11.21"
 
       - name: Run compatibility tests
-        run: uv run --frozen pytest
+        run: uv run --frozen python -m pytest
