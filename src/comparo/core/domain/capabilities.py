@@ -10,6 +10,7 @@ import msgspec
 
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.provenance import ProvenanceEntry
+from comparo.core.domain.provenance import ProvenanceKind
 
 _TOKEN_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
 
@@ -47,6 +48,8 @@ class CapabilityId(msgspec.Struct, frozen=True, kw_only=True):
             or not self.version.isdigit()
         ):
             raise ValueError("capability version must be an ASCII decimal version")
+        if int(self.version) < 1:
+            raise ValueError("capability version must be positive")
 
 
 @final
@@ -127,13 +130,15 @@ class CapabilityDenialReason(StrEnum):
 
 
 def _validate_authority_chain(authority: tuple[ProvenanceEntry, ...]) -> None:
-    """Require immutable, non-empty, value-free policy provenance."""
+    """Require immutable, non-empty, externally owned policy provenance."""
     if type(authority) is not tuple:
         raise TypeError("capability authority must be an immutable tuple")
     if not authority:
         raise ValueError("capability authority must not be empty")
     if any(type(entry) is not ProvenanceEntry for entry in authority):
         raise TypeError("capability authority must contain ProvenanceEntry values")
+    if not any(entry.kind is ProvenanceKind.EXECUTION_POLICY for entry in authority):
+        raise ValueError("final capability authority must include an ExecutionPolicy")
 
 
 @final

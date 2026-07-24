@@ -49,6 +49,7 @@ def _request() -> CapabilityRequest:
         ("Bad", "request", "1"),
         ("comparo", "bad_name", "1"),
         ("comparo", "request", "v1"),
+        ("comparo", "request", "0"),
         ("comparo", "request", chr(0x661)),
         ("comparo", "request", 1),
     ],
@@ -150,6 +151,11 @@ def test_capability_decisions_validate_request_reason_and_authority() -> None:
         CapabilityGranted(request=request, authority=list(_authority()))  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="ProvenanceEntry"):
         CapabilityGranted(request=request, authority=("policy",))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="ExecutionPolicy"):
+        CapabilityGranted(
+            request=request,
+            authority=(ProvenanceEntry(kind=ProvenanceKind.PROJECT),),
+        )
     with pytest.raises(TypeError, match="CapabilityRequest"):
         CapabilityDenied(
             request="request",  # type: ignore[arg-type]
