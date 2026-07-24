@@ -111,6 +111,8 @@ def test_operator_identity_and_configuration_reject_invalid_direct_values() -> N
         ContainsOperator(mode=ContainsMode.ONE, expected=(_literal(), _literal(2)))
     with pytest.raises(ValueError, match="unique"):
         KeySetOperator(relation=KeySetRelation.HAS, keys=("id", "id"))
+    with pytest.raises(ValueError, match="exactly one"):
+        KeySetOperator(relation=KeySetRelation.HAS, keys=("id", "name"))
     with pytest.raises(ValueError, match="non-empty"):
         _regex(pattern="")
 

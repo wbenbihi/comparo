@@ -42,7 +42,7 @@ def test_assertion_result_branches_reject_nondecisive_or_contradictory_outcomes(
     assert type(_assertion_fact(rule=rule, outcome=error, counts=error_counts).outcome) is (
         AssertionError
     )
-    with pytest.raises(ValueError, match="non-error"):
+    with pytest.raises(ValueError, match="satisfied outcome"):
         _assertion_fact(rule=rule, outcome=Satisfied(), counts=error_counts)
     with pytest.raises(ValueError, match="at least one match error"):
         _assertion_fact(
@@ -80,6 +80,53 @@ def test_assertion_result_branches_reject_nondecisive_or_contradictory_outcomes(
                 errors=Count(value=0),
             ),
         )
+
+
+def test_decisive_match_outcomes_override_nondecisive_match_errors() -> None:
+    base = _compiled_rule()
+    cases = (
+        (
+            Quantifier.ANY,
+            Satisfied(),
+            AssertionCounts(
+                selected=Count(value=2),
+                evaluated=Count(value=2),
+                satisfied=Count(value=1),
+                violated=Count(value=0),
+                errors=Count(value=1),
+            ),
+        ),
+        (
+            Quantifier.ALL,
+            Violated(reason=ViolationReason.PREDICATE),
+            AssertionCounts(
+                selected=Count(value=2),
+                evaluated=Count(value=2),
+                satisfied=Count(value=0),
+                violated=Count(value=1),
+                errors=Count(value=1),
+            ),
+        ),
+        (
+            Quantifier.NONE,
+            Violated(reason=ViolationReason.PREDICATE),
+            AssertionCounts(
+                selected=Count(value=2),
+                evaluated=Count(value=2),
+                satisfied=Count(value=1),
+                violated=Count(value=0),
+                errors=Count(value=1),
+            ),
+        ),
+    )
+
+    for quantifier, outcome, counts in cases:
+        fact = _assertion_fact(
+            rule=msgspec.structs.replace(base, quantifier=quantifier),
+            outcome=outcome,
+            counts=counts,
+        )
+        assert fact.outcome == outcome
 
 
 def test_cardinality_result_branches_cover_exact_and_bounded_contracts() -> None:

@@ -53,6 +53,10 @@ class SchemaOperator(msgspec.Struct, frozen=True, kw_only=True):
 
     schema: CompiledSchema
     default_dialect: NamedCapabilityTarget
+    validator: NamedCapabilityTarget = NamedCapabilityTarget(
+        kind=CapabilityTargetKind.PROVIDER,
+        identifier="comparo.core.jsonschema@1",
+    )
     assert_formats: bool = False
 
     def __post_init__(self) -> None:
@@ -67,6 +71,11 @@ class SchemaOperator(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("schema default dialect must be an exact public schema-source URL")
         if type(self.assert_formats) is not bool:
             raise TypeError("schema format behavior must be a bool")
+        if (
+            type(self.validator) is not NamedCapabilityTarget
+            or self.validator.kind is not CapabilityTargetKind.PROVIDER
+        ):
+            raise ValueError("schema validator must be an exact provider identity")
 
 
 @final

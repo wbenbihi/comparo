@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
+import msgspec
 import pytest
 
+from comparo.core.domain.assertions.extended_operators import DecodeOperator
 from comparo.core.domain.assertions.operators import AssertionOperatorIdentity
 from comparo.core.domain.assertions.operators import AssertionOperatorKind
 from comparo.core.domain.assertions.operators import EqualityOperator
@@ -41,12 +43,17 @@ from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.model import CompiledSelector
+from comparo.core.domain.selectors.paths import JsonPointer
+from comparo.core.domain.selectors.paths import JsonPointerPath
 from comparo.core.domain.selectors.paths import NoPath
+from comparo.core.domain.selectors.selector_semantics import derive_selector_capabilities
+from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectionAccess
 from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonInteger
+from tests.core.domain.assertions._invariant_support import _evidence_exhaustion
 
 
 def _fingerprint() -> Fingerprint:
@@ -135,6 +142,52 @@ def test_compiled_rule_rejects_mismatched_operator_identity() -> None:
         )
 
 
+def test_decode_rule_is_bound_to_its_exact_whole_body_view() -> None:
+    path = NoPath()
+    capabilities = derive_selector_capabilities(SelectorSource.RESPONSE_BODY, path)
+    selector = CompiledSelector(
+        fingerprint=_fingerprint(),
+        source=SelectorSource.RESPONSE_BODY,
+        path=path,
+        capabilities=capabilities,
+        output=ValueContract(
+            kinds=(ValueKind.UNKNOWN,),
+            cardinality=capabilities.cardinality,
+        ),
+        body_view=BodyViewKind.JSON,
+    )
+    operator = DecodeOperator(view=BodyViewKind.JSON)
+    decode = msgspec.structs.replace(
+        _compiled_rule(),
+        selector=selector,
+        operator_id=_operator_id(AssertionOperatorKind.DECODES_AS),
+        operator=operator,
+        quantifier=None,
+    )
+
+    assert decode.operator == operator
+    with pytest.raises(ValueError, match="body selector"):
+        msgspec.structs.replace(decode, selector=_selector())
+    with pytest.raises(ValueError, match="view must match"):
+        msgspec.structs.replace(decode, operator=DecodeOperator(view=BodyViewKind.AUTO))
+
+    nested_path = JsonPointerPath(pointer=JsonPointer(value="/id"))
+    nested_capabilities = derive_selector_capabilities(SelectorSource.RESPONSE_BODY, nested_path)
+    nested = CompiledSelector(
+        fingerprint=_fingerprint(),
+        source=SelectorSource.RESPONSE_BODY,
+        path=nested_path,
+        capabilities=nested_capabilities,
+        output=ValueContract(
+            kinds=(ValueKind.UNKNOWN,),
+            cardinality=nested_capabilities.cardinality,
+        ),
+        body_view=BodyViewKind.JSON,
+    )
+    with pytest.raises(ValueError, match="whole-body"):
+        msgspec.structs.replace(decode, selector=nested)
+
+
 def test_reusable_rule_requires_assertion_profile_origin() -> None:
     with pytest.raises(ValueError, match="AssertionProfile"):
         AssertionRuleDefinition(
@@ -166,7 +219,9 @@ def test_parent_fact_keeps_exact_counts_separate_from_empty_evidence() -> None:
         rule=_compiled_rule(),
         outcome=Satisfied(),
         counts=counts,
-        evidence=AssertionEvidence(retained=(), omitted=Count(value=1)),
+        evidence=AssertionEvidence(
+            retained=(), omitted=Count(value=1), truncation=_evidence_exhaustion()
+        ),
     )
 
     assert fact.counts.evaluated.value == 1

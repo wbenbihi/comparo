@@ -54,6 +54,7 @@ from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonInteger
 from tests.core.domain.assertions._invariant_support import _application
 from tests.core.domain.assertions._invariant_support import _compiled_rule
+from tests.core.domain.assertions._invariant_support import _evidence_exhaustion
 from tests.core.domain.assertions._invariant_support import _fingerprint
 from tests.core.domain.assertions._invariant_support import _literal
 from tests.core.domain.assertions._invariant_support import _rule_definition
@@ -229,7 +230,9 @@ def test_assertion_fact_rejects_invalid_identity_coverage_and_skip_evaluation() 
         violated=Count(value=0),
         errors=Count(value=0),
     )
-    evidence = AssertionEvidence(retained=(), omitted=Count(value=1))
+    evidence = AssertionEvidence(
+        retained=(), omitted=Count(value=1), truncation=_evidence_exhaustion()
+    )
     with pytest.raises(TypeError, match="FactId"):
         AssertionFact(
             fact_id=cast("FactId", "bad"),
@@ -290,7 +293,9 @@ def test_assertion_fact_rejects_invalid_identity_coverage_and_skip_evaluation() 
                 violated=Count(value=0),
                 errors=Count(value=0),
             ),
-            evidence=AssertionEvidence(retained=(), omitted=Count(value=1)),
+            evidence=AssertionEvidence(
+                retained=(), omitted=Count(value=1), truncation=_evidence_exhaustion()
+            ),
         )
 
 

@@ -52,6 +52,16 @@ from comparo.core.domain.assertions.rules import CompiledAssertionRule
 from comparo.core.domain.assertions.rules import CompletenessRequirement
 from comparo.core.domain.assertions.rules import Quantifier
 from comparo.core.domain.assertions.rules import Severity
+from comparo.core.domain.budget_contracts import BudgetExhaustionEffect
+from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.domain.budget_contracts import BudgetScopeKind
+from comparo.core.domain.budget_contracts import BudgetStage
+from comparo.core.domain.budgets import BudgetContribution
+from comparo.core.domain.budgets import BudgetContributionKind
+from comparo.core.domain.budgets import BudgetExceeded
+from comparo.core.domain.budgets import BudgetOperation
+from comparo.core.domain.budgets import BudgetUsage
+from comparo.core.domain.budgets import ResourceBudget
 from comparo.core.domain.capabilities import CapabilityTargetKind
 from comparo.core.domain.capabilities import NamedCapabilityTarget
 from comparo.core.domain.expressions import LiteralExpr
@@ -67,6 +77,7 @@ from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RuleApplicationId
 from comparo.core.domain.identity import RuleId
+from comparo.core.domain.identity import RunId
 from comparo.core.domain.metadata import Metadata
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
@@ -74,6 +85,7 @@ from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.model import CompiledSelector
@@ -84,6 +96,7 @@ from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonInteger
+from tests.core.domain.budget_origin_factories import default_budget_origin
 
 
 def _fingerprint() -> Fingerprint:
@@ -165,7 +178,39 @@ def _assertion_fact(
         rule=rule,
         outcome=outcome,
         counts=counts,
-        evidence=AssertionEvidence(retained=(), omitted=Count(value=counts.evaluated.value)),
+        evidence=AssertionEvidence(
+            retained=(),
+            omitted=Count(value=counts.evaluated.value),
+            truncation=(_evidence_exhaustion() if counts.evaluated.value else None),
+        ),
+    )
+
+
+def _evidence_exhaustion() -> BudgetExceeded:
+    """Build canonical evidence-example exhaustion for omitted assertion facts."""
+    limit = Count(value=0)
+    budget = ResourceBudget(
+        resource=BudgetResource.EVIDENCE_EXAMPLES,
+        scope_kind=BudgetScopeKind.RUN,
+        stage=BudgetStage.EVIDENCE,
+        operation=BudgetOperation(value="assertion.evidence.test"),
+        requested=limit,
+        effective=limit,
+        cap=None,
+        contributions=(
+            BudgetContribution(
+                kind=BudgetContributionKind.DEFAULT,
+                amount=limit,
+                origin=default_budget_origin(),
+            ),
+        ),
+        usage=BudgetUsage(consumed=limit, in_use=limit, high_water=limit),
+        scope=RunScope(run_id=RunId(value=UUID(int=97_000))),
+    )
+    return BudgetExceeded(
+        budget=budget,
+        attempted=Count(value=1),
+        effect=BudgetExhaustionEffect.EVIDENCE_TRUNCATED,
     )
 
 

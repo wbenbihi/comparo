@@ -29,6 +29,7 @@ from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.contracts import contract_accepts
 from comparo.core.domain.selectors.contracts import expression_accepts
 from comparo.core.domain.selectors.contracts import expression_kinds
+from comparo.core.domain.selectors.sources import BodyViewKind
 
 _TEXT = frozenset({ValueKind.STRING})
 _CONTAINERS = frozenset({ValueKind.STRING, ValueKind.ARRAY, ValueKind.OBJECT})
@@ -44,10 +45,33 @@ _LENGTH_VALUES = frozenset(
 _DIGEST_VALUES = frozenset(
     {
         ValueKind.BYTES,
-        ValueKind.STRING,
         ValueKind.BODY_HANDLE,
-        ValueKind.VIEW_HANDLE,
     }
+)
+_TYPE_VISIBLE_VALUES = frozenset(
+    {
+        ValueKind.NULL,
+        ValueKind.BOOLEAN,
+        ValueKind.INTEGER,
+        ValueKind.NUMBER,
+        ValueKind.STRING,
+        ValueKind.ARRAY,
+        ValueKind.OBJECT,
+        ValueKind.BYTES,
+        ValueKind.DURATION,
+        ValueKind.SIZE,
+        ValueKind.INSTANT,
+    }
+)
+_DECODE_VIEW_VALUES = (
+    (BodyViewKind.HANDLE, frozenset({ValueKind.BODY_HANDLE})),
+    (BodyViewKind.ENTITY_BYTES, frozenset({ValueKind.BYTES})),
+    (BodyViewKind.TEXT, frozenset({ValueKind.STRING})),
+    (BodyViewKind.JSON, JSON_VALUE_KINDS),
+    (BodyViewKind.SSE_EVENTS, frozenset({ValueKind.ARRAY})),
+    (BodyViewKind.NDJSON_RECORDS, frozenset({ValueKind.ARRAY})),
+    (BodyViewKind.JSON_SEQUENCE_RECORDS, frozenset({ValueKind.ARRAY})),
+    (BodyViewKind.AUTO, frozenset({ValueKind.UNKNOWN})),
 )
 
 
@@ -58,6 +82,8 @@ def require_assertion_operator_contract(
     """Reject a compiled operator that cannot consume its known selector output."""
     if type(selected) is not ValueContract:
         raise TypeError("assertion selector output must be a ValueContract")
+    if _require_type_contract(selected, operator):
+        return
     if _require_relational_contract(selected, operator):
         return
     if _require_collection_contract(selected, operator):
@@ -67,12 +93,17 @@ def require_assertion_operator_contract(
     raise TypeError("unsupported assertion operator contract")
 
 
+def _require_type_contract(selected: ValueContract, operator: AssertionOperator) -> bool:
+    if type(operator) is TypeOperator:
+        _require_selected(selected, _TYPE_VISIBLE_VALUES, "type")
+        return True
+    return type(operator) is CardinalityOperator
+
+
 def _require_relational_contract(
     selected: ValueContract,
     operator: AssertionOperator,
 ) -> bool:
-    if type(operator) in {TypeOperator, CardinalityOperator}:
-        return True
     if type(operator) is EqualityOperator:
         _require_operand_overlap(selected, operator.expected, "equality")
         return True
@@ -113,6 +144,7 @@ def _require_collection_contract(
         return True
     if type(operator) is ContainsOperator:
         _require_selected(selected, _CONTAINERS, "contains")
+        _require_contains_operands(selected, operator)
         return True
     if type(operator) is KeySetOperator:
         _require_selected(selected, frozenset({ValueKind.OBJECT}), "key-set")
@@ -131,7 +163,8 @@ def _require_extended_contract(
         _require_selected(selected, JSON_VALUE_KINDS, "schema")
         return True
     if type(operator) is DecodeOperator:
-        _require_selected(selected, _DIGEST_VALUES, "decode")
+        accepted = next(kinds for view, kinds in _DECODE_VIEW_VALUES if view is operator.view)
+        _require_selected(selected, accepted, "decode")
         return True
     if type(operator) is MediaTypeOperator:
         _require_selected(selected, frozenset({ValueKind.MEDIA_TYPE}), "media-type")
@@ -184,3 +217,16 @@ def _require_operand_overlap(
         for kind in kinds
     ):
         raise ValueError(f"{operation} operand contradicts selector output types")
+
+
+def _require_contains_operands(
+    selected: ValueContract,
+    operator: ContainsOperator,
+) -> None:
+    """Enforce the operand domain implied by every statically possible container."""
+    if ValueKind.UNKNOWN in selected.kinds:
+        return
+    requires_text = bool(set(selected.kinds) & {ValueKind.STRING, ValueKind.OBJECT})
+    accepted = _TEXT if requires_text else JSON_VALUE_KINDS
+    for expression in operator.expected:
+        _require_operand(expression, accepted, "contains")

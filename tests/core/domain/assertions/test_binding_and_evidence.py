@@ -45,6 +45,7 @@ from comparo.core.domain.values import JsonString
 from tests.core.domain.assertions._invariant_support import _application
 from tests.core.domain.assertions._invariant_support import _assertion_fact
 from tests.core.domain.assertions._invariant_support import _compiled_rule
+from tests.core.domain.assertions._invariant_support import _evidence_exhaustion
 from tests.core.domain.assertions._invariant_support import _fingerprint
 from tests.core.domain.assertions._invariant_support import _literal
 from tests.core.domain.assertions._invariant_support import _regex
@@ -103,7 +104,9 @@ def test_assertion_fact_is_bound_to_exact_effective_compiled_rule() -> None:
             rule=rule,
             outcome=Satisfied(),
             counts=counts,
-            evidence=AssertionEvidence(retained=(), omitted=Count(value=1)),
+            evidence=AssertionEvidence(
+                retained=(), omitted=Count(value=1), truncation=_evidence_exhaustion()
+            ),
         )
 
 
@@ -171,7 +174,9 @@ def test_quantifier_and_predicate_free_cardinality_outcome_laws() -> None:
                 violated=Count(value=0),
                 errors=Count(value=1),
             ),
-            evidence=AssertionEvidence(retained=(), omitted=Count(value=1)),
+            evidence=AssertionEvidence(
+                retained=(), omitted=Count(value=1), truncation=_evidence_exhaustion()
+            ),
         )
 
 

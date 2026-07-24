@@ -176,7 +176,7 @@ def _schema() -> SchemaOperator:
             LengthOperator(relation=CountRelation.AT_LEAST, expected=Count(value=1)),
         ),
         (ValueKind.OBJECT, _schema()),
-        (ValueKind.BYTES, DecodeOperator(view=BodyViewKind.JSON)),
+        (ValueKind.BOOLEAN, DecodeOperator(view=BodyViewKind.JSON)),
         (
             ValueKind.MEDIA_TYPE,
             MediaTypeOperator(
@@ -233,7 +233,6 @@ def test_every_assertion_operator_has_a_static_input_contract(
         ),
         KeySetOperator(relation=KeySetRelation.HAS, keys=("id",)),
         LengthOperator(relation=CountRelation.EQUALS, expected=Count(value=1)),
-        DecodeOperator(view=BodyViewKind.JSON),
         MediaTypeOperator(
             relation=MediaRelation.EXACT,
             expected=MediaType(type="application", subtype="json"),
@@ -335,6 +334,26 @@ def test_static_operands_cannot_contradict_selector_or_operator_types() -> None:
                 algorithm=DigestAlgorithm.SHA256,
                 expected=_literal(JsonInteger(value=1)),
             ),
+        )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ValueKind.COUNT,
+        ValueKind.RATIO,
+        ValueKind.BODY_HANDLE,
+        ValueKind.VIEW_HANDLE,
+        ValueKind.MEDIA_TYPE,
+        ValueKind.HTTP_FIELD_VALUE,
+        ValueKind.HTTP_FIELD_ITEMS,
+    ],
+)
+def test_type_operator_rejects_unrepresented_runtime_kinds(kind: ValueKind) -> None:
+    with pytest.raises(ValueError, match="type operator cannot consume"):
+        require_assertion_operator_contract(
+            _contract(kind),
+            TypeOperator(expected=ExactValueType.STRING),
         )
 
 

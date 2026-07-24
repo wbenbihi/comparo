@@ -8,6 +8,7 @@ from typing import final
 import msgspec
 
 from comparo.core.domain.assertions.contracts import require_assertion_operator_contract
+from comparo.core.domain.assertions.extended_operators import DecodeOperator
 from comparo.core.domain.assertions.operators import AssertionOperator
 from comparo.core.domain.assertions.operators import AssertionOperatorIdentity
 from comparo.core.domain.assertions.operators import operator_uses_match_predicate
@@ -23,6 +24,8 @@ from comparo.core.domain.identity import RuleId
 from comparo.core.domain.metadata import Metadata
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.selectors.model import CompiledSelector
+from comparo.core.domain.selectors.paths import NoPath
+from comparo.core.domain.selectors.sources import SelectorSource
 
 
 class Severity(DomainStrEnum):
@@ -65,6 +68,8 @@ class PredicateCondition(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("condition selector must be a CompiledSelector")
         require_operator(self.operator_id, self.operator)
         require_assertion_operator_contract(self.selector.output, self.operator)
+        if type(self.operator) is DecodeOperator:
+            _require_decode_selector(self.selector, self.operator)
         if not operator_uses_match_predicate(self.operator):
             raise ValueError("applicability conditions require a match predicate operator")
         if type(self.quantifier) is not Quantifier:
@@ -151,11 +156,9 @@ class CompiledAssertionRule(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("compiled assertion selector must be a CompiledSelector")
         require_operator(self.operator_id, self.operator)
         require_assertion_operator_contract(self.selector.output, self.operator)
-        uses_predicate = operator_uses_match_predicate(self.operator)
-        if uses_predicate and type(self.quantifier) is not Quantifier:
-            raise TypeError("predicate assertion operators require an explicit quantifier")
-        if not uses_predicate and self.quantifier is not None:
-            raise ValueError("predicate-free assertion operators cannot declare a quantifier")
+        if type(self.operator) is DecodeOperator:
+            _require_decode_selector(self.selector, self.operator)
+        _require_quantifier(self.operator, self.quantifier)
         if type(self.completeness) is not CompletenessRequirement:
             raise TypeError("compiled assertion completeness has an unsupported type")
         if self.applicability is not None and not is_applicability_condition(self.applicability):
@@ -198,3 +201,24 @@ def _require_conditions(conditions: tuple[ApplicabilityCondition, ...]) -> None:
         raise ValueError("conditions must not be empty")
     if any(not is_applicability_condition(condition) for condition in conditions):
         raise TypeError("conditions contain an unsupported value")
+
+
+def _require_decode_selector(selector: CompiledSelector, operator: DecodeOperator) -> None:
+    """Bind decode state checks to the exact requested whole-body view."""
+    if selector.source not in {SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_BODY}:
+        raise ValueError("decode assertion requires a request or response body selector")
+    if type(selector.path) is not NoPath:
+        raise ValueError("decode assertion requires a whole-body selector")
+    if selector.body_view is not operator.view:
+        raise ValueError("decode assertion view must match the selector body view")
+
+
+def _require_quantifier(
+    operator: AssertionOperator,
+    quantifier: Quantifier | None,
+) -> None:
+    uses_predicate = operator_uses_match_predicate(operator)
+    if uses_predicate and type(quantifier) is not Quantifier:
+        raise TypeError("predicate assertion operators require an explicit quantifier")
+    if not uses_predicate and quantifier is not None:
+        raise ValueError("predicate-free assertion operators cannot declare a quantifier")

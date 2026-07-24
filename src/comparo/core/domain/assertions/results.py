@@ -8,46 +8,21 @@ from typing import final
 import msgspec
 
 from comparo.core.domain.assertions.extended_operators import CardinalityOperator
+from comparo.core.domain.assertions.extended_operators import DecodeOperator
+from comparo.core.domain.assertions.match_results import AssertionEvidence as AssertionEvidence
+from comparo.core.domain.assertions.match_results import MatchFact as MatchFact
+from comparo.core.domain.assertions.match_results import MatchOutcome as MatchOutcome
 from comparo.core.domain.assertions.rules import AssertionApplication
 from comparo.core.domain.assertions.rules import CompiledAssertionRule
 from comparo.core.domain.assertions.rules import Quantifier
 from comparo.core.domain.assertions.rules import Severity
+from comparo.core.domain.budgets import BudgetExceeded
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.selectors.model import CompiledSelector
-from comparo.core.domain.selectors.results import SelectionMatch
 from comparo.core.domain.selectors.results import require_match_contract
-
-
-class MatchOutcome(DomainStrEnum):
-    """Concrete predicate outcomes for one selected value."""
-
-    SATISFIED = "satisfied"
-    VIOLATED = "violated"
-    ERROR = "error"
-
-
-@final
-class MatchFact(msgspec.Struct, frozen=True, kw_only=True):
-    """One bounded child fact at a concrete selector location."""
-
-    fact_id: FactId
-    match: SelectionMatch
-    outcome: MatchOutcome
-    diagnostic: DiagnosticCode | None = None
-
-    def __post_init__(self) -> None:
-        """Require diagnostics exactly for evaluator errors."""
-        if type(self.fact_id) is not FactId or type(self.match) is not SelectionMatch:
-            raise TypeError("match fact requires a FactId and SelectionMatch")
-        if type(self.outcome) is not MatchOutcome:
-            raise TypeError("match outcome must be a MatchOutcome")
-        if self.diagnostic is not None and type(self.diagnostic) is not DiagnosticCode:
-            raise TypeError("match diagnostic must be a DiagnosticCode")
-        if (self.outcome is MatchOutcome.ERROR) != (self.diagnostic is not None):
-            raise ValueError("exactly evaluator-error match facts require diagnostics")
 
 
 @final
@@ -73,26 +48,6 @@ class AssertionCounts(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class AssertionEvidence(msgspec.Struct, frozen=True, kw_only=True):
-    """Bounded evidence whose omission never changes logical counts."""
-
-    retained: tuple[MatchFact, ...]
-    omitted: Count
-
-    def __post_init__(self) -> None:
-        """Require immutable typed evidence and exact omission count."""
-        if type(self.retained) is not tuple:
-            raise TypeError("assertion evidence must be an immutable tuple")
-        if any(type(fact) is not MatchFact for fact in self.retained):
-            raise TypeError("assertion evidence contains an unsupported fact")
-        if type(self.omitted) is not Count:
-            raise TypeError("omitted evidence must be a Count")
-        fact_ids = tuple(fact.fact_id for fact in self.retained)
-        if len(set(fact_ids)) != len(fact_ids):
-            raise ValueError("assertion evidence fact IDs must be unique")
-
-
-@final
 class Satisfied(msgspec.Struct, frozen=True, kw_only=True):
     """The quantified predicate and cardinality were satisfied."""
 
@@ -102,6 +57,7 @@ class ViolationReason(DomainStrEnum):
 
     PREDICATE = "predicate"
     CARDINALITY = "cardinality"
+    STATE = "state"
 
 
 @final
@@ -121,16 +77,44 @@ class Skipped(msgspec.Struct, frozen=True, kw_only=True):
     """An explicitly false applicability condition."""
 
 
+class AssertionUnavailableReason(DomainStrEnum):
+    """Typed reason required assertion data could not be evaluated."""
+
+    SELECTION = "selection"
+    OPERAND = "operand"
+    CAPABILITY = "capability"
+    INCOMPLETE = "incomplete"
+    BUDGET_EXCEEDED = "budget-exceeded"
+    CANCELLED = "cancelled"
+
+
 @final
 class AssertionUnavailable(msgspec.Struct, frozen=True, kw_only=True):
     """Required observation, view, or operand data was unavailable."""
 
     code: DiagnosticCode
+    reason: AssertionUnavailableReason = AssertionUnavailableReason.SELECTION
+    exhaustion: BudgetExceeded | None = None
 
     def __post_init__(self) -> None:
         """Require a safe stable diagnostic code."""
         if type(self.code) is not DiagnosticCode:
             raise TypeError("unavailability requires a DiagnosticCode")
+        if type(self.reason) is not AssertionUnavailableReason:
+            raise TypeError("unavailability reason must be an AssertionUnavailableReason")
+        if self.exhaustion is not None and type(self.exhaustion) is not BudgetExceeded:
+            raise TypeError("unavailability exhaustion must be BudgetExceeded")
+        if (self.reason is AssertionUnavailableReason.BUDGET_EXCEEDED) != (
+            self.exhaustion is not None
+        ):
+            raise ValueError("exactly budget-exceeded unavailability requires exhaustion evidence")
+
+
+class AssertionErrorScope(DomainStrEnum):
+    """Whether an error belongs to one match or the parent evaluation."""
+
+    MATCH = "match"
+    EVALUATION = "evaluation"
 
 
 @final
@@ -138,11 +122,14 @@ class AssertionError(msgspec.Struct, frozen=True, kw_only=True):
     """A runtime operand failure or evaluator defect."""
 
     code: DiagnosticCode
+    scope: AssertionErrorScope = AssertionErrorScope.MATCH
 
     def __post_init__(self) -> None:
         """Require a safe stable diagnostic code."""
         if type(self.code) is not DiagnosticCode:
             raise TypeError("assertion error requires a DiagnosticCode")
+        if type(self.scope) is not AssertionErrorScope:
+            raise TypeError("assertion error scope must be an AssertionErrorScope")
 
 
 type AssertionOutcome = Satisfied | Violated | Skipped | AssertionUnavailable | AssertionError
@@ -242,7 +229,7 @@ def _require_assertion_outcome(
     outcome: AssertionOutcome,
     counts: AssertionCounts,
 ) -> None:
-    if type(outcome) in {Skipped, AssertionUnavailable}:
+    if type(outcome) is Skipped:
         if any(
             count.value
             for count in (
@@ -253,12 +240,76 @@ def _require_assertion_outcome(
                 counts.errors,
             )
         ):
-            raise ValueError("skipped or unavailable assertions cannot contain match counts")
+            raise ValueError("skipped assertions cannot contain match counts")
+        return
+    if type(outcome) is AssertionUnavailable:
+        _require_unavailable_outcome(outcome, counts)
         return
     if type(rule.operator) is CardinalityOperator:
         _require_cardinality_outcome(rule.operator, outcome, counts)
         return
+    if (
+        type(rule.operator) is DecodeOperator
+        and (
+            type(outcome) is Satisfied
+            or (type(outcome) is Violated and outcome.reason is ViolationReason.STATE)
+        )
+        and not any(
+            count.value
+            for count in (
+                counts.selected,
+                counts.evaluated,
+                counts.satisfied,
+                counts.violated,
+                counts.errors,
+            )
+        )
+    ):
+        return
+    if (
+        type(outcome) is AssertionError
+        and outcome.scope is AssertionErrorScope.EVALUATION
+        and not any(
+            count.value
+            for count in (
+                counts.selected,
+                counts.evaluated,
+                counts.satisfied,
+                counts.violated,
+                counts.errors,
+            )
+        )
+    ):
+        return
     _require_quantified_outcome(cast("Quantifier", rule.quantifier), outcome, counts)
+
+
+def _require_unavailable_outcome(
+    outcome: AssertionUnavailable,
+    counts: AssertionCounts,
+) -> None:
+    """Admit exact partial coverage only for match-level terminal states."""
+    if not any(
+        count.value
+        for count in (
+            counts.selected,
+            counts.evaluated,
+            counts.satisfied,
+            counts.violated,
+            counts.errors,
+        )
+    ):
+        return
+    if outcome.reason is AssertionUnavailableReason.INCOMPLETE:
+        return
+    if counts.evaluated.value >= counts.selected.value:
+        raise ValueError("unavailable assertions require unevaluated selected matches")
+    if outcome.reason not in {
+        AssertionUnavailableReason.OPERAND,
+        AssertionUnavailableReason.CAPABILITY,
+        AssertionUnavailableReason.BUDGET_EXCEEDED,
+    }:
+        raise ValueError("this unavailability reason cannot contain partial match counts")
 
 
 def _require_cardinality_outcome(
@@ -295,8 +346,6 @@ def _require_quantified_outcome(
     if type(outcome) is AssertionError:
         _require_quantified_error(quantifier, selected, satisfied, violated, errors)
         return
-    if errors:
-        raise ValueError("non-error assertion outcomes cannot contain match errors")
     if type(outcome) is Satisfied:
         valid = (
             (quantifier is Quantifier.ONE and selected == evaluated == satisfied == 1)

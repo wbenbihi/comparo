@@ -274,6 +274,8 @@ class KeySetOperator(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("key-set keys must be text")
         if len(set(self.keys)) != len(self.keys):
             raise ValueError("key-set keys must be unique")
+        if self.relation is KeySetRelation.HAS and len(self.keys) != 1:
+            raise ValueError("key-set has requires exactly one key")
 
 
 class CountRelation(DomainStrEnum):
@@ -399,7 +401,7 @@ def operator_uses_match_predicate(operator: AssertionOperator) -> bool:
     """Return whether evaluation produces one predicate fact per inspected match."""
     if not is_assertion_operator(operator):
         raise TypeError("assertion operator has an unsupported type")
-    return type(operator) is not CardinalityOperator
+    return type(operator) not in {CardinalityOperator, DecodeOperator}
 
 
 def _require_expression(value: ValueExpression) -> None:
