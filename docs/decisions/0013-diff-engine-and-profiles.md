@@ -168,6 +168,16 @@ are acceptable. Evaluation rules never decide the release verdict. Coverage reco
 selected, derived, compared, ignored, or not evaluated so a narrow profile cannot accidentally be
 presented as whole-response equivalence.
 
+Coverage separately conserves each side's derived, consumed, and resolved counts. Every concrete
+fact declares whether it consumes the baseline side, candidate side, or both; added, removed,
+ignored, and incomparable facts cannot borrow the wrong footprint. A complete `equivalent`,
+`drifted`, or all-ignored result must account for every derived value on both sides. Gate
+normalization preserves those exact counts rather than reconstructing them from aggregate labels.
+
+Assertion gate roles are derived from exact Environment-execution assignments and the invocation's
+directed comparison pairs. One execution may be baseline in one pair and candidate in another;
+`OTHER` is exclusive and cannot relabel an execution that appears in a pair.
+
 ## Consequences
 
 - Environment-owned identifiers and timestamps can be excluded without suppressing the rest of a

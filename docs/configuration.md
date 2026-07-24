@@ -1,5 +1,9 @@
 # Configuration reference
 
+> **Historical prototype reference.** This unsupported `comparo/v1` format is not the new product
+> contract and has no loader on the `refactor` branch. The new configuration lineage will begin at
+> `comparo/v1alpha1`; see [ADR 0003](decisions/0003-configuration-resource-model.md).
+
 > The `comparo/v1` object model — every `kind`, field, sigil, and rule.
 
 A comparo project is a `comparo.yaml` **manifest** plus a set of version-controlled YAML
@@ -7,8 +11,7 @@ objects it references. Each object shares a Kubernetes-style envelope (`apiVersi
 `metadata` / `spec`), is decoded strictly, and is indexed by its `metadata.id` so other
 objects can reference it. This document is the authoritative reference for that format.
 
-Every example below is drawn from or is consistent with the runnable
-[`examples/sample-project`](../examples/sample-project).
+The examples below describe the quarantined prototype and are not runnable on this branch.
 
 ## Table of contents
 

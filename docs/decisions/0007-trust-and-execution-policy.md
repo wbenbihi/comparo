@@ -40,6 +40,19 @@ Effective safety uses typed composition rather than precedence:
 Final authorization is evaluated against the immutable effective request, resolved destination,
 redirect, value source, remote Schema graph, artifact behavior, and resource plan.
 
+Every final capability grant or denial carries the exact fingerprinted `ExecutionPolicy`
+definition that made the decision. A generic provenance marker is not authority. Related approvals
+for one outbound operation, such as HTTP execution, mutation, delegated proxy DNS, external
+analysis, and destination-bound secret egress, must use that same exact policy authority and bind
+the immutable request or plan they authorize; they cannot be replayed under another effective
+policy or against another request.
+
+Serializable capability coordinates contain only typed resource identities, bounded logical
+aliases, or public HTTP(S) origins/paths without user-info, query, or fragment components. Secret
+tokens and signed URLs remain sealed inputs and never become authority metadata. HTTP authority
+binds a finalized request only through a materialization proof for the exact EffectiveRequest;
+derived byte digests must preserve every sensitive input origin.
+
 ### Restricted CI integration
 
 A GitHub Action receives the possibly untrusted Project directory and trusted ExecutionPolicy as

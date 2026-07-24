@@ -235,12 +235,35 @@ requires a scalar string representation and never silently serializes objects, a
 `$${...}` escapes interpolation, while `$literal` disables interpolation and directive recognition
 recursively for its payload.
 
+The compiled expression tree carries a conservative static output-kind contract. A `$file` path
+must be text whenever its output is statically known. Embedded interpolation accepts only scalar
+text-renderable outputs; whole-value interpolation retains the source's native output. An unknown
+lookup defers the check to resolution, but it does not hide an incompatible known fallback branch:
+every statically known branch must satisfy the receiving operation.
+
 ### Exact directive result model
 
 Value resolution returns one of five distinct results: `Present` with type, sensitivity, and
 provenance; `Unavailable` with an absence reason; intentional `Missing`; `Error`; or policy
 `Blocked`. Empty strings, `null`, `false`, and zero are present values. A required receiving field
 promotes an unhandled unavailable value to a resolution failure.
+
+Every result carries a `ResolutionProvenance`, including unavailable, missing, error, and blocked
+results. It binds the stable logical symbol being resolved, its optional `ValueNamespace`, the
+terminal namespaced and versioned provider identity, one exact concrete runtime scope, and a
+non-empty ordered chain of source attempts. Each source attempt has its own logical source symbol,
+optional namespace, provider identity, exact production or cache scope, configuration-origin
+chain, and coarse outcome. The overall scope is the composite consumer scope. A source namespace
+is valid at its production scope, and that exact coordinate must contain or otherwise supply the
+consumer coordinate in the runtime scope lattice. This allows independent cell-scoped Matrix and
+Environment-scoped sources to compose at their matching execution while rejecting a foreign run,
+cell, Environment, or step. Only `Unavailable` may precede another attempt; `Present`, `Missing`,
+`Error`, and `Blocked` are terminal, and the result variant must agree with that terminal outcome.
+
+`ValueProvenance` remains the separate ordered chain describing configuration origins such as a
+Project, profile, invocation, or source location. Resolution provenance composes those chains; it
+does not replace them or store resolved values. A provider identity is an internal, stable audit
+coordinate, not a provider dispatch, registration, or public plugin contract.
 
 `$var`, `$secret`, and `$param` resolve only their named namespaces. `$secret` always taints its
 result, and a sensitive parameter does the same. `$env` reads the effective environment-specific
@@ -320,16 +343,19 @@ read secrets or external values. At run start, a `RunContext` snapshots permitte
 owns provider caches, generated values, clocks, randomness, cancellation, and the secret registry
 used by sanitization.
 
-Every resolved non-literal value records provenance without exposing the value:
+Every resolution outcome records provenance without exposing the value:
 
 ```text
-logical name
-namespace (variable / environment source / secret / generated)
-configuration layer
-concrete provider
-scope
-sensitivity
+stable logical symbol and optional namespace
+terminal namespaced and versioned provider identity
+exact concrete run / cell / trial / environment / execution / step / attempt scope
+ordered source attempts with production scopes and configuration-origin chains
 ```
+
+The result variant and sealed payload containment remain the authoritative outcome and sensitivity
+facts. Provenance does not duplicate the live value or invent a second sensitivity label that
+could contradict the result. A present result whose logical namespace or terminal source namespace
+is `secrets` must contain a sealed sensitive value; direct construction cannot relabel it public.
 
 The same snapshot that resolves a value for the wire is used by the sanitization boundary. Reports
 and frontends never reconstruct source values after execution.

@@ -8,4 +8,4 @@
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run mypy` passes
 - [ ] `uv run lint-imports` passes (core stays decoupled from interfaces)
-- [ ] `uv run pytest` passes; tests added for behavioural changes
+- [ ] `uv run python -m pytest` passes; tests added for behavioural changes

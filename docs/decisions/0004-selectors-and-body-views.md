@@ -59,6 +59,13 @@ multimap and are not flattened into a JSON object or comma-joined. Body selectio
 decoded view such as bytes, text, JSON, SSE events, or chunked JSON values. The original body remains
 available through the configured BodyStore regardless of which decoded views are requested.
 
+Query, header, trailer, cookie, informational-header, and derived encoding occurrences select
+exact raw field values. Their locations retain source, name or index, and occurrence order; empty
+text remains distinct from a bare query parameter; and sensitive text remains sealed without
+changing its runtime value kind. Raw fields are not required to satisfy HTTP token grammar.
+`HTTP_FIELD_ITEMS` is reserved for an explicitly requested parsed token-list projection and is not
+the default result type of any generic field source.
+
 ## Accepted body diff default
 
 The default for body comparison is a named `auto` view-selection strategy. `auto` is not
@@ -239,6 +246,11 @@ and filter use, duplicate possibility, and function dependencies. Consumers impo
 capabilities: stream stops must be incremental, diff keys singular, captures explicitly
 cardinalized, and redaction fails closed. Query, traversal, filter, regex, result, and storage
 budgets return BudgetExceeded rather than a successful prefix.
+
+A ready runtime result must satisfy that compiled contract exactly. `exactlyOne` has one match,
+`zeroOrOne` has at most one, and source absence remains a non-ready outcome. Every match uses the
+closed carrier for its declared value kind; body and view handles bind their exact location IDs,
+and duplicate locations are accepted only when the compiled selector says they are possible.
 
 ## Implementation-level follow-up
 

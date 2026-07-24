@@ -62,6 +62,12 @@ Operation schemas define units and scopes. A per-body limit does not substitute 
 storage limit, and an evidence limit does not change a logically completed result merely because
 not every example was retained.
 
+All addressable scope kinds carry typed coordinates: runtime hierarchy scopes plus body, stream,
+comparison, artifact, and external-capability identities. `PLAN` alone has no runtime coordinate.
+An exhaustion wrapper must bind those coordinates to the object it interrupts whenever that
+identity is available; a matching enum or numeric limit without the canonical budget record is not
+exhaustion evidence.
+
 ### Admission control and lazy execution
 
 The planner calculates or safely bounds logical cardinalities before network work, including:

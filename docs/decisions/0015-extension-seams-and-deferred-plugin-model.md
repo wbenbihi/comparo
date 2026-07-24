@@ -71,6 +71,11 @@ distinct from judged semantic drift. Artifacts can retain sanitized inputs or th
 digests plus the complete execution provenance needed to explain or replay the analysis where
 policy allows.
 
+The authorized request begins with unused input, output, deadline, and work budgets. Every terminal
+analysis fact retains exact snapshots for all four contracts; cumulative and high-water usage must
+be monotonic, timeout evidence must consume the declared deadline, and exhaustion must identify the
+matching terminal budget. A provider result without this usage provenance is not a complete fact.
+
 ### Future plugins are executable authority
 
 If third-party plugins are introduced, Comparo will state their actual trust boundary. Installed

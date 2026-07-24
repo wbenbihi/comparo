@@ -20,8 +20,17 @@ uv run --frozen ruff check .          # lint (and import sorting)
 uv run --frozen ruff format --check . # formatting
 uv run --frozen mypy                  # strict type checking
 uv run --frozen lint-imports          # architecture contracts
-uv run --frozen pytest --cov          # tests and branch coverage
+uv run --frozen python -m pytest --cov --cov-report=term-missing
+uv lock --check
+uv build
+uv run --frozen python -m tests.architecture.distribution_members \
+  dist/comparo-*.tar.gz dist/comparo-*.whl
+gzip --test dist/comparo-*.tar.gz
+unzip -t dist/comparo-*.whl
 ```
+
+The archive checks require a clean reviewed Git index: untracked package files are deliberately
+rejected rather than treated as release inputs.
 
 ## Architecture rules
 

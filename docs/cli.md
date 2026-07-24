@@ -1,5 +1,9 @@
 # comparo CLI & GitHub Action
 
+> **Historical prototype reference.** Step 1 deliberately ships no CLI, TUI, runtime, or GitHub
+> Action. None of the commands in this document are available on the `refactor` branch. See the
+> [core foundation](core-domain-foundation.md) and [refactor roadmap](core-refactor-roadmap.md).
+
 Reference for the `comparo` command-line interface and the `comparo diff` GitHub
 Action. **comparo** replays the same HTTP requests against two environments and
 diffs the responses to catch regressions before they ship.

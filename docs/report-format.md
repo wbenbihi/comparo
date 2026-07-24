@@ -1,5 +1,9 @@
 # Report format
 
+> **Historical prototype reference.** No artifact writer or reader ships in Step 1. This document
+> does not define a supported external contract for the `refactor` branch; see the
+> [refactor roadmap](core-refactor-roadmap.md).
+
 comparo writes one versioned JSON artifact for every **run**, **diff**, and
 **execution**. It captures the whole interaction — the resolved outbound request
 *and* the response, per side — so a saved report replays in full detail offline,

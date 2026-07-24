@@ -14,7 +14,7 @@ Steps or a minimal config that triggers it. Redact any secrets.
 **Expected behaviour**
 
 **Environment**
-- comparo version: `comparo --version`
+- comparo package version or commit:
 - Python version:
 - OS:
 

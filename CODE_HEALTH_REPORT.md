@@ -1,5 +1,9 @@
 # Code Health Report
 
+> **Historical prototype audit (2026-07-18).** This report describes the quarantined implementation,
+> not the current `refactor` branch. For current scope and verification guarantees, see
+> [`docs/core-domain-foundation.md`](docs/core-domain-foundation.md).
+
 **Project:** comparo — HTTP regression & diff testing (TUI + headless CLI + CI)
 **Date:** 2026-07-18 (re-audit after the `remediation/code-health-a-grade` branch; supersedes the same-day C-grade report)
 **Stack:** Python 3.13, msgspec, ruamel.yaml, httpx / httpx-sse, typer, textual, jsonschema

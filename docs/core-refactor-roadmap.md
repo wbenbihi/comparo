@@ -84,6 +84,9 @@ developers could independently implement compatible modules from it.
 
 ## Step 1: immutable domain foundation
 
+Status: completed on 2026-07-24. The implemented boundary and verification contract are recorded
+in [Immutable core domain foundation](core-domain-foundation.md).
+
 Define the internal language before parsing external configuration:
 
 - Typed identifiers for environments, requests, matrices, profiles, executions, rules, cells,

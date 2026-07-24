@@ -66,6 +66,11 @@ The planner reports Matrix-cell, trial, Environment-execution, and pairwise-comp
 cardinalities before network work. Execution is lazy and bounded. Configuration and operator
 policy may impose resource budgets without introducing an arbitrary hard-coded project-size limit.
 
+One RunPlan is compiled against one coherent definition graph. Across all plan slices, a stable
+ResourceIdentity maps to exactly one fingerprint for subjects, Matrix definitions, selected
+Environments, and comparison endpoints. A run cannot silently combine two revisions under one
+logical identity.
+
 ## Consequences
 
 - Environment resources never acquire permanent baseline or candidate roles.
