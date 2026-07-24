@@ -110,4 +110,4 @@ def _scope_coordinate(scope: RuntimeScope) -> str:
     if type(scope) is AttemptScope:
         step = "none" if scope.step_execution_id is None else str(scope.step_execution_id.value)
         return f"attempt:{_scope_coordinate(scope.execution)}:{step}:{scope.attempt_id.value}"
-    raise TypeError("unsupported generation scope")
+    raise TypeError("unsupported generation scope")  # pragma: no cover - closed RuntimeScope

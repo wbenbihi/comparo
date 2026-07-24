@@ -186,7 +186,9 @@ def _json_value(value: object) -> JsonValue:
                 for name, item in value.items()
             )
         )
-    raise ConversionError("decoded document contains an unsupported value")
+    raise ConversionError(  # pragma: no cover - json.loads has a closed output vocabulary
+        "decoded document contains an unsupported value"
+    )
 
 
 def _encode_json(value: JsonValue) -> str:

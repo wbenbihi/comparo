@@ -133,7 +133,7 @@ def _scope_cell_id(scope: RuntimeScope) -> CellId | None:
         return scope.execution.trial.cell.cell_id
     if type(scope) is AttemptScope:
         return scope.execution.trial.cell.cell_id
-    raise TypeError("unsupported runtime scope")
+    raise TypeError("unsupported runtime scope")  # pragma: no cover - closed RuntimeScope
 
 
 type SnapshotValue = JsonString | SensitiveValue[JsonString]

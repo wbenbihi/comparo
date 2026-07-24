@@ -25,6 +25,8 @@ from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import SensitiveLiteralExpr
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
+from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.domain.provenance import ResolutionSource
 from comparo.core.domain.provenance import ResolutionStep
@@ -111,7 +113,7 @@ from comparo.core.resolution.snapshots import validate_environment_snapshots
 _ACCESS = SensitiveValueAccess(purpose="value-resolution")
 type _Result = ResolutionResult[ResolvedValue]
 type _LookupToken = tuple[ValueNamespace, SymbolPath, RuntimeScope]
-type _FileKey = tuple[FileExpr, RuntimeScope, JsonString | SensitiveValue[JsonString]]
+type _FileKey = tuple[FileExpr, RuntimeScope]
 type _ExternalKey = tuple[ExternalProviderSource, RuntimeScope]
 type _GenerationKey = tuple[GenerationSpec, RuntimeScope]
 
@@ -156,6 +158,12 @@ class RunContext:
         _validate_provider_collection(external_providers)
         if type(safety) is not tuple or any(not is_definition_handle(item) for item in safety):
             raise TypeError("run context safety must be an immutable definition-handle tuple")
+        if any(
+            (item.identity.kind if type(item) is DefinitionRef else item.kind)
+            is not ResourceKind.SAFETY_PROFILE
+            for item in safety
+        ):
+            raise ValueError("run context safety handles must identify SafetyProfile")
         self._prepared = prepared
         self._run = RunScope(run_id=prepared.invocation.run_id)
         self._snapshots = environment_snapshots
@@ -262,7 +270,6 @@ class RunContext:
             outcome,
             source=runtime_source,
             target=target,
-            sensitive=False,
         )
 
     async def generate(self, spec: GenerationSpec, target: ResolutionTarget) -> _Result:
@@ -291,26 +298,25 @@ class RunContext:
                 target=target,
                 code=ResolutionErrorCode.CANCELLED,
             )
-        try:
-            instant = self._clock.now()
-        except Exception:  # noqa: BLE001 - adapter boundary becomes a value-free failure
-            return self._error_for_source(
-                source=runtime_source,
-                target=target,
-                code=ResolutionErrorCode.PROVIDER_FAILED,
+
+        async def generate_once() -> ProviderOutcome:
+            request = GenerationRequest(
+                spec=spec,
+                scope=production_scope,
+                instant=self._clock.now(),
             )
-        request = GenerationRequest(spec=spec, scope=production_scope, instant=instant)
+            return await provider.generate(request)
+
         outcome = await self._provider_call(
             self._generation_cache,
             (spec, production_scope),
-            lambda: provider.generate(request),
+            generate_once,
             sensitive_origin=(_taint_origin("generated", spec.symbol) if spec.sensitive else None),
         )
         return await self._provider_result(
             outcome,
             source=runtime_source,
             target=target,
-            sensitive=False,
         )
 
     def cancel(self, source: CancellationSource) -> None:
@@ -511,7 +517,7 @@ class RunContext:
         )
         outcome = await self._provider_call(
             self._file_cache,
-            (expression, target.scope, typed_path),
+            (expression, target.scope),
             lambda: provider.read(request),
             sensitive_origin=(
                 _taint_origin("file", target.symbol) if is_sensitive_value(typed_path) else None
@@ -528,7 +534,6 @@ class RunContext:
             outcome,
             source=source,
             target=target,
-            sensitive=False,
         )
         if type(result) is not Present or expression.conversion is None:
             return result
@@ -759,12 +764,9 @@ class RunContext:
         *,
         source: ResolutionSource,
         target: ResolutionTarget,
-        sensitive: bool,
     ) -> _Result:
         if type(outcome) is ProviderPresent:
             value = outcome.value
-            if sensitive:
-                value = _sensitive(value, _taint_origin("provider", target.symbol))
             result = present(
                 value,
                 symbol=target.symbol,
@@ -958,7 +960,7 @@ def _taint_origin(prefix: str, symbol: SymbolPath) -> TaintOriginId:
 
 
 def _prepend_unavailable(
-    result: _Result,
+    result: Present[ResolvedValue] | Missing | Error | Blocked,
     steps: tuple[ResolutionStep, ...],
     target: ResolutionTarget,
 ) -> _Result:
@@ -992,17 +994,8 @@ def _prepend_unavailable(
             namespace=namespace,
             unavailable_steps=steps,
         )
-    if type(result) is Blocked:
-        return blocked(
-            result.code,
-            symbol=target.symbol,
-            scope=target.scope,
-            source=terminal,
-            namespace=namespace,
-            unavailable_steps=steps,
-        )
-    return unavailable(
-        result.reason,
+    return blocked(
+        result.code,
         symbol=target.symbol,
         scope=target.scope,
         source=terminal,
