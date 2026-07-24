@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -12,6 +15,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -23,17 +27,41 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
 
+      - name: Verify dependency lock
+        run: uv lock --check
+
       - name: Lint (ruff)
-        run: uv run ruff check .
+        run: uv run --frozen ruff check .
 
       - name: Format check (ruff)
-        run: uv run ruff format --check .
+        run: uv run --frozen ruff format --check .
 
       - name: Type check (mypy --strict)
-        run: uv run mypy
+        run: uv run --frozen mypy
 
       - name: Architecture contract (import-linter)
-        run: uv run lint-imports
+        run: uv run --frozen lint-imports
 
       - name: Tests
-        run: uv run pytest --cov --cov-report=term-missing
+        run: uv run --frozen pytest --cov --cov-report=term-missing
+
+      - name: Build distributions
+        run: uv build
+
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run compatibility tests
+        run: uv run --frozen pytest

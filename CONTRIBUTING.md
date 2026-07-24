@@ -7,8 +7,8 @@ Thanks for your interest in improving comparo.
 comparo uses [uv](https://docs.astral.sh/uv/) for environment and dependency management.
 
 ```console
-uv sync                                   # create the venv and install everything
-uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
+uv sync --frozen                          # create the venv from the committed lock
+uv run --frozen pre-commit install --hook-type pre-commit --hook-type commit-msg
 ```
 
 ## Quality gates
@@ -16,18 +16,29 @@ uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
 Every change must pass the same checks CI runs:
 
 ```console
-uv run ruff check .          # lint (and import sorting)
-uv run ruff format .         # format
-uv run mypy                  # strict type checking
-uv run lint-imports          # architecture contract (core must not import interfaces)
-uv run pytest                # tests
+uv run --frozen ruff check .          # lint (and import sorting)
+uv run --frozen ruff format --check . # formatting
+uv run --frozen mypy                  # strict type checking
+uv run --frozen lint-imports          # architecture contracts
+uv run --frozen pytest --cov          # tests and branch coverage
 ```
 
-## Architecture rule
+## Architecture rules
 
-The engine in `comparo.core` must not import from `comparo.cli`, `comparo.tui`, or
-`comparo.adapters`. Front-ends depend on the core, never the reverse. This is enforced by
-import-linter and will fail CI if violated.
+The domain in `comparo.core.domain` is an immutable, I/O-free semantic kernel. It does not import
+HTTP clients, parsers, schema engines, front ends, or other adapter frameworks. External document
+DTOs and sanitized artifact DTOs are separate from live domain objects. Architecture tests and
+import-linter enforce these boundaries.
+
+Every concrete domain `msgspec.Struct` declares `frozen=True` and `kw_only=True`; its nested state
+must also be immutable. Type annotations do not validate direct `msgspec` constructors, so domain
+invariants belong in `__post_init__` and focused factories. Do not use `Any`, mutable containers,
+generic recursive dictionaries, `msgspec.structs.force_setattr`, or broad serialization helpers in
+the domain.
+
+Prefer small, final value types and composition. Inheritance is appropriate only for a genuine
+substitutability relationship. Ports are narrow standard-library protocols, and effectful work
+stays outside the domain.
 
 ## Commits
 

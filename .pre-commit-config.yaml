@@ -8,11 +8,16 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-        # broken-project ships intentionally invalid YAML as an error fixture
-        exclude: ^examples/broken-project/
       - id: check-toml
+      - id: check-json
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: destroyed-symlinks
       - id: check-added-large-files
       - id: check-merge-conflict
+      - id: debug-statements
+      - id: mixed-line-ending
+      - id: detect-private-key
 
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.0.0
@@ -26,25 +31,25 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff (lint)
-        entry: uv run ruff check --fix
+        entry: uv run --frozen ruff check --fix
         language: system
         types_or: [python, pyi]
         require_serial: true
       - id: ruff-format
         name: ruff (format)
-        entry: uv run ruff format
+        entry: uv run --frozen ruff format
         language: system
         types_or: [python, pyi]
         require_serial: true
       - id: mypy
         name: mypy (strict)
-        entry: uv run mypy
+        entry: uv run --frozen mypy
         language: system
         types: [python]
         pass_filenames: false
       - id: import-linter
         name: import-linter (architecture contract)
-        entry: uv run lint-imports
+        entry: uv run --frozen lint-imports
         language: system
         pass_filenames: false
         always_run: true

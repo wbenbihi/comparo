@@ -18,6 +18,7 @@ classifiers = [
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: Testing",
   "Topic :: Software Development :: Quality Assurance",
   "Typing :: Typed",
@@ -33,6 +34,7 @@ Issues = "https://github.com/wbenbihi/comparo/issues"
 
 [dependency-groups]
 dev = [
+  "hypothesis>=6.135.0",
   "ruff>=0.9.0",
   "mypy>=1.14.0",
   "pytest>=8.3.0",
@@ -60,12 +62,23 @@ select = [
   "N",   # pep8-naming
   "UP",  # pyupgrade
   "B",   # flake8-bugbear
+  "BLE", # flake8-blind-except
+  "C90", # mccabe complexity
   "C4",  # flake8-comprehensions
+  "DTZ", # flake8-datetimez
+  "G",   # flake8-logging-format
+  "LOG", # flake8-logging
+  "PERF",# perflint
+  "PIE", # flake8-pie
+  "RET", # flake8-return
+  "S",   # flake8-bandit
   "SIM", # flake8-simplify
+  "T20", # flake8-print
   "PTH", # flake8-use-pathlib
   "TID", # flake8-tidy-imports
   "RUF", # ruff-specific
   "D",   # pydocstyle — enforce presence + Google style (no missing docstrings)
+  "ANN401", # prohibit dynamically typed Any parameters
   "PT",  # flake8-pytest-style — functional-test hygiene
 ]
 
@@ -78,9 +91,7 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # Test functions and fakes are self-describing; require module docstrings only.
-"tests/*" = ["S101", "D102", "D103", "D107"]
-# The TUI uses design glyphs (×, ·, ▌, ╎, ●) that trip the confusable-unicode rule.
-"src/comparo/tui/*.py" = ["RUF001"]
+"tests/*" = ["S101", "S105", "S106", "S107", "D102", "D103", "D107"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -92,16 +103,21 @@ strict = true
 warn_unreachable = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+extra_checks = true
+enable_error_code = [
+  "explicit-override",
+  "ignore-without-code",
+  "mutable-override",
+  "possibly-undefined",
+]
 files = ["src", "tests"]
-
-[[tool.mypy.overrides]]
-module = ["ruamel.*"]
-ignore_missing_imports = true
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 source = ["comparo"]
@@ -110,6 +126,7 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+fail_under = 100
 
 # ── Architecture guards ───────────────────────────────────────────────
 [tool.importlinter]
