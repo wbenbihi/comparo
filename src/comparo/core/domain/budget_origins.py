@@ -8,6 +8,7 @@ from typing import final
 import msgspec
 
 from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import InvocationId
 from comparo.core.domain.primitives import Fingerprint
 
@@ -57,12 +58,14 @@ class DefaultBudgetOrigin(msgspec.Struct, frozen=True, kw_only=True):
 class DefinitionBudgetOrigin(msgspec.Struct, frozen=True, kw_only=True):
     """An exact fingerprinted authored or operator-owned definition origin."""
 
-    definition: DefinitionRef
+    definition: DefinitionRef | InlineDefinitionRef
 
     def __post_init__(self) -> None:
         """Require an exact definition reference."""
-        if type(self.definition) is not DefinitionRef:
-            raise TypeError("definition budget origin requires a DefinitionRef")
+        if type(self.definition) not in {DefinitionRef, InlineDefinitionRef}:
+            raise TypeError(
+                "definition budget origin requires a DefinitionRef or InlineDefinitionRef"
+            )
 
 
 @final

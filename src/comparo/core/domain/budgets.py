@@ -22,6 +22,7 @@ from comparo.core.domain.budget_origins import DefaultBudgetOrigin
 from comparo.core.domain.budget_origins import DefinitionBudgetOrigin
 from comparo.core.domain.budget_origins import InvocationBudgetOrigin
 from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
@@ -125,7 +126,7 @@ def _validate_budget_origin(kind: BudgetContributionKind, origin: BudgetOrigin) 
             raise ValueError("default budget contribution requires a versioned default-set origin")
         return
     if kind is BudgetContributionKind.CEILING:
-        if type(origin) is not DefinitionBudgetOrigin or origin.definition.identity.kind not in {
+        if type(origin) is not DefinitionBudgetOrigin or _definition_kind(origin) not in {
             ResourceKind.SAFETY_PROFILE,
             ResourceKind.EXECUTION_POLICY,
         }:
@@ -142,13 +143,16 @@ def _validate_budget_origin(kind: BudgetContributionKind, origin: BudgetOrigin) 
         ResourceKind.REDACTION_PROFILE,
         ResourceKind.ARTIFACT_PROFILE,
     }
-    if (
-        type(origin) is not DefinitionBudgetOrigin
-        or origin.definition.identity.kind not in ordinary_kinds
-    ):
+    if type(origin) is not DefinitionBudgetOrigin or _definition_kind(origin) not in ordinary_kinds:
         raise ValueError(
             "ordinary budget contribution requires an exact Project, profile, or invocation"
         )
+
+
+def _definition_kind(origin: DefinitionBudgetOrigin) -> ResourceKind:
+    """Return the kind shared by named and anonymous exact definition references."""
+    definition = origin.definition
+    return definition.identity.kind if type(definition) is DefinitionRef else definition.kind
 
 
 @final

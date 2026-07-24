@@ -156,6 +156,24 @@ class InlineDefinitionOrigin(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("inline definition origin requires an InlineFragment")
 
 
+@final
+class InlineDefinitionRef(msgspec.Struct, frozen=True, kw_only=True):
+    """Fingerprint an anonymous definition without making it publicly addressable."""
+
+    kind: ResourceKind
+    origin: InlineDefinitionOrigin
+    fingerprint: Fingerprint
+
+    def __post_init__(self) -> None:
+        """Require an exact kind, structural owner coordinate, and content fingerprint."""
+        if type(self.kind) is not ResourceKind:
+            raise TypeError("inline definition kind must be a ResourceKind")
+        if type(self.origin) is not InlineDefinitionOrigin:
+            raise TypeError("inline definition reference requires an InlineDefinitionOrigin")
+        if type(self.fingerprint) is not Fingerprint:
+            raise TypeError("inline definition fingerprint must be a Fingerprint")
+
+
 class _UuidIdentifier(msgspec.Struct, frozen=True, kw_only=True):
     """Private implementation base for type-distinct UUID occurrence IDs."""
 

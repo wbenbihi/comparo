@@ -8,6 +8,7 @@ import pytest
 from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import InlineFragment
 from comparo.core.domain.identity import InvocationId
 from comparo.core.domain.identity import NamespaceId
@@ -95,6 +96,46 @@ def test_inline_origin_requires_structural_fragment_and_typed_owner() -> None:
         InlineDefinitionOrigin(owner=owner, fragment=cast("InlineFragment", "#safety"))
     with pytest.raises(TypeError, match="owner"):
         InlineDefinitionOrigin(owner=cast("ResourceIdentity", "release"), fragment=fragment)
+
+
+def test_inline_definition_reference_requires_exact_typed_components() -> None:
+    owner = ResourceIdentity(
+        namespace=NamespaceId(value="local"),
+        kind=ResourceKind.REQUEST,
+        resource_id=ResourceId(value="health"),
+    )
+    origin = InlineDefinitionOrigin(
+        owner=owner,
+        fragment=InlineFragment(value="#safety"),
+    )
+    fingerprint = Fingerprint(
+        algorithm="sha256",
+        digest=Sha256Digest(hex_value="b" * 64),
+    )
+    reference = InlineDefinitionRef(
+        kind=ResourceKind.SAFETY_PROFILE,
+        origin=origin,
+        fingerprint=fingerprint,
+    )
+    assert reference.origin is origin
+    with pytest.raises(TypeError, match="ResourceKind"):
+        InlineDefinitionRef(
+            kind=cast("ResourceKind", "SafetyProfile"),
+            origin=origin,
+            fingerprint=fingerprint,
+        )
+    with pytest.raises(TypeError, match="InlineDefinitionOrigin"):
+        InlineDefinitionRef(
+            kind=ResourceKind.SAFETY_PROFILE,
+            origin=cast("InlineDefinitionOrigin", object()),
+            fingerprint=fingerprint,
+        )
+    with pytest.raises(TypeError, match="Fingerprint"):
+        InlineDefinitionRef(
+            kind=ResourceKind.SAFETY_PROFILE,
+            origin=origin,
+            fingerprint=cast("Fingerprint", object()),
+        )
 
 
 def test_occurrence_identifiers_are_type_distinct() -> None:

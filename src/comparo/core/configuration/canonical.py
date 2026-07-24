@@ -14,6 +14,7 @@ from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceKind
@@ -104,18 +105,25 @@ class CanonicalObject(msgspec.Struct, frozen=True, kw_only=True):
 class InlineResource(msgspec.Struct, frozen=True, kw_only=True):
     """An anonymous typed resource definition owned by a compiled parent resource."""
 
-    kind: ResourceKind
-    origin: InlineDefinitionOrigin
+    definition: InlineDefinitionRef
     spec: CanonicalObject
 
     def __post_init__(self) -> None:
         """Require exact kind, diagnostic origin, and canonical spec."""
-        if type(self.kind) is not ResourceKind:
-            raise TypeError("inline resource kind must be a ResourceKind")
-        if type(self.origin) is not InlineDefinitionOrigin:
-            raise TypeError("inline resource origin must be an InlineDefinitionOrigin")
+        if type(self.definition) is not InlineDefinitionRef:
+            raise TypeError("inline resource definition must be an InlineDefinitionRef")
         if type(self.spec) is not CanonicalObject:
             raise TypeError("inline resource spec must be a CanonicalObject")
+
+    @property
+    def kind(self) -> ResourceKind:
+        """Return the anonymous definition's resource kind."""
+        return self.definition.kind
+
+    @property
+    def origin(self) -> InlineDefinitionOrigin:
+        """Return the anonymous definition's diagnostic-only owner coordinate."""
+        return self.definition.origin
 
 
 type CanonicalValue = (

@@ -40,6 +40,7 @@ from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import InlineFragment
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
@@ -393,15 +394,19 @@ class _Compiler:
             return CanonicalObject(members=())
         kind = field.reference_kinds[0]
         fragment = re.sub(r"(?<!^)(?=[A-Z])", "-", field.name).lower()
+        origin = InlineDefinitionOrigin(
+            owner=owner,
+            fragment=InlineFragment(value=f"#{fragment}"),
+        )
         spec = cast(
             "CanonicalObject",
             self._compile_spec(schema_for(kind), node, owner=owner),
         )
         return InlineResource(
-            kind=kind,
-            origin=InlineDefinitionOrigin(
-                owner=owner,
-                fragment=InlineFragment(value=f"#{fragment}"),
+            definition=InlineDefinitionRef(
+                kind=kind,
+                origin=origin,
+                fingerprint=_inline_fingerprint(kind, origin, node),
             ),
             spec=spec,
         )
@@ -547,6 +552,31 @@ def _contains_dynamic_syntax(node: ConfigurationNode) -> bool:
     return any(
         entry.name.startswith("$") or _contains_dynamic_syntax(entry.value)
         for entry in node.entries
+    )
+
+
+def _inline_fingerprint(
+    kind: ResourceKind,
+    origin: InlineDefinitionOrigin,
+    node: ConfigurationNode,
+) -> Fingerprint:
+    """Fingerprint anonymous content while redacting authored secret containers."""
+    content = {
+        "kind": kind.value,
+        "owner": {
+            "namespace": origin.owner.namespace.value,
+            "kind": origin.owner.kind.value,
+            "id": origin.owner.resource_id.value,
+        },
+        "fragment": origin.fragment.value,
+        "spec": _fingerprint_node(node),
+    }
+    encoded = json.dumps(
+        content, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    return Fingerprint(
+        algorithm="sha256",
+        digest=Sha256Digest(hex_value=hashlib.sha256(encoded).hexdigest()),
     )
 
 

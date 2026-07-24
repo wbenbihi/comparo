@@ -22,6 +22,7 @@ from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import InlineFragment
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
@@ -641,25 +642,26 @@ def test_canonical_models_reject_mutable_ambiguous_and_incoherent_states() -> No
     with pytest.raises(TypeError, match="DefinitionRef"):
         LinkedResource(target=cast("DefinitionRef", object()))
     inline = InlineResource(
-        kind=ResourceKind.VALUE,
-        origin=InlineDefinitionOrigin(
-            owner=definition.identity,
-            fragment=InlineFragment(value="#value"),
+        definition=InlineDefinitionRef(
+            kind=ResourceKind.VALUE,
+            origin=InlineDefinitionOrigin(
+                owner=definition.identity,
+                fragment=InlineFragment(value="#value"),
+            ),
+            fingerprint=definition.fingerprint,
         ),
         spec=CanonicalObject(members=()),
     )
-    with pytest.raises(TypeError, match="ResourceKind"):
-        InlineResource(kind=cast("ResourceKind", "Value"), origin=inline.origin, spec=inline.spec)
-    with pytest.raises(TypeError, match="InlineDefinitionOrigin"):
+    assert inline.kind is ResourceKind.VALUE
+    assert inline.origin.fragment.value == "#value"
+    with pytest.raises(TypeError, match="InlineDefinitionRef"):
         InlineResource(
-            kind=inline.kind,
-            origin=cast("InlineDefinitionOrigin", object()),
+            definition=cast("InlineDefinitionRef", object()),
             spec=inline.spec,
         )
     with pytest.raises(TypeError, match="CanonicalObject"):
         InlineResource(
-            kind=inline.kind,
-            origin=inline.origin,
+            definition=inline.definition,
             spec=cast("CanonicalObject", object()),
         )
     with pytest.raises(TypeError, match="definition"):

@@ -254,6 +254,9 @@
             "baseline": {
               "$ref": "#/$defs/resourceUse"
             },
+            "budgets": {
+              "$ref": "#/$defs/jsonValue"
+            },
             "candidates": {
               "items": {
                 "$ref": "#/$defs/resourceUse"
@@ -295,6 +298,9 @@
               },
               "type": "array"
             },
+            "maximumAttempts": {
+              "$ref": "#/$defs/jsonValue"
+            },
             "parameters": {
               "$ref": "#/$defs/resolvableValue"
             },
@@ -328,7 +334,7 @@
               "type": "array"
             },
             "trials": {
-              "$ref": "#/$defs/resolvableValue"
+              "$ref": "#/$defs/jsonValue"
             },
             "variables": {
               "$ref": "#/$defs/resolvableValue"
@@ -476,6 +482,9 @@
                 "baseline": {
                   "$ref": "#/$defs/resourceUse"
                 },
+                "budgets": {
+                  "$ref": "#/$defs/jsonValue"
+                },
                 "candidates": {
                   "items": {
                     "$ref": "#/$defs/resourceUse"
@@ -517,6 +526,9 @@
                   },
                   "type": "array"
                 },
+                "maximumAttempts": {
+                  "$ref": "#/$defs/jsonValue"
+                },
                 "parameters": {
                   "$ref": "#/$defs/resolvableValue"
                 },
@@ -550,7 +562,7 @@
                   "type": "array"
                 },
                 "trials": {
-                  "$ref": "#/$defs/resolvableValue"
+                  "$ref": "#/$defs/jsonValue"
                 },
                 "variables": {
                   "$ref": "#/$defs/resolvableValue"

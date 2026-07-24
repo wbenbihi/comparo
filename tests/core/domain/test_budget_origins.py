@@ -1,5 +1,6 @@
 """Tests for exact, value-free budget-origin identities."""
 
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -101,7 +102,8 @@ def test_ordinary_budget_requests_accept_exact_project_and_profile_origins(
         origin=definition_budget_origin(kind),
     )
     assert isinstance(contribution.origin, DefinitionBudgetOrigin)
-    assert contribution.origin.definition.identity.kind is kind
+    definition = cast("DefinitionRef", contribution.origin.definition)
+    assert definition.identity.kind is kind
 
 
 def test_ordinary_budget_requests_accept_an_exact_invocation_origin() -> None:
@@ -129,7 +131,8 @@ def test_budget_ceilings_accept_only_exact_operator_authority_definitions(
         origin=definition_budget_origin(kind),
     )
     assert isinstance(contribution.origin, DefinitionBudgetOrigin)
-    assert contribution.origin.definition.identity.kind is kind
+    definition = cast("DefinitionRef", contribution.origin.definition)
+    assert definition.identity.kind is kind
 
 
 def test_budget_contribution_roles_reject_inexact_or_wrong_authorities() -> None:
