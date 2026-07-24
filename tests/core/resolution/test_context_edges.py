@@ -29,6 +29,7 @@ from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.lifecycle import CancellationSource
+from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import UtcInstant
 from comparo.core.domain.provenance import ValueProviderIdentity
@@ -60,6 +61,7 @@ from comparo.core.resolution.models import ProviderBlocked
 from comparo.core.resolution.models import ProviderOutcome
 from comparo.core.resolution.models import ProviderPresent
 from comparo.core.resolution.models import ResolutionTarget
+from comparo.core.resolution.models import YamlDecodeRequest
 from tests.core.planning.conftest import policy_definition
 from tests.core.resolution.conftest import configuration_provenance
 from tests.core.resolution.conftest import execution_scope
@@ -107,6 +109,11 @@ class ConfigurableProvider:
         del request
         return await self._outcome()
 
+    async def decode(self, request: YamlDecodeRequest) -> ProviderOutcome:
+        """Return the configured YAML decoding result."""
+        del request
+        return await self._outcome()
+
 
 class ExplodingClock:
     """A clock adapter that fails without exposing its exception."""
@@ -133,6 +140,7 @@ def _context(
     file_provider: ConfigurableProvider | None = None,
     external: tuple[ConfigurableProvider, ...] = (),
     safety: tuple[DefinitionRef, ...] = (),
+    yaml_decoder: ConfigurableProvider | None = None,
 ) -> RunContext:
     return RunContext(
         prepared=prepared,
@@ -143,6 +151,7 @@ def _context(
         file_provider=file_provider,
         external_providers=external,
         safety=safety,
+        yaml_decoder=yaml_decoder,
     )
 
 
@@ -717,5 +726,93 @@ def test_public_secret_binding_is_tainted_once_and_safety_is_forwarded(
         assert type(file_result.value) is SensitiveValue
         assert file_provider.calls == 1
         await context.close()
+
+    _run(scenario())
+
+
+def test_yaml_conversion_uses_injected_decoder_cache_and_preserves_taint(
+    prepared_run: PreparedRun,
+) -> None:
+    decoder = ConfigurableProvider(
+        ProviderPresent(value=JsonString(value="decoded")),
+        name="safe-yaml",
+    )
+    expression = ConvertExpr(
+        source=_literal(JsonString(value="key: value")),
+        target=ConversionType.YAML,
+        provenance=configuration_provenance(),
+    )
+
+    async def scenario() -> None:
+        no_decoder = _context(prepared_run)
+        missing = await no_decoder.resolve(expression, _target(prepared_run))
+        assert type(missing) is Error
+        assert missing.code is ResolutionErrorCode.CONVERSION_FAILED
+        await no_decoder.close()
+
+        context = _context(prepared_run, yaml_decoder=decoder)
+        first = await context.resolve(expression, _target(prepared_run))
+        second = await context.resolve(expression, _target(prepared_run))
+        assert type(first) is Present
+        assert first == second
+        assert decoder.calls == 1
+        invalid_input = ConvertExpr(
+            source=_duration(),
+            target=ConversionType.YAML,
+            provenance=configuration_provenance(),
+        )
+        assert type(await context.resolve(invalid_input, _target(prepared_run))) is Error
+        await context.close()
+
+        invalid_decoder = ConfigurableProvider(
+            ProviderPresent(value=Duration(nanoseconds=1)),
+            name="invalid-yaml",
+        )
+        invalid_context = _context(prepared_run, yaml_decoder=invalid_decoder)
+        assert type(await invalid_context.resolve(expression, _target(prepared_run))) is Error
+        await invalid_context.close()
+
+        blocked_decoder = ConfigurableProvider(
+            ProviderBlocked(code=ResolutionBlockCode.SOURCE_DENIED),
+            name="blocked-yaml",
+        )
+        blocked_context = _context(prepared_run, yaml_decoder=blocked_decoder)
+        assert type(await blocked_context.resolve(expression, _target(prepared_run))) is Blocked
+        await blocked_context.close()
+
+        secret_prepared = _with_binding(
+            prepared_run,
+            namespace=ValueNamespace.SECRETS,
+            name="yaml",
+            expression=_literal(JsonString(value="key: secret")),
+        )
+        secret_expression = ConvertExpr(
+            source=_lookup(ValueNamespace.SECRETS, "yaml", ValueScopeKind.RUN),
+            target=ConversionType.YAML,
+            provenance=configuration_provenance(),
+        )
+        secret_decoder = ConfigurableProvider(
+            ProviderPresent(value=JsonString(value="decoded")),
+            name="secret-yaml",
+        )
+        secret_context = _context(secret_prepared, yaml_decoder=secret_decoder)
+        secret = await secret_context.resolve(secret_expression, _target(secret_prepared))
+        assert type(secret) is Present
+        assert type(secret.value) is SensitiveValue
+        await secret_context.close()
+
+        secret_duration = _with_binding(
+            prepared_run,
+            namespace=ValueNamespace.SECRETS,
+            name="yaml",
+            expression=_duration(),
+        )
+        secret_duration_context = _context(secret_duration, yaml_decoder=secret_decoder)
+        invalid_secret_document = await secret_duration_context.resolve(
+            secret_expression,
+            _target(secret_duration),
+        )
+        assert type(invalid_secret_document) is Error
+        await secret_duration_context.close()
 
     _run(scenario())

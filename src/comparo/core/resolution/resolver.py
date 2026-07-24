@@ -106,6 +106,15 @@ class ResolutionHost(Protocol):
         """Retain a sensitive result for the run's sanitization boundary."""
         ...
 
+    async def decode_yaml(
+        self,
+        result: Present[ResolvedValue],
+        expression: ValueExpression,
+        target: ResolutionTarget,
+    ) -> ResolutionResultT:
+        """Delegate one explicit YAML conversion through the run's decoder port."""
+        ...
+
 
 class ExpressionResolver:
     """Evaluate expressions while delegating run state and effects to a narrow host."""
@@ -209,7 +218,7 @@ class ExpressionResolver:
         result = await self.resolve(expression.source, target, stack)
         if type(result) is not Present:
             return result
-        return self.convert_result(
+        return await self.convert_result(
             result,
             expression.target,
             expression,
@@ -322,7 +331,7 @@ class ExpressionResolver:
             INTERPOLATION_PROVIDER,
         )
 
-    def convert_result(
+    async def convert_result(
         self,
         result: Present[ResolvedValue],
         target_type: ConversionType,
@@ -331,6 +340,8 @@ class ExpressionResolver:
         provider: ValueProviderIdentity,
     ) -> ResolutionResultT:
         """Convert one present value while preserving its sensitivity lineage."""
+        if target_type is ConversionType.YAML:
+            return await self._host.decode_yaml(result, expression, target)
         value, origins = _revealed(result.value)
         if type(expression) is FileExpr and type(value) is BytesValue:
             value = trim_bytes(value, expression.trim)

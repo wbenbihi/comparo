@@ -10,6 +10,7 @@ from comparo.core.resolution.models import ExternalValueRequest
 from comparo.core.resolution.models import FileReadRequest
 from comparo.core.resolution.models import GenerationRequest
 from comparo.core.resolution.models import ProviderOutcome
+from comparo.core.resolution.models import YamlDecodeRequest
 
 
 class ExternalValueProvider(Protocol):
@@ -48,6 +49,19 @@ class GeneratedValueProvider(Protocol):
 
     async def generate(self, request: GenerationRequest) -> ProviderOutcome:
         """Generate one value without depending on scheduler order."""
+        ...
+
+
+class YamlValueDecoder(Protocol):
+    """Decode inert YAML through an adapter selected by the composition root."""
+
+    @property
+    def identity(self) -> ValueProviderIdentity:
+        """Return the exact decoder identity retained in resolution provenance."""
+        ...
+
+    async def decode(self, request: YamlDecodeRequest) -> ProviderOutcome:
+        """Decode safely without interpreting Comparo directives or returning exception text."""
         ...
 
 

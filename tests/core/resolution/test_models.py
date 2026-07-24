@@ -54,6 +54,7 @@ from comparo.core.resolution.models import RegisteredSensitiveValue
 from comparo.core.resolution.models import ResolutionTarget
 from comparo.core.resolution.models import ResolvedForWire
 from comparo.core.resolution.models import SanitizationSnapshot
+from comparo.core.resolution.models import YamlDecodeRequest
 from comparo.core.resolution.provenance import LITERAL_PROVIDER
 from comparo.core.resolution.provenance import present
 from comparo.core.resolution.provenance import resolution_source
@@ -444,3 +445,30 @@ def test_empty_snapshot_fixture_still_covers_all_selected_environments(
     prepared_run: PreparedRun,
 ) -> None:
     assert len(snapshots(prepared_run)) == 2
+
+
+def test_yaml_decode_request_accepts_only_structured_documents(prepared_run: PreparedRun) -> None:
+    request = YamlDecodeRequest(
+        document=cast("SensitiveValue[JsonString]", _sensitive()),
+        symbol=_symbol(),
+        scope=_attempt(prepared_run),
+        configuration=configuration_provenance(),
+    )
+    assert YamlDecodeRequest(
+        document=BytesValue(value=b"value"),
+        symbol=request.symbol,
+        scope=request.scope,
+        configuration=request.configuration,
+    )
+    assert YamlDecodeRequest(
+        document=cast("SensitiveValue[BytesValue]", _sensitive(BytesValue(value=b"value"))),
+        symbol=request.symbol,
+        scope=request.scope,
+        configuration=request.configuration,
+    )
+    with pytest.raises(TypeError, match="text, bytes"):
+        msgspec.structs.replace(request, document=cast("Any", JsonInteger(value=1)))
+    with pytest.raises(TypeError, match="SymbolPath"):
+        msgspec.structs.replace(request, symbol=cast("SymbolPath", object()))
+    with pytest.raises(TypeError, match="ValueProvenance"):
+        msgspec.structs.replace(request, configuration=cast("Any", object()))

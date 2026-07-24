@@ -18,4 +18,5 @@ from comparo.core.resolution.models import ResolutionTarget as ResolutionTarget
 from comparo.core.resolution.models import ResolvedForWire as ResolvedForWire
 from comparo.core.resolution.models import SanitizationSnapshot as SanitizationSnapshot
 from comparo.core.resolution.models import WireResolution as WireResolution
+from comparo.core.resolution.models import YamlDecodeRequest as YamlDecodeRequest
 from comparo.core.resolution.snapshots import cell_inputs as cell_inputs

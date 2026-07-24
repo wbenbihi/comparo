@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-from collections.abc import Callable
-from collections.abc import Coroutine
-from typing import Any
 from typing import cast
 
 from comparo.core.domain.expressions import FileExpr
@@ -16,22 +12,18 @@ from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.lifecycle import CancellationSource
-from comparo.core.domain.provenance import ResolutionSource
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.scopes import RuntimeScope
 from comparo.core.domain.scopes import run_scope_of
 from comparo.core.domain.sensitivity import SensitiveValue
-from comparo.core.domain.sensitivity import SensitiveValueAccess
-from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.sensitivity import is_sensitive_value
-from comparo.core.domain.sensitivity import stable_taint_origin_union
-from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
-from comparo.core.domain.values import Error
+from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import Present
 from comparo.core.domain.values import ResolutionErrorCode
 from comparo.core.domain.values import ResolvedValue
+from comparo.core.domain.values import is_json_value
 from comparo.core.planning.models import DefinitionHandle
 from comparo.core.planning.models import PreparedRun
 from comparo.core.planning.models import is_definition_handle
@@ -45,27 +37,27 @@ from comparo.core.resolution.models import ExternalValueRequest
 from comparo.core.resolution.models import FileReadRequest
 from comparo.core.resolution.models import GenerationRequest
 from comparo.core.resolution.models import GenerationSpec
-from comparo.core.resolution.models import ProviderBlocked
-from comparo.core.resolution.models import ProviderError
 from comparo.core.resolution.models import ProviderOutcome
-from comparo.core.resolution.models import ProviderPresent
-from comparo.core.resolution.models import ProviderUnavailable
 from comparo.core.resolution.models import ResolutionTarget
 from comparo.core.resolution.models import ResolvedForWire
 from comparo.core.resolution.models import SanitizationSnapshot
+from comparo.core.resolution.models import StructuredDocument
 from comparo.core.resolution.models import WireResolution
+from comparo.core.resolution.models import YamlDecodeRequest
 from comparo.core.resolution.ports import ExternalValueProvider
 from comparo.core.resolution.ports import FileValueProvider
 from comparo.core.resolution.ports import GeneratedValueProvider
 from comparo.core.resolution.ports import RunClock
+from comparo.core.resolution.ports import YamlValueDecoder
+from comparo.core.resolution.provenance import CONVERSION_PROVIDER
 from comparo.core.resolution.provenance import ENV_PROVIDER
 from comparo.core.resolution.provenance import MATRIX_PROVIDER
 from comparo.core.resolution.provenance import NAMESPACE_PROVIDER
-from comparo.core.resolution.provenance import blocked
-from comparo.core.resolution.provenance import error
-from comparo.core.resolution.provenance import present
 from comparo.core.resolution.provenance import resolution_source
-from comparo.core.resolution.provenance import unavailable
+from comparo.core.resolution.provider_runtime import ProviderRuntime
+from comparo.core.resolution.provider_runtime import reveal
+from comparo.core.resolution.provider_runtime import seal
+from comparo.core.resolution.provider_runtime import taint_origin
 from comparo.core.resolution.registry import SensitiveValueRegistry
 from comparo.core.resolution.resolver import ExpressionResolver
 from comparo.core.resolution.resolver import LookupToken
@@ -77,12 +69,12 @@ from comparo.core.resolution.snapshots import matrix_binding
 from comparo.core.resolution.snapshots import namespace_binding
 from comparo.core.resolution.snapshots import validate_environment_snapshots
 
-_ACCESS = SensitiveValueAccess(purpose="value-resolution")
 type _Result = ResolutionResultT
 type _LookupToken = LookupToken
 type _FileKey = tuple[FileExpr, RuntimeScope]
 type _ExternalKey = tuple[ExternalProviderSource, RuntimeScope]
 type _GenerationKey = tuple[GenerationSpec, RuntimeScope]
+type _DecodeKey = tuple[ValueExpression, RuntimeScope]
 
 
 class RunContext:
@@ -92,6 +84,7 @@ class RunContext:
         "_cancellation",
         "_clock",
         "_closed",
+        "_decode_cache",
         "_external_cache",
         "_external_providers",
         "_file_cache",
@@ -99,12 +92,14 @@ class RunContext:
         "_generation_cache",
         "_generator",
         "_prepared",
+        "_providers",
         "_registry",
         "_resolver",
         "_run",
         "_safety",
         "_secure_generator",
         "_snapshots",
+        "_yaml_decoder",
     )
 
     def __init__(
@@ -118,6 +113,7 @@ class RunContext:
         external_providers: tuple[ExternalValueProvider, ...] = (),
         secure_generator: GeneratedValueProvider | None = None,
         safety: tuple[DefinitionHandle, ...] = (),
+        yaml_decoder: YamlValueDecoder | None = None,
     ) -> None:
         """Create one isolated context from already admitted and snapshotted inputs."""
         if type(prepared) is not PreparedRun:
@@ -141,14 +137,17 @@ class RunContext:
         self._file_provider = file_provider
         self._external_providers = external_providers
         self._safety = safety
+        self._yaml_decoder = yaml_decoder
         self._cancellation = RunCancellation()
         self._registry = SensitiveValueRegistry(self._run)
+        self._providers = ProviderRuntime(self._cancellation, self._registry)
         self._resolver = ExpressionResolver(self)
         self._file_cache: SingleFlightCache[_FileKey, ProviderOutcome] = SingleFlightCache()
         self._external_cache: SingleFlightCache[_ExternalKey, ProviderOutcome] = SingleFlightCache()
         self._generation_cache: SingleFlightCache[_GenerationKey, ProviderOutcome] = (
             SingleFlightCache()
         )
+        self._decode_cache: SingleFlightCache[_DecodeKey, ProviderOutcome] = SingleFlightCache()
         self._closed = False
 
     @property
@@ -189,7 +188,7 @@ class RunContext:
             raise TypeError("external resolution requires an ExternalProviderSource")
         production_scope = concrete_scope(source.scope_kind, target.scope)
         if production_scope is None:
-            return self._error_for_source(
+            return self._providers.error(
                 source=resolution_source(
                     symbol=source.symbol,
                     provider=source.provider,
@@ -216,7 +215,7 @@ class RunContext:
             namespace=source.namespace,
         )
         if provider is None:
-            return self._error_for_source(
+            return self._providers.error(
                 source=runtime_source,
                 target=target,
                 code=ResolutionErrorCode.INVALID_SOURCE,
@@ -227,15 +226,15 @@ class RunContext:
             policy=self._prepared.authority.policy,
             safety=self._safety,
         )
-        outcome = await self._provider_call(
+        outcome = await self._providers.call(
             self._external_cache,
             (source, production_scope),
             lambda: provider.read(request),
             sensitive_origin=(
-                _taint_origin("provider", source.symbol) if source.sensitive else None
+                taint_origin("provider", source.symbol) if source.sensitive else None
             ),
         )
-        return await self._provider_result(
+        return await self._providers.result(
             outcome,
             source=runtime_source,
             target=target,
@@ -256,13 +255,13 @@ class RunContext:
             namespace=target.namespace,
         )
         if production_scope is None or provider is None:
-            return self._error_for_source(
+            return self._providers.error(
                 source=runtime_source,
                 target=target,
                 code=ResolutionErrorCode.INVALID_SOURCE,
             )
         if self._cancellation.cancelled:
-            return self._error_for_source(
+            return self._providers.error(
                 source=runtime_source,
                 target=target,
                 code=ResolutionErrorCode.CANCELLED,
@@ -276,13 +275,13 @@ class RunContext:
             )
             return await provider.generate(request)
 
-        outcome = await self._provider_call(
+        outcome = await self._providers.call(
             self._generation_cache,
             (spec, production_scope),
             generate_once,
-            sensitive_origin=(_taint_origin("generated", spec.symbol) if spec.sensitive else None),
+            sensitive_origin=(taint_origin("generated", spec.symbol) if spec.sensitive else None),
         )
-        return await self._provider_result(
+        return await self._providers.result(
             outcome,
             source=runtime_source,
             target=target,
@@ -307,6 +306,7 @@ class RunContext:
             self._file_cache.close(),
             self._external_cache.close(),
             self._generation_cache.close(),
+            self._decode_cache.close(),
         )
         await self._registry.close()
         if type(self._generator) is DeterministicGenerator:
@@ -384,7 +384,7 @@ class RunContext:
         if type(resolved) is Present:
             value = resolved.value
             if dependency.namespace is ValueNamespace.SECRETS:
-                value = _sensitive(value, _taint_origin("secret", dependency.symbol))
+                value = seal(value, taint_origin("secret", dependency.symbol))
             return self._resolver.present(expression, target, value, provider)
         return resolved
 
@@ -456,12 +456,12 @@ class RunContext:
             trim=expression.trim,
             maximum_bytes=expression.maximum_bytes,
         )
-        outcome = await self._provider_call(
+        outcome = await self._providers.call(
             self._file_cache,
             (expression, target.scope),
             lambda: provider.read(request),
             sensitive_origin=(
-                _taint_origin("file", target.symbol) if is_sensitive_value(typed_path) else None
+                taint_origin("file", target.symbol) if is_sensitive_value(typed_path) else None
             ),
         )
         source = resolution_source(
@@ -471,14 +471,14 @@ class RunContext:
             scope=target.scope,
             namespace=target.namespace,
         )
-        result = await self._provider_result(
+        result = await self._providers.result(
             outcome,
             source=source,
             target=target,
         )
         if type(result) is not Present or expression.conversion is None:
             return result
-        return self._resolver.convert_result(
+        return await self._resolver.convert_result(
             result,
             expression.conversion,
             expression,
@@ -486,95 +486,75 @@ class RunContext:
             provider.identity,
         )
 
-    async def _provider_call[KeyT](
+    async def decode_yaml(
         self,
-        cache: SingleFlightCache[KeyT, ProviderOutcome],
-        key: KeyT,
-        call: Callable[[], Coroutine[Any, Any, ProviderOutcome]],
-        sensitive_origin: TaintOriginId | None = None,
-    ) -> ProviderOutcome:
-        if self._cancellation.cancelled:
-            return ProviderError(code=ResolutionErrorCode.CANCELLED)
-
-        async def guarded() -> ProviderOutcome:
-            try:
-                outcome = await call()
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - provider boundary becomes a value-free failure
-                return ProviderError(code=ResolutionErrorCode.PROVIDER_FAILED)
-            if type(outcome) not in {
-                ProviderPresent,
-                ProviderUnavailable,
-                ProviderError,
-                ProviderBlocked,
-            }:
-                return ProviderError(code=ResolutionErrorCode.PROVIDER_FAILED)
-            if sensitive_origin is not None and type(outcome) is ProviderPresent:
-                return ProviderPresent(value=_sensitive(outcome.value, sensitive_origin))
-            return outcome
-
-        try:
-            return await cache.get(key, guarded)
-        except RuntimeError:
-            return ProviderError(code=ResolutionErrorCode.CANCELLED)
-
-    async def _provider_result(
-        self,
-        outcome: ProviderOutcome,
-        *,
-        source: ResolutionSource,
+        result: Present[ResolvedValue],
+        expression: ValueExpression,
         target: ResolutionTarget,
     ) -> _Result:
-        if type(outcome) is ProviderPresent:
-            value = outcome.value
-            result = present(
-                value,
-                symbol=target.symbol,
-                scope=target.scope,
-                source=source,
-                namespace=target.namespace,
+        """Delegate explicit YAML conversion without importing a parser into core."""
+        decoder = self._yaml_decoder
+        if decoder is None:
+            return self._resolver.error(
+                expression,
+                target,
+                ResolutionErrorCode.CONVERSION_FAILED,
+                CONVERSION_PROVIDER,
             )
-            await self._registry.register(result, symbol=target.symbol, scope=target.scope)
-            return result
-        if type(outcome) is ProviderUnavailable:
-            return unavailable(
-                outcome.reason,
-                symbol=target.symbol,
-                scope=target.scope,
-                source=source,
-                namespace=target.namespace,
+        document = result.value
+        if is_sensitive_value(document):
+            if document.payload_type not in {JsonString, BytesValue}:
+                return self._resolver.error(
+                    expression,
+                    target,
+                    ResolutionErrorCode.CONVERSION_FAILED,
+                    decoder.identity,
+                )
+        elif type(document) not in {JsonString, BytesValue}:
+            return self._resolver.error(
+                expression,
+                target,
+                ResolutionErrorCode.CONVERSION_FAILED,
+                decoder.identity,
             )
-        if type(outcome) is ProviderBlocked:
-            return blocked(
-                outcome.code,
-                symbol=target.symbol,
-                scope=target.scope,
-                source=source,
-                namespace=target.namespace,
-            )
-        return error(
-            outcome.code,
+        request = YamlDecodeRequest(
+            document=cast("StructuredDocument", document),
             symbol=target.symbol,
             scope=target.scope,
-            source=source,
-            namespace=target.namespace,
+            configuration=expression.provenance,
         )
-
-    def _error_for_source(
-        self,
-        *,
-        source: ResolutionSource,
-        target: ResolutionTarget,
-        code: ResolutionErrorCode,
-    ) -> Error:
-        return error(
-            code,
+        outcome = await self._providers.call(
+            self._decode_cache,
+            (expression, target.scope),
+            lambda: decoder.decode(request),
+            sensitive_origin=(
+                taint_origin("yaml", target.symbol) if is_sensitive_value(document) else None
+            ),
+        )
+        source = resolution_source(
             symbol=target.symbol,
+            provider=decoder.identity,
+            configuration=expression.provenance,
             scope=target.scope,
-            source=source,
             namespace=target.namespace,
         )
+        decoded = await self._providers.result(outcome, source=source, target=target)
+        if type(decoded) is not Present:
+            return decoded
+        value = decoded.value
+        payload = (
+            reveal(cast("SensitiveValue[ResolvedValue]", value))
+            if is_sensitive_value(value)
+            else value
+        )
+        if not is_json_value(payload):
+            return self._resolver.error(
+                expression,
+                target,
+                ResolutionErrorCode.CONVERSION_FAILED,
+                decoder.identity,
+            )
+        return decoded
 
     def _validate_call(self, expression: object, target: ResolutionTarget) -> None:
         if not is_value_expression(expression):
@@ -611,21 +591,3 @@ def _scope_cell_inputs(
         ).cell_inputs
     except ValueError:
         return None
-
-
-def _sensitive(
-    value: ResolvedValue | SensitiveValue[ResolvedValue],
-    origin: TaintOriginId,
-) -> SensitiveValue[ResolvedValue]:
-    if is_sensitive_value(value):
-        payload = cast("ResolvedValue", value.reveal(access=_ACCESS))
-        if origin in value.origins:
-            return cast("SensitiveValue[ResolvedValue]", value)
-        origins = stable_taint_origin_union(value.origins, (origin,))
-        return SensitiveValue(payload, origins=origins)
-    return SensitiveValue(cast("ResolvedValue", value), origins=(origin,))
-
-
-def _taint_origin(prefix: str, symbol: SymbolPath) -> TaintOriginId:
-    digest = hashlib.sha256(".".join(symbol.segments).encode()).hexdigest()[:24]
-    return TaintOriginId(value=f"{prefix}/{digest}")

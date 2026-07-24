@@ -39,6 +39,7 @@ from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.value_references import namespace_supports_declared_scope
 from comparo.core.domain.value_references import runtime_value_scope_kind
 from comparo.core.domain.values import Blocked
+from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import Error
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import Missing
@@ -236,6 +237,35 @@ class ProviderBlocked(msgspec.Struct, frozen=True, kw_only=True):
 
 
 type ProviderOutcome = ProviderPresent | ProviderUnavailable | ProviderError | ProviderBlocked
+
+
+type StructuredDocument = (
+    JsonString | BytesValue | SensitiveValue[JsonString] | SensitiveValue[BytesValue]
+)
+
+
+@final
+class YamlDecodeRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """One explicit YAML conversion delegated to a safe injected decoder."""
+
+    document: StructuredDocument
+    symbol: SymbolPath
+    scope: RuntimeScope
+    configuration: ValueProvenance
+
+    def __post_init__(self) -> None:
+        """Accept only text or bytes, optionally sealed, with value-free coordinates."""
+        valid_document = type(self.document) in {JsonString, BytesValue} or (
+            is_sensitive_value(self.document)
+            and self.document.payload_type in {JsonString, BytesValue}
+        )
+        if not valid_document:
+            raise TypeError("YAML decode document must be text, bytes, or their sealed form")
+        if type(self.symbol) is not SymbolPath:
+            raise TypeError("YAML decode request requires a SymbolPath")
+        runtime_value_scope_kind(self.scope)
+        if type(self.configuration) is not ValueProvenance:
+            raise TypeError("YAML decode request requires ValueProvenance")
 
 
 @final
