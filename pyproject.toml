@@ -193,6 +193,36 @@ forbidden_modules = [
   "urllib3",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Evaluation engines must remain independently replaceable"
+type = "independence"
+modules = [
+  "comparo.core.assertions",
+  "comparo.core.diffs",
+  "comparo.core.gates",
+]
+
+[[tool.importlinter.contracts]]
+name = "Pure evaluation engines must not import adapter frameworks"
+type = "forbidden"
+source_modules = [
+  "comparo.core.assertions",
+  "comparo.core.diffs",
+  "comparo.core.evaluation",
+  "comparo.core.gates",
+]
+forbidden_modules = [
+  "aiohttp",
+  "httpcore",
+  "httpx",
+  "jsonschema",
+  "requests",
+  "ruamel",
+  "textual",
+  "typer",
+  "urllib3",
+]
+
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
