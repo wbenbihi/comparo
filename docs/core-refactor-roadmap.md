@@ -173,6 +173,8 @@ Exit criteria:
 
 ## Step 4: versioned configuration compiler
 
+Status: complete (2026-07-24).
+
 Treat configuration as an external language:
 
 ```text
@@ -195,11 +197,11 @@ attachments, or unsupported operator names.
 Exit criteria:
 
 - Repository examples use `comparo/v1alpha1`; known prototype documents receive an intentional
-  unsupported-format diagnostic.
-- All references are linked to the correct resource kind.
-- Cross-field invariants fail before execution.
-- Schemas are generated for every supported external version.
-- Migration behavior has golden fixtures.
+  unsupported-format diagnostic: complete.
+- All references are linked to the correct resource kind: complete.
+- Cross-field invariants fail before execution: complete.
+- Schemas are generated for every supported external version: complete.
+- Migration behavior has golden fixtures: complete.
 
 ## Step 5: deterministic run planner
 

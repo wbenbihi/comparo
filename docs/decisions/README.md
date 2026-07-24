@@ -22,6 +22,7 @@ product and architecture boundaries for the new configuration lineage beginning 
 | [0014](0014-resource-budgets-and-backpressure.md) | Layered budgets, admission control, and bounded execution | Accepted |
 | [0015](0015-extension-seams-and-deferred-plugin-model.md) | Internal capability seams and deliberately deferred plugin model | Accepted |
 | [0016](0016-compatibility-versioning-and-migration.md) | New-lineage compatibility, independent versions, and migration | Accepted |
+| [0017](0017-configuration-compiler-contract.md) | v1alpha1 frontend, canonical graph, admission, diagnostics, and schema | Accepted |
 
 ## Meaning of completion
 
