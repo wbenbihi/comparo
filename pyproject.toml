@@ -249,6 +249,28 @@ forbidden_modules = [
   "comparo.configuration",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Deterministic planning must remain pure and adapter independent"
+type = "forbidden"
+source_modules = ["comparo.core.planning"]
+forbidden_modules = [
+  "comparo.configuration",
+  "aiohttp",
+  "asyncio",
+  "httpcore",
+  "httpx",
+  "os",
+  "pathlib",
+  "random",
+  "requests",
+  "ruamel",
+  "textual",
+  "time",
+  "typer",
+  "urllib3",
+  "yaml",
+]
+
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
