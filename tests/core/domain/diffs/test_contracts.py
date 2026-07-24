@@ -51,12 +51,17 @@ from comparo.core.domain.diffs.strategies import ReducerKind
 from comparo.core.domain.diffs.strategies import SingularPairing
 from comparo.core.domain.diffs.strategies import TextPredicateComparator
 from comparo.core.domain.diffs.strategies import TextPredicateRelation
+from comparo.core.domain.expressions import ExpressionDependency
 from comparo.core.domain.expressions import LiteralExpr
+from comparo.core.domain.expressions import LookupExpr
+from comparo.core.domain.expressions import SymbolPath
+from comparo.core.domain.expressions import ValueNamespace
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.items import CompiledItemPredicate
@@ -164,6 +169,19 @@ def _literal(value: int = 0) -> LiteralExpr:
 def _text_literal(value: str = ",") -> LiteralExpr:
     return LiteralExpr(
         value=JsonString(value=value),
+        provenance=ValueProvenance(
+            entries=(ProvenanceEntry(kind=ProvenanceKind.PROFILE),),
+        ),
+    )
+
+
+def _numeric_lookup(scope: ValueScopeKind) -> LookupExpr:
+    return LookupExpr(
+        dependency=ExpressionDependency(
+            namespace=ValueNamespace.VARIABLES,
+            symbol=SymbolPath(segments=("tolerance",)),
+            available_at=scope,
+        ),
         provenance=ValueProvenance(
             entries=(ProvenanceEntry(kind=ProvenanceKind.PROFILE),),
         ),
@@ -381,6 +399,52 @@ def test_reducers_derive_scalar_output_contracts(
     assert side.output_cardinality is SelectorCardinality.EXACTLY_ONE
 
 
+def test_ordered_reducers_require_one_static_ordering_family() -> None:
+    heterogeneous = ValueContract(
+        kinds=(ValueKind.DURATION, ValueKind.SIZE),
+        cardinality=SelectorCardinality.ZERO_OR_MORE,
+    )
+    with pytest.raises(ValueError, match="compatible ordering family"):
+        derive_side_contract(
+            heterogeneous,
+            (),
+            Reducer(
+                identity=_operation(DiffOperationFamily.REDUCER, "minimum"),
+                kind=ReducerKind.MINIMUM,
+                empty=EmptyInputMode.ERROR,
+            ),
+        )
+    numeric = ValueContract(
+        kinds=(ValueKind.INTEGER, ValueKind.NUMBER),
+        cardinality=SelectorCardinality.ZERO_OR_MORE,
+    )
+    assert (
+        derive_side_contract(
+            numeric,
+            (),
+            Reducer(
+                identity=_operation(DiffOperationFamily.REDUCER, "maximum"),
+                kind=ReducerKind.MAXIMUM,
+                empty=EmptyInputMode.ERROR,
+            ),
+        ).kinds
+        == numeric.kinds
+    )
+    unknown = ValueContract(
+        kinds=(ValueKind.UNKNOWN,),
+        cardinality=SelectorCardinality.ZERO_OR_MORE,
+    )
+    assert derive_side_contract(
+        unknown,
+        (),
+        Reducer(
+            identity=_operation(DiffOperationFamily.REDUCER, "minimum"),
+            kind=ReducerKind.MINIMUM,
+            empty=EmptyInputMode.ERROR,
+        ),
+    ).kinds == (ValueKind.UNKNOWN,)
+
+
 def test_concatenate_and_keyed_reducers_validate_item_contracts() -> None:
     concatenate = Reducer(
         identity=_operation(DiffOperationFamily.REDUCER, "concatenate"),
@@ -412,6 +476,18 @@ def test_concatenate_and_keyed_reducers_validate_item_contracts() -> None:
             reducer=reducer,
         ).output_contract
         assert output.kinds == (ValueKind.OBJECT,)
+    numeric_group = GroupByReducer(
+        identity=_operation(DiffOperationFamily.REDUCER, "group-by"),
+        key=_item(ValueKind.OBJECT, ValueKind.INTEGER),
+        empty=EmptyInputMode.ERROR,
+        duplicate_keys=DuplicateKeyMode.COLLECT,
+    )
+    with pytest.raises(ValueError, match="group-by key"):
+        derive_side_contract(
+            _contract(ValueKind.OBJECT, SelectorCardinality.ZERO_OR_MORE),
+            (),
+            numeric_group,
+        )
 
 
 def test_pairing_and_comparator_contracts_reject_impossible_pipelines() -> None:
@@ -440,16 +516,27 @@ def test_pairing_and_comparator_contracts_reject_impossible_pipelines() -> None:
                 relation=TextPredicateRelation.CANDIDATE_CONTAINS_BASELINE,
             ),
         )
-    objects = SidePipeline(selector=_selector(ValueKind.OBJECT, SelectorCardinality.ZERO_OR_MORE))
+    arrays = SidePipeline(selector=_selector(ValueKind.ARRAY, SelectorCardinality.ZERO_OR_MORE))
     DiffPipeline(
-        baseline=objects,
-        candidate=objects,
+        baseline=arrays,
+        candidate=arrays,
         pairing=_ordered(),
         comparator=CollectionComparator(
             identity=_operation(DiffOperationFamily.COMPARATOR, "ordered"),
             kind=CollectionComparisonKind.ORDERED,
         ),
     )
+    objects = SidePipeline(selector=_selector(ValueKind.OBJECT, SelectorCardinality.ZERO_OR_MORE))
+    with pytest.raises(ValueError, match="collection comparator"):
+        DiffPipeline(
+            baseline=objects,
+            candidate=objects,
+            pairing=_ordered(),
+            comparator=CollectionComparator(
+                identity=_operation(DiffOperationFamily.COMPARATOR, "ordered"),
+                kind=CollectionComparisonKind.ORDERED,
+            ),
+        )
     DiffPipeline(
         baseline=text,
         candidate=number,
@@ -458,6 +545,29 @@ def test_pairing_and_comparator_contracts_reject_impossible_pipelines() -> None:
             identity=_operation(DiffOperationFamily.COMPARATOR, "ignore"),
         ),
     )
+
+
+def test_shared_comparator_operands_reject_side_specific_dependencies() -> None:
+    number = _contract(ValueKind.NUMBER, SelectorCardinality.ZERO_OR_MORE)
+    require_pipeline_contract(
+        number,
+        number,
+        _ordered(),
+        NumericToleranceComparator(
+            identity=_operation(DiffOperationFamily.COMPARATOR, "numeric-tolerance"),
+            absolute_tolerance=_numeric_lookup(ValueScopeKind.CELL),
+        ),
+    )
+    with pytest.raises(ValueError, match="side-specific scope"):
+        require_pipeline_contract(
+            number,
+            number,
+            _ordered(),
+            NumericToleranceComparator(
+                identity=_operation(DiffOperationFamily.COMPARATOR, "numeric-tolerance"),
+                absolute_tolerance=_numeric_lookup(ValueScopeKind.ENVIRONMENT),
+            ),
+        )
 
 
 def test_compatibility_and_keyed_pairing_contracts_are_explicit() -> None:

@@ -262,7 +262,11 @@ class IgnoreComparator(msgspec.Struct, frozen=True, kw_only=True):
 
 
 class CompatibilityKind(DomainStrEnum):
-    """Non-equality structural compatibility relations."""
+    """Directed baseline-to-candidate structural compatibility relations.
+
+    SUBSET means baseline is contained by candidate; SUPERSET means baseline contains
+    candidate.
+    """
 
     TYPE = "type"
     JSON_SHAPE = "json-shape"

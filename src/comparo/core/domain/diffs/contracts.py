@@ -17,6 +17,7 @@ from comparo.core.domain.diffs.operations import Projection
 from comparo.core.domain.diffs.operations import RelativeSelection
 from comparo.core.domain.diffs.operations import SortBy
 from comparo.core.domain.diffs.operations import StreamProjection
+from comparo.core.domain.diffs.operations import StreamSemanticSource
 from comparo.core.domain.diffs.operations import TextNormalization
 from comparo.core.domain.diffs.operations import ValueTypeTransform
 from comparo.core.domain.diffs.strategies import CollectionComparator
@@ -36,6 +37,8 @@ from comparo.core.domain.diffs.strategies import ReducerKind
 from comparo.core.domain.diffs.strategies import SingularPairing
 from comparo.core.domain.diffs.strategies import TextPredicateComparator
 from comparo.core.domain.expressions import ValueExpression
+from comparo.core.domain.expressions import expression_dependencies
+from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.selectors.contracts import JSON_VALUE_KINDS
 from comparo.core.domain.selectors.contracts import NUMERIC_VALUE_KINDS
 from comparo.core.domain.selectors.contracts import ORDERED_VALUE_KINDS
@@ -50,6 +53,7 @@ from comparo.core.domain.selectors.contracts import with_cardinality
 from comparo.core.domain.selectors.sources import SelectorCardinality
 
 _JSON_CONTAINERS = frozenset({ValueKind.ARRAY, ValueKind.OBJECT})
+_JSON_ARRAYS = frozenset({ValueKind.ARRAY})
 _KEY_KINDS = frozenset(
     {
         ValueKind.BOOLEAN,
@@ -57,6 +61,9 @@ _KEY_KINDS = frozenset(
         ValueKind.NUMBER,
         ValueKind.STRING,
     }
+)
+_COMPARISON_SHARED_SCOPES = frozenset(
+    {ValueScopeKind.RUN, ValueScopeKind.CELL, ValueScopeKind.TRIAL}
 )
 
 
@@ -98,7 +105,12 @@ def require_pipeline_contract(
     _require_comparator(baseline, candidate, comparator)
 
 
-def _derive_transform(current: ValueContract, transform: DiffTransform) -> ValueContract:
+def _derive_transform(  # noqa: C901 -- closed transform dispatch remains explicit
+    current: ValueContract,
+    transform: DiffTransform,
+) -> ValueContract:
+    if type(transform) is StreamProjection:
+        return _derive_stream_transform(transform)
     if _is_item_selection_transform(transform):
         _require_item_input(current, transform.selector.input, "relative selector")
         cardinality = _compose_cardinality(
@@ -158,6 +170,20 @@ def _derive_transform(current: ValueContract, transform: DiffTransform) -> Value
     raise TypeError("unsupported diff transform contract")
 
 
+def _derive_stream_transform(transform: StreamProjection) -> ValueContract:
+    item_contract = _stream_item_contract(transform.source)
+    _require_item_input(item_contract, transform.selector.input, "stream projection")
+    return with_cardinality(transform.selector.output, SelectorCardinality.ZERO_OR_MORE)
+
+
+def _stream_item_contract(source: StreamSemanticSource) -> ValueContract:
+    if source is StreamSemanticSource.SSE_EVENT:
+        return scalar_contract(ValueKind.OBJECT)
+    if source is StreamSemanticSource.SSE_DATA:
+        return scalar_contract(ValueKind.STRING)
+    return scalar_contract(ValueKind.UNKNOWN)
+
+
 def _derive_reducer(current: ValueContract, reducer: DiffReducer) -> ValueContract:
     if type(reducer) is Reducer:
         if reducer.kind in {ReducerKind.FIRST, ReducerKind.LAST}:
@@ -175,18 +201,27 @@ def _derive_reducer(current: ValueContract, reducer: DiffReducer) -> ValueContra
             return scalar_contract(*current.kinds)
         if reducer.kind in {ReducerKind.MINIMUM, ReducerKind.MAXIMUM}:
             _require_kinds(current, ORDERED_VALUE_KINDS, "ordered reducer")
+            _require_compatible_ordering_family(current)
             return scalar_contract(*current.kinds)
         return scalar_contract(ValueKind.ARRAY)
     if type(reducer) is GroupByReducer:
         _require_item_input(current, reducer.key.input, "group-by key")
-        _require_kinds(reducer.key.output, _KEY_KINDS, "group-by key")
+        _require_kinds(reducer.key.output, frozenset({ValueKind.STRING}), "group-by key")
         return scalar_contract(ValueKind.OBJECT)
     if type(reducer) is ObjectFromEntriesReducer:
         _require_item_input(current, reducer.key.input, "object key")
         _require_item_input(current, reducer.value.input, "object value")
-        _require_kinds(reducer.key.output, _KEY_KINDS, "object key")
+        _require_kinds(reducer.key.output, frozenset({ValueKind.STRING}), "object key")
         return scalar_contract(ValueKind.OBJECT)
     raise TypeError("unsupported diff reducer contract")
+
+
+def _require_compatible_ordering_family(contract: ValueContract) -> None:
+    if ValueKind.UNKNOWN in contract.kinds:
+        return
+    kinds = frozenset(contract.kinds)
+    if len(kinds) > 1 and not kinds <= NUMERIC_VALUE_KINDS:
+        raise ValueError("ordered reducer requires one compatible ordering family")
 
 
 def _require_comparator(
@@ -213,7 +248,7 @@ def _require_comparator(
         )
         return
     if type(comparator) is CollectionComparator:
-        _require_both(baseline, candidate, _JSON_CONTAINERS, "collection comparator")
+        _require_both(baseline, candidate, _JSON_ARRAYS, "collection comparator")
         return
     if type(comparator) is CompatibilityComparator:
         if comparator.kind is CompatibilityKind.TYPE:
@@ -238,6 +273,11 @@ def _require_numeric_tolerances(comparator: NumericToleranceComparator) -> None:
             NUMERIC_VALUE_KINDS,
         ):
             raise ValueError("numeric comparator tolerance must resolve to a number")
+        if tolerance is not None and any(
+            dependency.available_at not in _COMPARISON_SHARED_SCOPES
+            for dependency in expression_dependencies(tolerance)
+        ):
+            raise ValueError("numeric comparator tolerance cannot depend on a side-specific scope")
 
 
 def _require_both(
@@ -284,5 +324,5 @@ def _compose_cardinality(
 
 def _is_item_selection_transform(
     transform: DiffTransform,
-) -> TypeGuard[RelativeSelection | CollectionMap | StreamProjection]:
-    return type(transform) in {RelativeSelection, CollectionMap, StreamProjection}
+) -> TypeGuard[RelativeSelection | CollectionMap]:
+    return type(transform) in {RelativeSelection, CollectionMap}

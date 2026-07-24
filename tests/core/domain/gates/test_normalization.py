@@ -92,6 +92,12 @@ from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonInteger
+from tests.core.domain.assertions._invariant_support import (
+    _evidence_exhaustion as _assertion_evidence_exhaustion,
+)
+from tests.core.domain.diffs._invariant_support import (
+    _evidence_exhaustion as _diff_evidence_exhaustion,
+)
 
 
 def _fingerprint() -> Fingerprint:
@@ -214,6 +220,7 @@ def _assertion_fact(
         evidence=AssertionEvidence(
             retained=(),
             omitted=Count(value=counts.evaluated.value),
+            truncation=(_assertion_evidence_exhaustion() if counts.evaluated.value else None),
         ),
     )
 
@@ -315,7 +322,11 @@ def _diff_fact(
         outcome=outcome,
         counts=counts,
         coverage=coverage,
-        evidence=DiffEvidence(retained=(), omitted=Count(value=counts.total)),
+        evidence=DiffEvidence(
+            retained=(),
+            omitted=Count(value=counts.total),
+            exhaustion=_diff_evidence_exhaustion() if counts.total else None,
+        ),
     )
 
 

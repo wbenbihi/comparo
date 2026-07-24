@@ -61,6 +61,7 @@ from comparo.core.domain.selectors.sources import SelectionAccess
 from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
+from tests.core.domain.diffs._invariant_support import _evidence_exhaustion
 
 
 def _fingerprint() -> Fingerprint:
@@ -79,7 +80,12 @@ def _operation(family: DiffOperationFamily, name: str) -> DiffOperationIdentity:
 def _selector(source: SelectorSource = SelectorSource.STREAM_RECORDS) -> CompiledSelector:
     cardinality = (
         SelectorCardinality.ZERO_OR_MORE
-        if source in {SelectorSource.STREAM_EVENTS, SelectorSource.STREAM_RECORDS}
+        if source
+        in {
+            SelectorSource.STREAM_EVENTS,
+            SelectorSource.STREAM_EVENT_DATA_JSON,
+            SelectorSource.STREAM_RECORDS,
+        }
         else SelectorCardinality.EXACTLY_ONE
     )
     return CompiledSelector(
@@ -124,6 +130,21 @@ def _item_selector() -> CompiledItemSelector:
             kinds=(ValueKind.UNKNOWN,),
             cardinality=SelectorCardinality.EXACTLY_ONE,
         ),
+    )
+
+
+def _text_item_selector() -> CompiledItemSelector:
+    base = _item_selector()
+    text = ValueContract(
+        kinds=(ValueKind.STRING,),
+        cardinality=SelectorCardinality.EXACTLY_ONE,
+    )
+    return CompiledItemSelector(
+        fingerprint=base.fingerprint,
+        input=text,
+        path=NoPath(),
+        capabilities=base.capabilities,
+        output=text,
     )
 
 
@@ -218,13 +239,38 @@ def test_stream_pipeline_can_reduce_semantics_without_chunk_identity() -> None:
         empty=EmptyInputMode.RETURN_EMPTY_COLLECTION,
     )
     pipeline = SidePipeline(
-        selector=_selector(SelectorSource.STREAM_EVENTS),
+        selector=_selector(SelectorSource.STREAM_EVENT_DATA_JSON),
         transforms=(projection,),
         reducer=reducer,
     )
 
     assert pipeline.transforms == (projection,)
     assert pipeline.reducer == reducer
+
+
+def test_sse_data_pipeline_uses_extracted_text_as_its_static_item_contract() -> None:
+    projection = StreamProjection(
+        identity=_operation(DiffOperationFamily.TRANSFORM, "stream-project"),
+        source=StreamSemanticSource.SSE_DATA,
+        selector=_text_item_selector(),
+    )
+    pipeline = SidePipeline(
+        selector=_selector(SelectorSource.STREAM_EVENTS),
+        transforms=(projection,),
+    )
+    assert pipeline.output_contract.kinds == (ValueKind.STRING,)
+    assert pipeline.output_contract.cardinality is SelectorCardinality.ZERO_OR_MORE
+    with pytest.raises(ValueError, match="whole-item text selector"):
+        SidePipeline(
+            selector=_selector(SelectorSource.STREAM_EVENTS),
+            transforms=(
+                StreamProjection(
+                    identity=projection.identity,
+                    source=StreamSemanticSource.SSE_DATA,
+                    selector=_item_selector(),
+                ),
+            ),
+        )
 
 
 def test_stream_projection_cannot_relabel_or_recover_erased_root_semantics() -> None:
@@ -371,7 +417,9 @@ def test_equivalent_requires_nonempty_coverage_and_exact_counts() -> None:
             ignored=Count(value=0),
             not_evaluated=Count(value=0),
         ),
-        evidence=DiffEvidence(retained=(), omitted=Count(value=1)),
+        evidence=DiffEvidence(
+            retained=(), omitted=Count(value=1), exhaustion=_evidence_exhaustion()
+        ),
     )
 
     assert type(fact.outcome) is Equivalent

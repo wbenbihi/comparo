@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from comparo.core.domain.budget_contracts import BudgetExhaustionEffect
+from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.domain.budget_contracts import BudgetScopeKind
+from comparo.core.domain.budget_contracts import BudgetStage
+from comparo.core.domain.budgets import BudgetContribution
+from comparo.core.domain.budgets import BudgetContributionKind
+from comparo.core.domain.budgets import BudgetExceeded
+from comparo.core.domain.budgets import BudgetOperation
+from comparo.core.domain.budgets import BudgetUsage
+from comparo.core.domain.budgets import ResourceBudget
 from comparo.core.domain.diffs.operations import DiffOperationFamily
 from comparo.core.domain.diffs.operations import DiffOperationIdentity
+from comparo.core.domain.diffs.results import DiffValueProvenance
 from comparo.core.domain.diffs.rules import CompiledDiffRule
 from comparo.core.domain.diffs.rules import DiffApplication
 from comparo.core.domain.diffs.rules import DiffCompletenessRequirement
@@ -28,12 +39,15 @@ from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RuleApplicationId
 from comparo.core.domain.identity import RuleId
+from comparo.core.domain.identity import RunId
 from comparo.core.domain.metadata import Metadata
+from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.selectors.contracts import JSON_VALUE_KINDS
 from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
@@ -42,6 +56,7 @@ from comparo.core.domain.selectors.items import CompiledItemSelector
 from comparo.core.domain.selectors.items import ItemEqualityPredicate
 from comparo.core.domain.selectors.items import ItemPredicateIdentity
 from comparo.core.domain.selectors.items import ItemPredicateKind
+from comparo.core.domain.selectors.locations import ConcreteLocation
 from comparo.core.domain.selectors.locations import ExchangeLocation
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.paths import JsonPointer
@@ -55,6 +70,7 @@ from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonString
 from comparo.core.selection import compile_jsonpath
+from tests.core.domain.budget_origin_factories import default_budget_origin
 
 
 def _fingerprint() -> Fingerprint:
@@ -67,6 +83,33 @@ def _operation(family: DiffOperationFamily, name: str) -> DiffOperationIdentity:
         family=family,
         name=name,
         version="1",
+    )
+
+
+def _evidence_exhaustion() -> BudgetExceeded:
+    limit = Count(value=0)
+    budget = ResourceBudget(
+        resource=BudgetResource.EVIDENCE_EXAMPLES,
+        scope_kind=BudgetScopeKind.RUN,
+        stage=BudgetStage.EVIDENCE,
+        operation=BudgetOperation(value="diff.evidence.test"),
+        requested=limit,
+        effective=limit,
+        cap=None,
+        contributions=(
+            BudgetContribution(
+                kind=BudgetContributionKind.DEFAULT,
+                amount=limit,
+                origin=default_budget_origin(),
+            ),
+        ),
+        usage=BudgetUsage(consumed=limit, in_use=limit, high_water=limit),
+        scope=RunScope(run_id=RunId(value=UUID(int=98_000))),
+    )
+    return BudgetExceeded(
+        budget=budget,
+        attempted=Count(value=1),
+        effect=BudgetExhaustionEffect.EVIDENCE_TRUNCATED,
     )
 
 
@@ -86,6 +129,19 @@ def _selector() -> CompiledSelector:
             kinds=(ValueKind.INTEGER,),
             cardinality=SelectorCardinality.EXACTLY_ONE,
         ),
+    )
+
+
+def _value_provenance(
+    location: ConcreteLocation,
+    *,
+    selector: CompiledSelector | None = None,
+) -> DiffValueProvenance:
+    return DiffValueProvenance(
+        selector=_selector() if selector is None else selector,
+        locations=(location,),
+        operations=(),
+        taint_origins=(),
     )
 
 

@@ -6,15 +6,16 @@ from comparo.core.domain.diffs.operations import DiffTransform
 from comparo.core.domain.diffs.operations import StreamProjection
 from comparo.core.domain.diffs.operations import StreamSemanticSource
 from comparo.core.domain.selectors.model import CompiledSelector
+from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectorSource
+from comparo.core.domain.value_kinds import ValueKind
 
 _BODY_SOURCES = frozenset({SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_BODY})
-_SSE_SEMANTICS = frozenset(
+_SSE_EVENT_SEMANTICS = frozenset(
     {
         StreamSemanticSource.SSE_EVENT,
         StreamSemanticSource.SSE_DATA,
-        StreamSemanticSource.SSE_JSON_DATA,
     }
 )
 
@@ -36,6 +37,12 @@ def require_stream_projection_source(
     projection = projections[0][1]
     if not _source_supports_semantics(selector, projection.source):
         raise ValueError("stream projection semantics contradict the root selector source or view")
+    if projection.source is StreamSemanticSource.SSE_DATA and (
+        type(projection.selector.path) is not NoPath
+        or projection.selector.input.kinds != (ValueKind.STRING,)
+        or projection.selector.output.kinds != (ValueKind.STRING,)
+    ):
+        raise ValueError("SSE data projection requires a whole-item text selector")
 
 
 def _source_supports_semantics(
@@ -43,13 +50,15 @@ def _source_supports_semantics(
     semantics: StreamSemanticSource,
 ) -> bool:
     if selector.source is SelectorSource.STREAM_EVENTS:
-        return semantics in _SSE_SEMANTICS
+        return semantics in _SSE_EVENT_SEMANTICS
+    if selector.source is SelectorSource.STREAM_EVENT_DATA_JSON:
+        return semantics is StreamSemanticSource.SSE_JSON_DATA
     if selector.source is SelectorSource.STREAM_RECORDS:
         return semantics is StreamSemanticSource.JSON_RECORD
     if selector.source not in _BODY_SOURCES:
         return False
     if selector.body_view is BodyViewKind.SSE_EVENTS:
-        return semantics in _SSE_SEMANTICS
+        return semantics in _SSE_EVENT_SEMANTICS
     if selector.body_view in {
         BodyViewKind.NDJSON_RECORDS,
         BodyViewKind.JSON_SEQUENCE_RECORDS,

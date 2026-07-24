@@ -30,6 +30,7 @@ from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from tests.core.domain.diffs._invariant_support import _application
 from tests.core.domain.diffs._invariant_support import _compiled_rule
+from tests.core.domain.diffs._invariant_support import _evidence_exhaustion
 from tests.core.domain.diffs._invariant_support import _item_selector
 from tests.core.domain.diffs._invariant_support import _object_selector
 from tests.core.domain.diffs._invariant_support import _operation
@@ -198,14 +199,16 @@ def test_typed_aggregate_outcomes_reject_unsupported_reasons_and_precedence() ->
             outcome=NotEvaluated(reason=DiffNotEvaluatedReason.FALSE_APPLICABILITY),
             counts=ignored_counts,
             coverage=ignored_coverage,
-            evidence=DiffEvidence(retained=(), omitted=Count(value=1)),
+            evidence=DiffEvidence(
+                retained=(), omitted=Count(value=1), exhaustion=_evidence_exhaustion()
+            ),
         )
     with pytest.raises(ValueError, match="derived and resolved"):
         DiffRuleFact(
             fact_id=FactId(value=UUID(int=984)),
             application=_application(),
             rule=_compiled_rule(DiffSeverity.INFO),
-            outcome=NotEvaluated(reason=DiffNotEvaluatedReason.EMPTY_SELECTION),
+            outcome=NotEvaluated(reason=DiffNotEvaluatedReason.EMPTY_DERIVATION),
             counts=zero_counts,
             coverage=DiffCoverage(
                 baseline_selected=Count(value=1),

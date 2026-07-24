@@ -52,6 +52,7 @@ from tests.core.domain.diffs._invariant_support import _location
 from tests.core.domain.diffs._invariant_support import _operation
 from tests.core.domain.diffs._invariant_support import _plural_selector
 from tests.core.domain.diffs._invariant_support import _selector
+from tests.core.domain.diffs._invariant_support import _value_provenance
 
 
 def test_compiled_diff_rule_owns_complete_static_pipeline() -> None:
@@ -255,10 +256,10 @@ def test_fact_directionality(
         fact_id=FactId(value=UUID(int=64)),
         outcome=outcome,
         comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
-        baseline_location=_location(65) if baseline else None,
-        candidate_location=_location(66, candidate=True) if candidate else None,
+        baseline=_value_provenance(_location(65)) if baseline else None,
+        candidate=_value_provenance(_location(66, candidate=True)) if candidate else None,
     )
-    assert (fact.baseline_location is not None, fact.candidate_location is not None) == (
+    assert (fact.baseline is not None, fact.candidate is not None) == (
         baseline,
         candidate,
     )
@@ -270,14 +271,14 @@ def test_added_and_removed_cannot_reverse_direction() -> None:
             fact_id=FactId(value=UUID(int=67)),
             outcome=DiffFactOutcome.ADDED,
             comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
-            baseline_location=_location(68),
+            baseline=_value_provenance(_location(68)),
         )
     with pytest.raises(ValueError, match="baseline"):
         DiffFact(
             fact_id=FactId(value=UUID(int=69)),
             outcome=DiffFactOutcome.REMOVED,
             comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
-            candidate_location=_location(70, candidate=True),
+            candidate=_value_provenance(_location(70, candidate=True)),
         )
 
 
