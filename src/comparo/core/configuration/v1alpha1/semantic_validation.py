@@ -103,6 +103,8 @@ def _walk_diff_operations(node: ConfigurationNode) -> tuple[ConfigurationDiagnos
         return ()
     if type(node) is SequenceNode:
         return tuple(issue for item in node.items for issue in _walk_diff_operations(item))
+    if len(node.entries) == 1 and node.entries[0].name == "$literal":
+        return ()
     diagnostics: list[ConfigurationDiagnostic] = []
     operation_fields = {
         "comparator": DIFF_COMPARATOR_ALIASES,

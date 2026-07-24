@@ -300,7 +300,8 @@ def test_profile_rules_accept_structured_and_versioned_builtin_operations() -> N
                     "{rules: [{comparator: {name: numericTolerance, absolute: 0.1}, "
                     "transforms: [{name: project, pointers: [/status]}], reducer: count, "
                     "pairing: singular, note: semantic, samples: [one], "
-                    "nested: {comparator: exact}}]}",
+                    "nested: {comparator: exact}, payload: {$literal: {comparator: arbitrary, "
+                    "transforms: [arbitrary]}}}]}",
                 ),
             )
         )
