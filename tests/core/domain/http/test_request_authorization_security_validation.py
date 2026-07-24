@@ -20,6 +20,7 @@ from comparo.core.domain.http.authorization import network_destination_identifie
 from comparo.core.domain.http.authorization import proxy_dns_target_identifier
 from comparo.core.domain.http.authorization import resolved_route_identifier
 from comparo.core.domain.http.requests import FinalizedWireRequest
+from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import ClientResolvedTarget
 from comparo.core.domain.http.url import DirectResolvedRoute
 from comparo.core.domain.http.url import DnsHost
@@ -86,8 +87,12 @@ def test_route_request_binding_rejects_every_mismatch() -> None:
     )
 
     delegated_request, delegated_route = proxy_request_and_route(delegated=True)
-    delegated_target = cast("ProxyResolvedTarget", delegated_route.target)
-    approval = ProxyDnsApproval(target=delegated_target, authority=authority("b"))
+    approval = ProxyDnsApproval(
+        request=delegated_request,
+        route=delegated_route,
+        plan_fingerprint=fingerprint("a"),
+        authority=authority("b"),
+    )
     wrong_target = ProxyResolvedTarget(
         scheme=HttpScheme.HTTPS,
         authority=HttpAuthority(host=DnsHost(value="other.example.test")),
@@ -98,7 +103,12 @@ def test_route_request_binding_rejects_every_mismatch() -> None:
             route=msgspec.structs.replace(delegated_route, target=wrong_target),
             plan_fingerprint=fingerprint("a"),
             effective_policy_fingerprint=fingerprint("b"),
-            proxy_dns_approval=ProxyDnsApproval(target=wrong_target, authority=authority("b")),
+            proxy_dns_approval=ProxyDnsApproval(
+                request=delegated_request,
+                route=msgspec.structs.replace(delegated_route, target=wrong_target),
+                plan_fingerprint=fingerprint("a"),
+                authority=authority("b"),
+            ),
         )
     with pytest.raises(TypeError, match="route must be ResolvedRoute"):
         authorization_models._validate_route_request(
@@ -140,7 +150,7 @@ def test_route_request_binding_rejects_every_mismatch() -> None:
             plan_fingerprint=fingerprint("a"),
             effective_policy_fingerprint=fingerprint("b"),
         )
-    assert approval.target is delegated_target
+    assert approval.route is delegated_route
 
 
 def test_mutation_and_proxy_dns_approvals_validate_every_component() -> None:
@@ -178,15 +188,40 @@ def test_mutation_and_proxy_dns_approvals_validate_every_component() -> None:
             capability_id=cast("CapabilityId", object()),
         )
 
-    target = ProxyResolvedTarget(
-        scheme=HttpScheme.HTTPS,
-        authority=HttpAuthority(host=DnsHost(value="api.example.test")),
-    )
-    with pytest.raises(TypeError, match="target must be ProxyResolvedTarget"):
-        ProxyDnsApproval(target=cast("ProxyResolvedTarget", object()), authority=authority())
+    proxy_request, proxy_route = proxy_request_and_route(delegated=True)
+    with pytest.raises(TypeError, match="request must be FinalizedWireRequest"):
+        ProxyDnsApproval(
+            request=cast("FinalizedWireRequest", object()),
+            route=proxy_route,
+            plan_fingerprint=plan,
+            authority=authority(),
+        )
+    with pytest.raises(TypeError, match="route must be ResolvedRoute"):
+        ProxyDnsApproval(
+            request=proxy_request,
+            route=cast("ResolvedRoute", object()),
+            plan_fingerprint=plan,
+            authority=authority(),
+        )
+    with pytest.raises(ValueError, match="proxy-resolved delegated route"):
+        ProxyDnsApproval(
+            request=finalized_request(),
+            route=DirectResolvedRoute(destination=destination()),
+            plan_fingerprint=plan,
+            authority=authority(),
+        )
+    with pytest.raises(TypeError, match="plan binding"):
+        ProxyDnsApproval(
+            request=proxy_request,
+            route=proxy_route,
+            plan_fingerprint=cast("Fingerprint", object()),
+            authority=authority(),
+        )
     with pytest.raises(ValueError, match="wrong built-in capability"):
         ProxyDnsApproval(
-            target=target,
+            request=proxy_request,
+            route=proxy_route,
+            plan_fingerprint=plan,
             authority=authority(),
             operation=CapabilityOperation(value="dns.inspect"),
         )
@@ -260,11 +295,12 @@ def test_proxy_dns_approval_modes_are_exactly_bound() -> None:
         )
 
     client_request, client_route = proxy_request_and_route(delegated=False)
-    target = ProxyResolvedTarget(
-        scheme=HttpScheme.HTTPS,
-        authority=HttpAuthority(host=DnsHost(value="api.example.test")),
+    approval = ProxyDnsApproval(
+        request=delegated_request,
+        route=delegated_route,
+        plan_fingerprint=fingerprint("a"),
+        authority=authority("b"),
     )
-    approval = ProxyDnsApproval(target=target, authority=authority("b"))
     with pytest.raises(ValueError, match="client-resolved routes"):
         HttpAuthorizationIntent(
             request=client_request,
@@ -278,13 +314,27 @@ def test_proxy_dns_approval_modes_are_exactly_bound() -> None:
         scheme=HttpScheme.HTTPS,
         authority=HttpAuthority(host=DnsHost(value="other.example.test")),
     )
-    with pytest.raises(ValueError, match="not bound to this route"):
+    other_route = msgspec.structs.replace(delegated_route, target=other)
+    other_request = msgspec.structs.replace(
+        delegated_request,
+        url=AbsoluteHttpUrl(
+            scheme=HttpScheme.HTTPS,
+            authority=HttpAuthority(host=DnsHost(value="other.example.test")),
+        ),
+    )
+    other_approval = ProxyDnsApproval(
+        request=other_request,
+        route=other_route,
+        plan_fingerprint=fingerprint("a"),
+        authority=authority("b"),
+    )
+    with pytest.raises(ValueError, match="not bound to this HTTP intent"):
         HttpAuthorizationIntent(
             request=delegated_request,
             route=delegated_route,
             plan_fingerprint=fingerprint("a"),
             effective_policy_fingerprint=fingerprint("b"),
-            proxy_dns_approval=ProxyDnsApproval(target=other, authority=authority("b")),
+            proxy_dns_approval=other_approval,
         )
 
 
@@ -315,9 +365,13 @@ def test_http_authority_revision_and_approval_issuer_are_exact() -> None:
         )
 
     delegated_request, delegated_route = proxy_request_and_route(delegated=True)
-    target = cast("ProxyResolvedTarget", delegated_route.target)
-    mismatched = ProxyDnsApproval(target=target, authority=authority("c"))
-    with pytest.raises(ValueError, match="effective HTTP policy"):
+    mismatched = ProxyDnsApproval(
+        request=delegated_request,
+        route=delegated_route,
+        plan_fingerprint=fingerprint("a"),
+        authority=authority("c"),
+    )
+    with pytest.raises(ValueError, match="not bound to this HTTP intent"):
         HttpAuthorizationIntent(
             request=delegated_request,
             route=delegated_route,
@@ -346,7 +400,9 @@ def test_http_authority_revision_and_approval_issuer_are_exact() -> None:
         plan_fingerprint=fingerprint("a"),
         effective_policy_fingerprint=fingerprint("b"),
         proxy_dns_approval=ProxyDnsApproval(
-            target=target,
+            request=delegated_request,
+            route=delegated_route,
+            plan_fingerprint=fingerprint("a"),
             authority=approval_authority,
         ),
     )

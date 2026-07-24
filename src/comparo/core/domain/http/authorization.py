@@ -175,18 +175,30 @@ class MutationApproval(msgspec.Struct, frozen=True, kw_only=True):
 
 @final
 class ProxyDnsApproval(msgspec.Struct, frozen=True, kw_only=True):
-    """ExecutionPolicy authority to delegate one exact target name to a proxy resolver."""
+    """ExecutionPolicy authority to delegate DNS for one exact HTTP request intent."""
 
-    target: ProxyResolvedTarget
+    request: FinalizedWireRequest
+    route: ResolvedRoute
+    plan_fingerprint: Fingerprint
     authority: ExecutionPolicyAuthority
     capability_id: CapabilityId = _PROXY_DNS_ID
     operation: CapabilityOperation = _PROXY_DNS_OPERATION
 
     def __post_init__(self) -> None:
-        """Require the exact built-in proxy-DNS capability for this target origin."""
-        if type(self.target) is not ProxyResolvedTarget:
-            raise TypeError("proxy DNS approval target must be ProxyResolvedTarget")
+        """Bind proxy-DNS authority structurally to request, delegated route, and plan."""
+        if type(self.request) is not FinalizedWireRequest:
+            raise TypeError("proxy DNS approval request must be FinalizedWireRequest")
+        if not is_resolved_route(self.route):
+            raise TypeError("proxy DNS approval route must be ResolvedRoute")
+        if (
+            type(self.route) is not ProxyResolvedRoute
+            or type(self.route.target) is not ProxyResolvedTarget
+        ):
+            raise ValueError("proxy DNS approval requires a proxy-resolved delegated route")
+        if type(self.plan_fingerprint) is not Fingerprint:
+            raise TypeError("proxy DNS approval plan binding must be Fingerprint")
         _validate_policy_authority(self.authority, self.authority.policy.fingerprint)
+        _validate_route_request(self.route, self.request)
         _validate_contract(
             actual_id=self.capability_id,
             actual_operation=self.operation,
@@ -261,13 +273,14 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
         if delegated is not None:
             if self.proxy_dns_approval is None:
                 raise ValueError("proxy-side DNS requires explicit ExecutionPolicy approval")
-            if self.proxy_dns_approval.target != delegated:
-                raise ValueError("proxy DNS approval is not bound to this route resolution mode")
             if (
-                self.proxy_dns_approval.effective_policy_fingerprint
+                self.proxy_dns_approval.request != self.request
+                or self.proxy_dns_approval.route != self.route
+                or self.proxy_dns_approval.plan_fingerprint != self.plan_fingerprint
+                or self.proxy_dns_approval.effective_policy_fingerprint
                 != self.effective_policy_fingerprint
             ):
-                raise ValueError("proxy DNS approval is not bound to this effective HTTP policy")
+                raise ValueError("proxy DNS approval is not bound to this HTTP intent")
 
 
 @final

@@ -372,7 +372,9 @@ def test_proxy_route_pins_proxy_and_declares_target_resolution_owner() -> None:
     delegated_target = route.target
     assert type(delegated_target) is ProxyResolvedTarget
     proxy_dns_approval = ProxyDnsApproval(
-        target=delegated_target,
+        request=request,
+        route=route,
+        plan_fingerprint=fingerprint("d"),
         authority=authority("e"),
     )
     intent = HttpAuthorizationIntent(
