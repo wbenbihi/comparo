@@ -226,9 +226,13 @@ Paths and pointer expressions are structural compiler fields.
 The typed source catalog covers execution/attempt/exchange state and timings; effective request
 method, URL, query, headers, cookies, and body; terminal or explicitly addressed response protocol,
 status, informational responses, headers, trailers, media, encodings, body, timing, endpoint, and
-TLS facts; stream events/records/controls/termination; and applicable Scenario step data. Common
+TLS facts; stream events/records/controls/timings/termination; and applicable Scenario step data. Common
 shorthands and structured forms lower to one Selector AST. Header/trailer lookup returns every
 ordered occurrence and never silently chooses or joins values.
+
+The implemented catalog also exposes logical-stream timings and an explicit
+`stream.events.data-json` source for nested SSE data. Execution, attempt, exchange, response,
+stream, and body facts share the same immutable snapshot boundary and exact occurrence scope.
 
 Assertions require explicit semantic body views; a bare body selects the BodyHandle. RFC result
 duplicates are preserved and counted. Comparo imposes a documented deterministic order where RFC
@@ -254,5 +258,7 @@ and duplicate locations are accepted only when the compiled selector says they a
 
 ## Implementation-level follow-up
 
-The remaining per-kind shorthand inventory will be generated from concrete versioned schemas; the
-shared selector semantics are closed.
+The remaining per-kind shorthand inventory will be generated from concrete versioned schemas. A
+bounded RFC 9485 I-Regexp implementation for JSONPath `match()` and `search()` is deferred during
+`comparo/v1alpha1`; evaluation reports it as explicitly unsupported and never substitutes a host
+regular-expression engine. The shared selector semantics are otherwise closed.

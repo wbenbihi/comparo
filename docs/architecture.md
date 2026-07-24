@@ -1,8 +1,9 @@
 # Architecture
 
 Comparo is being rebuilt from a pure, immutable domain center outward. The current public source
-tree implements **Step 1 only**: the internal language shared by future compiler, planner,
-runtime, evaluator, artifact, CLI, and TUI modules. It is not yet a runnable CLI or TUI.
+tree implements **Steps 1 and 2**: the internal language plus the shared pure selector engine used
+by future assertion, diff, capture, redaction, and triage consumers. It is not yet a runnable CLI
+or TUI.
 
 The accepted destination and implementation order are recorded in the
 [core refactor roadmap](core-refactor-roadmap.md). The exact Step 1 boundary is recorded in the
@@ -17,13 +18,14 @@ src/comparo/
 ├── py.typed
 └── core/
     ├── __init__.py
-    └── domain/
-        ├── assertions/   typed assertion rules and outcomes
-        ├── diffs/        typed binary diff pipelines and outcomes
-        ├── gates/        value-free gate inputs and verdict contracts
-        ├── http/         finalized request and observation language
-        ├── selectors/    compiled selectors, locations, and result variants
-        └── *.py          identity, values, scopes, budgets, planning, and policy contracts
+    ├── domain/
+    │   ├── assertions/   typed assertion rules and outcomes
+    │   ├── diffs/        typed binary diff pipelines and outcomes
+    │   ├── gates/        value-free gate inputs and verdict contracts
+    │   ├── http/         finalized request and observation language
+    │   ├── selectors/    compiled selectors, locations, and result variants
+    │   └── *.py          identity, values, scopes, budgets, planning, and policy contracts
+    └── selection/        pure parser, compiler, snapshot, evaluator, and accounting kernel
 ```
 
 The previous prototype implementation, tests, and examples are quarantined under
@@ -48,15 +50,21 @@ versioned configuration frontend
   -> CLI / TUI / CI reporters
 ```
 
-Only the domain layer exists today. Domain modules cannot import adapter frameworks, HTTP client
+Only the domain and selector kernel exist today. Domain modules cannot import adapter frameworks, HTTP client
 libraries, YAML or schema libraries, CLI/TUI frameworks, filesystem APIs, networking APIs,
 serialization helpers, ambient environment access, clocks, randomness, or task schedulers.
 Architecture tests also enforce acyclic internal imports, frozen/final `msgspec.Struct` records,
 closed field types, immutable module constants, secret-safe containers, and cohesive module size.
 
+Selection accepts a closed immutable snapshot containing an observation and values already
+resolved by storage adapters. It performs no I/O or decoding. Its explicit import allowlist,
+module-size limit, cumulative budgets, and closed result union protect that boundary from gradual
+coupling to adapters.
+
 The current import-linter configuration contains one contract: `comparo.core.domain` must not
-import adapter or framework packages. Additional layer contracts will be added when those packages
-actually exist; this document does not claim future modules are already implemented.
+import adapter or framework packages. The selector package has a stricter AST-enforced dependency
+allowlist. Additional layer contracts will be added when those packages actually exist; this
+document does not claim future modules are already implemented.
 
 ## Domain responsibilities
 

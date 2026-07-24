@@ -111,22 +111,36 @@ Exit criteria:
 
 ## Step 2: shared selector engine
 
+Status: completed on 2026-07-24. The implemented language and runtime boundary are documented in
+[Comparo selector language](selector-language.md).
+
 Implement one selector abstraction for assertions, diffs, captures, redaction, triage, and future
 matrix injection.
 
 ```text
-select(observation, selector) -> SelectionResult
+select(prepared_snapshot, compiled_selector, control) -> SelectionEvaluation
 ```
 
-Selection results distinguish one value, multiple values, missing data, an unavailable source, a
-parse failure, and an invalid selector. The grammar must support proper escaping and be documented
-as a stable language rather than described loosely as JSONPath.
+The prepared snapshot binds an immutable observation to already-resolved body, decoded-view, and
+stream values. Control carries cumulative selection budgets and an immutable cancellation
+observation. Evaluation returns both the closed result union and updated budgets. Authored parse
+failures are compilation outcomes; they never masquerade as missing runtime data.
+
+Selection implements RFC 6901 JSON Pointer and RFC 9535 JSONPath, typed HTTP fields and static
+facts, exact attempt/exchange occurrence scope, body views, and SSE/record stream sources. Runtime
+results distinguish ready, partial, unavailable, unmeasured, observed-invalid, decode-failed,
+incomplete, budget-exhausted, unsupported, and cancelled states.
 
 Exit criteria:
 
-- Parser and evaluator are separate pure modules.
-- Property and fuzz tests cover path parsing and evaluation.
-- No downstream evaluator needs its own path parser.
+- Parser and evaluator are separate pure modules: complete.
+- Property, adversarial, and pinned RFC conformance tests cover path parsing and evaluation:
+  complete.
+- Evaluation is I/O-free, incrementally budgeted before retention, and protected by an explicit
+  dependency allowlist: complete.
+- HTTP, body, stream, occurrence, and JSON sources lower to one public selection boundary:
+  complete.
+- No downstream evaluator needs its own path parser: complete.
 
 ## Step 3: pure assertion, diff, and gate engines
 

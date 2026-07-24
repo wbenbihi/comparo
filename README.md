@@ -22,6 +22,7 @@ networking, persistence, CLI, and TUI concerns are adapters around that core.
 
 - [Core refactor roadmap](https://github.com/wbenbihi/comparo/blob/main/docs/core-refactor-roadmap.md)
 - [Immutable core domain foundation](https://github.com/wbenbihi/comparo/blob/main/docs/core-domain-foundation.md)
+- [Shared selector language](https://github.com/wbenbihi/comparo/blob/main/docs/selector-language.md)
 - [Accepted architecture decisions](https://github.com/wbenbihi/comparo/blob/main/docs/decisions/README.md)
 
 The canonical product promise, security boundary, configuration model, HTTP semantics, assertion
