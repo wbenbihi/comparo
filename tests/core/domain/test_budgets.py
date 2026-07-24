@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 
+from comparo.core.domain.budget_origins import BudgetOrigin
 from comparo.core.domain.budgets import BudgetContribution
 from comparo.core.domain.budgets import BudgetContributionKind
 from comparo.core.domain.budgets import BudgetExceeded
@@ -15,30 +16,32 @@ from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import BudgetStage
 from comparo.core.domain.budgets import BudgetUsage
 from comparo.core.domain.budgets import ResourceBudget
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Ratio
-from comparo.core.domain.provenance import ProvenanceEntry
-from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.scopes import RunScope
+from tests.core.domain.budget_origin_factories import default_budget_origin
+from tests.core.domain.budget_origin_factories import definition_budget_origin
+from tests.core.domain.budget_origin_factories import invocation_budget_origin
 
 _REQUESTED = Count(value=10)
 _EFFECTIVE = Count(value=8)
 _CAP = Count(value=8)
 
 
-def _origin(kind: ProvenanceKind = ProvenanceKind.VERSIONED_DEFAULT) -> ProvenanceEntry:
-    return ProvenanceEntry(kind=kind)
-
-
 def _contribution(
     amount: Count | ByteCount | Duration | Ratio,
     kind: BudgetContributionKind = BudgetContributionKind.DEFAULT,
-    origin: ProvenanceKind = ProvenanceKind.VERSIONED_DEFAULT,
+    origin: BudgetOrigin | None = None,
 ) -> BudgetContribution:
-    return BudgetContribution(kind=kind, amount=amount, provenance=_origin(origin))
+    return BudgetContribution(
+        kind=kind,
+        amount=amount,
+        origin=origin or default_budget_origin(),
+    )
 
 
 def _usage(amount: Count | ByteCount | Duration | Ratio) -> BudgetUsage:
@@ -68,12 +71,12 @@ def _budget(
             _contribution(
                 requested,
                 BudgetContributionKind.REQUEST,
-                ProvenanceKind.INVOCATION,
+                invocation_budget_origin(),
             ),
             _contribution(
                 Count(value=8),
                 BudgetContributionKind.CEILING,
-                ProvenanceKind.EXECUTION_POLICY,
+                definition_budget_origin(ResourceKind.EXECUTION_POLICY),
             ),
         )
     return ResourceBudget(
@@ -86,7 +89,7 @@ def _budget(
         cap=cap,
         contributions=contributions,
         usage=usage or _usage(requested),
-        scope=scope,
+        scope=scope or RunScope(run_id=RunId(value=UUID(int=1))),
     )
 
 
@@ -125,9 +128,21 @@ def test_multiple_ceilings_use_the_exact_lowest_value() -> None:
     middle = Ratio.from_decimal(Decimal("2.5"))
     contributions = (
         _contribution(requested),
-        _contribution(high, BudgetContributionKind.CEILING, ProvenanceKind.SAFETY_PROFILE),
-        _contribution(low, BudgetContributionKind.CEILING, ProvenanceKind.EXECUTION_POLICY),
-        _contribution(middle, BudgetContributionKind.CEILING, ProvenanceKind.SAFETY_PROFILE),
+        _contribution(
+            high,
+            BudgetContributionKind.CEILING,
+            definition_budget_origin(ResourceKind.SAFETY_PROFILE),
+        ),
+        _contribution(
+            low,
+            BudgetContributionKind.CEILING,
+            definition_budget_origin(ResourceKind.EXECUTION_POLICY),
+        ),
+        _contribution(
+            middle,
+            BudgetContributionKind.CEILING,
+            definition_budget_origin(ResourceKind.SAFETY_PROFILE),
+        ),
     )
     budget = ResourceBudget(
         resource=BudgetResource.DECOMPRESSION_RATIO,
@@ -148,7 +163,7 @@ def test_duration_budgets_compare_exact_nanoseconds() -> None:
     cap = Duration(nanoseconds=10)
     budget = ResourceBudget(
         resource=BudgetResource.DEADLINE,
-        scope_kind=BudgetScopeKind.ATTEMPT,
+        scope_kind=BudgetScopeKind.BODY,
         stage=BudgetStage.HTTP,
         operation=BudgetOperation(value="send.request"),
         requested=requested,
@@ -156,7 +171,11 @@ def test_duration_budgets_compare_exact_nanoseconds() -> None:
         cap=cap,
         contributions=(
             _contribution(requested),
-            _contribution(cap, BudgetContributionKind.CEILING, ProvenanceKind.EXECUTION_POLICY),
+            _contribution(
+                cap,
+                BudgetContributionKind.CEILING,
+                definition_budget_origin(ResourceKind.EXECUTION_POLICY),
+            ),
         ),
         usage=_usage(requested),
     )
@@ -171,19 +190,25 @@ def test_budget_operation_and_contribution_validate_components() -> None:
         BudgetContribution(
             kind="default",  # type: ignore[arg-type]
             amount=Count(value=1),
-            provenance=_origin(),
+            origin=default_budget_origin(),
         )
     with pytest.raises(TypeError, match="supported exact amount"):
         BudgetContribution(
             kind=BudgetContributionKind.DEFAULT,
             amount=1,  # type: ignore[arg-type]
-            provenance=_origin(),
+            origin=default_budget_origin(),
         )
-    with pytest.raises(TypeError, match="provenance"):
+    with pytest.raises(TypeError, match="exact BudgetOrigin"):
         BudgetContribution(
             kind=BudgetContributionKind.DEFAULT,
             amount=Count(value=1),
-            provenance="default",  # type: ignore[arg-type]
+            origin="default",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="versioned default-set"):
+        _contribution(
+            Count(value=1),
+            BudgetContributionKind.DEFAULT,
+            definition_budget_origin(ResourceKind.EXECUTION_POLICY),
         )
 
 
@@ -205,6 +230,30 @@ def test_budget_usage_is_typed_and_unit_consistent() -> None:
             consumed=Count(value=1),
             in_use=ByteCount(value=0),
             high_water=Count(value=1),
+        )
+    with pytest.raises(ValueError, match="in-use"):
+        _budget(
+            usage=BudgetUsage(
+                consumed=Count(value=0),
+                in_use=Count(value=2),
+                high_water=Count(value=1),
+            )
+        )
+    with pytest.raises(ValueError, match="high-water"):
+        _budget(
+            usage=BudgetUsage(
+                consumed=Count(value=0),
+                in_use=Count(value=0),
+                high_water=Count(value=9),
+            )
+        )
+    with pytest.raises(ValueError, match="consumption"):
+        _budget(
+            usage=BudgetUsage(
+                consumed=Count(value=9),
+                in_use=Count(value=0),
+                high_water=Count(value=0),
+            )
         )
 
 
@@ -230,7 +279,7 @@ def test_budget_rejects_untyped_identity_fields(field: str, replacement: object)
         "cap": None,
         "contributions": (_contribution(Count(value=1)),),
         "usage": _usage(Count(value=1)),
-        "scope": None,
+        "scope": RunScope(run_id=RunId(value=UUID(int=1))),
     }
     values[field] = replacement
     with pytest.raises(TypeError):
@@ -259,6 +308,42 @@ def test_budget_rejects_invalid_amount_and_contribution_shapes() -> None:
             effective=Count(value=10),
             contributions=(_contribution(ByteCount(value=10)),),
         )
+    with pytest.raises(TypeError, match="contract-defined amount type"):
+        ResourceBudget(
+            resource=BudgetResource.REQUEST_BYTES,
+            scope_kind=BudgetScopeKind.BODY,
+            stage=BudgetStage.HTTP,
+            operation=BudgetOperation(value="send.request"),
+            requested=Count(value=1),
+            effective=Count(value=1),
+            cap=None,
+            contributions=(_contribution(Count(value=1)),),
+            usage=_usage(Count(value=1)),
+        )
+    with pytest.raises(ValueError, match="scope/stage placement"):
+        ResourceBudget(
+            resource=BudgetResource.REQUESTS,
+            scope_kind=BudgetScopeKind.BODY,
+            stage=BudgetStage.PLANNING,
+            operation=BudgetOperation(value="expand.requests"),
+            requested=Count(value=1),
+            effective=Count(value=1),
+            cap=None,
+            contributions=(_contribution(Count(value=1)),),
+            usage=_usage(Count(value=1)),
+        )
+    with pytest.raises(ValueError, match="scope/stage placement"):
+        ResourceBudget(
+            resource=BudgetResource.REQUESTS,
+            scope_kind=BudgetScopeKind.PLAN,
+            stage=BudgetStage.HTTP,
+            operation=BudgetOperation(value="expand.requests"),
+            requested=Count(value=1),
+            effective=Count(value=1),
+            cap=None,
+            contributions=(_contribution(Count(value=1)),),
+            usage=_usage(Count(value=1)),
+        )
 
 
 def test_budget_recomputes_every_derivation_invariant() -> None:
@@ -266,7 +351,7 @@ def test_budget_recomputes_every_derivation_invariant() -> None:
         _contribution(
             Count(value=8),
             BudgetContributionKind.CEILING,
-            ProvenanceKind.EXECUTION_POLICY,
+            definition_budget_origin(ResourceKind.EXECUTION_POLICY),
         ),
     )
     with pytest.raises(ValueError, match="default or requested"):
@@ -277,7 +362,7 @@ def test_budget_recomputes_every_derivation_invariant() -> None:
                 _contribution(
                     Count(value=10),
                     BudgetContributionKind.REQUEST,
-                    ProvenanceKind.PROJECT,
+                    definition_budget_origin(ResourceKind.PROJECT),
                 ),
             ),
             effective=Count(value=10),
@@ -313,6 +398,12 @@ def test_budget_exhaustion_is_a_typed_non_success_outcome() -> None:
     )
     assert exceeded.budget.stage is BudgetStage.PLANNING
     assert exceeded.effect is BudgetExhaustionEffect.PLAN_REJECTED
+    with pytest.raises(ValueError, match="not valid"):
+        BudgetExceeded(
+            budget=budget,
+            attempted=Count(value=9),
+            effect=BudgetExhaustionEffect.ARTIFACT_REJECTED,
+        )
     with pytest.raises(TypeError, match="ResourceBudget"):
         BudgetExceeded(
             budget="budget",  # type: ignore[arg-type]

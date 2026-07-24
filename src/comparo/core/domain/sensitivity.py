@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import Enum
 from enum import StrEnum
 from typing import Final
 from typing import Never
@@ -26,12 +25,13 @@ def _is_deeply_immutable(value: object) -> bool:
         return True
     if type(value) is Decimal:
         return value.is_finite()
-    if isinstance(value, Enum):
-        return True
+    if isinstance(value, StrEnum):
+        return False
     if type(value) is tuple:
         return all(_is_deeply_immutable(item) for item in value)
     if isinstance(value, msgspec.Struct):
-        if not type(value).__struct_config__.frozen:
+        config = type(value).__struct_config__
+        if config.dict or not config.frozen:
             return False
         return all(
             _is_deeply_immutable(getattr(value, field.name))

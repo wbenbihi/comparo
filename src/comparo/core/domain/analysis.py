@@ -3,37 +3,65 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
+from typing import Final
 from typing import Protocol
+from typing import cast
 from typing import final
 
 import msgspec
 
-from comparo.core.domain.budgets import BudgetExceeded
-from comparo.core.domain.budgets import BudgetStage
+from comparo.core.domain.analysis_results import AnalysisBudgetExhausted as AnalysisBudgetExhausted
+from comparo.core.domain.analysis_results import AnalysisCancelled as AnalysisCancelled
+from comparo.core.domain.analysis_results import AnalysisEvidence as AnalysisEvidence
+from comparo.core.domain.analysis_results import AnalysisExecutionResult
+from comparo.core.domain.analysis_results import AnalysisMalformed as AnalysisMalformed
+from comparo.core.domain.analysis_results import AnalysisProviderFailed as AnalysisProviderFailed
+from comparo.core.domain.analysis_results import AnalysisSucceeded as AnalysisSucceeded
+from comparo.core.domain.analysis_results import AnalysisTimedOut as AnalysisTimedOut
+from comparo.core.domain.analysis_results import AnalysisVerdict as AnalysisVerdict
+from comparo.core.domain.budgets import BudgetOperation
+from comparo.core.domain.budgets import BudgetResource
+from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import ResourceBudget
 from comparo.core.domain.capabilities import CapabilityCategory
 from comparo.core.domain.capabilities import CapabilityDenied
 from comparo.core.domain.capabilities import CapabilityGranted
+from comparo.core.domain.capabilities import CapabilityId
+from comparo.core.domain.capabilities import CapabilityOperation
+from comparo.core.domain.capabilities import CapabilityRequest
 from comparo.core.domain.capabilities import CapabilityTargetKind
 from comparo.core.domain.capabilities import NamedCapabilityTarget
-from comparo.core.domain.diagnostics import Diagnostic
-from comparo.core.domain.diagnostics import DiagnosticCode
-from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.identity import AnalysisId
 from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.identity import ViewId
-from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.domain.primitives import ByteCount
-from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Fingerprint
-from comparo.core.domain.primitives import Ratio
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 
 _PROVIDER_TOKEN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
+
+ANALYSIS_CAPABILITY_ID: Final = CapabilityId(
+    namespace="comparo.core",
+    name="external-analysis",
+    version="1",
+)
+ANALYSIS_EXECUTE_OPERATION: Final = CapabilityOperation(value="execute")
+SECRET_EGRESS_CAPABILITY_ID: Final = CapabilityId(
+    namespace="comparo.core",
+    name="secret-egress",
+    version="1",
+)
+SECRET_EGRESS_OPERATION: Final = CapabilityOperation(value="egress")
+
+_ANALYSIS_BUDGET_OPERATIONS: Final = {
+    BudgetResource.EXTERNAL_INPUT_BYTES: BudgetOperation(value="analysis.input"),
+    BudgetResource.EXTERNAL_OUTPUT_BYTES: BudgetOperation(value="analysis.output"),
+    BudgetResource.DEADLINE: BudgetOperation(value="analysis.deadline"),
+    BudgetResource.EXTERNAL_WORK: BudgetOperation(value="analysis.work"),
+}
 
 
 @final
@@ -61,6 +89,24 @@ class AnalysisProvider(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("analysis destination must be a NamedCapabilityTarget")
         if self.destination.kind is not CapabilityTargetKind.DESTINATION:
             raise ValueError("analysis destination must use the destination target kind")
+
+
+@final
+class AnalysisSchema(msgspec.Struct, frozen=True, kw_only=True):
+    """The exact structured-output contract requested from an analysis provider."""
+
+    identifier: str
+    version: str
+    fingerprint: Fingerprint
+
+    def __post_init__(self) -> None:
+        """Require a stable identity, explicit version, and content fingerprint."""
+        if type(self.identifier) is not str or _PROVIDER_TOKEN.fullmatch(self.identifier) is None:
+            raise ValueError("analysis schema identifier must be a lowercase namespaced token")
+        if type(self.version) is not str or not self.version.strip():
+            raise ValueError("analysis schema version must be non-blank text")
+        if type(self.fingerprint) is not Fingerprint:
+            raise TypeError("analysis schema fingerprint must be a Fingerprint")
 
 
 type AnalysisInputSource = BodyId | ViewId | FactId
@@ -99,29 +145,85 @@ class AnalysisInput(msgspec.Struct, frozen=True, kw_only=True):
 
 @final
 class AnalysisRequest(msgspec.Struct, frozen=True, kw_only=True):
-    """An immutable analysis recipe with explicit authority, cost, and timeout bounds."""
+    """An immutable analysis recipe awaiting an operator-owned authorization grant."""
 
     analysis_id: AnalysisId
     provider: AnalysisProvider
     inputs: tuple[AnalysisInput, ...]
-    authorization: CapabilityGranted
+    output_schema: AnalysisSchema
     budgets: tuple[ResourceBudget, ...]
     timeout: Duration
-    fingerprint: Fingerprint
+    fingerprint: Fingerprint | SensitiveValue[Fingerprint]
 
     def __post_init__(self) -> None:
-        """Bind the request to matching external-analysis authority and finite bounds."""
+        """Require exact model, inputs, output contract, and finite operational bounds."""
         if type(self.analysis_id) is not AnalysisId:
             raise TypeError("analysis request requires an AnalysisId")
         if type(self.provider) is not AnalysisProvider:
             raise TypeError("analysis request requires an AnalysisProvider")
         _validate_inputs(self.inputs)
-        _validate_authorization(self.authorization, self.provider)
-        _validate_budgets(self.budgets)
+        if type(self.output_schema) is not AnalysisSchema:
+            raise TypeError("analysis request requires an AnalysisSchema")
         if type(self.timeout) is not Duration:
             raise TypeError("analysis timeout must be a Duration")
-        if type(self.fingerprint) is not Fingerprint:
-            raise TypeError("analysis fingerprint must be a Fingerprint")
+        _validate_budgets(self.budgets, inputs=self.inputs, timeout=self.timeout)
+        _validate_request_fingerprint(self.fingerprint, inputs=self.inputs)
+
+
+@final
+class AnalysisAuthorizationGrant(msgspec.Struct, frozen=True, kw_only=True):
+    """Operator authority bound to one exact immutable analysis recipe.
+
+    The complete request is nested in the grant instead of re-stating only its destination. This
+    prevents an authorized destination from being reused with a different model, input set,
+    output schema, timeout, or budget set.
+    """
+
+    analysis: AnalysisRequest
+    capability: CapabilityGranted
+    secret_egress: CapabilityGranted | None = None
+
+    def __post_init__(self) -> None:
+        """Require the built-in operation and externally owned authority for this recipe."""
+        if type(self.analysis) is not AnalysisRequest:
+            raise TypeError("analysis authorization must bind an AnalysisRequest")
+        if type(self.capability) is not CapabilityGranted:
+            raise TypeError("analysis authorization requires a final CapabilityGranted")
+        _validate_analysis_capability(
+            self.capability.request,
+            destination=self.analysis.provider.destination,
+        )
+        contains_sensitive_input = any(
+            item.sensitivity is Sensitivity.SENSITIVE for item in self.analysis.inputs
+        )
+        if contains_sensitive_input:
+            if type(self.secret_egress) is not CapabilityGranted:
+                raise ValueError("sensitive analysis requires an exact secret-egress grant")
+            _validate_secret_egress_capability(
+                self.secret_egress.request,
+                destination=self.analysis.provider.destination,
+            )
+            if self.secret_egress.authority != self.capability.authority:
+                raise ValueError("analysis capability grants must use the same policy authority")
+        elif self.secret_egress is not None:
+            raise ValueError("public analysis must not carry unnecessary secret-egress authority")
+
+
+@final
+class AuthorizedAnalysisRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """The only request type accepted by an effectful analysis executor."""
+
+    grant: AnalysisAuthorizationGrant
+
+    def __post_init__(self) -> None:
+        """Reject generic or unvalidated authority decisions at the executor boundary."""
+        if type(self.grant) is not AnalysisAuthorizationGrant:
+            raise TypeError("authorized analysis requires an AnalysisAuthorizationGrant")
+
+    @property
+    def analysis(self) -> AnalysisRequest:
+        """Return the exact immutable recipe nested in the authorization grant."""
+        return self.grant.analysis
 
 
 def _validate_inputs(inputs: tuple[AnalysisInput, ...]) -> None:
@@ -133,176 +235,145 @@ def _validate_inputs(inputs: tuple[AnalysisInput, ...]) -> None:
         raise TypeError("analysis inputs must contain AnalysisInput values")
 
 
-def _validate_authorization(
-    authorization: CapabilityGranted,
-    provider: AnalysisProvider,
+def _validate_analysis_capability(
+    capability: CapabilityRequest,
+    *,
+    destination: NamedCapabilityTarget | None,
 ) -> None:
-    if type(authorization) is not CapabilityGranted:
-        raise TypeError("analysis authorization must be a CapabilityGranted")
-    if authorization.request.category is not CapabilityCategory.EXTERNAL_ANALYSIS:
+    if capability.category is not CapabilityCategory.EXTERNAL_ANALYSIS:
         raise ValueError("analysis authorization must grant external analysis")
-    if authorization.request.target != provider.destination:
+    if capability.capability_id != ANALYSIS_CAPABILITY_ID:
+        raise ValueError("analysis authorization must use the built-in capability identity")
+    if capability.operation != ANALYSIS_EXECUTE_OPERATION:
+        raise ValueError("analysis authorization must use the built-in execute operation")
+    if type(capability.target) is not NamedCapabilityTarget:
+        raise TypeError("analysis authorization target must be a NamedCapabilityTarget")
+    if capability.target.kind is not CapabilityTargetKind.DESTINATION:
+        raise ValueError("analysis authorization target must identify a destination")
+    if destination is not None and capability.target != destination:
         raise ValueError("analysis authorization target must match the provider destination")
 
 
-def _validate_budgets(budgets: tuple[ResourceBudget, ...]) -> None:
+def _validate_secret_egress_capability(
+    capability: CapabilityRequest,
+    *,
+    destination: NamedCapabilityTarget,
+) -> None:
+    if capability.category is not CapabilityCategory.SECRET_EGRESS:
+        raise ValueError("sensitive analysis authorization must grant secret egress")
+    if capability.capability_id != SECRET_EGRESS_CAPABILITY_ID:
+        raise ValueError("secret-egress authorization must use the built-in capability identity")
+    if capability.operation != SECRET_EGRESS_OPERATION:
+        raise ValueError("secret-egress authorization must use the built-in egress operation")
+    if capability.target != destination:
+        raise ValueError("secret-egress authorization target must match the provider destination")
+
+
+def _validate_budgets(
+    budgets: tuple[ResourceBudget, ...],
+    *,
+    inputs: tuple[AnalysisInput, ...],
+    timeout: Duration,
+) -> None:
+    by_resource = _index_analysis_budgets(budgets)
+    _validate_analysis_budget_coordinates(by_resource)
+    _validate_analysis_budget_limits(by_resource, inputs=inputs, timeout=timeout)
+
+
+def _index_analysis_budgets(
+    budgets: tuple[ResourceBudget, ...],
+) -> dict[BudgetResource, ResourceBudget]:
     if type(budgets) is not tuple:
         raise TypeError("analysis budgets must be an immutable tuple")
-    if not budgets:
-        raise ValueError("analysis request requires finite external-capability budgets")
     if any(type(budget) is not ResourceBudget for budget in budgets):
         raise TypeError("analysis budgets must contain ResourceBudget values")
-    if any(budget.stage is not BudgetStage.EXTERNAL_CAPABILITY for budget in budgets):
-        raise ValueError("analysis budgets must belong to the external-capability stage")
+    if len(budgets) != len(_ANALYSIS_BUDGET_OPERATIONS):
+        raise ValueError("analysis requires exact input, output, deadline, and work budgets")
+    by_resource = {budget.resource: budget for budget in budgets}
+    if frozenset(by_resource) != frozenset(_ANALYSIS_BUDGET_OPERATIONS):
+        raise ValueError("analysis budgets must contain each required dimension exactly once")
+    return by_resource
 
 
-class AnalysisVerdict(StrEnum):
-    """Semantic judgments returned by an authorized external analysis."""
-
-    EQUIVALENT = "equivalent"
-    DRIFTED = "drifted"
-    INCONCLUSIVE = "inconclusive"
-
-
-@final
-class AnalysisEvidence(msgspec.Struct, frozen=True, kw_only=True):
-    """Value-free evidence identity and exact count from an external analysis."""
-
-    code: DiagnosticCode
-    digest: SensitiveValue[Fingerprint]
-    items: Count
-
-    def __post_init__(self) -> None:
-        """Require stable structured evidence without arbitrary provider prose."""
-        if type(self.code) is not DiagnosticCode:
-            raise TypeError("analysis evidence code must be a DiagnosticCode")
-        if (
-            not isinstance(self.digest, SensitiveValue)
-            or self.digest.payload_type is not Fingerprint
-        ):
-            raise TypeError("analysis evidence digest must be a sensitive Fingerprint")
-        if type(self.items) is not Count:
-            raise TypeError("analysis evidence items must be a Count")
+def _validate_analysis_budget_coordinates(
+    by_resource: dict[BudgetResource, ResourceBudget],
+) -> None:
+    for resource, operation in _ANALYSIS_BUDGET_OPERATIONS.items():
+        budget = by_resource[resource]
+        if budget.scope_kind is not BudgetScopeKind.EXTERNAL_CAPABILITY:
+            raise ValueError("analysis budgets must use the external-capability scope")
+        if budget.operation != operation:
+            raise ValueError("analysis budget must use its canonical operation identity")
 
 
-@final
-class AnalysisSucceeded(msgspec.Struct, frozen=True, kw_only=True):
-    """A completed semantic analysis with optional exact normalized score."""
+def _validate_analysis_budget_limits(
+    by_resource: dict[BudgetResource, ResourceBudget],
+    *,
+    inputs: tuple[AnalysisInput, ...],
+    timeout: Duration,
+) -> None:
+    input_limit = cast("ByteCount", by_resource[BudgetResource.EXTERNAL_INPUT_BYTES].effective)
+    deadline = cast("Duration", by_resource[BudgetResource.DEADLINE].effective)
+    if sum(item.bytes.value for item in inputs) > input_limit.value:
+        raise ValueError("analysis input bytes exceed the effective external input budget")
+    if timeout.nanoseconds > deadline.nanoseconds:
+        raise ValueError("analysis timeout exceeds the effective deadline budget")
 
-    verdict: AnalysisVerdict
-    score: Ratio | None
-    evidence: tuple[AnalysisEvidence, ...]
 
-    def __post_init__(self) -> None:
-        """Require a typed verdict, score in [0, 1], and immutable evidence."""
-        if type(self.verdict) is not AnalysisVerdict:
-            raise TypeError("analysis verdict must be an AnalysisVerdict")
-        if self.score is not None:
-            if type(self.score) is not Ratio:
-                raise TypeError("analysis score must be a Ratio")
-            if self.score.numerator > self.score.denominator.value:
-                raise ValueError("analysis score must be between zero and one")
-        if type(self.evidence) is not tuple:
-            raise TypeError("analysis evidence must be an immutable tuple")
-        if any(type(item) is not AnalysisEvidence for item in self.evidence):
-            raise TypeError("analysis evidence must contain AnalysisEvidence values")
+def _validate_request_fingerprint(
+    fingerprint: Fingerprint | SensitiveValue[Fingerprint],
+    *,
+    inputs: tuple[AnalysisInput, ...],
+) -> None:
+    if type(fingerprint) is not Fingerprint and not (
+        isinstance(fingerprint, SensitiveValue) and fingerprint.payload_type is Fingerprint
+    ):
+        raise TypeError("analysis fingerprint must contain a Fingerprint")
+    contains_sensitive_input = any(item.sensitivity is Sensitivity.SENSITIVE for item in inputs)
+    if isinstance(fingerprint, SensitiveValue) != contains_sensitive_input:
+        raise ValueError("analysis fingerprint containment must match input sensitivity")
 
 
 @final
 class AnalysisDenied(msgspec.Struct, frozen=True, kw_only=True):
     """External analysis was denied before provider invocation."""
 
+    analysis: AnalysisRequest
     decision: CapabilityDenied
 
     def __post_init__(self) -> None:
-        """Require a matching external-analysis denial."""
+        """Bind the denial to the exact recipe and its requested destination."""
+        if type(self.analysis) is not AnalysisRequest:
+            raise TypeError("analysis denial must bind an AnalysisRequest")
         if type(self.decision) is not CapabilityDenied:
             raise TypeError("analysis denial requires a CapabilityDenied")
-        if self.decision.request.category is not CapabilityCategory.EXTERNAL_ANALYSIS:
-            raise ValueError("analysis denial must concern external analysis")
+        if self.decision.request.category is CapabilityCategory.EXTERNAL_ANALYSIS:
+            _validate_analysis_capability(
+                self.decision.request,
+                destination=self.analysis.provider.destination,
+            )
+            return
+        contains_sensitive_input = any(
+            item.sensitivity is Sensitivity.SENSITIVE for item in self.analysis.inputs
+        )
+        if (
+            self.decision.request.category is CapabilityCategory.SECRET_EGRESS
+            and contains_sensitive_input
+        ):
+            _validate_secret_egress_capability(
+                self.decision.request,
+                destination=self.analysis.provider.destination,
+            )
+            return
+        raise ValueError("analysis denial must refuse required analysis authority")
 
 
-@final
-class AnalysisTimedOut(msgspec.Struct, frozen=True, kw_only=True):
-    """The authorized analysis exceeded its explicit deadline."""
-
-    elapsed: Duration
-
-    def __post_init__(self) -> None:
-        """Require an exact elapsed duration."""
-        if type(self.elapsed) is not Duration:
-            raise TypeError("analysis timeout elapsed value must be a Duration")
-
-
-@final
-class AnalysisProviderFailed(msgspec.Struct, frozen=True, kw_only=True):
-    """The provider failed with a value-free structured diagnostic."""
-
-    diagnostic: Diagnostic
-
-    def __post_init__(self) -> None:
-        """Require an error diagnostic."""
-        _require_error_diagnostic(self.diagnostic, label="analysis provider failure")
-
-
-@final
-class AnalysisMalformed(msgspec.Struct, frozen=True, kw_only=True):
-    """The provider returned an unusable response."""
-
-    diagnostic: Diagnostic
-
-    def __post_init__(self) -> None:
-        """Require an error diagnostic."""
-        _require_error_diagnostic(self.diagnostic, label="malformed analysis")
-
-
-@final
-class AnalysisCancelled(msgspec.Struct, frozen=True, kw_only=True):
-    """The analysis was cancelled by an explicit outer source."""
-
-    source: CancellationSource
-
-    def __post_init__(self) -> None:
-        """Require a typed cancellation source."""
-        if type(self.source) is not CancellationSource:
-            raise TypeError("analysis cancellation source must be a CancellationSource")
-
-
-@final
-class AnalysisBudgetExhausted(msgspec.Struct, frozen=True, kw_only=True):
-    """Analysis could not complete within an effective resource budget."""
-
-    exhaustion: BudgetExceeded
-
-    def __post_init__(self) -> None:
-        """Require a typed external-capability exhaustion."""
-        if type(self.exhaustion) is not BudgetExceeded:
-            raise TypeError("analysis budget exhaustion requires BudgetExceeded")
-        if self.exhaustion.budget.stage is not BudgetStage.EXTERNAL_CAPABILITY:
-            raise ValueError("analysis exhaustion budget must be external-capability scoped")
-
-
-type AnalysisResult = (
-    AnalysisSucceeded
-    | AnalysisDenied
-    | AnalysisTimedOut
-    | AnalysisProviderFailed
-    | AnalysisMalformed
-    | AnalysisCancelled
-    | AnalysisBudgetExhausted
-)
+type AnalysisResult = AnalysisDenied | AnalysisExecutionResult
 
 
 class AnalysisExecutor(Protocol):
     """Narrow runtime port for an authorized, bounded external analysis."""
 
-    def execute(self, request: AnalysisRequest) -> AnalysisResult:
+    def execute(self, request: AuthorizedAnalysisRequest) -> AnalysisExecutionResult:
         """Execute one already authorized request and return a typed terminal result."""
         ...
-
-
-def _require_error_diagnostic(diagnostic: Diagnostic, *, label: str) -> None:
-    if type(diagnostic) is not Diagnostic:
-        raise TypeError(f"{label} requires a Diagnostic")
-    if diagnostic.severity is not DiagnosticSeverity.ERROR:
-        raise ValueError(f"{label} diagnostic must have error severity")

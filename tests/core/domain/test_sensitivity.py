@@ -6,6 +6,9 @@ import pickle
 from collections.abc import Callable
 from copy import copy
 from copy import deepcopy
+from decimal import Decimal
+from enum import Enum
+from enum import StrEnum
 
 import msgspec
 import pytest
@@ -14,6 +17,40 @@ from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import SensitiveValueAccess
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
+
+
+class _ExampleEnum(StrEnum):
+    """String Enum rejected because arbitrary Enum instances are not allowlisted."""
+
+    VALUE = "value"
+
+
+def _mutable_payload() -> list[str]:
+    return ["mutable"]
+
+
+class _MutableEnum(Enum):
+    """An Enum whose value would otherwise smuggle a mutable object."""
+
+    VALUE = _mutable_payload()
+
+
+class _FrozenPayload(msgspec.Struct, frozen=True):
+    """Deeply immutable Struct payload."""
+
+    value: str
+
+
+class _FrozenWithMutablePayload(msgspec.Struct, frozen=True):
+    """Shallowly frozen Struct whose nested list must still be rejected."""
+
+    values: list[str]
+
+
+class _MutablePayload(msgspec.Struct):
+    """Mutable Struct payload that must never enter SensitiveValue."""
+
+    value: str
 
 
 def _origin(value: str = "secret/project/api-token") -> TaintOriginId:
@@ -74,6 +111,39 @@ def test_reveal_requires_an_explicit_access_capability() -> None:
         sensitive.reveal(access=object())  # type: ignore[arg-type]
 
 
+def test_access_capability_validates_purpose_and_has_safe_repr() -> None:
+    access = SensitiveValueAccess(purpose="authorize outbound bytes")
+    assert repr(access) == "SensitiveValueAccess(purpose='authorize outbound bytes')"
+    with pytest.raises(ValueError, match="non-empty string"):
+        SensitiveValueAccess(purpose="")
+    with pytest.raises(ValueError, match="non-empty string"):
+        SensitiveValueAccess(purpose=1)  # type: ignore[arg-type]
+
+
+def test_deep_immutability_accepts_only_closed_immutable_graphs() -> None:
+    origin = (_origin(),)
+    accepted: tuple[object, ...] = (
+        None,
+        Decimal("1.25"),
+        ("a", 1, Decimal("2")),
+        _FrozenPayload("value"),
+    )
+    for value in accepted:
+        assert SensitiveValue(value, origins=origin).payload_type is type(value)
+
+    rejected: tuple[object, ...] = (
+        Decimal("NaN"),
+        _ExampleEnum.VALUE,
+        _MutableEnum.VALUE,
+        ("safe", []),
+        _MutablePayload("value"),
+        _FrozenWithMutablePayload(["value"]),
+    )
+    for value in rejected:
+        with pytest.raises(TypeError, match="deeply immutable"):
+            SensitiveValue(value, origins=origin)
+
+
 def test_sensitive_values_and_access_capabilities_are_immutable() -> None:
     sensitive = SensitiveValue("token", origins=(_origin(),))
     access = SensitiveValueAccess(purpose="construct authorization header")
@@ -95,6 +165,8 @@ def test_sensitive_values_reject_pickle() -> None:
     with pytest.raises(TypeError, match="cannot be pickled") as caught:
         pickle.dumps(sensitive)
     assert secret not in str(caught.value)
+    with pytest.raises(TypeError, match="cannot be pickled"):
+        sensitive.__reduce__()
 
 
 def test_sensitive_values_reject_shallow_and_deep_copy() -> None:

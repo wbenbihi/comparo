@@ -1,5 +1,7 @@
 """Tests for run lifecycle outcomes independent from gates."""
 
+from typing import cast
+
 import pytest
 
 from comparo.core.domain.diagnostics import Diagnostic
@@ -48,6 +50,21 @@ def test_partial_run_requires_unique_typed_reasons() -> None:
             ),
             completed_at=instant,
         )
+    with pytest.raises(TypeError, match="immutable tuple"):
+        RunPartial(
+            reasons=cast("tuple[PartialRunReason, ...]", [PartialRunReason.EXECUTION_INCOMPLETE]),
+            completed_at=instant,
+        )
+    with pytest.raises(TypeError, match="PartialRunReason"):
+        RunPartial(
+            reasons=cast("tuple[PartialRunReason, ...]", ("execution-incomplete",)),
+            completed_at=instant,
+        )
+    with pytest.raises(TypeError, match="UtcInstant"):
+        RunPartial(
+            reasons=(PartialRunReason.EXECUTION_INCOMPLETE,),
+            completed_at=cast("UtcInstant", object()),
+        )
 
 
 def test_cancelled_run_preserves_source_stage_and_instant() -> None:
@@ -63,6 +80,18 @@ def test_cancelled_run_preserves_source_stage_and_instant() -> None:
             stage=cancelled.stage,
             cancelled_at=cancelled.cancelled_at,
         )
+    with pytest.raises(TypeError, match="DiagnosticStage"):
+        RunCancelled(
+            source=cancelled.source,
+            stage=cast("DiagnosticStage", object()),
+            cancelled_at=cancelled.cancelled_at,
+        )
+    with pytest.raises(TypeError, match="UtcInstant"):
+        RunCancelled(
+            source=cancelled.source,
+            stage=cancelled.stage,
+            cancelled_at=cast("UtcInstant", object()),
+        )
 
 
 def test_rejection_requires_non_empty_error_diagnostics() -> None:
@@ -75,6 +104,8 @@ def test_rejection_requires_non_empty_error_diagnostics() -> None:
         RunRejected(diagnostics=())
     with pytest.raises(ValueError, match="error severity"):
         RunRejected(diagnostics=(_diagnostic(DiagnosticSeverity.WARNING),))
+    with pytest.raises(TypeError, match="Diagnostic values"):
+        RunRejected(diagnostics=cast("tuple[Diagnostic, ...]", (object(),)))
 
 
 def test_internal_error_requires_one_structured_error() -> None:

@@ -30,13 +30,10 @@ def _require_value_provenance(value: object, *, outcome: str) -> None:
 
 def _canonical_decimal(value: Decimal) -> Decimal:
     sign, digits, exponent = value.as_tuple()
-    if not isinstance(exponent, int):
-        msg = "only finite Decimal values can be canonicalized"
-        raise ValueError(msg)
+    canonical_exponent = cast("int", exponent)
     if not any(digits):
         return Decimal(0)
     canonical_digits = digits
-    canonical_exponent = exponent
     while canonical_exponent < 0 and canonical_digits[-1] == 0:
         canonical_digits = canonical_digits[:-1]
         canonical_exponent += 1

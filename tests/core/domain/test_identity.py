@@ -7,6 +7,7 @@ import pytest
 from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InvocationId
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
@@ -88,6 +89,9 @@ def test_occurrence_identifiers_are_type_distinct() -> None:
     value = UUID("12345678-1234-5678-1234-567812345678")
     run: object = RunId(value=value)
     attempt: object = AttemptId(value=value)
+    invocation: object = InvocationId(value=value)
     assert run != attempt
+    assert run != invocation
+    assert attempt != invocation
     with pytest.raises(TypeError):
         RunId(value=str(value))  # type: ignore[arg-type]

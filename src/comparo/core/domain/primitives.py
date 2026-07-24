@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC
 from datetime import datetime
 from decimal import Decimal
-from decimal import InvalidOperation
 from math import gcd
 from typing import final
 
@@ -76,11 +75,8 @@ class Duration(msgspec.Struct, frozen=True, kw_only=True):
         """Construct a duration from an exactly representable finite Decimal."""
         if type(seconds) is not Decimal or not seconds.is_finite():
             raise ValueError("seconds must be a finite Decimal")
-        try:
-            nanoseconds = seconds * _NANOSECONDS_PER_SECOND
-            integral = nanoseconds.to_integral_exact()
-        except InvalidOperation as error:
-            raise ValueError("seconds must resolve to whole nanoseconds") from error
+        nanoseconds = seconds * _NANOSECONDS_PER_SECOND
+        integral = nanoseconds.to_integral_exact()
         if nanoseconds != integral:
             raise ValueError("seconds must resolve to whole nanoseconds")
         return cls(nanoseconds=int(integral))

@@ -30,6 +30,16 @@ class ValueNamespace(StrEnum):
     STEPS = "steps"
 
 
+_NAMESPACE_SCOPES = {
+    ValueNamespace.VARIABLES: frozenset(ValueScopeKind),
+    ValueNamespace.SECRETS: frozenset(ValueScopeKind),
+    ValueNamespace.ENV: frozenset({ValueScopeKind.ENVIRONMENT}),
+    ValueNamespace.PARAMETERS: frozenset({ValueScopeKind.CELL, ValueScopeKind.STEP}),
+    ValueNamespace.MATRIX: frozenset({ValueScopeKind.CELL}),
+    ValueNamespace.STEPS: frozenset({ValueScopeKind.STEP}),
+}
+
+
 class ConversionType(StrEnum):
     """The strict, explicit value-conversion vocabulary."""
 
@@ -88,6 +98,8 @@ class ExpressionDependency(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("dependency symbol must be a SymbolPath")
         if type(self.available_at) is not ValueScopeKind:
             raise TypeError("dependency scope must be a ValueScopeKind")
+        if self.available_at not in _NAMESPACE_SCOPES[self.namespace]:
+            raise ValueError("dependency namespace is unavailable at the declared scope")
 
 
 @final

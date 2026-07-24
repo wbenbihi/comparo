@@ -10,13 +10,15 @@ from comparo.core.domain.capabilities import CapabilityId
 from comparo.core.domain.capabilities import CapabilityOperation
 from comparo.core.domain.capabilities import CapabilityRequest
 from comparo.core.domain.capabilities import CapabilityTargetKind
+from comparo.core.domain.capabilities import ExecutionPolicyAuthority
 from comparo.core.domain.capabilities import NamedCapabilityTarget
+from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
-from comparo.core.domain.provenance import ProvenanceEntry
-from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.primitives import Fingerprint
+from comparo.core.domain.primitives import Sha256Digest
 
 
 def _capability_id() -> CapabilityId:
@@ -27,8 +29,22 @@ def _operation() -> CapabilityOperation:
     return CapabilityOperation(value="send.request")
 
 
-def _authority() -> tuple[ProvenanceEntry, ...]:
-    return (ProvenanceEntry(kind=ProvenanceKind.EXECUTION_POLICY),)
+def _definition(kind: ResourceKind = ResourceKind.EXECUTION_POLICY) -> DefinitionRef:
+    return DefinitionRef(
+        identity=ResourceIdentity(
+            namespace=NamespaceId(value="local"),
+            kind=kind,
+            resource_id=ResourceId(value="policy"),
+        ),
+        fingerprint=Fingerprint(
+            algorithm="sha256",
+            digest=Sha256Digest(hex_value="a" * 64),
+        ),
+    )
+
+
+def _authority() -> ExecutionPolicyAuthority:
+    return ExecutionPolicyAuthority(policy=_definition())
 
 
 def _request() -> CapabilityRequest:
@@ -51,6 +67,7 @@ def _request() -> CapabilityRequest:
         ("comparo", "request", "v1"),
         ("comparo", "request", "0"),
         ("comparo", "request", chr(0x661)),
+        ("comparo", "request", "01"),
         ("comparo", "request", 1),
     ],
 )
@@ -145,17 +162,8 @@ def test_capability_decisions_validate_request_reason_and_authority() -> None:
     request = _request()
     with pytest.raises(TypeError, match="CapabilityRequest"):
         CapabilityGranted(request="request", authority=_authority())  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="must not be empty"):
-        CapabilityGranted(request=request, authority=())
-    with pytest.raises(TypeError, match="immutable tuple"):
-        CapabilityGranted(request=request, authority=list(_authority()))  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="ProvenanceEntry"):
-        CapabilityGranted(request=request, authority=("policy",))  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="ExecutionPolicy"):
-        CapabilityGranted(
-            request=request,
-            authority=(ProvenanceEntry(kind=ProvenanceKind.PROJECT),),
-        )
+    with pytest.raises(TypeError, match="exact ExecutionPolicy"):
+        CapabilityGranted(request=request, authority=())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="CapabilityRequest"):
         CapabilityDenied(
             request="request",  # type: ignore[arg-type]
@@ -168,9 +176,23 @@ def test_capability_decisions_validate_request_reason_and_authority() -> None:
             reason="not-allowed",  # type: ignore[arg-type]
             authority=_authority(),
         )
+    with pytest.raises(TypeError, match="exact ExecutionPolicy"):
+        CapabilityDenied(
+            request=request,
+            reason=CapabilityDenialReason.NOT_ALLOWED,
+            authority=object(),  # type: ignore[arg-type]
+        )
 
 
 def test_capability_decisions_are_immutable() -> None:
     decision = CapabilityGranted(request=_request(), authority=_authority())
     with pytest.raises(AttributeError):
-        decision.authority = ()  # type: ignore[misc]
+        decision.authority = ()  # type: ignore[misc, assignment]
+
+
+def test_exact_policy_authority_requires_a_fingerprinted_execution_policy() -> None:
+    assert _authority().policy.fingerprint == _definition().fingerprint
+    with pytest.raises(TypeError, match="DefinitionRef"):
+        ExecutionPolicyAuthority(policy=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="ExecutionPolicy"):
+        ExecutionPolicyAuthority(policy=_definition(ResourceKind.PROJECT))

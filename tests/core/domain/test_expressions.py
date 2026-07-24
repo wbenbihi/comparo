@@ -1,5 +1,7 @@
 """Tests for the canonical value-expression tree."""
 
+from typing import cast
+
 import pytest
 
 from comparo.core.domain.expressions import ConversionType
@@ -72,6 +74,27 @@ def test_dependency_requires_typed_namespace_symbol_and_scope() -> None:
             namespace=dependency.namespace,
             symbol=dependency.symbol,
             available_at="environment",  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("namespace", "scope"),
+    [
+        (ValueNamespace.ENV, ValueScopeKind.RUN),
+        (ValueNamespace.PARAMETERS, ValueScopeKind.RUN),
+        (ValueNamespace.MATRIX, ValueScopeKind.STEP),
+        (ValueNamespace.STEPS, ValueScopeKind.CELL),
+    ],
+)
+def test_dependency_namespace_rejects_unavailable_scopes(
+    namespace: ValueNamespace,
+    scope: ValueScopeKind,
+) -> None:
+    with pytest.raises(ValueError, match="unavailable"):
+        ExpressionDependency(
+            namespace=namespace,
+            symbol=SymbolPath(segments=("value",)),
+            available_at=scope,
         )
 
 
@@ -181,3 +204,86 @@ def test_dependency_collection_is_stable_and_deduplicated() -> None:
         provenance=_provenance(),
     )
     assert expression_dependencies(file_expression) == (lookup.dependency,)
+
+
+def test_file_expression_rejects_untyped_options() -> None:
+    path = LiteralExpr(value=JsonString(value="token.txt"), provenance=_provenance())
+    with pytest.raises(TypeError, match="ConversionType"):
+        FileExpr(
+            path=path,
+            conversion=cast("ConversionType", "text"),
+            trim=FileTrim.NONE,
+            maximum_bytes=ByteCount(value=10),
+            provenance=_provenance(),
+        )
+    with pytest.raises(TypeError, match="FileTrim"):
+        FileExpr(
+            path=path,
+            conversion=ConversionType.STRING,
+            trim=cast("FileTrim", "none"),
+            maximum_bytes=ByteCount(value=10),
+            provenance=_provenance(),
+        )
+    with pytest.raises(TypeError, match="ByteCount"):
+        FileExpr(
+            path=path,
+            conversion=ConversionType.STRING,
+            trim=FileTrim.NONE,
+            maximum_bytes=cast("ByteCount", object()),
+            provenance=_provenance(),
+        )
+
+
+def test_optional_conversion_and_segments_reject_untyped_values() -> None:
+    lookup = _lookup()
+    with pytest.raises(TypeError, match="optional source"):
+        OptionalExpr(source=cast("LiteralExpr", object()), provenance=_provenance())
+    with pytest.raises(TypeError, match="conversion source"):
+        ConvertExpr(
+            source=cast("LiteralExpr", object()),
+            target=ConversionType.STRING,
+            provenance=_provenance(),
+        )
+    with pytest.raises(TypeError, match="ConversionType"):
+        ConvertExpr(
+            source=lookup,
+            target=cast("ConversionType", "string"),
+            provenance=_provenance(),
+        )
+    with pytest.raises(TypeError, match="must be text"):
+        LiteralTextSegment(value=cast("str", object()))
+    with pytest.raises(TypeError, match="value expression"):
+        ExpressionSegment(expression=cast("LiteralExpr", object()))
+
+
+def test_interpolation_rejects_invalid_container_and_mode_states() -> None:
+    segment = ExpressionSegment(expression=_lookup())
+    with pytest.raises(TypeError, match="InterpolationMode"):
+        InterpolationExpr(
+            mode=cast("InterpolationMode", "embedded-text"),
+            segments=(segment,),
+            provenance=_provenance(),
+        )
+    with pytest.raises(TypeError, match="immutable tuple"):
+        InterpolationExpr(
+            mode=InterpolationMode.EMBEDDED_TEXT,
+            segments=cast("tuple[ExpressionSegment, ...]", [segment]),
+            provenance=_provenance(),
+        )
+    with pytest.raises(ValueError, match="at least one segment"):
+        InterpolationExpr(
+            mode=InterpolationMode.EMBEDDED_TEXT,
+            segments=(),
+            provenance=_provenance(),
+        )
+    with pytest.raises(TypeError, match="unsupported segment"):
+        InterpolationExpr(
+            mode=InterpolationMode.EMBEDDED_TEXT,
+            segments=cast("tuple[ExpressionSegment, ...]", (object(),)),
+            provenance=_provenance(),
+        )
+
+
+def test_dependency_collection_rejects_values_outside_closed_union() -> None:
+    with pytest.raises(TypeError, match="unsupported value expression"):
+        expression_dependencies(cast("LiteralExpr", object()))

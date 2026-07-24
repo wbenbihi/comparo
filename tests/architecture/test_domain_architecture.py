@@ -176,6 +176,29 @@ def _domain_sources() -> tuple[tuple[str, Path, ast.Module], ...]:
     return tuple(sources)
 
 
+def _domain_import_graph() -> dict[str, frozenset[str]]:
+    """Build the direct internal dependency graph from static domain imports."""
+    sources = _domain_sources()
+    module_names = {module_name for module_name, _, _ in sources}
+    graph: dict[str, frozenset[str]] = {}
+    for module_name, _, tree in sources:
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            candidates: tuple[str, ...] = ()
+            if isinstance(node, ast.Import):
+                candidates = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                candidates = (node.module,)
+            for candidate in candidates:
+                current = candidate
+                while current not in module_names and current.startswith(f"{_DOMAIN_PREFIX}."):
+                    current = current.rpartition(".")[0]
+                if current in module_names and current != module_name:
+                    imported.add(current)
+        graph[module_name] = frozenset(imported)
+    return graph
+
+
 def _domain_structs() -> tuple[type[msgspec.Struct], ...]:
     structs: set[type[msgspec.Struct]] = set()
     for module in _domain_modules():
@@ -196,6 +219,28 @@ def test_domain_modules_remain_small_enough_to_have_one_cohesive_responsibility(
         if len(path.read_text(encoding="utf-8").splitlines()) > _MAX_DOMAIN_SOURCE_LINES
     }
     assert not oversized, f"split oversized domain modules by responsibility: {oversized}"
+
+
+def test_domain_import_graph_is_acyclic() -> None:
+    """Keep leaf contracts independently reusable and initialization-order agnostic."""
+    graph = _domain_import_graph()
+    visited: set[str] = set()
+    active: list[str] = []
+
+    def visit(module_name: str) -> None:
+        if module_name in active:
+            cycle = (*active[active.index(module_name) :], module_name)
+            pytest.fail(f"domain import cycle: {' -> '.join(cycle)}")
+        if module_name in visited:
+            return
+        active.append(module_name)
+        for dependency in sorted(graph[module_name]):
+            visit(dependency)
+        active.pop()
+        visited.add(module_name)
+
+    for module_name in sorted(graph):
+        visit(module_name)
 
 
 def _qualified_name(candidate: type[object]) -> str:

@@ -8,9 +8,9 @@ from typing import final
 
 import msgspec
 
+from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceIdentity
-from comparo.core.domain.provenance import ProvenanceEntry
-from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.identity import ResourceKind
 
 _TOKEN_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
 
@@ -50,6 +50,8 @@ class CapabilityId(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("capability version must be an ASCII decimal version")
         if int(self.version) < 1:
             raise ValueError("capability version must be positive")
+        if str(int(self.version)) != self.version:
+            raise ValueError("capability version must use canonical decimal notation")
 
 
 @final
@@ -129,16 +131,18 @@ class CapabilityDenialReason(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
-def _validate_authority_chain(authority: tuple[ProvenanceEntry, ...]) -> None:
-    """Require immutable, non-empty, externally owned policy provenance."""
-    if type(authority) is not tuple:
-        raise TypeError("capability authority must be an immutable tuple")
-    if not authority:
-        raise ValueError("capability authority must not be empty")
-    if any(type(entry) is not ProvenanceEntry for entry in authority):
-        raise TypeError("capability authority must contain ProvenanceEntry values")
-    if not any(entry.kind is ProvenanceKind.EXECUTION_POLICY for entry in authority):
-        raise ValueError("final capability authority must include an ExecutionPolicy")
+@final
+class ExecutionPolicyAuthority(msgspec.Struct, frozen=True, kw_only=True):
+    """Exact policy definition whose fingerprint authorized a capability decision."""
+
+    policy: DefinitionRef
+
+    def __post_init__(self) -> None:
+        """Require an exact fingerprinted ExecutionPolicy definition."""
+        if type(self.policy) is not DefinitionRef:
+            raise TypeError("capability authority policy must be a DefinitionRef")
+        if self.policy.identity.kind is not ResourceKind.EXECUTION_POLICY:
+            raise ValueError("capability authority must identify an ExecutionPolicy")
 
 
 @final
@@ -146,13 +150,14 @@ class CapabilityGranted(msgspec.Struct, frozen=True, kw_only=True):
     """A positive final authority decision for one exact request."""
 
     request: CapabilityRequest
-    authority: tuple[ProvenanceEntry, ...]
+    authority: ExecutionPolicyAuthority
 
     def __post_init__(self) -> None:
         """Validate the request and immutable authority chain."""
         if type(self.request) is not CapabilityRequest:
             raise TypeError("capability grant requires a CapabilityRequest")
-        _validate_authority_chain(self.authority)
+        if type(self.authority) is not ExecutionPolicyAuthority:
+            raise TypeError("capability grant requires exact ExecutionPolicy authority")
 
 
 @final
@@ -161,7 +166,7 @@ class CapabilityDenied(msgspec.Struct, frozen=True, kw_only=True):
 
     request: CapabilityRequest
     reason: CapabilityDenialReason
-    authority: tuple[ProvenanceEntry, ...]
+    authority: ExecutionPolicyAuthority
 
     def __post_init__(self) -> None:
         """Validate the request, typed reason, and immutable authority chain."""
@@ -169,7 +174,8 @@ class CapabilityDenied(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("capability denial requires a CapabilityRequest")
         if type(self.reason) is not CapabilityDenialReason:
             raise TypeError("capability denial reason must be a CapabilityDenialReason")
-        _validate_authority_chain(self.authority)
+        if type(self.authority) is not ExecutionPolicyAuthority:
+            raise TypeError("capability denial requires exact ExecutionPolicy authority")
 
 
 type CapabilityDecision = CapabilityGranted | CapabilityDenied

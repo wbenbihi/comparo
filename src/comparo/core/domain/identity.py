@@ -77,6 +77,11 @@ class MatrixCaseId(_SlugIdentifier, frozen=True, kw_only=True):
 
 
 @final
+class MatrixBindingId(_SlugIdentifier, frozen=True, kw_only=True):
+    """A local alias that disambiguates repeated Matrix attachments."""
+
+
+@final
 class ArtifactId(_SlugIdentifier, frozen=True, kw_only=True):
     """A stable artifact identity within one run."""
 
@@ -142,6 +147,11 @@ class _UuidIdentifier(msgspec.Struct, frozen=True, kw_only=True):
 @final
 class RunId(_UuidIdentifier, frozen=True, kw_only=True):
     """A single run occurrence."""
+
+
+@final
+class InvocationId(_UuidIdentifier, frozen=True, kw_only=True):
+    """One exact CLI, TUI, or CI invocation supplying runtime overrides."""
 
 
 @final

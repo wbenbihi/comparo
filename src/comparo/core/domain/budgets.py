@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from fractions import Fraction
+from types import MappingProxyType
+from typing import Final
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.budget_contracts import BudgetAccountingMode
+from comparo.core.domain.budget_contracts import BudgetExhaustionEffect as BudgetExhaustionEffect
+from comparo.core.domain.budget_contracts import BudgetResource as BudgetResource
+from comparo.core.domain.budget_contracts import BudgetScopeKind as BudgetScopeKind
+from comparo.core.domain.budget_contracts import BudgetStage as BudgetStage
+from comparo.core.domain.budget_contracts import budget_dimension_contract
+from comparo.core.domain.budget_origins import BudgetOrigin
+from comparo.core.domain.budget_origins import DefaultBudgetOrigin
+from comparo.core.domain.budget_origins import DefinitionBudgetOrigin
+from comparo.core.domain.budget_origins import InvocationBudgetOrigin
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Ratio
-from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.scopes import AttemptScope
 from comparo.core.domain.scopes import CellScope
 from comparo.core.domain.scopes import EnvironmentScope
@@ -28,94 +41,27 @@ _OPERATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
 type BudgetAmount = Count | ByteCount | Duration | Ratio
 
 
-class BudgetResource(StrEnum):
-    """Independently configurable resource dimensions."""
+type RuntimeScopeType = (
+    type[RunScope]
+    | type[CellScope]
+    | type[TrialScope]
+    | type[EnvironmentScope]
+    | type[ExecutionScope]
+    | type[StepScope]
+    | type[AttemptScope]
+)
 
-    REQUESTS = "requests"
-    MATRIX_CELLS = "matrix-cells"
-    TRIALS = "trials"
-    SCENARIO_STEPS = "scenario-steps"
-    ENVIRONMENT_EXECUTIONS = "environment-executions"
-    ATTEMPTS = "attempts"
-    COMPARISONS = "comparisons"
-    QUEUED_WORK = "queued-work"
-    CONCURRENCY = "concurrency"
-    OPEN_CONNECTIONS = "open-connections"
-    REQUEST_BYTES = "request-bytes"
-    HEADER_BYTES = "header-bytes"
-    HEADER_COUNT = "header-count"
-    ENCODED_BODY_BYTES = "encoded-body-bytes"
-    ENTITY_BODY_BYTES = "entity-body-bytes"
-    DECOMPRESSION_RATIO = "decompression-ratio"
-    REDIRECTS = "redirects"
-    RETRIES = "retries"
-    DEADLINE = "deadline"
-    STREAM_RECONNECTS = "stream-reconnects"
-    STREAM_EVENTS = "stream-events"
-    STREAM_BYTES = "stream-bytes"
-    STREAM_DURATION = "stream-duration"
-    STREAM_IDLE_DURATION = "stream-idle-duration"
-    DECODED_CHARACTERS = "decoded-characters"
-    JSON_DEPTH = "json-depth"
-    JSON_NODES = "json-nodes"
-    JSON_TOKENS = "json-tokens"
-    VIEW_INDEX_BYTES = "view-index-bytes"
-    SELECTION_WORK = "selection-work"
-    SELECTION_MATCHES = "selection-matches"
-    SELECTED_RESULT_BYTES = "selected-result-bytes"
-    DERIVED_VALUES = "derived-values"
-    DERIVED_BYTES = "derived-bytes"
-    TRANSFORM_WORK = "transform-work"
-    PAIRS = "pairs"
-    FACTS = "facts"
-    TRIAL_SAMPLES = "trial-samples"
-    STATISTICAL_WORK = "statistical-work"
-    EVIDENCE_EXAMPLES = "evidence-examples"
-    EVIDENCE_BYTES = "evidence-bytes"
-    MEMORY_BYTES = "memory-bytes"
-    TRANSIENT_STORAGE_BYTES = "transient-storage-bytes"
-    STORE_QUOTA_BYTES = "store-quota-bytes"
-    ARTIFACT_BODY_BYTES = "artifact-body-bytes"
-    ARTIFACT_BLOBS = "artifact-blobs"
-    ARTIFACT_BYTES = "artifact-bytes"
-    EXTERNAL_INPUT_BYTES = "external-input-bytes"
-    EXTERNAL_OUTPUT_BYTES = "external-output-bytes"
-    EXTERNAL_WORK = "external-work"
-
-
-class BudgetScopeKind(StrEnum):
-    """The accounting boundary for a resource budget."""
-
-    PLAN = "plan"
-    RUN = "run"
-    CELL = "cell"
-    TRIAL = "trial"
-    ENVIRONMENT = "environment"
-    EXECUTION = "execution"
-    STEP = "step"
-    ATTEMPT = "attempt"
-    BODY = "body"
-    STREAM = "stream"
-    COMPARISON = "comparison"
-    ARTIFACT = "artifact"
-    EXTERNAL_CAPABILITY = "external-capability"
-
-
-class BudgetStage(StrEnum):
-    """The stage responsible for enforcing and reporting a budget."""
-
-    PLANNING = "planning"
-    SCHEDULING = "scheduling"
-    HTTP = "http"
-    CAPTURE = "capture"
-    STREAM = "stream"
-    DECODING = "decoding"
-    SELECTION = "selection"
-    EVALUATION = "evaluation"
-    EVIDENCE = "evidence"
-    STORAGE = "storage"
-    ARTIFACT = "artifact"
-    EXTERNAL_CAPABILITY = "external-capability"
+_RUNTIME_SCOPE_TYPES: Final[Mapping[BudgetScopeKind, RuntimeScopeType]] = MappingProxyType(
+    {
+        BudgetScopeKind.RUN: RunScope,
+        BudgetScopeKind.CELL: CellScope,
+        BudgetScopeKind.TRIAL: TrialScope,
+        BudgetScopeKind.ENVIRONMENT: EnvironmentScope,
+        BudgetScopeKind.EXECUTION: ExecutionScope,
+        BudgetScopeKind.STEP: StepScope,
+        BudgetScopeKind.ATTEMPT: AttemptScope,
+    }
+)
 
 
 @final
@@ -144,7 +90,7 @@ class BudgetContribution(msgspec.Struct, frozen=True, kw_only=True):
 
     kind: BudgetContributionKind
     amount: BudgetAmount
-    provenance: ProvenanceEntry
+    origin: BudgetOrigin
 
     def __post_init__(self) -> None:
         """Require typed contribution components."""
@@ -152,8 +98,42 @@ class BudgetContribution(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("budget contribution kind must be a BudgetContributionKind")
         if not _is_budget_amount(self.amount):
             raise TypeError("budget contribution amount must be a supported exact amount")
-        if type(self.provenance) is not ProvenanceEntry:
-            raise TypeError("budget contribution provenance must be a ProvenanceEntry")
+        _validate_budget_origin(self.kind, self.origin)
+
+
+def _validate_budget_origin(kind: BudgetContributionKind, origin: BudgetOrigin) -> None:
+    """Bind each derivation role to an exact authorized origin type and resource kind."""
+    if type(origin) not in {DefaultBudgetOrigin, DefinitionBudgetOrigin, InvocationBudgetOrigin}:
+        raise TypeError("budget contribution origin must be an exact BudgetOrigin")
+    if kind is BudgetContributionKind.DEFAULT:
+        if type(origin) is not DefaultBudgetOrigin:
+            raise ValueError("default budget contribution requires a versioned default-set origin")
+        return
+    if kind is BudgetContributionKind.CEILING:
+        if type(origin) is not DefinitionBudgetOrigin or origin.definition.identity.kind not in {
+            ResourceKind.SAFETY_PROFILE,
+            ResourceKind.EXECUTION_POLICY,
+        }:
+            raise ValueError("budget ceiling requires an exact SafetyProfile or ExecutionPolicy")
+        return
+    if type(origin) is InvocationBudgetOrigin:
+        return
+    ordinary_kinds = {
+        ResourceKind.PROJECT,
+        ResourceKind.EXECUTION_PROFILE,
+        ResourceKind.ASSERTION_PROFILE,
+        ResourceKind.DIFF_PROFILE,
+        ResourceKind.GATE_PROFILE,
+        ResourceKind.REDACTION_PROFILE,
+        ResourceKind.ARTIFACT_PROFILE,
+    }
+    if (
+        type(origin) is not DefinitionBudgetOrigin
+        or origin.definition.identity.kind not in ordinary_kinds
+    ):
+        raise ValueError(
+            "ordinary budget contribution requires an exact Project, profile, or invocation"
+        )
 
 
 @final
@@ -205,6 +185,9 @@ def _validate_budget_identity(budget: ResourceBudget) -> None:
         raise TypeError("budget operation must be a BudgetOperation")
     if type(budget.usage) is not BudgetUsage:
         raise TypeError("budget usage must be a BudgetUsage")
+    contract = budget_dimension_contract(budget.resource)
+    if (budget.scope_kind, budget.stage) not in contract.placements:
+        raise ValueError("budget resource does not support the declared scope/stage placement")
     if budget.scope is not None and type(budget.scope) not in {
         RunScope,
         CellScope,
@@ -215,6 +198,24 @@ def _validate_budget_identity(budget: ResourceBudget) -> None:
         AttemptScope,
     }:
         raise TypeError("budget scope must be a supported RuntimeScope")
+    _validate_budget_scope(budget.scope_kind, budget.scope)
+
+
+def _validate_budget_scope(
+    scope_kind: BudgetScopeKind,
+    scope: RuntimeScope | None,
+) -> None:
+    """Require a concrete runtime coordinate exactly when its kind is addressable."""
+    expected_scope = _RUNTIME_SCOPE_TYPES.get(scope_kind)
+
+    if expected_scope is None:
+        if scope is not None:
+            raise ValueError("non-runtime budget scope kind cannot carry a RuntimeScope")
+        return
+    if scope is None:
+        raise ValueError("runtime-addressable budget scope kind requires a concrete scope")
+    if type(scope) is not expected_scope:
+        raise ValueError("budget scope kind must match the concrete RuntimeScope")
 
 
 def _validate_budget_derivation(budget: ResourceBudget) -> None:
@@ -263,6 +264,17 @@ def _validate_budget_inputs(budget: ResourceBudget) -> None:
         *optional_cap,
         *amounts,
     )
+    contract = budget_dimension_contract(budget.resource)
+    if type(budget.requested) is not contract.amount_type:
+        raise TypeError("budget resource requires its contract-defined amount type")
+    if not _amount_less_equal(budget.usage.in_use, budget.usage.high_water):
+        raise ValueError("budget in-use amount must not exceed its high-water mark")
+    if not _amount_less_equal(budget.usage.high_water, budget.effective):
+        raise ValueError("budget high-water mark must not exceed the effective limit")
+    if contract.accounting is BudgetAccountingMode.CUMULATIVE and not _amount_less_equal(
+        budget.usage.consumed, budget.effective
+    ):
+        raise ValueError("cumulative budget consumption must not exceed the effective limit")
 
 
 def _validate_ordinary_contributions(
@@ -278,19 +290,6 @@ def _validate_ordinary_contributions(
         raise ValueError("budget derivation may contain only one default")
     if ordinary[-1].amount != requested:
         raise ValueError("requested budget must equal the last ordinary contribution")
-
-
-class BudgetExhaustionEffect(StrEnum):
-    """The typed consequence of exhaustion at the responsible stage."""
-
-    PLAN_REJECTED = "plan-rejected"
-    OBSERVATION_PARTIAL = "observation-partial"
-    OBSERVATION_UNAVAILABLE = "observation-unavailable"
-    EVALUATION_INCOMPLETE = "evaluation-incomplete"
-    EVIDENCE_TRUNCATED = "evidence-truncated"
-    ARTIFACT_INCOMPLETE = "artifact-incomplete"
-    ARTIFACT_REJECTED = "artifact-rejected"
-    EXTERNAL_CAPABILITY_UNAVAILABLE = "external-capability-unavailable"
 
 
 @final
@@ -309,6 +308,10 @@ class BudgetExceeded(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("attempted budget amount must be a supported exact amount")
         if type(self.effect) is not BudgetExhaustionEffect:
             raise TypeError("budget exhaustion effect must be a BudgetExhaustionEffect")
+        contract = budget_dimension_contract(self.budget.resource)
+        effects = contract.exhaustion_effects_by_stage[self.budget.stage]
+        if self.effect not in effects:
+            raise ValueError("budget exhaustion effect is not valid for this resource")
         _require_same_amount_type(self.budget.effective, self.attempted)
         if _amount_less_equal(self.attempted, self.budget.effective):
             raise ValueError("attempted amount must exceed the effective budget")

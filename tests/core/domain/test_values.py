@@ -44,6 +44,8 @@ def test_json_scalars_retain_exact_types() -> None:
     assert JsonInteger(value=10**100).value == 10**100
     assert JsonDecimal(value=Decimal("1.23")).value == Decimal("1.23")
     assert JsonString(value="").value == ""
+    with pytest.raises(TypeError, match="must be a str"):
+        JsonString(value=1)  # type: ignore[arg-type]
 
 
 def test_json_boolean_and_integer_cannot_be_confused() -> None:
@@ -77,6 +79,8 @@ def test_json_number_factory_produces_one_canonical_representation() -> None:
         JsonDecimal(value=Decimal("1"))
     with pytest.raises(TypeError, match="cannot be a bool"):
         json_number(True)
+    with pytest.raises(ValueError, match="must be finite"):
+        json_number(Decimal("NaN"))
 
 
 def test_json_arrays_are_deeply_immutable_and_typed() -> None:
@@ -101,6 +105,17 @@ def test_json_objects_retain_order_and_reject_duplicate_names() -> None:
 
     with pytest.raises(ValueError, match="must be unique"):
         JsonObject(members=(first, JsonObjectMember(name="first", value=JsonInteger(value=3))))
+    with pytest.raises(TypeError, match="member name"):
+        JsonObjectMember(name=1, value=JsonInteger(value=1))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="member value"):
+        JsonObjectMember(
+            name="invalid",
+            value=BytesValue(value=b"not-json"),  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="immutable tuple"):
+        JsonObject(members=[first])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="JsonObjectMember"):
+        JsonObject(members=(JsonString(value="not-member"),))  # type: ignore[arg-type]
 
 
 def test_bytes_are_distinct_from_json() -> None:
@@ -161,9 +176,28 @@ def test_resolution_outcomes_validate_direct_construction() -> None:
     with pytest.raises(TypeError, match="UnavailableReason"):
         Unavailable(reason="not-found", provenance=provenance)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="provenance"):
+        Present(value=JsonNull(), provenance=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="provenance"):
+        Unavailable(
+            reason=UnavailableReason.NOT_FOUND,
+            provenance=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="provenance"):
+        Missing(provenance=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="ResolutionErrorCode"):
+        Error(
+            code="provider-failed",  # type: ignore[arg-type]
+            provenance=provenance,
+        )
+    with pytest.raises(TypeError, match="provenance"):
         Error(
             code=ResolutionErrorCode.PROVIDER_FAILED,
             provenance=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="ResolutionBlockCode"):
+        Blocked(
+            code="source-denied",  # type: ignore[arg-type]
+            provenance=provenance,
         )
     with pytest.raises(TypeError, match="provenance"):
         Blocked(
