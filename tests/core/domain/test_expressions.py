@@ -5,6 +5,8 @@ from typing import cast
 
 import pytest
 
+from comparo.core.domain.expression_analysis import expression_dependencies
+from comparo.core.domain.expressions import ArrayExpr
 from comparo.core.domain.expressions import ConversionType
 from comparo.core.domain.expressions import ConvertExpr
 from comparo.core.domain.expressions import ExpressionDependency
@@ -17,10 +19,11 @@ from comparo.core.domain.expressions import InterpolationMode
 from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import LiteralTextSegment
 from comparo.core.domain.expressions import LookupExpr
+from comparo.core.domain.expressions import ObjectExpr
+from comparo.core.domain.expressions import ObjectExpressionMember
 from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import SymbolPath
 from comparo.core.domain.expressions import ValueNamespace
-from comparo.core.domain.expressions import expression_dependencies
 from comparo.core.domain.expressions import expression_output_kinds
 from comparo.core.domain.expressions import expression_outputs_only
 from comparo.core.domain.primitives import ByteCount
@@ -142,7 +145,7 @@ def test_lookup_requires_typed_dependency_and_provenance() -> None:
         LookupExpr(dependency="env.TOKEN", provenance=_provenance())  # type: ignore[arg-type]
 
 
-def test_file_expression_requires_explicit_bounded_read_semantics() -> None:
+def test_file_expression_supports_policy_cap_with_optional_configuration_narrowing() -> None:
     path = LiteralExpr(value=JsonString(value="token.txt"), provenance=_provenance())
     raw = FileExpr(
         path=path,
@@ -152,6 +155,13 @@ def test_file_expression_requires_explicit_bounded_read_semantics() -> None:
         provenance=_provenance(),
     )
     assert raw.conversion is None
+    uncapped_by_configuration = FileExpr(
+        path=path,
+        conversion=None,
+        trim=FileTrim.NONE,
+        provenance=_provenance(),
+    )
+    assert uncapped_by_configuration.maximum_bytes is None
     with pytest.raises(ValueError, match="cannot apply text trimming"):
         FileExpr(
             path=path,
@@ -232,6 +242,50 @@ def test_fallback_optional_and_conversion_are_typed_and_ordered() -> None:
         FallbackExpr(sources=[lookup], provenance=_provenance())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="value expressions"):
         FallbackExpr(sources=("env.TOKEN",), provenance=_provenance())  # type: ignore[arg-type]
+
+
+def test_array_and_object_expressions_compose_nested_runtime_values() -> None:
+    lookup = _lookup()
+    array = ArrayExpr(
+        items=(lookup, _literal(JsonInteger(value=1))),
+        provenance=_provenance(),
+    )
+    optional = OptionalExpr(source=lookup, provenance=_provenance())
+    object_expression = ObjectExpr(
+        members=(
+            ObjectExpressionMember(name="items", expression=array),
+            ObjectExpressionMember(name="optional", expression=optional),
+        ),
+        provenance=_provenance(),
+    )
+    assert expression_output_kinds(array) == frozenset({ValueKind.ARRAY})
+    assert expression_output_kinds(object_expression) == frozenset({ValueKind.OBJECT})
+    assert expression_dependencies(object_expression) == (lookup.dependency,)
+
+
+def test_array_and_object_expressions_reject_ambiguous_shapes() -> None:
+    lookup = _lookup()
+    member = ObjectExpressionMember(name="value", expression=lookup)
+    with pytest.raises(TypeError, match="immutable tuple"):
+        ArrayExpr(items=cast("tuple[LookupExpr, ...]", [lookup]), provenance=_provenance())
+    with pytest.raises(TypeError, match="value expressions"):
+        ArrayExpr(items=cast("tuple[LookupExpr, ...]", (object(),)), provenance=_provenance())
+    with pytest.raises(ValueError, match="cannot be optional"):
+        ArrayExpr(
+            items=(OptionalExpr(source=lookup, provenance=_provenance()),),
+            provenance=_provenance(),
+        )
+    with pytest.raises(TypeError, match="name must be text"):
+        ObjectExpressionMember(name=cast("str", 1), expression=lookup)
+    with pytest.raises(TypeError, match="value expression"):
+        ObjectExpressionMember(name="value", expression=cast("LookupExpr", object()))
+    with pytest.raises(TypeError, match="immutable tuple"):
+        ObjectExpr(
+            members=cast("tuple[ObjectExpressionMember, ...]", [member]),
+            provenance=_provenance(),
+        )
+    with pytest.raises(ValueError, match="unique"):
+        ObjectExpr(members=(member, member), provenance=_provenance())
 
 
 def test_interpolation_distinguishes_native_whole_value_from_embedded_text() -> None:

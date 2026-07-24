@@ -36,8 +36,8 @@ from comparo.core.domain.diffs.strategies import Reducer
 from comparo.core.domain.diffs.strategies import ReducerKind
 from comparo.core.domain.diffs.strategies import SingularPairing
 from comparo.core.domain.diffs.strategies import TextPredicateComparator
+from comparo.core.domain.expression_analysis import expression_dependencies
 from comparo.core.domain.expressions import ValueExpression
-from comparo.core.domain.expressions import expression_dependencies
 from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.selectors.contracts import JSON_VALUE_KINDS
 from comparo.core.domain.selectors.contracts import NUMERIC_VALUE_KINDS

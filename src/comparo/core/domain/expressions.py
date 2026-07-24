@@ -11,6 +11,7 @@ import msgspec
 from comparo.core.domain.expression_types import ConversionType as ConversionType
 from comparo.core.domain.expression_types import FileTrim as FileTrim
 from comparo.core.domain.expression_types import InterpolationMode as InterpolationMode
+from comparo.core.domain.expression_types import conversion_output_kinds
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.scopes import ValueScopeKind
@@ -119,11 +120,11 @@ class FileExpr(msgspec.Struct, frozen=True, kw_only=True):
     path: ValueExpression
     conversion: ConversionType | None
     trim: FileTrim
-    maximum_bytes: ByteCount
     provenance: ValueProvenance
+    maximum_bytes: ByteCount | None = None
 
     def __post_init__(self) -> None:
-        """Require an expression path and explicit finite read policy."""
+        """Require an expression path and validate an optional narrowing byte budget."""
         if not is_value_expression(self.path):
             raise TypeError("file path must be a value expression")
         if not expression_outputs_only(self.path, _TEXT_OUTPUT_KINDS):
@@ -134,8 +135,8 @@ class FileExpr(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("file trim behavior must be a FileTrim")
         if self.conversion is None and self.trim is not FileTrim.NONE:
             raise ValueError("raw byte file reads cannot apply text trimming")
-        if type(self.maximum_bytes) is not ByteCount:
-            raise TypeError("file maximum bytes must be a ByteCount")
+        if self.maximum_bytes is not None and type(self.maximum_bytes) is not ByteCount:
+            raise TypeError("file maximum bytes must be a ByteCount when provided")
         _require_provenance(self.provenance)
 
 
@@ -185,6 +186,58 @@ class ConvertExpr(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("conversion source must be a value expression")
         if type(self.target) is not ConversionType:
             raise TypeError("conversion target must be a ConversionType")
+        _require_provenance(self.provenance)
+
+
+@final
+class ArrayExpr(msgspec.Struct, frozen=True, kw_only=True):
+    """An ordered runtime array whose members may independently resolve."""
+
+    items: tuple[ValueExpression, ...]
+    provenance: ValueProvenance
+
+    def __post_init__(self) -> None:
+        """Require typed members and reject unsupported list-element omission."""
+        if type(self.items) is not tuple:
+            raise TypeError("array expression items must be an immutable tuple")
+        if any(not is_value_expression(item) for item in self.items):
+            raise TypeError("array expression items must be value expressions")
+        if any(type(item) is OptionalExpr for item in self.items):
+            raise ValueError("array expression items cannot be optional")
+        _require_provenance(self.provenance)
+
+
+@final
+class ObjectExpressionMember(msgspec.Struct, frozen=True, kw_only=True):
+    """One source-ordered runtime object member."""
+
+    name: str
+    expression: ValueExpression
+
+    def __post_init__(self) -> None:
+        """Require an exact member name and typed expression."""
+        if type(self.name) is not str:
+            raise TypeError("object expression member name must be text")
+        if not is_value_expression(self.expression):
+            raise TypeError("object expression member must contain a value expression")
+
+
+@final
+class ObjectExpr(msgspec.Struct, frozen=True, kw_only=True):
+    """A runtime object retaining deterministic source member order."""
+
+    members: tuple[ObjectExpressionMember, ...]
+    provenance: ValueProvenance
+
+    def __post_init__(self) -> None:
+        """Require typed members and reject ambiguous duplicate names."""
+        if type(self.members) is not tuple or any(
+            type(member) is not ObjectExpressionMember for member in self.members
+        ):
+            raise TypeError("object expression members must be an immutable tuple of members")
+        names = tuple(member.name for member in self.members)
+        if len(names) != len(set(names)):
+            raise ValueError("object expression member names must be unique")
         _require_provenance(self.provenance)
 
 
@@ -265,6 +318,8 @@ type ValueExpression = (
     | FallbackExpr
     | OptionalExpr
     | ConvertExpr
+    | ArrayExpr
+    | ObjectExpr
     | InterpolationExpr
 )
 
@@ -279,18 +334,10 @@ def is_value_expression(value: object) -> TypeGuard[ValueExpression]:
         FallbackExpr,
         OptionalExpr,
         ConvertExpr,
+        ArrayExpr,
+        ObjectExpr,
         InterpolationExpr,
     }
-
-
-def expression_dependencies(expression: ValueExpression) -> tuple[ExpressionDependency, ...]:
-    """Return ordered unique dependencies without storing competing derived metadata."""
-    discovered = _all_dependencies(expression)
-    return tuple(
-        dependency
-        for index, dependency in enumerate(discovered)
-        if dependency not in discovered[:index]
-    )
 
 
 def expression_output_kinds(expression: ValueExpression) -> frozenset[ValueKind]:
@@ -302,45 +349,16 @@ def expression_output_kinds(expression: ValueExpression) -> frozenset[ValueKind]
         FileExpr,
         ConvertExpr,
     }:
-        return _atomic_expression_output_kinds(cast("AtomicExpression", expression))
-    if type(expression) in {FallbackExpr, OptionalExpr, InterpolationExpr}:
-        return _composite_expression_output_kinds(cast("CompositeExpression", expression))
+        return _atomic_output_kinds(cast("AtomicExpression", expression))
+    if type(expression) in {
+        FallbackExpr,
+        OptionalExpr,
+        ArrayExpr,
+        ObjectExpr,
+        InterpolationExpr,
+    }:
+        return _composite_output_kinds(cast("CompositeExpression", expression))
     raise TypeError("unsupported value expression")
-
-
-type AtomicExpression = LiteralExpr | SensitiveLiteralExpr | LookupExpr | FileExpr | ConvertExpr
-type CompositeExpression = FallbackExpr | OptionalExpr | InterpolationExpr
-
-
-def _atomic_expression_output_kinds(expression: AtomicExpression) -> frozenset[ValueKind]:
-    if type(expression) is LiteralExpr:
-        return frozenset({_literal_output_kind(expression)})
-    if type(expression) is SensitiveLiteralExpr:
-        return frozenset({_literal_type_output_kind(expression.value.payload_type)})
-    if type(expression) is LookupExpr:
-        return frozenset({ValueKind.UNKNOWN})
-    if type(expression) is FileExpr:
-        if expression.conversion is None:
-            return frozenset({ValueKind.BYTES})
-        return _conversion_output_kinds(expression.conversion)
-    return _conversion_output_kinds(expression.target)
-
-
-def _composite_expression_output_kinds(
-    expression: CompositeExpression,
-) -> frozenset[ValueKind]:
-    if type(expression) is FallbackExpr:
-        return frozenset().union(
-            *(expression_output_kinds(source) for source in expression.sources)
-        )
-    if type(expression) is OptionalExpr:
-        return expression_output_kinds(expression.source)
-    if expression.mode is InterpolationMode.EMBEDDED_TEXT:
-        return _TEXT_OUTPUT_KINDS
-    segment = expression.segments[0]
-    if type(segment) is not ExpressionSegment:  # pragma: no cover - constructor invariant
-        raise TypeError("whole-value interpolation requires an expression segment")
-    return expression_output_kinds(segment.expression)
 
 
 def expression_outputs_only(
@@ -358,77 +376,58 @@ def expression_outputs_only(
     )
 
 
-def _all_dependencies(expression: ValueExpression) -> tuple[ExpressionDependency, ...]:
-    if type(expression) in {LiteralExpr, SensitiveLiteralExpr}:
-        return ()
+type AtomicExpression = LiteralExpr | SensitiveLiteralExpr | LookupExpr | FileExpr | ConvertExpr
+type CompositeExpression = FallbackExpr | OptionalExpr | ArrayExpr | ObjectExpr | InterpolationExpr
+
+
+def _atomic_output_kinds(expression: AtomicExpression) -> frozenset[ValueKind]:
+    if type(expression) is LiteralExpr:
+        return frozenset({_literal_type_output_kind(type(expression.value))})
+    if type(expression) is SensitiveLiteralExpr:
+        return frozenset({_literal_type_output_kind(expression.value.payload_type)})
     if type(expression) is LookupExpr:
-        return (expression.dependency,)
+        return frozenset({ValueKind.UNKNOWN})
     if type(expression) is FileExpr:
-        return _all_dependencies(expression.path)
+        if expression.conversion is None:
+            return frozenset({ValueKind.BYTES})
+        return conversion_output_kinds(expression.conversion)
+    return conversion_output_kinds(expression.target)
+
+
+def _composite_output_kinds(expression: CompositeExpression) -> frozenset[ValueKind]:
     if type(expression) is FallbackExpr:
-        return tuple(
-            dependency for source in expression.sources for dependency in _all_dependencies(source)
+        return frozenset().union(
+            *(expression_output_kinds(source) for source in expression.sources)
         )
     if type(expression) is OptionalExpr:
-        return _all_dependencies(expression.source)
-    if type(expression) is ConvertExpr:
-        return _all_dependencies(expression.source)
-    if type(expression) is InterpolationExpr:
-        return tuple(
-            dependency
-            for segment in expression.segments
-            if type(segment) is ExpressionSegment
-            for dependency in _all_dependencies(segment.expression)
-        )
-    raise TypeError("unsupported value expression")
-
-
-def _literal_output_kind(expression: LiteralExpr) -> ValueKind:
-    return _literal_type_output_kind(type(expression.value))
+        return expression_output_kinds(expression.source)
+    if type(expression) is ArrayExpr:
+        return frozenset({ValueKind.ARRAY})
+    if type(expression) is ObjectExpr:
+        return frozenset({ValueKind.OBJECT})
+    if expression.mode is InterpolationMode.EMBEDDED_TEXT:
+        return _TEXT_OUTPUT_KINDS
+    segment = expression.segments[0]
+    if type(segment) is not ExpressionSegment:  # pragma: no cover - constructor invariant
+        raise TypeError("whole-value interpolation requires an expression segment")
+    return expression_output_kinds(segment.expression)
 
 
 def _literal_type_output_kind(value_type: type[object]) -> ValueKind:
-    if value_type is JsonNull:
-        return ValueKind.NULL
-    if value_type is JsonBoolean:
-        return ValueKind.BOOLEAN
-    if value_type is JsonInteger:
-        return ValueKind.INTEGER
-    if value_type is JsonDecimal:
-        return ValueKind.NUMBER
-    if value_type is JsonString:
-        return ValueKind.STRING
-    if value_type is JsonArray:
-        return ValueKind.ARRAY
-    if value_type is JsonObject:
-        return ValueKind.OBJECT
-    if value_type is BytesValue:
-        return ValueKind.BYTES
-    raise TypeError(  # pragma: no cover - literal constructors enforce the closed value union
-        "literal expression contains an unsupported value"
-    )
-
-
-def _conversion_output_kinds(conversion: ConversionType) -> frozenset[ValueKind]:
-    if conversion is ConversionType.STRING:
-        return frozenset({ValueKind.STRING})
-    if conversion is ConversionType.BYTES:
-        return frozenset({ValueKind.BYTES})
-    if conversion is ConversionType.INTEGER:
-        return frozenset({ValueKind.INTEGER})
-    if conversion is ConversionType.NUMBER:
-        return frozenset({ValueKind.NUMBER})
-    if conversion is ConversionType.BOOLEAN:
-        return frozenset({ValueKind.BOOLEAN})
-    if conversion in {ConversionType.JSON, ConversionType.YAML}:
-        return _JSON_OUTPUT_KINDS
-    if conversion is ConversionType.DURATION:
-        return frozenset({ValueKind.DURATION})
-    if conversion is ConversionType.SIZE:
-        return frozenset({ValueKind.SIZE})
-    raise TypeError(  # pragma: no cover - expression constructors require ConversionType
-        "unsupported conversion type"
-    )
+    mapping: dict[type[object], ValueKind] = {
+        JsonNull: ValueKind.NULL,
+        JsonBoolean: ValueKind.BOOLEAN,
+        JsonInteger: ValueKind.INTEGER,
+        JsonDecimal: ValueKind.NUMBER,
+        JsonString: ValueKind.STRING,
+        JsonArray: ValueKind.ARRAY,
+        JsonObject: ValueKind.OBJECT,
+        BytesValue: ValueKind.BYTES,
+    }
+    try:
+        return mapping[value_type]
+    except KeyError as error:  # pragma: no cover - literal constructors close the value union
+        raise TypeError("literal expression contains an unsupported value") from error
 
 
 def _require_provenance(provenance: object) -> None:

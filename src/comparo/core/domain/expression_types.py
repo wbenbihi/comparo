@@ -1,6 +1,19 @@
 """Closed scalar vocabularies used by compiled value expressions."""
 
 from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.value_kinds import ValueKind
+
+_JSON_OUTPUT_KINDS = frozenset(
+    {
+        ValueKind.NULL,
+        ValueKind.BOOLEAN,
+        ValueKind.INTEGER,
+        ValueKind.NUMBER,
+        ValueKind.STRING,
+        ValueKind.ARRAY,
+        ValueKind.OBJECT,
+    }
+)
 
 
 class ConversionType(DomainStrEnum):
@@ -31,3 +44,26 @@ class InterpolationMode(DomainStrEnum):
 
     WHOLE_VALUE = "whole-value"
     EMBEDDED_TEXT = "embedded-text"
+
+
+def conversion_output_kinds(conversion: ConversionType) -> frozenset[ValueKind]:
+    """Return the exact static output-kind contract of a conversion."""
+    if conversion is ConversionType.STRING:
+        return frozenset({ValueKind.STRING})
+    if conversion is ConversionType.BYTES:
+        return frozenset({ValueKind.BYTES})
+    if conversion is ConversionType.INTEGER:
+        return frozenset({ValueKind.INTEGER})
+    if conversion is ConversionType.NUMBER:
+        return frozenset({ValueKind.NUMBER})
+    if conversion is ConversionType.BOOLEAN:
+        return frozenset({ValueKind.BOOLEAN})
+    if conversion in {ConversionType.JSON, ConversionType.YAML}:
+        return _JSON_OUTPUT_KINDS
+    if conversion is ConversionType.DURATION:
+        return frozenset({ValueKind.DURATION})
+    if conversion is ConversionType.SIZE:
+        return frozenset({ValueKind.SIZE})
+    raise TypeError(  # pragma: no cover - callers require ConversionType
+        "unsupported conversion type"
+    )

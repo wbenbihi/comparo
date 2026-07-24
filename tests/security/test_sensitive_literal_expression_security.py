@@ -6,9 +6,9 @@ from typing import cast
 import msgspec
 import pytest
 
+from comparo.core.domain.expression_analysis import expression_dependencies
 from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import SensitiveLiteralExpr
-from comparo.core.domain.expressions import expression_dependencies
 from comparo.core.domain.expressions import expression_output_kinds
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.primitives import Duration
