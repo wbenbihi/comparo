@@ -12,6 +12,8 @@ from tests.core.domain.gates.test_normalization import _diff_counts
 from tests.core.domain.gates.test_normalization import _diff_coverage
 from tests.core.domain.gates.test_normalization import _diff_fact
 from tests.core.domain.gates.test_normalization import _predicate_rule
+from tests.core.gates.test_engine import _profile
+from tests.core.gates.test_engine import _threshold
 
 from comparo.core.domain.assertions.results import AssertionCounts
 from comparo.core.domain.assertions.results import AssertionEvidence
@@ -28,6 +30,7 @@ from comparo.core.domain.gates.summaries import DiffGateSummary
 from comparo.core.domain.gates.summaries import GateEnvironmentExecution
 from comparo.core.domain.gates.summaries import NormalizedFactSummary
 from comparo.core.domain.gates.types import EnvironmentRole
+from comparo.core.domain.gates.types import GateSeverity
 from comparo.core.domain.identity import ExchangeId
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.identity import ResourceId
@@ -41,6 +44,7 @@ from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.values import JsonInteger
+from comparo.core.gates import evaluate_gate
 
 _SECRET = "998877665544332211"
 
@@ -119,6 +123,22 @@ def test_sensitive_assertion_normalizes_to_a_value_free_serializable_projection(
     assert not any(type(item) is AssertionFact for item in reachable)
     assert not hasattr(normalized.rules[0], "fact")
     assert not hasattr(normalized.rules[0], "evidence")
+
+    evaluation = evaluate_gate(
+        _profile(
+            roles=(EnvironmentRole.BASELINE,),
+            assertion_coverage=True,
+            thresholds=(_threshold(GateSeverity.BLOCKING, violated=1),),
+        ),
+        NormalizedFactSummary(
+            completion=RunComplete(completed_at=UtcInstant(unix_nanoseconds=1)),
+            assertions=(normalized,),
+        ),
+    )
+    _assert_serializable_without_secret(evaluation)
+    evaluated_reachable = tuple(_walk(evaluation))
+    assert not any(type(item) is AssertionFact for item in evaluated_reachable)
+    assert not hasattr(evaluation, "summary")
 
 
 def test_diff_normalizes_to_the_same_narrow_value_free_boundary() -> None:
