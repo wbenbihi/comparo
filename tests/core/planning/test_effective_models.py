@@ -185,6 +185,7 @@ def test_value_layers_and_effective_execution_validate_topology_and_values(
         ({"comparisons": (object(),)}, TypeError, "typed immutable"),
         ({"trials": object()}, TypeError, "PositiveCount"),
         ({"maximum_attempts": object()}, TypeError, "PositiveCount"),
+        ({"fail_fast": object()}, TypeError, "bool"),
         ({"value_layers": []}, TypeError, "typed immutable"),
         ({"value_layers": (object(),)}, TypeError, "typed immutable"),
         ({"provenance": []}, TypeError, "typed immutable"),

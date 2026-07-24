@@ -85,7 +85,7 @@ def test_budget_and_value_overlay_inputs_are_closed() -> None:
     )
     with pytest.raises(TypeError, match="BudgetResource"):
         msgspec.structs.replace(budget, resource="trials")
-    with pytest.raises(ValueError, match="not admitted"):
+    with pytest.raises(ValueError, match="not bound"):
         msgspec.structs.replace(budget, resource=BudgetResource.MEMORY_BYTES)
     with pytest.raises(TypeError, match="PositiveCount"):
         msgspec.structs.replace(budget, limit=2)
@@ -107,6 +107,7 @@ def test_run_invocation_rejects_untyped_and_duplicate_override_surfaces() -> Non
         ("topology", object(), "topology"),
         ("matrices", object(), "Matrix selection"),
         ("trials", object(), "count overrides"),
+        ("fail_fast", object(), "boolean overrides"),
         ("budgets", cast("tuple[PlanningBudgetValue, ...]", []), "budgets"),
         ("values", cast("tuple[InvocationValueOverlay, ...]", []), "values"),
     )
@@ -194,5 +195,5 @@ def test_planning_authority_requires_exact_complete_nonduplicated_authority() ->
         msgspec.structs.replace(valid, ceilings=cast("tuple[PlanningBudgetValue, ...]", []))
     with pytest.raises(ValueError, match="resources must be unique"):
         msgspec.structs.replace(valid, ceilings=(*valid.ceilings, valid.ceilings[0]))
-    with pytest.raises(ValueError, match="every RunPlan"):
+    with pytest.raises(ValueError, match="every planning and scheduling"):
         msgspec.structs.replace(valid, ceilings=valid.ceilings[:-1])

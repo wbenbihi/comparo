@@ -72,6 +72,8 @@ def authority(limit: int = 100_000) -> PlanningAuthority:
         BudgetResource.ENVIRONMENT_EXECUTIONS,
         BudgetResource.ATTEMPTS,
         BudgetResource.COMPARISONS,
+        BudgetResource.QUEUED_WORK,
+        BudgetResource.CONCURRENCY,
     )
     return PlanningAuthority(
         policy=policy_definition(),

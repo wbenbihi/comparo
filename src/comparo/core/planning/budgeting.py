@@ -29,6 +29,7 @@ from comparo.core.domain.planning_inputs import RunInvocation
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Sha256Digest
+from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.values import JsonInteger
 from comparo.core.domain.values import JsonObject
 from comparo.core.planning._canonical import object_member
@@ -42,6 +43,8 @@ _DEFAULT_LIMITS: Mapping[BudgetResource, int] = {
     BudgetResource.ENVIRONMENT_EXECUTIONS: 50_000,
     BudgetResource.ATTEMPTS: 150_000,
     BudgetResource.COMPARISONS: 50_000,
+    BudgetResource.QUEUED_WORK: 64,
+    BudgetResource.CONCURRENCY: 8,
 }
 _RESOURCE_BY_NAME = {resource.value: resource for resource in _DEFAULT_LIMITS}
 
@@ -136,7 +139,7 @@ def admit_cardinality(
         BudgetResource.COMPARISONS: cardinality.comparisons.value,
     }
     for budget in budgets:
-        value = actual[budget.resource]
+        value = actual.get(budget.resource)
         if value is not None and value > effective_limit(budgets, budget.resource):
             raise PlanningProblem(
                 "planning.budget.exceeded",
@@ -238,16 +241,22 @@ def _compose_budget(
     cap = min(ceilings)
     effective = min(requested, cap)
     zero = Count(value=0)
+    scheduling = resource in {BudgetResource.QUEUED_WORK, BudgetResource.CONCURRENCY}
+    operation = {
+        BudgetResource.QUEUED_WORK: "schedule.queue",
+        BudgetResource.CONCURRENCY: "schedule.execute",
+    }.get(resource, f"admit.{resource.value}")
     return ResourceBudget(
         resource=resource,
-        scope_kind=BudgetScopeKind.PLAN,
-        stage=BudgetStage.PLANNING,
-        operation=BudgetOperation(value=f"admit.{resource.value}"),
+        scope_kind=BudgetScopeKind.RUN if scheduling else BudgetScopeKind.PLAN,
+        stage=BudgetStage.SCHEDULING if scheduling else BudgetStage.PLANNING,
+        operation=BudgetOperation(value=operation),
         requested=Count(value=requested),
         effective=Count(value=effective),
         cap=Count(value=cap),
         contributions=tuple(contributions),
         usage=BudgetUsage(consumed=zero, in_use=zero, high_water=zero),
+        scope=RunScope(run_id=invocation.run_id) if scheduling else None,
     )
 
 
@@ -258,8 +267,8 @@ def _default_set() -> VersionedDefaultSetRef:
         separators=(",", ":"),
     ).encode()
     return VersionedDefaultSetRef(
-        identifier="comparo.planning",
-        version="1",
+        identifier="comparo.execution",
+        version="2",
         fingerprint=Fingerprint(
             algorithm="sha256",
             digest=Sha256Digest(hex_value=hashlib.sha256(encoded).hexdigest()),

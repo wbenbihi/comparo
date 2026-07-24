@@ -128,6 +128,7 @@ _EXECUTION_FIELDS = (
     _field("matrices", FieldMode.REFERENCE_LIST, kinds=(ResourceKind.MATRIX,)),
     _field("trials", FieldMode.STATIC),
     _field("maximumAttempts", FieldMode.STATIC),
+    _field("failFast", FieldMode.STATIC),
     _field("budgets", FieldMode.STATIC),
     _field("parameters", FieldMode.RESOLVABLE),
     _field("variables", FieldMode.RESOLVABLE),

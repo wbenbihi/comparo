@@ -25,7 +25,7 @@ from comparo.core.domain.overrides import ScalarOverride
 from comparo.core.domain.overrides import SetValue
 from comparo.core.domain.primitives import PositiveCount
 
-_PLANNING_RESOURCES = frozenset(
+_EXECUTION_COUNT_RESOURCES = frozenset(
     {
         BudgetResource.REQUESTS,
         BudgetResource.MATRIX_CELLS,
@@ -33,6 +33,8 @@ _PLANNING_RESOURCES = frozenset(
         BudgetResource.ENVIRONMENT_EXECUTIONS,
         BudgetResource.ATTEMPTS,
         BudgetResource.COMPARISONS,
+        BudgetResource.QUEUED_WORK,
+        BudgetResource.CONCURRENCY,
     }
 )
 
@@ -115,17 +117,17 @@ type TopologyOverride = (
 
 @final
 class PlanningBudgetValue(msgspec.Struct, frozen=True, kw_only=True):
-    """One finite planning-dimension request or authoritative ceiling."""
+    """One finite planning or scheduling request or authoritative ceiling."""
 
     resource: BudgetResource
     limit: PositiveCount
 
     def __post_init__(self) -> None:
-        """Restrict this planning surface to RunPlan admission dimensions."""
+        """Restrict this surface to count dimensions bound before execution."""
         if type(self.resource) is not BudgetResource:
             raise TypeError("planning budget resource must be a BudgetResource")
-        if self.resource not in _PLANNING_RESOURCES:
-            raise ValueError("planning budget resource is not admitted by RunPlan")
+        if self.resource not in _EXECUTION_COUNT_RESOURCES:
+            raise ValueError("execution budget resource is not bound by run planning")
         if type(self.limit) is not PositiveCount:
             raise TypeError("planning budget limit must be a PositiveCount")
 
@@ -166,6 +168,7 @@ class RunInvocation(msgspec.Struct, frozen=True, kw_only=True):
     matrices: CollectionOverridePlan[MatrixBindingId, MatrixSelection] = _default_matrix_edit()
     trials: ScalarOverride[PositiveCount] = Inherit()
     maximum_attempts: ScalarOverride[PositiveCount] = Inherit()
+    fail_fast: ScalarOverride[bool] = Inherit()
     budgets: tuple[PlanningBudgetValue, ...] = ()
     values: tuple[InvocationValueOverlay, ...] = ()
 
@@ -187,6 +190,7 @@ class RunInvocation(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("run invocation topology must be a typed topology override")
         _validate_matrix_edit(self.matrices)
         _validate_count_overrides(self.trials, self.maximum_attempts)
+        _validate_bool_override(self.fail_fast)
         _validate_invocation_budgets(self.budgets)
         _validate_invocation_values(self.values)
 
@@ -197,6 +201,13 @@ def _validate_count_overrides(*overrides: ScalarOverride[PositiveCount]) -> None
             type(override) is SetValue and type(override.value) is PositiveCount
         ):
             raise TypeError("count overrides must inherit, clear, or set a PositiveCount")
+
+
+def _validate_bool_override(override: ScalarOverride[bool]) -> None:
+    if type(override) not in {Inherit, Clear} and not (
+        type(override) is SetValue and type(override.value) is bool
+    ):
+        raise TypeError("boolean overrides must inherit, clear, or set a bool")
 
 
 def _validate_invocation_budgets(budgets: tuple[PlanningBudgetValue, ...]) -> None:
@@ -243,8 +254,8 @@ class PlanningAuthority(msgspec.Struct, frozen=True, kw_only=True):
         resources = tuple(ceiling.resource for ceiling in self.ceilings)
         if len(resources) != len(set(resources)):
             raise ValueError("planning authority ceiling resources must be unique")
-        if frozenset(resources) != _PLANNING_RESOURCES:
-            raise ValueError("planning authority requires every RunPlan admission ceiling")
+        if frozenset(resources) != _EXECUTION_COUNT_RESOURCES:
+            raise ValueError("planning authority requires every planning and scheduling ceiling")
 
 
 def _validate_resource_ids(values: tuple[ResourceId, ...], *, label: str) -> None:

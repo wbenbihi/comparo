@@ -61,6 +61,9 @@ def test_planner_binds_profiles_counts_budgets_and_binary_topology(
     budgets = {item.resource: item for item in prepared.plan.budgets}
     assert cast("Count", budgets[BudgetResource.MATRIX_CELLS].cap).value == 50
     assert cast("Count", budgets[BudgetResource.TRIALS].cap).value == 20
+    assert cast("Count", budgets[BudgetResource.QUEUED_WORK].effective).value == 64
+    assert cast("Count", budgets[BudgetResource.CONCURRENCY].effective).value == 8
+    assert prepared.effective.fail_fast is False
     assert all(cast("Count", item.usage.consumed).value == 0 for item in budgets.values())
     assert len(prepared.effective.value_layers) == 3
     assert "hello" not in repr(prepared.plan)
@@ -74,10 +77,15 @@ def test_invocation_replaces_topology_subjects_trials_and_budget_requests(
         topology=AssertionTopology(environments=(ResourceId(value="prod"),)),
         trials=SetValue(value=PositiveCount(value=3)),
         maximum_attempts=SetValue(value=PositiveCount(value=1)),
+        fail_fast=SetValue(value=True),
         budgets=(
             PlanningBudgetValue(
                 resource=BudgetResource.TRIALS,
                 limit=PositiveCount(value=8),
+            ),
+            PlanningBudgetValue(
+                resource=BudgetResource.CONCURRENCY,
+                limit=PositiveCount(value=3),
             ),
         ),
     )
@@ -91,6 +99,11 @@ def test_invocation_replaces_topology_subjects_trials_and_budget_requests(
     trial_budget = next(item for item in plan.budgets if item.resource is BudgetResource.TRIALS)
     assert cast("Count", trial_budget.requested).value == 8
     assert cast("Count", trial_budget.effective).value == 8
+    concurrency_budget = next(
+        item for item in plan.budgets if item.resource is BudgetResource.CONCURRENCY
+    )
+    assert cast("Count", concurrency_budget.requested).value == 3
+    assert result.prepared.effective.fail_fast is True
 
 
 def test_execution_profile_is_a_more_specific_structural_layer(

@@ -282,6 +282,9 @@
               },
               "type": "array"
             },
+            "failFast": {
+              "$ref": "#/$defs/jsonValue"
+            },
             "gate": {
               "oneOf": [
                 {
@@ -509,6 +512,9 @@
                     "$ref": "#/$defs/resourceUse"
                   },
                   "type": "array"
+                },
+                "failFast": {
+                  "$ref": "#/$defs/jsonValue"
                 },
                 "gate": {
                   "oneOf": [

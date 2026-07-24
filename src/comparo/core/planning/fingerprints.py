@@ -83,6 +83,7 @@ def plan_fingerprint(
         ],
         "trials": effective.trials.value,
         "maximumAttempts": effective.maximum_attempts.value,
+        "failFast": effective.fail_fast,
         "valueLayers": [
             {
                 "source": _source(layer.source),

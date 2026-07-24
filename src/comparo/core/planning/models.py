@@ -203,6 +203,7 @@ class EffectiveExecution(msgspec.Struct, frozen=True, kw_only=True):
     comparisons: tuple[EnvironmentPair, ...]
     trials: PositiveCount
     maximum_attempts: PositiveCount
+    fail_fast: bool
     value_layers: tuple[ValueBindingLayer, ...]
     provenance: tuple[EffectiveFieldProvenance, ...]
 
@@ -231,6 +232,8 @@ class EffectiveExecution(msgspec.Struct, frozen=True, kw_only=True):
             or type(self.maximum_attempts) is not PositiveCount
         ):
             raise TypeError("effective repetition settings must be PositiveCount values")
+        if type(self.fail_fast) is not bool:
+            raise TypeError("effective fail-fast setting must be bool")
         if type(self.value_layers) is not tuple or any(
             type(layer) is not ValueBindingLayer for layer in self.value_layers
         ):

@@ -36,6 +36,7 @@ from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import RunInvocation
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.values import JsonBoolean
 from comparo.core.planning._canonical import find_resource
 from comparo.core.planning._canonical import object_member
 from comparo.core.planning._canonical import positive_integer
@@ -103,6 +104,9 @@ def bind_execution(
         default=1,
         invocation=invocation,
     )
+    fail_fast, fail_fast_sources = _bind_bool(
+        tuple(layers), invocation.fail_fast, field="failFast", default=False, invocation=invocation
+    )
     matrix_selections, matrix_sources = _bind_matrix_selections(project, tuple(layers), invocation)
 
     profile_pairs = tuple(
@@ -154,6 +158,7 @@ def bind_execution(
         EffectiveFieldProvenance(field="matrices", sources=matrix_sources),
         EffectiveFieldProvenance(field="trials", sources=trial_sources),
         EffectiveFieldProvenance(field="maximumAttempts", sources=attempt_sources),
+        EffectiveFieldProvenance(field="failFast", sources=fail_fast_sources),
         EffectiveFieldProvenance(
             field="safety",
             sources=(
@@ -172,11 +177,43 @@ def bind_execution(
             comparisons=comparisons,
             trials=trial_count,
             maximum_attempts=attempt_count,
+            fail_fast=fail_fast,
             value_layers=value_layers,
             provenance=provenance,
         ),
         budgets,
     )
+
+
+def _bind_bool(
+    layers: tuple[_Layer, ...],
+    override: Inherit | Clear | SetValue[bool],
+    *,
+    field: str,
+    default: bool,
+    invocation: RunInvocation,
+) -> tuple[bool, tuple[PlanningSource, ...]]:
+    """Bind one static boolean with the same explicit scalar precedence as counts."""
+    value = default
+    sources = [PlanningSource(kind=ProvenanceKind.VERSIONED_DEFAULT)]
+    for layer in layers:
+        candidate = object_member(layer.spec, field)
+        if candidate is not None:
+            if type(candidate) is not JsonBoolean:
+                raise PlanningProblem(
+                    "planning.field.shape-invalid", resource=layer.resource, field=field
+                )
+            value = candidate.value
+            sources.append(_layer_source(layer))
+    if type(override) is Clear:
+        value = default
+        sources.append(_invocation_source(invocation))
+    elif type(override) is SetValue:
+        value = override.value
+        sources.append(_invocation_source(invocation))
+    elif type(override) is not Inherit:
+        raise TypeError("planner boolean override must be typed")
+    return value, tuple(sources)
 
 
 def _selected_execution_profile(
