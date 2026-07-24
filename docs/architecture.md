@@ -1,14 +1,17 @@
 # Architecture
 
 Comparo is being rebuilt from a pure, immutable domain center outward. The current public source
-tree implements **Steps 1 through 3**: the internal language, shared selector engine, and pure
-assertion, directed diff, and value-free gate evaluators. It is not yet a runnable CLI or TUI.
+tree implements **Steps 1 through 5**: the internal language, shared selector and evaluation
+kernels, versioned configuration compiler, and deterministic admitted run planner. It is not yet a
+runnable CLI or TUI.
 
 The accepted destination and implementation order are recorded in the
 [core refactor roadmap](core-refactor-roadmap.md). The exact Step 1 boundary is recorded in the
 [immutable core domain foundation](core-domain-foundation.md), the selector contract in the
 [selector language](selector-language.md), and the evaluator boundary in the
-[pure evaluation kernel](core-evaluation-kernel.md). Product decisions live in the [architecture
+[pure evaluation kernel](core-evaluation-kernel.md). The external-language boundary is documented
+in the [versioned configuration compiler](configuration-compiler.md), and the planning boundary in
+the [deterministic run planner](run-planner.md). Product decisions live in the [architecture
 decision index](decisions/README.md).
 
 ## Current package layout
@@ -17,8 +20,11 @@ decision index](decisions/README.md).
 src/comparo/
 ├── __init__.py
 ├── py.typed
+├── configuration/          filesystem discovery and source-located YAML adapter
+├── schemas/                generated public comparo/v1alpha1 JSON Schema
 └── core/
     ├── __init__.py
+    ├── configuration/      pure version frontend, linker, and canonical compiler
     ├── domain/
     │   ├── assertions/   typed assertion rules and outcomes
     │   ├── diffs/        typed binary diff pipelines and outcomes
@@ -30,6 +36,7 @@ src/comparo/
     ├── diffs/            pure directed binary semantic diff evaluator
     ├── evaluation/       shared deterministic fact identity and strict value semantics
     ├── gates/            pure value-free release-policy reducer
+    ├── planning/         pure precedence binding, Matrix planning, and admission
     └── selection/        pure parser, compiler, snapshot, evaluator, and accounting kernel
 ```
 
@@ -55,12 +62,15 @@ versioned configuration frontend
   -> CLI / TUI / CI reporters
 ```
 
-Only the domain and pure evaluation kernels exist today. Domain modules cannot import adapter
-frameworks, HTTP client libraries, YAML or schema libraries, CLI/TUI frameworks, filesystem APIs,
+The domain, pure evaluation kernels, versioned compiler, and planner exist today. Domain modules
+cannot import adapter frameworks, HTTP client libraries, YAML or schema libraries, CLI/TUI
+frameworks, filesystem APIs,
 networking APIs, serialization helpers, ambient environment access, clocks, randomness, or task
 schedulers. Architecture tests also enforce acyclic internal imports, frozen/final
 `msgspec.Struct` records, closed field types, immutable module constants, secret-safe containers,
-and cohesive module size.
+and cohesive module size. The core compiler cannot import the filesystem/YAML adapter, version
+frontends remain independent of canonical compiler stages, and planning cannot import adapters,
+ambient state, schedulers, clocks, or randomness.
 
 Selection accepts a closed immutable snapshot containing an observation and values already
 resolved by storage adapters. It performs no I/O or decoding. Its explicit import allowlist,
@@ -73,6 +83,12 @@ evaluator payloads. The import-linter configuration enforces three contracts: th
 import adapter frameworks, assertion/diff/gate engines remain mutually independent, and all pure
 evaluation packages reject adapter-framework imports. Selector, assertion, and diff packages add
 stricter AST-enforced dependency allowlists and cohesion limits.
+
+The compiler consumes neutral source-located documents and emits an exact `CompiledProject` with
+linked references and unresolved typed expressions. The planner consumes that graph plus typed
+invocation and external authority, then emits a compact `RunPlan` with exact cardinality, budget
+provenance, stable identity, and a secret-free fingerprint. Later resolution and runtime stages
+must consume these products rather than reinterpreting YAML or recomputing precedence.
 
 ## Domain responsibilities
 

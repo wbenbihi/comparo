@@ -100,10 +100,12 @@ malformed, cyclic, and ambiguous references are compile errors. The canonical gr
 reference string.
 
 Profile, policy, and Schema fields that allow inline definitions compile them with a container-
-owned origin. Inline definitions cannot be referenced from elsewhere. At a Schema-typed field,
-an absolute public HTTP(S) `$use` becomes a policy-controlled remote schema coordinate. URLs with
-user-info, queries, or fragments are rejected so credentials and signed values cannot enter
-serializable compiler results. No remote content is fetched during compilation.
+owned origin and a secret-redacted structural fingerprint. Inline definitions cannot be
+referenced from elsewhere, but their exact revision can participate in planning provenance and
+budget authority. At a Schema-typed field, an absolute public HTTP(S) `$use` becomes a policy-
+controlled remote schema coordinate. URLs with user-info, queries, or fragments are rejected so
+credentials and signed values cannot enter serializable compiler results. No remote content is
+fetched during compilation.
 
 Project `defaults` uses the same typed field catalog as `ExecutionProfile`. Environment selection,
 Matrices, and profile attachments are therefore linked and validated rather than hidden inside an
@@ -177,6 +179,12 @@ A successful `CompiledProject` contains one Project plus canonically ordered res
 YAML backend nodes, directive mappings, unlinked resource strings, arbitrary operation names, or
 filesystem paths. Runtime value sources remain typed expression nodes because Step 6 resolves
 them at the correct run scope.
+
+Static execution fields required before resolution include subject and Environment topology,
+Matrix attachments, positive trial and maximum-attempt counts, and typed planning-budget maps.
+The deterministic planner consumes the canonical graph, applies a typed invocation and external
+policy authority, and emits an admitted compact plan; it never asks the frontend or YAML adapter
+to merge configuration. See [Deterministic run planner](run-planner.md).
 
 The public JSON Schema is generated from the same resource field and operation catalogs and ships
 at `src/comparo/schemas/comparo-v1alpha1.schema.json`. Compiler semantic validation remains

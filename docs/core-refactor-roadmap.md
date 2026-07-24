@@ -205,6 +205,9 @@ Exit criteria:
 
 ## Step 5: deterministic run planner
 
+Status: completed on 2026-07-24. The implemented boundary, precedence model, admission contract,
+and preview guarantees are documented in [Deterministic run planner](run-planner.md).
+
 The planner consumes a `CompiledProject` and produces an immutable `RunPlan` without reading
 secrets or performing I/O.
 
@@ -227,10 +230,12 @@ multi-sided.
 
 Exit criteria:
 
-- Planning is deterministic and inspectable.
-- Empty, contradictory, unsafe, and excessively large plans fail before network activity.
-- Matrix expansion is bounded and does not create an eager unbounded task list.
-- A plan preview never resolves secrets.
+- Planning is deterministic and inspectable: complete.
+- Empty, contradictory, unsafe, and excessively large plans fail before network activity:
+  complete for pre-resolution structure and plan authority; finalized effects are re-authorized
+  after Step 6 materialization.
+- Matrix expansion is bounded and does not create an eager unbounded task list: complete.
+- A plan preview never resolves secrets: complete.
 
 ## Step 6: run-scoped values and secrets
 
