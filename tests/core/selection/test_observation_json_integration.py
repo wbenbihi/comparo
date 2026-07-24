@@ -206,6 +206,7 @@ def test_outer_sse_json_path_ignores_nested_data_decode_failure() -> None:
     )
 
     assert type(result) is SelectionReady
+    assert result.stream_extent is stream.extent
     assert len(result.matches) == 1
     assert type(result.matches[0].location) is StreamLocation
     assert result.matches[0].location.nested_pointer is not None
@@ -258,6 +259,7 @@ def test_empty_stream_retains_view_provenance_and_exposes_timing_leaf() -> None:
 
     assert type(event_result) is SelectionReady
     assert event_result.matches == ()
+    assert event_result.stream_extent is stream.extent
     assert len(event_result.views) == 1
     assert type(timing_result) is SelectionReady
     assert timing_result.matches[0].value == measured().duration

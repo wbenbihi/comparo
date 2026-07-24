@@ -35,6 +35,7 @@ from comparo.core.domain.selectors.result_values import (
 from comparo.core.domain.selectors.result_values import (
     require_view_provenance as require_view_provenance,
 )
+from comparo.core.domain.selectors.sources import NATIVE_STREAM_SELECTOR_SOURCES
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.selectors.values import HttpFieldItems as HttpFieldItems
@@ -51,6 +52,7 @@ class SelectionReady(msgspec.Struct, frozen=True, kw_only=True):
     environment_execution_id: EnvironmentExecutionId
     matches: tuple[SelectionMatch, ...]
     views: tuple[SelectionViewProvenance, ...] = ()
+    stream_extent: StreamExtent | None = None
 
     def __post_init__(self) -> None:
         """Preserve immutable deterministic match order."""
@@ -62,6 +64,7 @@ class SelectionReady(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("selection matches must be an immutable tuple")
         if any(type(match) is not SelectionMatch for match in self.matches):
             raise TypeError("selection result contains an unsupported match")
+        _require_ready_stream_extent(self)
         require_match_collection_contract(self.matches, self.selector)
         require_view_provenance(
             self.views,
@@ -70,6 +73,20 @@ class SelectionReady(msgspec.Struct, frozen=True, kw_only=True):
         )
         for match in self.matches:
             require_match_contract(match, self.selector, self.environment_execution_id)
+
+
+def _require_ready_stream_extent(result: SelectionReady) -> None:
+    """Bind native stream success to its exact complete or authored-window extent."""
+    if result.stream_extent is not None and type(result.stream_extent) is not StreamExtent:
+        raise TypeError("ready stream extent must be a StreamExtent")
+    native_stream = result.selector.source in NATIVE_STREAM_SELECTOR_SOURCES
+    if native_stream != (result.stream_extent is not None):
+        raise ValueError("exactly native stream ready results require their StreamExtent")
+    if (
+        result.stream_extent is not None
+        and result.stream_extent.completeness is StreamCompleteness.INCOMPLETE
+    ):
+        raise ValueError("ready native stream selection requires a full or window extent")
 
 
 class SelectionPartialReason(DomainStrEnum):
@@ -178,12 +195,7 @@ def _require_partial_components(result: SelectionPartial) -> None:
 
 
 def _is_native_stream_source(source: SelectorSource) -> bool:
-    return source in {
-        SelectorSource.STREAM_EVENTS,
-        SelectorSource.STREAM_EVENT_DATA_JSON,
-        SelectorSource.STREAM_RECORDS,
-        SelectorSource.STREAM_CONTROLS,
-    }
+    return source in NATIVE_STREAM_SELECTOR_SOURCES
 
 
 def _require_partial_reason_evidence(

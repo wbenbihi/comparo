@@ -51,6 +51,24 @@ class TaintOriginId(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError(msg)
 
 
+def stable_taint_origin_union(
+    *groups: tuple[TaintOriginId, ...],
+) -> tuple[TaintOriginId, ...]:
+    """Merge validated origin groups in first-seen order with linear deduplication."""
+    seen: set[TaintOriginId] = set()
+    merged: list[TaintOriginId] = []
+    for group in groups:
+        if type(group) is not tuple:
+            raise TypeError("taint origin groups must be immutable tuples")
+        for origin in group:
+            if type(origin) is not TaintOriginId:
+                raise TypeError("taint origin groups require exact TaintOriginId values")
+            if origin not in seen:
+                seen.add(origin)
+                merged.append(origin)
+    return tuple(merged)
+
+
 @final
 class SensitiveValueAccess:
     """Explicit capability required to reveal a live sensitive value.

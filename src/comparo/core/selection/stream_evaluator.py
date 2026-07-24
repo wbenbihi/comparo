@@ -145,6 +145,7 @@ def _stream_result(
         environment_execution_id=snapshot.observation.execution_id,
         matches=matches,
         views=provenance,
+        stream_extent=stream.extent,
     )
 
 

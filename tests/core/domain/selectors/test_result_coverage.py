@@ -393,6 +393,51 @@ def test_partial_components_and_reason_evidence_are_exhaustive() -> None:
         msgspec.structs.replace(window, stream_extent=stream.stream_extent)
 
 
+def test_ready_native_stream_requires_exact_full_or_window_extent() -> None:
+    selector = _selector(SelectorSource.STREAM_RECORDS)
+    owner = EnvironmentExecutionId(value=UUID(int=130))
+    full = StreamExtent(
+        completeness=StreamCompleteness.FULL,
+        termination=StreamTerminationReason.REMOTE_EOF,
+    )
+    ready = SelectionReady(
+        selector=selector,
+        environment_execution_id=owner,
+        matches=(),
+        stream_extent=full,
+    )
+    assert ready.stream_extent is full
+
+    window = StreamExtent(
+        completeness=StreamCompleteness.WINDOW,
+        termination=StreamTerminationReason.EVENT_COUNT_WINDOW,
+    )
+    assert msgspec.structs.replace(ready, stream_extent=window).stream_extent is window
+
+    with pytest.raises(TypeError, match="ready stream extent"):
+        msgspec.structs.replace(ready, stream_extent=cast("StreamExtent", "bad"))
+    with pytest.raises(ValueError, match="exactly native stream ready"):
+        msgspec.structs.replace(ready, stream_extent=None)
+    with pytest.raises(ValueError, match="full or window"):
+        msgspec.structs.replace(
+            ready,
+            stream_extent=StreamExtent(
+                completeness=StreamCompleteness.INCOMPLETE,
+                termination=StreamTerminationReason.DECODE_FAILURE,
+            ),
+        )
+
+    body = _body_partial()
+    body_ready = SelectionReady(
+        selector=body.selector,
+        environment_execution_id=body.environment_execution_id,
+        matches=body.matches,
+        views=body.views,
+    )
+    with pytest.raises(ValueError, match="exactly native stream ready"):
+        msgspec.structs.replace(body_ready, stream_extent=full)
+
+
 def test_partial_issues_are_bound_to_execution_source_and_unique_location() -> None:
     result = _stream_partial()
     issue = result.issues[0]

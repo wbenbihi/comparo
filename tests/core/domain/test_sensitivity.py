@@ -9,6 +9,7 @@ from copy import deepcopy
 from decimal import Decimal
 from enum import Enum
 from enum import StrEnum
+from typing import cast
 
 import msgspec
 import pytest
@@ -18,6 +19,8 @@ from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import SensitiveValueAccess
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.sensitivity import is_sensitive_value
+from comparo.core.domain.sensitivity import stable_taint_origin_union
 
 
 class _ExampleEnum(StrEnum):
@@ -56,6 +59,19 @@ class _MutablePayload(msgspec.Struct):
 
 def _origin(value: str = "secret/project/api-token") -> TaintOriginId:
     return TaintOriginId(value=value)
+
+
+def test_taint_origin_union_is_stable_unique_and_linear_set_backed() -> None:
+    first = _origin("secret/project/first")
+    second = _origin("secret/project/second")
+    assert stable_taint_origin_union((first, second), (second, first)) == (first, second)
+    sensitive = SensitiveValue("token", origins=(first,))
+    assert is_sensitive_value(sensitive)
+    assert not is_sensitive_value("token")
+    with pytest.raises(TypeError, match="immutable tuples"):
+        stable_taint_origin_union(cast("tuple[TaintOriginId, ...]", [first]))
+    with pytest.raises(TypeError, match="exact TaintOriginId"):
+        stable_taint_origin_union((cast("TaintOriginId", object()),))
 
 
 @pytest.mark.parametrize(

@@ -25,6 +25,7 @@ from comparo.core.domain.http.stream_items import SseRetryControl
 from comparo.core.domain.http.stream_items import SseUnknownField
 from comparo.core.domain.http.stream_items import StreamItem
 from comparo.core.domain.http.stream_items import StreamItemEnvelope
+from comparo.core.domain.http.stream_termination import EventCountWindowEvidence
 from comparo.core.domain.http.stream_termination import FramingDecodeFailureEvidence
 from comparo.core.domain.http.stream_termination import ManualStopEvidence
 from comparo.core.domain.http.streams import SegmentEndReason
@@ -46,6 +47,7 @@ from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Fingerprint
+from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.scopes import BodyBudgetScope
 from comparo.core.domain.selectors.contracts import ValueContract
@@ -264,6 +266,7 @@ def test_sse_event_selection_contains_sensitive_text_and_location() -> None:
     assert type(result.matches[0].location) is StreamLocation
     assert result.matches[0].location.item_index == Count(value=0)
     assert result.views[0].requested is BodyViewKind.SSE_EVENTS
+    assert result.stream_extent is stream.extent
 
     public = evaluator._event_value(_event(sensitive=False))
     assert type(public) is JsonObject
@@ -446,6 +449,34 @@ def test_incomplete_stream_is_partial_with_matches_and_incomplete_without_them()
         kind=ValueKind.OBJECT,
     )
     assert type(empty_result) is SelectionIncomplete
+
+
+def test_authored_stream_window_is_ready_with_exact_extent() -> None:
+    complete = _stream(StreamKind.SSE, records=1)
+    window = msgspec.structs.replace(
+        complete,
+        segments=(
+            msgspec.structs.replace(
+                complete.segments[0],
+                end_reason=SegmentEndReason.WINDOW_CLOSED,
+            ),
+        ),
+        extent=StreamExtent(
+            completeness=StreamCompleteness.WINDOW,
+            termination=StreamTerminationReason.EVENT_COUNT_WINDOW,
+        ),
+        termination_evidence=EventCountWindowEvidence(limit=PositiveCount(value=1)),
+    )
+
+    result = _evaluate(
+        _snapshot(window, (_event(),)),
+        SelectorSource.STREAM_EVENTS,
+        kind=ValueKind.OBJECT,
+    )
+
+    assert type(result) is SelectionReady
+    assert result.stream_extent is window.extent
+    assert result.stream_extent.completeness is StreamCompleteness.WINDOW
 
 
 def test_json_pointer_selects_record_outer_event_and_nested_event_data() -> None:

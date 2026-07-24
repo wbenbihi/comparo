@@ -69,12 +69,17 @@ RESPONSE_SELECTOR_SOURCES = frozenset(
         SelectorSource.RESPONSE_TLS,
     }
 )
-STREAM_SELECTOR_SOURCES = frozenset(
+NATIVE_STREAM_SELECTOR_SOURCES = frozenset(
     {
         SelectorSource.STREAM_EVENTS,
         SelectorSource.STREAM_EVENT_DATA_JSON,
         SelectorSource.STREAM_RECORDS,
         SelectorSource.STREAM_CONTROLS,
+    }
+)
+STREAM_SELECTOR_SOURCES = frozenset(
+    {
+        *NATIVE_STREAM_SELECTOR_SOURCES,
         SelectorSource.STREAM_TIMINGS,
         SelectorSource.STREAM_TERMINATION,
     }
