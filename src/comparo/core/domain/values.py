@@ -281,6 +281,7 @@ class ResolutionErrorCode(DomainStrEnum):
     PROVIDER_FAILED = "provider-failed"
     CYCLE = "cycle"
     BUDGET_EXCEEDED = "budget-exceeded"
+    CANCELLED = "cancelled"
 
 
 class ResolutionBlockCode(DomainStrEnum):
