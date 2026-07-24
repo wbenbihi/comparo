@@ -1,14 +1,15 @@
 # Architecture
 
 Comparo is being rebuilt from a pure, immutable domain center outward. The current public source
-tree implements **Steps 1 and 2**: the internal language plus the shared pure selector engine used
-by future assertion, diff, capture, redaction, and triage consumers. It is not yet a runnable CLI
-or TUI.
+tree implements **Steps 1 through 3**: the internal language, shared selector engine, and pure
+assertion, directed diff, and value-free gate evaluators. It is not yet a runnable CLI or TUI.
 
 The accepted destination and implementation order are recorded in the
 [core refactor roadmap](core-refactor-roadmap.md). The exact Step 1 boundary is recorded in the
-[immutable core domain foundation](core-domain-foundation.md), and product decisions live in the
-[architecture decision index](decisions/README.md).
+[immutable core domain foundation](core-domain-foundation.md), the selector contract in the
+[selector language](selector-language.md), and the evaluator boundary in the
+[pure evaluation kernel](core-evaluation-kernel.md). Product decisions live in the [architecture
+decision index](decisions/README.md).
 
 ## Current package layout
 
@@ -25,6 +26,10 @@ src/comparo/
     │   ├── http/         finalized request and observation language
     │   ├── selectors/    compiled selectors, locations, and result variants
     │   └── *.py          identity, values, scopes, budgets, planning, and policy contracts
+    ├── assertions/       pure per-Environment assertion evaluator
+    ├── diffs/            pure directed binary semantic diff evaluator
+    ├── evaluation/       shared deterministic fact identity and strict value semantics
+    ├── gates/            pure value-free release-policy reducer
     └── selection/        pure parser, compiler, snapshot, evaluator, and accounting kernel
 ```
 
@@ -50,21 +55,24 @@ versioned configuration frontend
   -> CLI / TUI / CI reporters
 ```
 
-Only the domain and selector kernel exist today. Domain modules cannot import adapter frameworks, HTTP client
-libraries, YAML or schema libraries, CLI/TUI frameworks, filesystem APIs, networking APIs,
-serialization helpers, ambient environment access, clocks, randomness, or task schedulers.
-Architecture tests also enforce acyclic internal imports, frozen/final `msgspec.Struct` records,
-closed field types, immutable module constants, secret-safe containers, and cohesive module size.
+Only the domain and pure evaluation kernels exist today. Domain modules cannot import adapter
+frameworks, HTTP client libraries, YAML or schema libraries, CLI/TUI frameworks, filesystem APIs,
+networking APIs, serialization helpers, ambient environment access, clocks, randomness, or task
+schedulers. Architecture tests also enforce acyclic internal imports, frozen/final
+`msgspec.Struct` records, closed field types, immutable module constants, secret-safe containers,
+and cohesive module size.
 
 Selection accepts a closed immutable snapshot containing an observation and values already
 resolved by storage adapters. It performs no I/O or decoding. Its explicit import allowlist,
 module-size limit, cumulative budgets, and closed result union protect that boundary from gradual
 coupling to adapters.
 
-The current import-linter configuration contains one contract: `comparo.core.domain` must not
-import adapter or framework packages. The selector package has a stricter AST-enforced dependency
-allowlist. Additional layer contracts will be added when those packages actually exist; this
-document does not claim future modules are already implemented.
+Assertions and diffs consume selector results and prepared immutable inputs; they cannot perform
+I/O or call each other. Gates consume only normalized value-free summaries and cannot inspect
+evaluator payloads. The import-linter configuration enforces three contracts: the domain cannot
+import adapter frameworks, assertion/diff/gate engines remain mutually independent, and all pure
+evaluation packages reject adapter-framework imports. Selector, assertion, and diff packages add
+stricter AST-enforced dependency allowlists and cohesion limits.
 
 ## Domain responsibilities
 
@@ -119,6 +127,6 @@ uv run --frozen python -m tests.architecture.distribution_members \
   dist/comparo-0.2.0.tar.gz dist/comparo-0.2.0-py3-none-any.whl
 ```
 
-The suite requires 100% statement and branch coverage for the foundational domain. Distribution
+The suite requires 100% statement and branch coverage across the current package. Distribution
 verification uses an exact member allowlist and fails if local untracked package sources or
 sensitive/deprecated paths could enter a release artifact.

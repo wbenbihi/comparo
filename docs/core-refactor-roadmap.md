@@ -144,27 +144,32 @@ Exit criteria:
 
 ## Step 3: pure assertion, diff, and gate engines
 
+Status: completed on 2026-07-24. The implemented evaluator boundaries and verification contract
+are documented in [Pure evaluation kernel](core-evaluation-kernel.md).
+
 Assertions consume an observation plus compiled rules and return structured assertion outcomes.
 Operators are typed variants whose parameters are validated before evaluation.
 
 Diffs consume two observations plus a compiled profile and remain a binary primitive. Rules use a
 typed select, transform/reduce, pair, and compare pipeline so Environment-specific values and
-nondeterministic streams can be reduced to meaningful semantic facts before comparison. Initial
-operations should cover projection/exclusion, exact/type/shape comparison, absolute and relative
-tolerance, ordered/keyed/set/multiset collections, subset/superset behavior, and bounded pure
-future external capability operations.
+nondeterministic streams can be reduced to meaningful semantic facts before comparison. The
+initial operation set covers projection/exclusion, exact/type/shape comparison, absolute and
+relative tolerance, ordered/keyed/set/multiset collections, and subset/superset behavior. Future
+external or plugin-provided analysis remains behind a separately prepared capability boundary; it
+is not built into the Step 3 diff evaluator.
 
 The gate is a separate pure engine over assertion, diff, and runtime outcomes. It decides whether
 facts are acceptable without forcing evaluators to know release policy.
 
 Exit criteria:
 
-- Evaluation is pure and I/O-free.
-- Every outcome points to a stable rule identifier.
+- Evaluation is pure and I/O-free: complete.
+- Every outcome points to a stable rule identifier: complete.
 - Invalid regex, missing selection, unavailable response, unequal value, drift, and evaluator
-  error are distinct outcomes.
-- Empty and entirely skipped evaluations cannot become accidentally green.
-- Ignored or unselected values cannot be reported as equal, and comparison coverage is explicit.
+  error are distinct outcomes: complete.
+- Empty and entirely skipped evaluations cannot become accidentally green: complete.
+- Ignored or unselected values cannot be reported as equal, and comparison coverage is explicit:
+  complete.
 
 ## Step 4: versioned configuration compiler
 
