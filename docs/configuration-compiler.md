@@ -122,6 +122,7 @@ Resolvable fields recursively accept arrays and objects containing these directi
 | `$secret` | Read the sealed secrets namespace later |
 | `$param` | Read executable parameters later |
 | `$env` | Read the declared Environment dotenv/ambient namespace later |
+| `$matrix` | Read the current logical Matrix cell later |
 | `$file` | Request a policy-confined file read later |
 | `$from` | Try a non-empty ordered fallback chain later |
 | `$optional` | Convert unavailable input to an explicit optional result later |
@@ -139,7 +140,7 @@ authorization: "Bearer ${secrets.API_TOKEN}"
 Interpolation uses a mandatory namespace: `variables`, `secrets`, `parameters`, `env`, `matrix`,
 or `steps`. A `:type` suffix requests explicit conversion. `$${...}` escapes interpolation.
 
-Known future directives such as `$generate`, `$matrix`, `$step`, `$transform`, and `$provider`
+Known future directives such as `$generate`, `$step`, `$transform`, and `$provider`
 produce an unsupported-directive diagnostic. Unknown `$` keys produce an unknown-directive
 diagnostic, including when a typo appears beside ordinary object members. `$literal` is the only
 boundary where dollar-prefixed payload keys are inert.

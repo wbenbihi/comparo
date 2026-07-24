@@ -57,16 +57,28 @@ type ValueReferenceResolver = Callable[[str, SourceSpan], ValueExpression | None
 
 _INTERPOLATION = re.compile(r"(?<!\$)\$\{([^{}]+)\}")
 _DIRECTIVES = frozenset(
-    {"$use", "$var", "$secret", "$param", "$env", "$file", "$from", "$optional", "$literal"}
+    {
+        "$use",
+        "$var",
+        "$secret",
+        "$param",
+        "$env",
+        "$matrix",
+        "$file",
+        "$from",
+        "$optional",
+        "$literal",
+    }
 )
 _FUTURE_DIRECTIVES = frozenset(
-    {"$matrix", "$case", "$generate", "$step", "$select", "$transform", "$patch", "$provider"}
+    {"$case", "$generate", "$step", "$select", "$transform", "$patch", "$provider"}
 )
 _LOOKUPS = {
     "$var": (ValueNamespace.VARIABLES, ValueScopeKind.RUN),
     "$secret": (ValueNamespace.SECRETS, ValueScopeKind.RUN),
     "$param": (ValueNamespace.PARAMETERS, ValueScopeKind.CELL),
     "$env": (ValueNamespace.ENV, ValueScopeKind.ENVIRONMENT),
+    "$matrix": (ValueNamespace.MATRIX, ValueScopeKind.CELL),
 }
 _INTERPOLATION_NAMESPACES = {namespace.value: namespace for namespace in ValueNamespace}
 

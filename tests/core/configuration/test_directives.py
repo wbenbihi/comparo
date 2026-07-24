@@ -96,6 +96,7 @@ def test_inert_compilation_preserves_exact_json_types_and_dollar_payloads() -> N
         ("{$secret: TOKEN}", ValueNamespace.SECRETS, False),
         ("{$param: tenant}", ValueNamespace.PARAMETERS, False),
         ("{$env: PORT}", ValueNamespace.ENV, False),
+        ("{$matrix: locale}", ValueNamespace.MATRIX, False),
         ("{$env: {name: PORT, as: integer}}", ValueNamespace.ENV, True),
     ],
 )
@@ -197,8 +198,7 @@ def test_interpolation_is_namespaced_typed_escaped_and_mode_aware() -> None:
         ("{$optional: {$unknown: x}}", "configuration.directive.unknown"),
         ("{$use: missing}", "configuration.reference.invalid"),
         ("{$use: 2}", "configuration.reference.invalid"),
-        ("{$matrix: field}", "configuration.directive.unsupported"),
-        ("{$matrix: field, other: true}", "configuration.directive.unsupported"),
+        ("{$matrix: field, other: true}", "configuration.directive.malformed"),
         ("{$unknown: field}", "configuration.directive.unknown"),
         ("{$unknown: field, other: true}", "configuration.directive.unknown"),
         ("{$env: PORT, other: true}", "configuration.directive.malformed"),
