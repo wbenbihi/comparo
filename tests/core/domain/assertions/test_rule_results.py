@@ -35,6 +35,7 @@ from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EffectiveRuleId
 from comparo.core.domain.identity import EnvironmentExecutionId
+from comparo.core.domain.identity import ExchangeId
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
@@ -45,10 +46,11 @@ from comparo.core.domain.identity import RuleId
 from comparo.core.domain.metadata import Metadata
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
-from comparo.core.domain.selectors.locations import ExecutionLocation
+from comparo.core.domain.selectors.locations import ExchangeLocation
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.paths import StaticFieldPath
 from comparo.core.domain.selectors.results import SelectionMatch
+from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonInteger
 from tests.core.domain.assertions._invariant_support import _application
 from tests.core.domain.assertions._invariant_support import _compiled_rule
@@ -114,8 +116,10 @@ def test_compiled_rule_retains_static_semantics_and_validates_components() -> No
 def test_match_fact_diagnostic_is_exactly_for_errors() -> None:
     match = SelectionMatch(
         value=JsonInteger(value=200),
-        location=ExecutionLocation(
-            execution_id=EnvironmentExecutionId(value=UUID(int=50)),
+        location=ExchangeLocation(
+            environment_execution_id=EnvironmentExecutionId(value=UUID(int=50)),
+            source=SelectorSource.RESPONSE_STATUS,
+            exchange_id=ExchangeId(value=UUID(int=501)),
             field=StaticFieldPath(segments=("response", "status")),
         ),
     )
@@ -154,8 +158,10 @@ def test_outcome_variants_and_empty_evidence_are_not_collapsed() -> None:
 def test_assertion_result_direct_construction_rejects_invalid_states() -> None:
     match = SelectionMatch(
         value=JsonInteger(value=200),
-        location=ExecutionLocation(
-            execution_id=EnvironmentExecutionId(value=UUID(int=54)),
+        location=ExchangeLocation(
+            environment_execution_id=EnvironmentExecutionId(value=UUID(int=54)),
+            source=SelectorSource.RESPONSE_STATUS,
+            exchange_id=ExchangeId(value=UUID(int=541)),
             field=StaticFieldPath(segments=("response", "status")),
         ),
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import cast
 from uuid import UUID
 
+import msgspec
 import pytest
 
 from comparo.core.domain.assertions.extended_operators import CardinalityOperator
@@ -59,6 +60,7 @@ from comparo.core.domain.diffs.strategies import SingularPairing
 from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.gates.normalization import normalize_assertion_fact
 from comparo.core.domain.gates.normalization import normalize_diff_fact
+from comparo.core.domain.gates.summaries import GateEnvironmentExecution
 from comparo.core.domain.gates.types import AssertionGateOutcome
 from comparo.core.domain.gates.types import DiffGateOutcome
 from comparo.core.domain.gates.types import EnvironmentRole
@@ -227,6 +229,17 @@ def _zero_assertion_counts() -> AssertionCounts:
     )
 
 
+def _gate_execution(
+    fact: AssertionFact,
+    *roles: EnvironmentRole,
+) -> GateEnvironmentExecution:
+    return GateEnvironmentExecution(
+        environment=fact.application.environment,
+        execution_id=fact.application.environment_execution_id,
+        roles=roles,
+    )
+
+
 def _diff_operation(family: DiffOperationFamily, name: str) -> DiffOperationIdentity:
     return DiffOperationIdentity(
         namespace="comparo.core",
@@ -254,9 +267,15 @@ def _diff_application() -> DiffApplication:
         rule_fingerprint=_fingerprint(),
         pair=DirectedEnvironmentPair(
             comparison_id=ComparisonId(value=UUID(int=212)),
-            baseline_environment=_resource(ResourceKind.ENVIRONMENT, "prod"),
+            baseline_environment=DefinitionRef(
+                identity=_resource(ResourceKind.ENVIRONMENT, "prod"),
+                fingerprint=_fingerprint(),
+            ),
             baseline_execution_id=EnvironmentExecutionId(value=UUID(int=213)),
-            candidate_environment=_resource(ResourceKind.ENVIRONMENT, "staging"),
+            candidate_environment=DefinitionRef(
+                identity=_resource(ResourceKind.ENVIRONMENT, "staging"),
+                fingerprint=_fingerprint(),
+            ),
             candidate_execution_id=EnvironmentExecutionId(value=UUID(int=214)),
         ),
     )
@@ -318,6 +337,10 @@ def _diff_coverage(*, compared: int = 0, not_evaluated: int = 0) -> DiffCoverage
         candidate_selected=Count(value=paired),
         baseline_derived=Count(value=paired),
         candidate_derived=Count(value=paired),
+        baseline_consumed=Count(value=paired),
+        candidate_consumed=Count(value=paired),
+        baseline_resolved=Count(value=compared),
+        candidate_resolved=Count(value=compared),
         paired=Count(value=paired),
         compared=Count(value=compared),
         ignored=Count(value=0),
@@ -329,15 +352,59 @@ def test_assertion_normalization_derives_lineage_severity_outcome_and_counts() -
     satisfied = _assertion_fact(Satisfied(), _zero_assertion_counts())
     summary = normalize_assertion_fact(
         satisfied,
-        role=EnvironmentRole.BASELINE,
+        execution=_gate_execution(
+            satisfied,
+            EnvironmentRole.BASELINE,
+            EnvironmentRole.CANDIDATE,
+        ),
     )
     normalized = summary.rules[0]
     assert normalized.outcome is AssertionGateOutcome.SATISFIED
     assert normalized.lineage.source_fact_id == satisfied.fact_id
     assert normalized.lineage.severity is GateSeverity.BLOCKING
-    assert normalized.fact is satisfied
+    assert normalized.counts.selected == satisfied.counts.selected
+    assert normalized.counts.evaluated == satisfied.counts.evaluated
+    assert not hasattr(normalized, "fact")
+    assert not hasattr(normalized, "evidence")
     assert summary.environment == satisfied.application.environment
     assert summary.execution_id == satisfied.application.environment_execution_id
+    assert summary.roles == (EnvironmentRole.BASELINE, EnvironmentRole.CANDIDATE)
+
+
+def test_assertion_normalization_rejects_role_spoofing_and_foreign_assignments() -> None:
+    fact = _assertion_fact(Satisfied(), _zero_assertion_counts())
+    baseline = _gate_execution(fact, EnvironmentRole.BASELINE)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        normalize_assertion_fact(  # type: ignore[call-arg]
+            fact,
+            role=EnvironmentRole.OTHER,
+        )
+    with pytest.raises(TypeError, match="GateEnvironmentExecution"):
+        normalize_assertion_fact(
+            fact,
+            execution=cast("GateEnvironmentExecution", "bad"),
+        )
+    with pytest.raises(ValueError, match="does not identify its application"):
+        normalize_assertion_fact(
+            fact,
+            execution=msgspec.structs.replace(
+                baseline,
+                execution_id=EnvironmentExecutionId(value=UUID(int=999)),
+                roles=(EnvironmentRole.OTHER,),
+            ),
+        )
+    with pytest.raises(ValueError, match="does not identify its application"):
+        normalize_assertion_fact(
+            fact,
+            execution=msgspec.structs.replace(
+                baseline,
+                environment=DefinitionRef(
+                    identity=_resource(ResourceKind.ENVIRONMENT, "staging"),
+                    fingerprint=_fingerprint(),
+                ),
+            ),
+        )
 
 
 @pytest.mark.parametrize(
@@ -381,24 +448,24 @@ def test_assertion_normalization_maps_every_terminal_outcome(
 ) -> None:
     summary = normalize_assertion_fact(
         fact,
-        role=EnvironmentRole.OTHER,
+        execution=_gate_execution(fact, EnvironmentRole.OTHER),
     )
     assert summary.rules[0].outcome is expected
 
 
 def test_diff_normalization_derives_pair_lineage_fact_buckets_and_coverage() -> None:
     fact = _diff_fact(Equivalent(), _diff_counts(same=1), _diff_coverage(compared=1))
-    summary = normalize_diff_fact(
-        fact,
-        baseline_role=EnvironmentRole.BASELINE,
-        candidate_role=EnvironmentRole.CANDIDATE,
-    )
+    summary = normalize_diff_fact(fact)
     normalized = summary.rules[0]
     assert normalized.outcome is DiffGateOutcome.EQUIVALENT
     assert normalized.lineage.source_fact_id == fact.fact_id
     assert normalized.lineage.severity is GateSeverity.INFO
     assert normalized.counts.same.value == 1
     assert summary.pair.baseline_execution_id == fact.application.pair.baseline_execution_id
+    assert summary.baseline_role is EnvironmentRole.BASELINE
+    assert summary.candidate_role is EnvironmentRole.CANDIDATE
+    assert not hasattr(normalized, "fact")
+    assert not hasattr(normalized, "evidence")
 
 
 @pytest.mark.parametrize(
@@ -444,11 +511,7 @@ def test_diff_normalization_maps_every_aggregate_outcome(
     fact: DiffRuleFact,
     expected: DiffGateOutcome,
 ) -> None:
-    summary = normalize_diff_fact(
-        fact,
-        baseline_role=EnvironmentRole.BASELINE,
-        candidate_role=EnvironmentRole.CANDIDATE,
-    )
+    summary = normalize_diff_fact(fact)
     assert summary.rules[0].outcome is expected
 
 
@@ -456,11 +519,7 @@ def test_normalization_rejects_non_source_objects() -> None:
     with pytest.raises(TypeError, match="AssertionFact"):
         normalize_assertion_fact(
             cast("AssertionFact", "bad"),
-            role=EnvironmentRole.BASELINE,
+            execution=cast("GateEnvironmentExecution", "bad"),
         )
     with pytest.raises(TypeError, match="DiffRuleFact"):
-        normalize_diff_fact(
-            cast("DiffRuleFact", "bad"),
-            baseline_role=EnvironmentRole.BASELINE,
-            candidate_role=EnvironmentRole.CANDIDATE,
-        )
+        normalize_diff_fact(cast("DiffRuleFact", "bad"))

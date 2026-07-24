@@ -8,6 +8,7 @@ import msgspec
 import pytest
 
 from comparo.core.domain.diagnostics import DiagnosticCode
+from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import ViewId
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Sha256Digest
@@ -17,6 +18,7 @@ from comparo.core.domain.selectors.locations import JsonLocation
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointer
+from comparo.core.domain.selectors.paths import JsonPointerPath
 from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.results import SelectionDecodeFailure
 from comparo.core.domain.selectors.results import SelectionMatch
@@ -47,6 +49,33 @@ def _capabilities(cardinality: SelectorCardinality) -> SelectorCapabilities:
         may_duplicate=False,
         uses_descendant=False,
         uses_filter=False,
+    )
+
+
+def _status_selector() -> CompiledSelector:
+    return CompiledSelector(
+        fingerprint=_fingerprint(),
+        source=SelectorSource.RESPONSE_STATUS,
+        path=NoPath(),
+        capabilities=_capabilities(SelectorCardinality.EXACTLY_ONE),
+        output=ValueContract(
+            kinds=(ValueKind.INTEGER,),
+            cardinality=SelectorCardinality.EXACTLY_ONE,
+        ),
+    )
+
+
+def _json_pointer_selector(pointer: JsonPointer) -> CompiledSelector:
+    return CompiledSelector(
+        fingerprint=_fingerprint(),
+        source=SelectorSource.RESPONSE_BODY,
+        path=JsonPointerPath(pointer=pointer),
+        capabilities=_capabilities(SelectorCardinality.ZERO_OR_ONE),
+        output=ValueContract(
+            kinds=(ValueKind.UNKNOWN,),
+            cardinality=SelectorCardinality.ZERO_OR_ONE,
+        ),
+        body_view=BodyViewKind.JSON,
     )
 
 
@@ -101,7 +130,11 @@ def test_only_body_selectors_accept_explicit_body_views() -> None:
 
 
 def test_ready_empty_is_distinct_from_decode_failure() -> None:
-    ready = SelectionReady(matches=())
+    ready = SelectionReady(
+        selector=_json_pointer_selector(JsonPointer(value="")),
+        environment_execution_id=EnvironmentExecutionId(value=UUID(int=9)),
+        matches=(),
+    )
     failure = SelectionDecodeFailure(
         code=DiagnosticCode(value="selector.decode-failed"),
         view=BodyViewKind.JSON,
@@ -113,7 +146,13 @@ def test_ready_empty_is_distinct_from_decode_failure() -> None:
 
 def test_match_retains_canonical_concrete_location() -> None:
     pointer = JsonPointer(value="/users/0/id")
-    location = JsonLocation(view_id=ViewId(value=UUID(int=1)), pointer=pointer)
+    location = JsonLocation(
+        environment_execution_id=EnvironmentExecutionId(value=UUID(int=10)),
+        source=SelectorSource.RESPONSE_BODY,
+        view_id=ViewId(value=UUID(int=1)),
+        pointer=pointer,
+        body_view=BodyViewKind.JSON,
+    )
     match = SelectionMatch(value=JsonInteger(value=42), location=location)
 
     assert match.location == location
@@ -123,7 +162,13 @@ def test_match_retains_canonical_concrete_location() -> None:
 def test_sensitive_match_propagates_taint_and_fails_closed_at_serialization() -> None:
     secret = "selector-secret-payload"
     origin = TaintOriginId(value="secret-provider.api-token")
-    location = JsonLocation(view_id=ViewId(value=UUID(int=2)), pointer=JsonPointer(value="/token"))
+    location = JsonLocation(
+        environment_execution_id=EnvironmentExecutionId(value=UUID(int=20)),
+        source=SelectorSource.RESPONSE_BODY,
+        view_id=ViewId(value=UUID(int=2)),
+        pointer=JsonPointer(value="/token"),
+        body_view=BodyViewKind.JSON,
+    )
     match = SelectionMatch(
         value=SensitiveValue(JsonString(value=secret), origins=(origin,)),
         location=location,
@@ -132,6 +177,12 @@ def test_sensitive_match_propagates_taint_and_fails_closed_at_serialization() ->
     assert match.sensitivity is Sensitivity.SENSITIVE
     assert match.taint_origins == (origin,)
     with pytest.raises(TypeError) as captured:
-        msgspec.json.encode(SelectionReady(matches=(match,)))
+        msgspec.json.encode(
+            SelectionReady(
+                selector=_json_pointer_selector(location.pointer),
+                environment_execution_id=location.environment_execution_id,
+                matches=(match,),
+            )
+        )
     assert secret not in str(captured.value)
     assert secret not in repr(captured.value)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
@@ -11,6 +10,7 @@ import msgspec
 from comparo.core.domain.diffs.operations import DiffOperationFamily
 from comparo.core.domain.diffs.operations import DiffOperationIdentity
 from comparo.core.domain.diffs.operations import require_operation
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.selectors.contracts import is_statically_negative_number
@@ -18,7 +18,7 @@ from comparo.core.domain.selectors.items import CompiledItemSelector
 from comparo.core.domain.selectors.items import is_singular_item_selector
 
 
-class ReducerKind(StrEnum):
+class ReducerKind(DomainStrEnum):
     """Finite semantic reducers, independent of wire chunking."""
 
     FIRST = "first"
@@ -34,7 +34,7 @@ class ReducerKind(StrEnum):
     DISTINCT = "distinct"
 
 
-class EmptyInputMode(StrEnum):
+class EmptyInputMode(DomainStrEnum):
     """Explicit empty-input reducer behavior."""
 
     ERROR = "error"
@@ -83,7 +83,7 @@ class Reducer(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("concatenate separator must be a ValueExpression")
 
 
-class DuplicateKeyMode(StrEnum):
+class DuplicateKeyMode(DomainStrEnum):
     """Explicit behavior for duplicate keys in key-producing stages."""
 
     ERROR = "error"
@@ -215,7 +215,7 @@ class KeyedPairing(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("keyed pairing duplicate keys must error or be incomparable")
 
 
-class UnorderedPairingKind(StrEnum):
+class UnorderedPairingKind(DomainStrEnum):
     """Order-insensitive identity models."""
 
     SET = "set"
@@ -261,7 +261,7 @@ class IgnoreComparator(msgspec.Struct, frozen=True, kw_only=True):
         require_operation(self.identity, DiffOperationFamily.COMPARATOR, "ignore")
 
 
-class CompatibilityKind(StrEnum):
+class CompatibilityKind(DomainStrEnum):
     """Non-equality structural compatibility relations."""
 
     TYPE = "type"
@@ -304,13 +304,12 @@ class NumericToleranceComparator(msgspec.Struct, frozen=True, kw_only=True):
                 raise ValueError("numeric tolerances cannot be negative")
 
 
-class CollectionComparisonKind(StrEnum):
+class CollectionComparisonKind(DomainStrEnum):
     """Collection relations with explicit order and multiplicity."""
 
     ORDERED = "ordered"
     SET = "set"
     MULTISET = "multiset"
-    KEYED_OBJECTS = "keyed-objects"
 
 
 @final
@@ -327,7 +326,7 @@ class CollectionComparator(msgspec.Struct, frozen=True, kw_only=True):
         require_operation(self.identity, DiffOperationFamily.COMPARATOR, self.kind.value)
 
 
-class TextPredicateRelation(StrEnum):
+class TextPredicateRelation(DomainStrEnum):
     """Directed literal text relations with no hidden normalization."""
 
     BASELINE_CONTAINS_CANDIDATE = "baseline-contains-candidate"

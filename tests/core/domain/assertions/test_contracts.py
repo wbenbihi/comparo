@@ -39,6 +39,8 @@ from comparo.core.domain.assertions.regex import RegexCompilerIdentity
 from comparo.core.domain.assertions.regex import RegexDialect
 from comparo.core.domain.assertions.regex import RegexMode
 from comparo.core.domain.assertions.regex import RegexOperator
+from comparo.core.domain.capabilities import CapabilityTargetKind
+from comparo.core.domain.capabilities import NamedCapabilityTarget
 from comparo.core.domain.expressions import ConversionType
 from comparo.core.domain.expressions import ConvertExpr
 from comparo.core.domain.expressions import LiteralExpr
@@ -97,9 +99,15 @@ def _schema() -> SchemaOperator:
     return SchemaOperator(
         schema=CompiledSchema(
             fingerprint=_fingerprint(),
-            remote_uri="https://schemas.example.test/value.json",
+            remote_uri=NamedCapabilityTarget(
+                kind=CapabilityTargetKind.SCHEMA_SOURCE,
+                identifier="https://schemas.example.test/value.json",
+            ),
         ),
-        default_dialect="https://json-schema.org/draft/2020-12/schema",
+        default_dialect=NamedCapabilityTarget(
+            kind=CapabilityTargetKind.SCHEMA_SOURCE,
+            identifier="https://json-schema.org/draft/2020-12/schema",
+        ),
     )
 
 

@@ -2,22 +2,27 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.identity import AnalysisId
+from comparo.core.domain.identity import ArtifactId
 from comparo.core.domain.identity import AttemptId
+from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import CellId
+from comparo.core.domain.identity import ComparisonId
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.identity import StepExecutionId
+from comparo.core.domain.identity import StreamId
 from comparo.core.domain.identity import TrialId
 
 
-class ValueScopeKind(StrEnum):
+class ValueScopeKind(DomainStrEnum):
     """A declared resolution scope that exists before runtime coordinates are assigned."""
 
     RUN = "run"
@@ -149,7 +154,82 @@ type RuntimeScope = (
 )
 
 
-class ScopeRelation(StrEnum):
+@final
+class BodyBudgetScope(msgspec.Struct, frozen=True, kw_only=True):
+    """One captured body budget inside its exact transport attempt."""
+
+    attempt: AttemptScope
+    body_id: BodyId
+
+    def __post_init__(self) -> None:
+        """Require the exact parent attempt and captured-body identity."""
+        if type(self.attempt) is not AttemptScope or type(self.body_id) is not BodyId:
+            raise TypeError("body budget scope requires an AttemptScope and BodyId")
+
+
+@final
+class StreamBudgetScope(msgspec.Struct, frozen=True, kw_only=True):
+    """One logical stream budget inside its owning Environment execution."""
+
+    execution: ExecutionScope
+    stream_id: StreamId
+
+    def __post_init__(self) -> None:
+        """Require the exact owning execution and logical-stream identity."""
+        if type(self.execution) is not ExecutionScope or type(self.stream_id) is not StreamId:
+            raise TypeError("stream budget scope requires an ExecutionScope and StreamId")
+
+
+@final
+class ComparisonBudgetScope(msgspec.Struct, frozen=True, kw_only=True):
+    """One comparison budget inside its exact run."""
+
+    run: RunScope
+    comparison_id: ComparisonId
+
+    def __post_init__(self) -> None:
+        """Require the exact parent run and comparison identity."""
+        if type(self.run) is not RunScope or type(self.comparison_id) is not ComparisonId:
+            raise TypeError("comparison budget scope requires a RunScope and ComparisonId")
+
+
+@final
+class ArtifactBudgetScope(msgspec.Struct, frozen=True, kw_only=True):
+    """One artifact budget inside its exact run."""
+
+    run: RunScope
+    artifact_id: ArtifactId
+
+    def __post_init__(self) -> None:
+        """Require the exact parent run and artifact identity."""
+        if type(self.run) is not RunScope or type(self.artifact_id) is not ArtifactId:
+            raise TypeError("artifact budget scope requires a RunScope and ArtifactId")
+
+
+@final
+class ExternalCapabilityBudgetScope(msgspec.Struct, frozen=True, kw_only=True):
+    """One authorized external-analysis budget inside its exact run."""
+
+    run: RunScope
+    analysis_id: AnalysisId
+
+    def __post_init__(self) -> None:
+        """Require the exact parent run and external-analysis identity."""
+        if type(self.run) is not RunScope or type(self.analysis_id) is not AnalysisId:
+            raise TypeError("external capability budget scope requires a RunScope and AnalysisId")
+
+
+type BudgetScope = (
+    RuntimeScope
+    | BodyBudgetScope
+    | StreamBudgetScope
+    | ComparisonBudgetScope
+    | ArtifactBudgetScope
+    | ExternalCapabilityBudgetScope
+)
+
+
+class ScopeRelation(DomainStrEnum):
     """The set relationship between two concrete runtime scope coordinates."""
 
     SAME = "same"
@@ -159,8 +239,8 @@ class ScopeRelation(StrEnum):
     DISJOINT = "disjoint"
 
 
-def run_scope_of(scope: RuntimeScope) -> RunScope:
-    """Return the run coordinate shared by any supported runtime scope."""
+def run_scope_of(scope: BudgetScope) -> RunScope:
+    """Return the run coordinate shared by any runtime or budget-specific scope."""
     if type(scope) is RunScope:
         return scope
     if type(scope) is CellScope:
@@ -175,6 +255,21 @@ def run_scope_of(scope: RuntimeScope) -> RunScope:
         return scope.execution.trial.cell.run
     if type(scope) is AttemptScope:
         return scope.execution.trial.cell.run
+    return _specialized_budget_run_scope(scope)
+
+
+def _specialized_budget_run_scope(scope: BudgetScope) -> RunScope:
+    """Return the run coordinate of one specialized addressable budget scope."""
+    if type(scope) is BodyBudgetScope:
+        return run_scope_of(scope.attempt)
+    if type(scope) is StreamBudgetScope:
+        return run_scope_of(scope.execution)
+    if type(scope) is ComparisonBudgetScope:
+        return scope.run
+    if type(scope) is ArtifactBudgetScope:
+        return scope.run
+    if type(scope) is ExternalCapabilityBudgetScope:
+        return scope.run
     raise TypeError("unsupported runtime scope")
 
 

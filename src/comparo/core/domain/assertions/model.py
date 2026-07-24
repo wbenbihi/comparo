@@ -4,4 +4,4 @@ from __future__ import annotations
 
 from comparo.core.domain.assertions.rules import CompiledAssertionRule
 
-__all__ = ["CompiledAssertionRule"]
+__all__ = ("CompiledAssertionRule",)

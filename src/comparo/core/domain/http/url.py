@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.http.fields import QueryParameters
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import Sensitivity
+from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.sensitivity import is_sensitive_value
 
 _DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _ENCODED_PCHAR = frozenset(
@@ -19,7 +23,7 @@ _ENCODED_PCHAR = frozenset(
 _UNRESERVED_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
-class HttpScheme(StrEnum):
+class HttpScheme(DomainStrEnum):
     """The only schemes in Comparo's HTTP transport boundary."""
 
     HTTP = "http"
@@ -91,6 +95,8 @@ class Ipv6Host(msgspec.Struct, frozen=True, kw_only=True):
             parsed = ipaddress.IPv6Address(self.value)
         except ipaddress.AddressValueError as error:
             raise ValueError("invalid IPv6 host") from error
+        if parsed.scope_id is not None:
+            raise ValueError("IPv6 HTTP hosts cannot contain a zone identifier")
         if parsed.compressed != self.value:
             raise ValueError("IPv6 host must use canonical compressed lowercase notation")
 
@@ -172,7 +178,14 @@ class EncodedPathSegment(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("literal dot segments are ambiguous and not supported")
 
 
-type PathSegment = DecodedPathSegment | EncodedPathSegment
+type PlainPathSegment = DecodedPathSegment | EncodedPathSegment
+type PathSegment = PlainPathSegment | SensitiveValue[PlainPathSegment]
+
+
+def _is_path_segment(value: object) -> bool:
+    return type(value) in {DecodedPathSegment, EncodedPathSegment} or (
+        is_sensitive_value(value) and value.payload_type in {DecodedPathSegment, EncodedPathSegment}
+    )
 
 
 @final
@@ -185,8 +198,7 @@ class UrlPath(msgspec.Struct, frozen=True, kw_only=True):
     def __post_init__(self) -> None:
         """Require immutable typed segments and one root-path representation."""
         if type(self.segments) is not tuple or any(
-            type(segment) not in {DecodedPathSegment, EncodedPathSegment}
-            for segment in self.segments
+            not _is_path_segment(segment) for segment in self.segments
         ):
             raise TypeError("URL path segments must be an immutable tuple of PathSegment values")
         if type(self.trailing_slash) is not bool:
@@ -200,6 +212,18 @@ class UrlPath(msgspec.Struct, frozen=True, kw_only=True):
             and not self.trailing_slash
         ):
             raise ValueError("a final empty path segment must use the trailing-slash marker")
+
+    @property
+    def sensitivity(self) -> Sensitivity:
+        """Derive whether any path segment remains sensitivity-contained."""
+        if any(is_sensitive_value(segment) for segment in self.segments):
+            return Sensitivity.SENSITIVE
+        return Sensitivity.PUBLIC
+
+    @property
+    def taint_origins(self) -> tuple[TaintOriginId, ...]:
+        """Return the stable union of every sealed path segment's lineage."""
+        return _taint_origins_of(self.segments)
 
 
 @final
@@ -221,6 +245,30 @@ class AbsoluteHttpUrl(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("absolute HTTP URL path must be UrlPath")
         if type(self.query) is not QueryParameters:
             raise TypeError("absolute HTTP URL query must be QueryParameters")
+
+    @property
+    def sensitivity(self) -> Sensitivity:
+        """Derive URL sensitivity from its value-bearing path and query components."""
+        if (
+            self.path.sensitivity is Sensitivity.SENSITIVE
+            or self.query.sensitivity is Sensitivity.SENSITIVE
+        ):
+            return Sensitivity.SENSITIVE
+        return Sensitivity.PUBLIC
+
+    @property
+    def taint_origins(self) -> tuple[TaintOriginId, ...]:
+        """Return the stable union of all sealed path and query lineage."""
+        return tuple(dict.fromkeys((*self.path.taint_origins, *self.query.taint_origins)))
+
+
+def _taint_origins_of(values: tuple[object, ...]) -> tuple[TaintOriginId, ...]:
+    """Return a stable origin union without revealing any sensitive payload."""
+    origins: list[TaintOriginId] = []
+    for value in values:
+        if is_sensitive_value(value):
+            origins.extend(value.origins)
+    return tuple(dict.fromkeys(origins))
 
 
 @final

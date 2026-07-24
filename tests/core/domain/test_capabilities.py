@@ -94,8 +94,48 @@ def test_named_target_is_a_non_payload_identifier() -> None:
     assert target.identifier == "project-root"
     with pytest.raises(TypeError, match="CapabilityTargetKind"):
         NamedCapabilityTarget(kind="file-root", identifier="project-root")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="non-blank"):
-        NamedCapabilityTarget(kind=CapabilityTargetKind.FILE_ROOT, identifier=" ")
+    for invalid in (
+        " ",
+        "/Users/example/private",
+        "Bearer secret\nforged",
+        "target=value",
+        "a" * 256,
+    ):
+        with pytest.raises(ValueError, match="bounded structural token"):
+            NamedCapabilityTarget(
+                kind=CapabilityTargetKind.FILE_ROOT,
+                identifier=invalid,
+            )
+
+    schema_source = NamedCapabilityTarget(
+        kind=CapabilityTargetKind.SCHEMA_SOURCE,
+        identifier="https://schemas.example.test/public/schema.json",
+    )
+    assert schema_source.identifier.endswith("/schema.json")
+    for unsafe_url in (
+        "https://user:secret@schemas.example.test/schema.json",
+        "https://schemas.example.test/schema.json?token=secret",
+        "https://schemas.example.test/schema.json#private",
+        "http://schemas.example.test:not-a-port/schema.json",
+        "file:///private/schema.json",
+    ):
+        with pytest.raises(ValueError, match=r"alias or bounded HTTP\(S\) URL"):
+            NamedCapabilityTarget(
+                kind=CapabilityTargetKind.SCHEMA_SOURCE,
+                identifier=unsafe_url,
+            )
+
+    with pytest.raises(ValueError, match=r"alias or bounded HTTP\(S\) URL"):
+        NamedCapabilityTarget(
+            kind=CapabilityTargetKind.DESTINATION,
+            identifier=1,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="ResourceIdentity"):
+        NamedCapabilityTarget(
+            kind=CapabilityTargetKind.RESOURCE,
+            identifier="logical-resource",
+        )
 
 
 def test_capability_request_accepts_resource_and_named_targets() -> None:

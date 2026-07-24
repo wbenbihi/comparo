@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import cast
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.budgets import BudgetOperation
 from comparo.core.domain.budgets import BudgetResource
 from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import BudgetStage
 from comparo.core.domain.budgets import ResourceBudget
+from comparo.core.domain.definition_consistency import require_consistent_definitions
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import CellId
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import MatrixBindingId
@@ -313,7 +315,7 @@ class RunPlanCardinality(msgspec.Struct, frozen=True, kw_only=True):
                 raise TypeError("run plan cardinalities must be Count values")
 
 
-class PlanOrdering(StrEnum):
+class PlanOrdering(DomainStrEnum):
     """Versioned deterministic lazy-enumeration ordering."""
 
     SUBJECT_MATRIX_TRIAL_ENVIRONMENT = "subject-matrix-trial-environment/v1"
@@ -335,6 +337,7 @@ class RunPlan(msgspec.Struct, frozen=True, kw_only=True):
         if type(self.run_id) is not RunId:
             raise TypeError("run plan requires a RunId")
         _validate_plan_collections(self.slices, self.budgets)
+        _validate_definition_consistency(self.slices)
         if type(self.ordering) is not PlanOrdering:
             raise TypeError("run plan ordering must be a PlanOrdering")
         if type(self.cardinality) is not RunPlanCardinality:
@@ -344,6 +347,17 @@ class RunPlan(msgspec.Struct, frozen=True, kw_only=True):
         if type(self.fingerprint) is not Fingerprint:
             raise TypeError("run plan fingerprint must be a Fingerprint")
         _validate_plan_budgets(self)
+
+
+def _validate_definition_consistency(slices: tuple[PlanSlice, ...]) -> None:
+    definitions: list[DefinitionRef] = []
+    for plan_slice in slices:
+        definitions.append(plan_slice.cells.subject)
+        definitions.extend(axis.matrix for axis in plan_slice.cells.matrix.axes)
+        definitions.extend(plan_slice.environments)
+        definitions.extend(pair.baseline for pair in plan_slice.comparisons)
+        definitions.extend(pair.candidate for pair in plan_slice.comparisons)
+    require_consistent_definitions(tuple(definitions))
 
 
 def _validate_plan_collections(
@@ -392,12 +406,14 @@ def _validate_plan_budgets(plan: RunPlan) -> None:
         BudgetResource.COMPARISONS: plan.cardinality.comparisons,
     }
     for resource, cardinality in required.items():
+        admission_operation = BudgetOperation(value=f"admit.{resource.value}")
         matches = tuple(
             budget
             for budget in plan.budgets
             if budget.resource is resource
             and budget.scope_kind is BudgetScopeKind.PLAN
             and budget.stage is BudgetStage.PLANNING
+            and budget.operation == admission_operation
         )
         if len(matches) != 1:
             raise ValueError("run plan requires one planning admission budget per dimension")

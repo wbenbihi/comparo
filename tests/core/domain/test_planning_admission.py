@@ -14,6 +14,7 @@ from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import BudgetStage
 from comparo.core.domain.budgets import BudgetUsage
 from comparo.core.domain.budgets import ResourceBudget
+from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import CellId
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
@@ -28,9 +29,11 @@ from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Ratio
 from comparo.core.domain.primitives import Sha256Digest
+from comparo.core.domain.scopes import BodyBudgetScope
 from comparo.core.domain.scopes import CellScope
 from comparo.core.domain.scopes import RunScope
 from tests.core.domain.budget_origin_factories import default_budget_origin
+from tests.core.domain.http.budget_factories import attempt_scope
 from tests.core.domain.planning_factories import _definition
 from tests.core.domain.planning_factories import _extra_budget
 from tests.core.domain.planning_factories import _plan_budgets
@@ -239,6 +242,16 @@ def test_run_plan_requires_unique_unused_sufficient_admission_budgets() -> None:
         msgspec.structs.replace(plan, budgets=(used, *plan.budgets[1:]))
 
 
+def test_run_plan_requires_the_exact_admission_operation_for_each_dimension() -> None:
+    plan = _run_plan()
+    unrelated = msgspec.structs.replace(
+        plan.budgets[0],
+        operation=BudgetOperation(value="totally.unrelated"),
+    )
+    with pytest.raises(ValueError, match="one planning admission budget"):
+        msgspec.structs.replace(plan, budgets=(unrelated, *plan.budgets[1:]))
+
+
 def test_run_scoped_budget_must_reference_the_exact_planned_run() -> None:
     plan = _run_plan()
     right_scope = RunScope(run_id=plan.run_id)
@@ -297,12 +310,27 @@ def test_plan_budget_snapshots_reject_nonzero_duration_and_ratio_usage() -> None
         scope=RunScope(run_id=plan.run_id),
     )
     zero_ratio = Ratio.from_decimal(Decimal(0))
+    generic_attempt = attempt_scope()
+    run = RunScope(run_id=plan.run_id)
+    cell = msgspec.structs.replace(generic_attempt.execution.trial.cell, run=run)
+    trial = msgspec.structs.replace(generic_attempt.execution.trial, cell=cell)
+    environment = msgspec.structs.replace(generic_attempt.execution.environment, run=run)
+    execution = msgspec.structs.replace(
+        generic_attempt.execution,
+        trial=trial,
+        environment=environment,
+    )
+    body_scope = BodyBudgetScope(
+        attempt=msgspec.structs.replace(generic_attempt, execution=execution),
+        body_id=BodyId(value=UUID(int=996)),
+    )
     ratio = _extra_budget(
         resource=BudgetResource.DECOMPRESSION_RATIO,
         scope_kind=BudgetScopeKind.BODY,
         stage=BudgetStage.DECODING,
         amount=Ratio.from_decimal(Decimal(2)),
         consumed=zero_ratio,
+        scope=body_scope,
     )
     assert msgspec.structs.replace(plan, budgets=(*plan.budgets, duration, ratio))
 

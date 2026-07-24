@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
-from enum import StrEnum
+import re
 from typing import Final
 from typing import Never
+from typing import TypeGuard
 from typing import final
 from typing import override
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.immutability import is_deeply_immutable_domain_value
+
 _REDACTION_MARKER: Final = "<sensitive>"
+_TAINT_ORIGIN_PATTERN: Final = re.compile(
+    r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
+)
+_ACCESS_PURPOSE_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
 
 
 def _require_access(access: object, *, operation: str) -> None:
@@ -20,27 +27,7 @@ def _require_access(access: object, *, operation: str) -> None:
         raise TypeError(msg)
 
 
-def _is_deeply_immutable(value: object) -> bool:
-    if value is None or type(value) in {str, bytes, bool, int}:
-        return True
-    if type(value) is Decimal:
-        return value.is_finite()
-    if isinstance(value, StrEnum):
-        return False
-    if type(value) is tuple:
-        return all(_is_deeply_immutable(item) for item in value)
-    if isinstance(value, msgspec.Struct):
-        config = type(value).__struct_config__
-        if config.dict or not config.frozen:
-            return False
-        return all(
-            _is_deeply_immutable(getattr(value, field.name))
-            for field in msgspec.structs.fields(value)
-        )
-    return False
-
-
-class Sensitivity(StrEnum):
+class Sensitivity(DomainStrEnum):
     """Whether a resolved value may cross a serialization boundary."""
 
     PUBLIC = "public"
@@ -54,9 +41,13 @@ class TaintOriginId(msgspec.Struct, frozen=True, kw_only=True):
     value: str
 
     def __post_init__(self) -> None:
-        """Reject empty or incorrectly typed origin identifiers."""
-        if type(self.value) is not str or not self.value:
-            msg = "taint origin ID must be a non-empty string"
+        """Reject paths, prose, controls, and payload-bearing origin identifiers."""
+        if (
+            type(self.value) is not str
+            or len(self.value) > 255
+            or _TAINT_ORIGIN_PATTERN.fullmatch(self.value) is None
+        ):
+            msg = "taint origin ID must be a bounded lowercase structural path"
             raise ValueError(msg)
 
 
@@ -73,8 +64,12 @@ class SensitiveValueAccess:
 
     def __init__(self, *, purpose: str) -> None:
         """Create an auditable reveal capability for one internal purpose."""
-        if type(purpose) is not str or not purpose:
-            msg = "sensitive-value access purpose must be a non-empty string"
+        if (
+            type(purpose) is not str
+            or len(purpose) > 127
+            or _ACCESS_PURPOSE_PATTERN.fullmatch(purpose) is None
+        ):
+            msg = "sensitive-value access purpose must be a bounded structural token"
             raise ValueError(msg)
         object.__setattr__(self, "_purpose", purpose)
 
@@ -122,7 +117,7 @@ class SensitiveValue[SensitiveT]:
         if len(set(origins)) != len(origins):
             msg = "sensitive value origins must be unique"
             raise ValueError(msg)
-        if not _is_deeply_immutable(value):
+        if not is_deeply_immutable_domain_value(value):
             msg = "sensitive value payload must be deeply immutable"
             raise TypeError(msg)
         object.__setattr__(self, "_SensitiveValue__value", value)
@@ -201,3 +196,8 @@ class SensitiveValue[SensitiveT]:
         """Reject legacy pickle protocols that could persist the wrapped value."""
         msg = "sensitive values cannot be pickled"
         raise TypeError(msg)
+
+
+def is_sensitive_value(value: object) -> TypeGuard[SensitiveValue[object]]:
+    """Accept only the sealed final implementation, never a behavior-changing subclass."""
+    return type(value) is SensitiveValue

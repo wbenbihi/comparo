@@ -98,11 +98,8 @@ def _selector(
     kind: ValueKind,
     cardinality: SelectorCardinality = SelectorCardinality.EXACTLY_ONE,
 ) -> CompiledSelector:
-    source = (
-        SelectorSource.REQUEST_HEADERS
-        if cardinality is SelectorCardinality.ZERO_OR_MORE
-        else SelectorSource.EXECUTION
-    )
+    plural = cardinality is SelectorCardinality.ZERO_OR_MORE
+    source = SelectorSource.SCENARIO_STEP if plural else SelectorSource.EXECUTION
     capabilities = SelectorCapabilities(
         cardinality=cardinality,
         access=SelectionAccess.INCREMENTAL,
@@ -113,7 +110,15 @@ def _selector(
     return CompiledSelector(
         fingerprint=_fingerprint(),
         source=source,
-        path=NoPath(),
+        path=(
+            JsonPathExpression(
+                canonical="$[*]",
+                fingerprint=_fingerprint(),
+                capabilities=capabilities,
+            )
+            if plural
+            else NoPath()
+        ),
         capabilities=capabilities,
         output=_contract(kind, cardinality),
     )

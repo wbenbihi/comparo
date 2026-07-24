@@ -45,10 +45,13 @@ from comparo.core.domain.diffs.strategies import Reducer
 from comparo.core.domain.diffs.strategies import ReducerKind
 from comparo.core.domain.diffs.strategies import SingularPairing
 from comparo.core.domain.identity import EffectiveRuleId
+from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.selectors.locations import ExchangeLocation
+from comparo.core.domain.selectors.paths import StaticFieldPath
 from comparo.core.domain.selectors.sources import SelectorCardinality
+from comparo.core.domain.selectors.sources import SelectorSource
 from tests.core.domain.diffs._invariant_support import _application
 from tests.core.domain.diffs._invariant_support import _compiled_rule
 from tests.core.domain.diffs._invariant_support import _item_selector
@@ -88,6 +91,10 @@ def test_impossible_aggregate_outcomes_are_rejected(
         candidate_selected=Count(value=compared),
         baseline_derived=Count(value=compared),
         candidate_derived=Count(value=compared),
+        baseline_consumed=Count(value=compared),
+        candidate_consumed=Count(value=compared),
+        baseline_resolved=Count(value=compared),
+        candidate_resolved=Count(value=compared),
         paired=Count(value=compared),
         compared=Count(value=compared),
         ignored=Count(value=0),
@@ -119,6 +126,10 @@ def test_entirely_ignored_comparison_is_not_evaluated_not_equivalent() -> None:
         candidate_selected=Count(value=1),
         baseline_derived=Count(value=1),
         candidate_derived=Count(value=1),
+        baseline_consumed=Count(value=1),
+        candidate_consumed=Count(value=1),
+        baseline_resolved=Count(value=1),
+        candidate_resolved=Count(value=1),
         paired=Count(value=1),
         compared=Count(value=0),
         ignored=Count(value=1),
@@ -143,7 +154,7 @@ def test_incomparable_fact_requires_safe_diagnostic() -> None:
         outcome=DiffFactOutcome.INCOMPARABLE,
         comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
         baseline_location=_location(74),
-        candidate_location=_location(75),
+        candidate_location=_location(75, candidate=True),
         diagnostic=code,
     )
     assert fact.diagnostic == code
@@ -162,7 +173,7 @@ def test_diff_fact_and_evidence_reject_untyped_or_locationless_states() -> None:
         outcome=DiffFactOutcome.SAME,
         comparator=comparator,
         baseline_location=_location(78),
-        candidate_location=_location(79),
+        candidate_location=_location(79, candidate=True),
     )
     with pytest.raises(TypeError, match="typed ID and outcome"):
         msgspec.structs.replace(valid, fact_id=cast("FactId", "bad"))
@@ -203,7 +214,7 @@ def test_diff_rule_fact_rejects_untyped_and_inconsistent_aggregate_data() -> Non
         outcome=DiffFactOutcome.SAME,
         comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
         baseline_location=_location(82),
-        candidate_location=_location(83),
+        candidate_location=_location(83, candidate=True),
     )
     counts = DiffFactCounts(
         same=Count(value=1),
@@ -218,6 +229,10 @@ def test_diff_rule_fact_rejects_untyped_and_inconsistent_aggregate_data() -> Non
         candidate_selected=Count(value=1),
         baseline_derived=Count(value=1),
         candidate_derived=Count(value=1),
+        baseline_consumed=Count(value=1),
+        candidate_consumed=Count(value=1),
+        baseline_resolved=Count(value=1),
+        candidate_resolved=Count(value=1),
         paired=Count(value=1),
         compared=Count(value=1),
         ignored=Count(value=0),
@@ -281,6 +296,8 @@ def test_diff_rule_fact_rejects_untyped_and_inconsistent_aggregate_data() -> Non
                 coverage,
                 compared=Count(value=0),
                 not_evaluated=Count(value=1),
+                baseline_resolved=Count(value=0),
+                candidate_resolved=Count(value=0),
             ),
         )
     ignored_counts = DiffFactCounts(
@@ -300,6 +317,8 @@ def test_diff_rule_fact_rejects_untyped_and_inconsistent_aggregate_data() -> Non
                 coverage,
                 compared=Count(value=0),
                 not_evaluated=Count(value=1),
+                baseline_resolved=Count(value=0),
+                candidate_resolved=Count(value=0),
             ),
             evidence=DiffEvidence(retained=(), omitted=Count(value=1)),
         )
@@ -408,3 +427,398 @@ def test_reducer_empty_and_duplicate_contracts_are_operation_specific() -> None:
             empty=EmptyInputMode.RETURN_EMPTY_COLLECTION,
             duplicate_keys=DuplicateKeyMode.COLLECT,
         )
+
+
+def test_diff_retained_locations_bind_directed_side_and_selector_source() -> None:
+    application = _application()
+    rule = _compiled_rule()
+    detail = DiffFact(
+        fact_id=FactId(value=UUID(int=850)),
+        outcome=DiffFactOutcome.SAME,
+        comparator=rule.pipeline.comparator.identity,
+        baseline_location=_location(851),
+        candidate_location=_location(852, candidate=True),
+    )
+    counts = DiffFactCounts(
+        same=Count(value=1),
+        changed=Count(value=0),
+        added=Count(value=0),
+        removed=Count(value=0),
+        ignored=Count(value=0),
+        incomparable=Count(value=0),
+    )
+    coverage = DiffCoverage(
+        baseline_selected=Count(value=1),
+        candidate_selected=Count(value=1),
+        baseline_derived=Count(value=1),
+        candidate_derived=Count(value=1),
+        baseline_consumed=Count(value=1),
+        candidate_consumed=Count(value=1),
+        baseline_resolved=Count(value=1),
+        candidate_resolved=Count(value=1),
+        paired=Count(value=1),
+        compared=Count(value=1),
+        ignored=Count(value=0),
+        not_evaluated=Count(value=0),
+    )
+    valid = DiffRuleFact(
+        fact_id=FactId(value=UUID(int=853)),
+        application=application,
+        rule=rule,
+        outcome=Equivalent(),
+        counts=counts,
+        coverage=coverage,
+        evidence=DiffEvidence(retained=(detail,), omitted=Count(value=0)),
+    )
+
+    with pytest.raises(ValueError, match="parent fact ID"):
+        msgspec.structs.replace(valid, fact_id=detail.fact_id)
+
+    baseline = cast("ExchangeLocation", detail.baseline_location)
+    with pytest.raises(ValueError, match=r"baseline.*different execution"):
+        msgspec.structs.replace(
+            valid,
+            evidence=DiffEvidence(
+                retained=(
+                    msgspec.structs.replace(
+                        detail,
+                        baseline_location=msgspec.structs.replace(
+                            baseline,
+                            environment_execution_id=EnvironmentExecutionId(value=UUID(int=854)),
+                        ),
+                    ),
+                ),
+                omitted=Count(value=0),
+            ),
+        )
+    with pytest.raises(ValueError, match="source does not match"):
+        msgspec.structs.replace(
+            valid,
+            evidence=DiffEvidence(
+                retained=(
+                    msgspec.structs.replace(
+                        detail,
+                        baseline_location=msgspec.structs.replace(
+                            baseline,
+                            source=SelectorSource.RESPONSE_PROTOCOL,
+                            field=StaticFieldPath(segments=("response", "protocol")),
+                        ),
+                    ),
+                ),
+                omitted=Count(value=0),
+            ),
+        )
+
+    candidate = cast("ExchangeLocation", detail.candidate_location)
+    with pytest.raises(ValueError, match=r"candidate.*different execution"):
+        msgspec.structs.replace(
+            valid,
+            evidence=DiffEvidence(
+                retained=(
+                    msgspec.structs.replace(
+                        detail,
+                        candidate_location=msgspec.structs.replace(
+                            candidate,
+                            environment_execution_id=EnvironmentExecutionId(value=UUID(int=856)),
+                        ),
+                    ),
+                ),
+                omitted=Count(value=0),
+            ),
+        )
+
+    removed = msgspec.structs.replace(
+        detail,
+        fact_id=FactId(value=UUID(int=857)),
+        outcome=DiffFactOutcome.REMOVED,
+        candidate_location=None,
+    )
+    removed_counts = msgspec.structs.replace(
+        counts,
+        same=Count(value=0),
+        removed=Count(value=1),
+    )
+    removed_coverage = msgspec.structs.replace(
+        coverage,
+        candidate_selected=Count(value=0),
+        candidate_derived=Count(value=0),
+        candidate_consumed=Count(value=0),
+        candidate_resolved=Count(value=0),
+    )
+    assert (
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=858)),
+            application=application,
+            rule=rule,
+            outcome=Drifted(),
+            counts=removed_counts,
+            coverage=removed_coverage,
+            evidence=DiffEvidence(retained=(removed,), omitted=Count(value=0)),
+        ).counts.removed.value
+        == 1
+    )
+
+    added = msgspec.structs.replace(
+        detail,
+        fact_id=FactId(value=UUID(int=859)),
+        outcome=DiffFactOutcome.ADDED,
+        baseline_location=None,
+    )
+    added_counts = msgspec.structs.replace(
+        counts,
+        same=Count(value=0),
+        added=Count(value=1),
+    )
+    added_coverage = msgspec.structs.replace(
+        coverage,
+        baseline_selected=Count(value=0),
+        baseline_derived=Count(value=0),
+        baseline_consumed=Count(value=0),
+        baseline_resolved=Count(value=0),
+    )
+    assert (
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=860)),
+            application=application,
+            rule=rule,
+            outcome=Drifted(),
+            counts=added_counts,
+            coverage=added_coverage,
+            evidence=DiffEvidence(retained=(added,), omitted=Count(value=0)),
+        ).counts.added.value
+        == 1
+    )
+
+
+def test_diff_rejects_synthetic_and_one_sided_equivalent_coverage() -> None:
+    zero = Count(value=0)
+    with pytest.raises(ValueError, match="paired units contradict"):
+        DiffCoverage(
+            baseline_selected=zero,
+            candidate_selected=zero,
+            baseline_derived=zero,
+            candidate_derived=zero,
+            baseline_consumed=zero,
+            candidate_consumed=zero,
+            baseline_resolved=zero,
+            candidate_resolved=zero,
+            paired=Count(value=1),
+            compared=Count(value=1),
+            ignored=zero,
+            not_evaluated=zero,
+        )
+
+    one_sided = DiffCoverage(
+        baseline_selected=Count(value=1),
+        candidate_selected=zero,
+        baseline_derived=Count(value=1),
+        candidate_derived=zero,
+        baseline_consumed=Count(value=1),
+        candidate_consumed=zero,
+        baseline_resolved=Count(value=1),
+        candidate_resolved=zero,
+        paired=Count(value=1),
+        compared=Count(value=1),
+        ignored=zero,
+        not_evaluated=zero,
+    )
+    counts = DiffFactCounts(
+        same=Count(value=1),
+        changed=zero,
+        added=zero,
+        removed=zero,
+        ignored=zero,
+        incomparable=zero,
+    )
+    with pytest.raises(ValueError, match="one-sided and bilateral"):
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=855)),
+            application=_application(),
+            rule=_compiled_rule(),
+            outcome=Equivalent(),
+            counts=counts,
+            coverage=one_sided,
+            evidence=DiffEvidence(retained=(), omitted=Count(value=1)),
+        )
+
+    with pytest.raises(ValueError, match="one-sided and bilateral"):
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=861)),
+            application=_application(),
+            rule=_compiled_rule(),
+            outcome=Equivalent(),
+            counts=counts,
+            coverage=msgspec.structs.replace(
+                one_sided,
+                baseline_selected=zero,
+                baseline_derived=zero,
+                baseline_consumed=zero,
+                baseline_resolved=zero,
+                candidate_selected=Count(value=1),
+                candidate_derived=Count(value=1),
+                candidate_consumed=Count(value=1),
+                candidate_resolved=Count(value=1),
+            ),
+            evidence=DiffEvidence(retained=(), omitted=Count(value=1)),
+        )
+
+
+def test_complete_diff_outcomes_cannot_drop_derived_values() -> None:
+    coverage = DiffCoverage(
+        baseline_selected=Count(value=2),
+        candidate_selected=Count(value=2),
+        baseline_derived=Count(value=2),
+        candidate_derived=Count(value=2),
+        baseline_consumed=Count(value=1),
+        candidate_consumed=Count(value=1),
+        baseline_resolved=Count(value=1),
+        candidate_resolved=Count(value=1),
+        paired=Count(value=1),
+        compared=Count(value=1),
+        ignored=Count(value=0),
+        not_evaluated=Count(value=0),
+    )
+    counts = DiffFactCounts(
+        same=Count(value=1),
+        changed=Count(value=0),
+        added=Count(value=0),
+        removed=Count(value=0),
+        ignored=Count(value=0),
+        incomparable=Count(value=0),
+    )
+    with pytest.raises(ValueError, match="consume and resolve every derived value"):
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=862)),
+            application=_application(),
+            rule=_compiled_rule(),
+            outcome=Equivalent(),
+            counts=counts,
+            coverage=coverage,
+            evidence=DiffEvidence(retained=(), omitted=Count(value=1)),
+        )
+
+
+def test_ignored_and_incomparable_facts_have_exact_side_footprints() -> None:
+    zero = Count(value=0)
+    one = Count(value=1)
+    rule = _compiled_rule()
+    application = _application()
+    ignored_counts = DiffFactCounts(
+        same=zero,
+        changed=zero,
+        added=zero,
+        removed=zero,
+        ignored=one,
+        incomparable=zero,
+    )
+    baseline_only_coverage = DiffCoverage(
+        baseline_selected=one,
+        candidate_selected=zero,
+        baseline_derived=one,
+        candidate_derived=zero,
+        baseline_consumed=one,
+        candidate_consumed=zero,
+        baseline_resolved=one,
+        candidate_resolved=zero,
+        paired=one,
+        compared=zero,
+        ignored=one,
+        not_evaluated=zero,
+    )
+    ignored = DiffFact(
+        fact_id=FactId(value=UUID(int=863)),
+        outcome=DiffFactOutcome.IGNORED,
+        comparator=rule.pipeline.comparator.identity,
+        baseline_location=_location(864),
+    )
+    assert (
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=865)),
+            application=application,
+            rule=rule,
+            outcome=NotEvaluated(reason=DiffNotEvaluatedReason.ALL_IGNORED),
+            counts=ignored_counts,
+            coverage=baseline_only_coverage,
+            evidence=DiffEvidence(retained=(ignored,), omitted=zero),
+        ).coverage.baseline_resolved
+        == one
+    )
+
+    bilateral_ignored = msgspec.structs.replace(
+        ignored,
+        fact_id=FactId(value=UUID(int=866)),
+        candidate_location=_location(867, candidate=True),
+    )
+    bilateral_coverage = msgspec.structs.replace(
+        baseline_only_coverage,
+        candidate_selected=one,
+        candidate_derived=one,
+        candidate_consumed=one,
+        candidate_resolved=one,
+    )
+    assert (
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=868)),
+            application=application,
+            rule=rule,
+            outcome=NotEvaluated(reason=DiffNotEvaluatedReason.ALL_IGNORED),
+            counts=ignored_counts,
+            coverage=bilateral_coverage,
+            evidence=DiffEvidence(retained=(bilateral_ignored,), omitted=zero),
+        ).coverage.candidate_resolved
+        == one
+    )
+    with pytest.raises(ValueError, match="retained ignored or incomparable"):
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=869)),
+            application=application,
+            rule=rule,
+            outcome=NotEvaluated(reason=DiffNotEvaluatedReason.ALL_IGNORED),
+            counts=ignored_counts,
+            coverage=baseline_only_coverage,
+            evidence=DiffEvidence(retained=(bilateral_ignored,), omitted=zero),
+        )
+
+    incomparable = DiffFact(
+        fact_id=FactId(value=UUID(int=870)),
+        outcome=DiffFactOutcome.INCOMPARABLE,
+        comparator=rule.pipeline.comparator.identity,
+        candidate_location=_location(871, candidate=True),
+        diagnostic=DiagnosticCode(value="diff.incomparable-value"),
+    )
+    incomparable_counts = msgspec.structs.replace(
+        ignored_counts,
+        ignored=zero,
+        incomparable=one,
+    )
+    candidate_only_coverage = msgspec.structs.replace(
+        baseline_only_coverage,
+        baseline_selected=zero,
+        baseline_derived=zero,
+        baseline_consumed=zero,
+        baseline_resolved=zero,
+        candidate_selected=one,
+        candidate_derived=one,
+        candidate_consumed=one,
+        candidate_resolved=one,
+        compared=one,
+        ignored=zero,
+    )
+    assert (
+        DiffRuleFact(
+            fact_id=FactId(value=UUID(int=872)),
+            application=application,
+            rule=rule,
+            outcome=Incomplete(
+                reason=DiffIncompleteReason(
+                    side=DiffSide.CANDIDATE,
+                    stage=DiffEvaluationStage.PAIRING,
+                    cause=DiffIncompleteCause.PARTIAL,
+                )
+            ),
+            counts=incomparable_counts,
+            coverage=candidate_only_coverage,
+            evidence=DiffEvidence(retained=(incomparable,), omitted=zero),
+        ).counts.incomparable
+        == one
+    )

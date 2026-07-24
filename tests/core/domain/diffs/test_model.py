@@ -13,6 +13,7 @@ from comparo.core.domain.diffs.operations import DiffOperationIdentity
 from comparo.core.domain.diffs.operations import Exclusion
 from comparo.core.domain.diffs.operations import StreamProjection
 from comparo.core.domain.diffs.operations import StreamSemanticSource
+from comparo.core.domain.diffs.operations import ValueTypeTransform
 from comparo.core.domain.diffs.results import DiffEvidence
 from comparo.core.domain.diffs.results import DiffRuleFact
 from comparo.core.domain.diffs.results import Equivalent
@@ -55,6 +56,7 @@ from comparo.core.domain.selectors.items import CompiledItemSelector
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.paths import NoPath
+from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectionAccess
 from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
@@ -77,7 +79,7 @@ def _operation(family: DiffOperationFamily, name: str) -> DiffOperationIdentity:
 def _selector(source: SelectorSource = SelectorSource.STREAM_RECORDS) -> CompiledSelector:
     cardinality = (
         SelectorCardinality.ZERO_OR_MORE
-        if source is SelectorSource.STREAM_RECORDS
+        if source in {SelectorSource.STREAM_EVENTS, SelectorSource.STREAM_RECORDS}
         else SelectorCardinality.EXACTLY_ONE
     )
     return CompiledSelector(
@@ -92,7 +94,11 @@ def _selector(source: SelectorSource = SelectorSource.STREAM_RECORDS) -> Compile
             uses_filter=False,
         ),
         output=ValueContract(
-            kinds=tuple(JSON_VALUE_KINDS),
+            kinds=(
+                (ValueKind.OBJECT,)
+                if source is SelectorSource.STREAM_EVENTS
+                else tuple(JSON_VALUE_KINDS)
+            ),
             cardinality=cardinality,
         ),
     )
@@ -121,11 +127,34 @@ def _item_selector() -> CompiledItemSelector:
     )
 
 
-def _environment(name: str) -> ResourceIdentity:
-    return ResourceIdentity(
-        namespace=NamespaceId(value="demo"),
-        kind=ResourceKind.ENVIRONMENT,
-        resource_id=ResourceId(value=name),
+def _body_stream_selector(view: BodyViewKind) -> CompiledSelector:
+    return CompiledSelector(
+        fingerprint=_fingerprint(),
+        source=SelectorSource.RESPONSE_BODY,
+        path=NoPath(),
+        capabilities=SelectorCapabilities(
+            cardinality=SelectorCardinality.EXACTLY_ONE,
+            access=SelectionAccess.INCREMENTAL,
+            may_duplicate=False,
+            uses_descendant=False,
+            uses_filter=False,
+        ),
+        output=ValueContract(
+            kinds=(ValueKind.ARRAY,),
+            cardinality=SelectorCardinality.EXACTLY_ONE,
+        ),
+        body_view=view,
+    )
+
+
+def _environment(name: str) -> DefinitionRef:
+    return DefinitionRef(
+        identity=ResourceIdentity(
+            namespace=NamespaceId(value="demo"),
+            kind=ResourceKind.ENVIRONMENT,
+            resource_id=ResourceId(value=name),
+        ),
+        fingerprint=_fingerprint(),
     )
 
 
@@ -188,10 +217,81 @@ def test_stream_pipeline_can_reduce_semantics_without_chunk_identity() -> None:
         kind=ReducerKind.MULTISET,
         empty=EmptyInputMode.RETURN_EMPTY_COLLECTION,
     )
-    pipeline = SidePipeline(selector=_selector(), transforms=(projection,), reducer=reducer)
+    pipeline = SidePipeline(
+        selector=_selector(SelectorSource.STREAM_EVENTS),
+        transforms=(projection,),
+        reducer=reducer,
+    )
 
     assert pipeline.transforms == (projection,)
     assert pipeline.reducer == reducer
+
+
+def test_stream_projection_cannot_relabel_or_recover_erased_root_semantics() -> None:
+    sse_projection = StreamProjection(
+        identity=_operation(DiffOperationFamily.TRANSFORM, "stream-project"),
+        source=StreamSemanticSource.SSE_JSON_DATA,
+        selector=_item_selector(),
+    )
+    json_projection = StreamProjection(
+        identity=_operation(DiffOperationFamily.TRANSFORM, "stream-project"),
+        source=StreamSemanticSource.JSON_RECORD,
+        selector=_item_selector(),
+    )
+    with pytest.raises(ValueError, match="root selector source or view"):
+        SidePipeline(selector=_selector(), transforms=(sse_projection,))
+    with pytest.raises(ValueError, match="root selector source or view"):
+        SidePipeline(
+            selector=_selector(SelectorSource.SCENARIO_STEP),
+            transforms=(sse_projection,),
+        )
+    with pytest.raises(ValueError, match="root selector source or view"):
+        SidePipeline(
+            selector=_selector(SelectorSource.STREAM_EVENTS),
+            transforms=(json_projection,),
+        )
+    with pytest.raises(ValueError, match="first and only"):
+        SidePipeline(
+            selector=_selector(SelectorSource.STREAM_EVENTS),
+            transforms=(
+                ValueTypeTransform(
+                    identity=_operation(DiffOperationFamily.TRANSFORM, "value-type"),
+                ),
+                sse_projection,
+            ),
+        )
+    with pytest.raises(ValueError, match="first and only"):
+        SidePipeline(
+            selector=_selector(SelectorSource.STREAM_EVENTS),
+            transforms=(sse_projection, sse_projection),
+        )
+
+
+def test_stream_projection_accepts_only_matching_explicit_body_views() -> None:
+    sse_projection = StreamProjection(
+        identity=_operation(DiffOperationFamily.TRANSFORM, "stream-project"),
+        source=StreamSemanticSource.SSE_EVENT,
+        selector=_item_selector(),
+    )
+    record_projection = StreamProjection(
+        identity=_operation(DiffOperationFamily.TRANSFORM, "stream-project"),
+        source=StreamSemanticSource.JSON_RECORD,
+        selector=_item_selector(),
+    )
+
+    SidePipeline(
+        selector=_body_stream_selector(BodyViewKind.SSE_EVENTS),
+        transforms=(sse_projection,),
+    )
+    SidePipeline(
+        selector=_body_stream_selector(BodyViewKind.NDJSON_RECORDS),
+        transforms=(record_projection,),
+    )
+    with pytest.raises(ValueError, match="root selector source or view"):
+        SidePipeline(
+            selector=_body_stream_selector(BodyViewKind.JSON),
+            transforms=(sse_projection,),
+        )
 
 
 def test_exclusion_keeps_all_unlisted_fields_in_scope() -> None:
@@ -227,6 +327,20 @@ def test_directed_pair_rejects_same_environment() -> None:
             candidate_environment=environment,
             candidate_execution_id=EnvironmentExecutionId(value=UUID(int=16)),
         )
+    with pytest.raises(ValueError, match="distinct"):
+        DirectedEnvironmentPair(
+            comparison_id=ComparisonId(value=UUID(int=17)),
+            baseline_environment=environment,
+            baseline_execution_id=EnvironmentExecutionId(value=UUID(int=18)),
+            candidate_environment=DefinitionRef(
+                identity=environment.identity,
+                fingerprint=Fingerprint(
+                    algorithm="sha256",
+                    digest=Sha256Digest(hex_value="3" * 64),
+                ),
+            ),
+            candidate_execution_id=EnvironmentExecutionId(value=UUID(int=19)),
+        )
 
 
 def test_equivalent_requires_nonempty_coverage_and_exact_counts() -> None:
@@ -248,6 +362,10 @@ def test_equivalent_requires_nonempty_coverage_and_exact_counts() -> None:
             candidate_selected=Count(value=1),
             baseline_derived=Count(value=1),
             candidate_derived=Count(value=1),
+            baseline_consumed=Count(value=1),
+            candidate_consumed=Count(value=1),
+            baseline_resolved=Count(value=1),
+            candidate_resolved=Count(value=1),
             paired=Count(value=1),
             compared=Count(value=1),
             ignored=Count(value=0),

@@ -31,6 +31,13 @@ from comparo.core.domain.http.fields import RequestHeaders
 from comparo.core.domain.http.policies import IdempotencyKeyRetry
 from comparo.core.domain.http.policies import NoMutationRetry
 from comparo.core.domain.http.policies import RequestPolicies
+from comparo.core.domain.http.request_materialization import EffectiveRequestFingerprint
+from comparo.core.domain.http.request_materialization import EffectiveRequestMaterializationIdentity
+from comparo.core.domain.http.request_materialization import RequestMaterializationProof
+from comparo.core.domain.http.request_materialization import describe_request_body
+from comparo.core.domain.http.request_materialization import effective_request_taint_origins
+from comparo.core.domain.http.request_materialization import request_envelope_taint_origins
+from comparo.core.domain.http.request_materialization import validate_effective_request_fingerprint
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import BaseRelativeTarget
 from comparo.core.domain.http.url import RequestTarget
@@ -39,7 +46,7 @@ from comparo.core.domain.identity import InlineDefinitionOrigin
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.provenance import ValueProvenance
-from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import is_sensitive_value
 
 type RequestDefinition = DefinitionRef | InlineDefinitionOrigin
 
@@ -77,7 +84,7 @@ def _validate_final_idempotency_key(request: FinalizedWireRequest) -> None:
     if len(matching) != 1:
         raise ValueError("the finalized idempotency key header must exist exactly once")
     field = matching[0]
-    if not isinstance(field.value, SensitiveValue):
+    if not is_sensitive_value(field.value):
         raise ValueError("the finalized idempotency key header must remain sensitive")
     if field.source is not HeaderSource.AUTHORED:
         raise ValueError("the finalized idempotency key must be a stable authored header")
@@ -251,6 +258,60 @@ class EffectiveRequest(msgspec.Struct, frozen=True, kw_only=True):
         _validate_retry_compatibility(self.method, self.policies)
 
 
+def prove_request_materialization(
+    effective_request: EffectiveRequest,
+    body: FinalizedBody,
+    *,
+    effective_request_fingerprint: EffectiveRequestFingerprint,
+) -> RequestMaterializationProof:
+    """Issue a value-free structural proof after a runtime fully materializes the body."""
+    if type(effective_request) is not EffectiveRequest:
+        raise TypeError("request materialization requires EffectiveRequest")
+    if type(body) not in {NoMaterializedBody, MaterializedBody}:
+        raise TypeError("request materialization output must be a finalized body")
+    required_origins = effective_request_taint_origins(
+        effective_request.url,
+        effective_request.headers,
+        effective_request.cookies,
+        effective_request.body,
+    )
+    validate_effective_request_fingerprint(effective_request_fingerprint, required_origins)
+    digest = body.source.digest if type(body) is MaterializedBody else None
+    return RequestMaterializationProof(
+        identity=EffectiveRequestMaterializationIdentity(
+            environment=effective_request.environment,
+            logical_request_fingerprint=effective_request.logical_request_fingerprint,
+            effective_request_fingerprint=effective_request_fingerprint,
+        ),
+        input_body=describe_request_body(effective_request.body, digest=digest),
+        body=body,
+    )
+
+
+def _validate_materialization_binding(request: FinalizedWireRequest) -> None:
+    """Bind finalized request identity and body output to one value-free proof."""
+    proof = request.materialization
+    if type(proof) is not RequestMaterializationProof:
+        raise TypeError("finalized request materialization must be RequestMaterializationProof")
+    if (
+        proof.identity.environment != request.environment
+        or proof.identity.logical_request_fingerprint != request.logical_request_fingerprint
+    ):
+        raise ValueError("finalized request is not bound to its effective request identity")
+    required_origins = request_envelope_taint_origins(
+        request.url,
+        request.headers,
+        request.cookies,
+        proof.input_body.taint_origins,
+    )
+    validate_effective_request_fingerprint(
+        proof.identity.effective_request_fingerprint,
+        required_origins,
+    )
+    if request.body != proof.body:
+        raise ValueError("finalized request body is not bound to its materialization proof")
+
+
 @final
 class FinalizedWireRequest(msgspec.Struct, frozen=True, kw_only=True):
     """The complete request description after authentication and body materialization.
@@ -266,6 +327,7 @@ class FinalizedWireRequest(msgspec.Struct, frozen=True, kw_only=True):
     headers: RequestHeaders
     cookies: RequestCookies
     body: FinalizedBody
+    materialization: RequestMaterializationProof
     policies: RequestPolicies
     provenance: ValueProvenance
 
@@ -281,3 +343,4 @@ class FinalizedWireRequest(msgspec.Struct, frozen=True, kw_only=True):
         _validate_retry_compatibility(self.method, self.policies)
         _validate_final_idempotency_key(self)
         _validate_multipart_materialization(self)
+        _validate_materialization_binding(self)

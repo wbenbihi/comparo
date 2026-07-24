@@ -13,6 +13,7 @@ from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.identity import SourceId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.provenance import SourceLocation
@@ -28,7 +29,7 @@ def _resource() -> ResourceIdentity:
 
 def _location() -> SourceLocation:
     return SourceLocation(
-        source_id="project-config",
+        source_id=SourceId(value="project-config"),
         document=PositiveCount(value=1),
         line=PositiveCount(value=10),
         column=PositiveCount(value=4),

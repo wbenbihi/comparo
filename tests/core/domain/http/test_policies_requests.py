@@ -36,6 +36,7 @@ from comparo.core.domain.http.policies import FixedBackoff
 from comparo.core.domain.http.policies import MutationRetry
 from comparo.core.domain.http.policies import NoBackoff
 from comparo.core.domain.http.policies import NoMutationRetry
+from comparo.core.domain.http.policies import ProxyTlsPolicy
 from comparo.core.domain.http.policies import RedirectMethodMode
 from comparo.core.domain.http.policies import RedirectPolicy
 from comparo.core.domain.http.policies import RequestPolicies
@@ -50,6 +51,7 @@ from comparo.core.domain.http.policies import UnlimitedTimeout
 from comparo.core.domain.http.requests import EffectiveRequest
 from comparo.core.domain.http.requests import FinalizedWireRequest
 from comparo.core.domain.http.requests import LogicalRequest
+from comparo.core.domain.http.requests import prove_request_materialization
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import BaseRelativeTarget
 from comparo.core.domain.http.url import DirectResolvedRoute
@@ -73,6 +75,7 @@ from tests.core.domain.http.factories import definition
 from tests.core.domain.http.factories import fingerprint
 from tests.core.domain.http.factories import policies
 from tests.core.domain.http.factories import provenance
+from tests.core.domain.http.factories import request_occurrence
 
 
 def retry_policy(
@@ -172,6 +175,7 @@ def destination(*, host: DnsHost | Ipv6Host | None = None) -> NetworkDestination
 
 
 def finalized_request(request: EffectiveRequest) -> FinalizedWireRequest:
+    body = NoMaterializedBody()
     return FinalizedWireRequest(
         environment=request.environment,
         logical_request_fingerprint=request.logical_request_fingerprint,
@@ -179,7 +183,12 @@ def finalized_request(request: EffectiveRequest) -> FinalizedWireRequest:
         url=request.url,
         headers=request.headers,
         cookies=request.cookies,
-        body=NoMaterializedBody(),
+        body=body,
+        materialization=prove_request_materialization(
+            request,
+            body,
+            effective_request_fingerprint=fingerprint("9"),
+        ),
         policies=request.policies,
         provenance=request.provenance,
     )
@@ -273,6 +282,15 @@ def test_tls_proxy_and_redirect_policies_are_explicit() -> None:
         scheme=HttpScheme.HTTPS,
         authority=HttpAuthority(host=DnsHost(value="proxy.example.test")),
         authentication=NoAuthentication(),
+        tls=ProxyTlsPolicy(
+            policy=TlsPolicy(
+                verify_certificates=True,
+                verify_hostname=True,
+                minimum_version=TlsVersion.TLS_1_2,
+                trust_source=TrustSource.OPERATING_SYSTEM,
+                client_identity=ClientIdentityRef(value="proxy-client"),
+            )
+        ),
     )
     redirect = RedirectPolicy(
         max_hops=Count(value=3),
@@ -280,7 +298,27 @@ def test_tls_proxy_and_redirect_policies_are_explicit() -> None:
     )
     assert tls.custom_trust_store == TrustStoreRef(value="company-ca")
     assert proxy.scheme is HttpScheme.HTTPS
+    assert type(proxy.tls) is ProxyTlsPolicy
+    assert proxy.tls.policy.client_identity == ClientIdentityRef(value="proxy-client")
     assert redirect.block_https_downgrade
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "",
+        "Company CA",
+        "/etc/ssl/private",
+        "-----BEGIN " + "PRIVATE KEY-----",
+        "credential\nforged",
+        "a" * 64,
+    ],
+)
+def test_tls_material_references_are_bounded_logical_slugs(invalid: object) -> None:
+    with pytest.raises(ValueError, match="lowercase logical slug"):
+        TrustStoreRef(value=invalid)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="lowercase logical slug"):
+        ClientIdentityRef(value=invalid)  # type: ignore[arg-type]
 
 
 def test_tls_policy_rejects_ambiguous_trust_and_verification() -> None:
@@ -415,6 +453,7 @@ def test_authorized_exchange_request_binds_request_destination_plan_and_policy()
     intent = HttpAuthorizationIntent(
         request=request,
         route=route,
+        occurrence=request_occurrence(),
         plan_fingerprint=fingerprint("c"),
         effective_policy_fingerprint=fingerprint("d"),
     )
@@ -431,6 +470,7 @@ def test_http_authorization_rejects_wrong_contract_and_route_binding() -> None:
     intent = HttpAuthorizationIntent(
         request=request,
         route=route,
+        occurrence=request_occurrence(),
         plan_fingerprint=fingerprint("c"),
         effective_policy_fingerprint=fingerprint("d"),
     )

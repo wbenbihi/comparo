@@ -178,6 +178,9 @@ def test_contract_compatibility_is_conservative_only_for_unknowns() -> None:
     assert contract_can_feed(text, unknown)
     assert contract_can_feed(unknown, text)
     assert not contract_can_feed(text, number)
+    assert with_cardinality(text, SelectorCardinality.ZERO_OR_ONE).cardinality is (
+        SelectorCardinality.ZERO_OR_ONE
+    )
     with pytest.raises(TypeError):
         contract_accepts(cast("ValueContract", "bad"), frozenset({ValueKind.STRING}))
     with pytest.raises(TypeError):
@@ -231,7 +234,7 @@ def test_file_lookup_fallback_optional_and_interpolation_contracts() -> None:
     assert expression_kinds(fallback) == frozenset({ValueKind.STRING, ValueKind.INTEGER})
     assert expression_kinds(
         msgspec.structs.replace(fallback, sources=(_lookup(), _literal(JsonString(value="x"))))
-    ) == frozenset({ValueKind.UNKNOWN})
+    ) == frozenset({ValueKind.UNKNOWN, ValueKind.STRING})
     assert expression_kinds(
         OptionalExpr(source=fallback, provenance=_provenance())
     ) == expression_kinds(fallback)
@@ -250,6 +253,11 @@ def test_file_lookup_fallback_optional_and_interpolation_contracts() -> None:
     assert expression_accepts(_lookup(), frozenset({ValueKind.STRING}))
     assert expression_accepts(_literal(JsonInteger(value=1)), frozenset({ValueKind.NUMBER}))
     assert not expression_accepts(_literal(JsonString(value="x")), frozenset({ValueKind.NUMBER}))
+    mixed_fallback = msgspec.structs.replace(
+        fallback,
+        sources=(_lookup(), _literal(JsonString(value="x"))),
+    )
+    assert not expression_accepts(mixed_fallback, frozenset({ValueKind.NUMBER}))
 
 
 def test_negative_literal_detection_is_exact_and_does_not_guess_dynamic_values() -> None:

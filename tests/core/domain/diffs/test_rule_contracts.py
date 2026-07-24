@@ -166,7 +166,7 @@ def test_diff_rule_and_application_identity_coordinates_are_strictly_typed() -> 
     with pytest.raises(ValueError, match="DiffProfile"):
         DiffRuleDefinition(
             origin=DefinitionRef(
-                identity=_environment("prod"),
+                identity=_environment("prod").identity,
                 fingerprint=_fingerprint(),
             ),
             rule_id=RuleId(value="response"),
@@ -178,15 +178,18 @@ def test_diff_rule_and_application_identity_coordinates_are_strictly_typed() -> 
     with pytest.raises(TypeError, match="pair environments"):
         msgspec.structs.replace(
             pair,
-            baseline_environment=cast("ResourceIdentity", "bad"),
+            baseline_environment=cast("DefinitionRef", "bad"),
         )
     with pytest.raises(ValueError, match="Environments"):
         msgspec.structs.replace(
             pair,
-            baseline_environment=ResourceIdentity(
-                namespace=NamespaceId(value="demo"),
-                kind=ResourceKind.REQUEST,
-                resource_id=ResourceId(value="request"),
+            baseline_environment=DefinitionRef(
+                identity=ResourceIdentity(
+                    namespace=NamespaceId(value="demo"),
+                    kind=ResourceKind.REQUEST,
+                    resource_id=ResourceId(value="request"),
+                ),
+                fingerprint=_fingerprint(),
             ),
         )
     with pytest.raises(ValueError, match="distinct"):
@@ -253,7 +256,7 @@ def test_fact_directionality(
         outcome=outcome,
         comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
         baseline_location=_location(65) if baseline else None,
-        candidate_location=_location(66) if candidate else None,
+        candidate_location=_location(66, candidate=True) if candidate else None,
     )
     assert (fact.baseline_location is not None, fact.candidate_location is not None) == (
         baseline,
@@ -274,7 +277,7 @@ def test_added_and_removed_cannot_reverse_direction() -> None:
             fact_id=FactId(value=UUID(int=69)),
             outcome=DiffFactOutcome.REMOVED,
             comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
-            candidate_location=_location(70),
+            candidate_location=_location(70, candidate=True),
         )
 
 
@@ -318,6 +321,10 @@ def test_coverage_conservation(compared: int, ignored: int, not_evaluated: int) 
         candidate_selected=Count(value=paired),
         baseline_derived=Count(value=paired),
         candidate_derived=Count(value=paired),
+        baseline_consumed=Count(value=paired),
+        candidate_consumed=Count(value=paired),
+        baseline_resolved=Count(value=compared + ignored),
+        candidate_resolved=Count(value=compared + ignored),
         paired=Count(value=paired),
         compared=Count(value=compared),
         ignored=Count(value=ignored),
@@ -345,6 +352,10 @@ def test_diff_counts_and_coverage_reject_untyped_or_overresolved_values() -> Non
             candidate_selected=zero,
             baseline_derived=zero,
             candidate_derived=zero,
+            baseline_consumed=zero,
+            candidate_consumed=zero,
+            baseline_resolved=zero,
+            candidate_resolved=zero,
             paired=zero,
             compared=cast("Count", 0),
             ignored=zero,
@@ -356,8 +367,45 @@ def test_diff_counts_and_coverage_reject_untyped_or_overresolved_values() -> Non
             candidate_selected=zero,
             baseline_derived=zero,
             candidate_derived=zero,
+            baseline_consumed=zero,
+            candidate_consumed=zero,
+            baseline_resolved=zero,
+            candidate_resolved=zero,
             paired=zero,
             compared=Count(value=1),
             ignored=zero,
             not_evaluated=zero,
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("baseline_consumed", 2, "baseline consumed"),
+        ("candidate_consumed", 2, "candidate consumed"),
+        ("baseline_resolved", 2, "baseline resolved"),
+        ("candidate_resolved", 2, "candidate resolved"),
+    ],
+)
+def test_diff_coverage_rejects_each_per_side_conservation_violation(
+    field: str,
+    value: int,
+    message: str,
+) -> None:
+    one = Count(value=1)
+    coverage = DiffCoverage(
+        baseline_selected=one,
+        candidate_selected=one,
+        baseline_derived=one,
+        candidate_derived=one,
+        baseline_consumed=one,
+        candidate_consumed=one,
+        baseline_resolved=one,
+        candidate_resolved=one,
+        paired=one,
+        compared=one,
+        ignored=Count(value=0),
+        not_evaluated=Count(value=0),
+    )
+    with pytest.raises(ValueError, match=message):
+        msgspec.structs.replace(coverage, **{field: Count(value=value)})

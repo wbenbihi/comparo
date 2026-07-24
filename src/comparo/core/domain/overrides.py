@@ -6,6 +6,15 @@ from typing import final
 
 import msgspec
 
+from comparo.core.domain.immutability import ImmutableDomainValue
+from comparo.core.domain.immutability import is_deeply_immutable_domain_value
+
+
+def _require_override_value(value: object, *, label: str) -> None:
+    """Keep generic-looking override carriers inside the closed immutable value model."""
+    if not is_deeply_immutable_domain_value(value):
+        raise TypeError(f"{label} must be a deeply immutable domain value")
+
 
 @final
 class Inherit(msgspec.Struct, frozen=True, kw_only=True):
@@ -18,10 +27,14 @@ class Clear(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class SetValue[ValueT](msgspec.Struct, frozen=True, kw_only=True):
+class SetValue[ValueT: ImmutableDomainValue](msgspec.Struct, frozen=True, kw_only=True):
     """Replace a scalar with an explicit value, including falsy values."""
 
     value: ValueT
+
+    def __post_init__(self) -> None:
+        """Reject mutable or open-ended payloads at direct construction."""
+        _require_override_value(self.value, label="scalar override value")
 
 
 type ScalarOverride[ValueT] = Inherit | Clear | SetValue[ValueT]
@@ -38,7 +51,7 @@ class ClearBase(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ReplaceBase[ItemT](msgspec.Struct, frozen=True, kw_only=True):
+class ReplaceBase[ItemT: ImmutableDomainValue](msgspec.Struct, frozen=True, kw_only=True):
     """Start a collection edit from an explicit immutable replacement."""
 
     items: tuple[ItemT, ...]
@@ -47,21 +60,36 @@ class ReplaceBase[ItemT](msgspec.Struct, frozen=True, kw_only=True):
         """Reject a mutable replacement container."""
         if type(self.items) is not tuple:
             raise TypeError("replacement items must be an immutable tuple")
+        if any(not is_deeply_immutable_domain_value(item) for item in self.items):
+            raise TypeError("replacement items must contain deeply immutable domain values")
 
 
 type CollectionBase[ItemT] = KeepBase | ClearBase | ReplaceBase[ItemT]
 
 
 @final
-class KeyedSet[IdentityT, ItemT](msgspec.Struct, frozen=True, kw_only=True):
+class KeyedSet[IdentityT: ImmutableDomainValue, ItemT: ImmutableDomainValue](
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+):
     """Replace all inherited items with one identity by an explicit item."""
 
     identity: IdentityT
     item: ItemT
 
+    def __post_init__(self) -> None:
+        """Require closed immutable identity and item values."""
+        _require_override_value(self.identity, label="keyed-set identity")
+        _require_override_value(self.item, label="keyed-set item")
+
 
 @final
-class CollectionOverridePlan[IdentityT, ItemT](msgspec.Struct, frozen=True, kw_only=True):
+class CollectionOverridePlan[IdentityT: ImmutableDomainValue, ItemT: ImmutableDomainValue](
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+):
     """A deterministic collection edit independent of authoring operation order.
 
     Consumers apply the operations in the fixed order: choose ``base``, remove identities,
@@ -86,6 +114,10 @@ class CollectionOverridePlan[IdentityT, ItemT](msgspec.Struct, frozen=True, kw_o
             raise TypeError("added items must be an immutable tuple")
         if any(type(operation) is not KeyedSet for operation in self.set_items):
             raise TypeError("set operations must contain KeyedSet values")
+        if any(not is_deeply_immutable_domain_value(identity) for identity in self.remove):
+            raise TypeError("removed identities must contain deeply immutable domain values")
+        if any(not is_deeply_immutable_domain_value(item) for item in self.add):
+            raise TypeError("added items must contain deeply immutable domain values")
         if _contains_duplicate(self.remove):
             raise ValueError("removed identities must be unique")
         set_identities = tuple(operation.identity for operation in self.set_items)

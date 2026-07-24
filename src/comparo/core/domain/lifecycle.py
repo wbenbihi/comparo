@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
@@ -10,6 +9,7 @@ import msgspec
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.diagnostics import DiagnosticStage
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.primitives import UtcInstant
 
 
@@ -25,7 +25,7 @@ class RunComplete(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("run completion requires a UtcInstant")
 
 
-class PartialRunReason(StrEnum):
+class PartialRunReason(DomainStrEnum):
     """Stable categories explaining why admitted work is incomplete."""
 
     EXECUTION_INCOMPLETE = "execution-incomplete"
@@ -56,7 +56,7 @@ class RunPartial(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("partial run completion requires a UtcInstant")
 
 
-class CancellationSource(StrEnum):
+class CancellationSource(DomainStrEnum):
     """The authority or outer condition that requested cancellation."""
 
     USER = "user"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from enum import StrEnum
 from fractions import Fraction
 from types import MappingProxyType
 from typing import Final
@@ -22,18 +21,24 @@ from comparo.core.domain.budget_origins import BudgetOrigin
 from comparo.core.domain.budget_origins import DefaultBudgetOrigin
 from comparo.core.domain.budget_origins import DefinitionBudgetOrigin
 from comparo.core.domain.budget_origins import InvocationBudgetOrigin
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Ratio
+from comparo.core.domain.scopes import ArtifactBudgetScope
 from comparo.core.domain.scopes import AttemptScope
+from comparo.core.domain.scopes import BodyBudgetScope
+from comparo.core.domain.scopes import BudgetScope
 from comparo.core.domain.scopes import CellScope
+from comparo.core.domain.scopes import ComparisonBudgetScope
 from comparo.core.domain.scopes import EnvironmentScope
 from comparo.core.domain.scopes import ExecutionScope
+from comparo.core.domain.scopes import ExternalCapabilityBudgetScope
 from comparo.core.domain.scopes import RunScope
-from comparo.core.domain.scopes import RuntimeScope
 from comparo.core.domain.scopes import StepScope
+from comparo.core.domain.scopes import StreamBudgetScope
 from comparo.core.domain.scopes import TrialScope
 
 _OPERATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
@@ -41,7 +46,7 @@ _OPERATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
 type BudgetAmount = Count | ByteCount | Duration | Ratio
 
 
-type RuntimeScopeType = (
+type BudgetScopeType = (
     type[RunScope]
     | type[CellScope]
     | type[TrialScope]
@@ -49,9 +54,14 @@ type RuntimeScopeType = (
     | type[ExecutionScope]
     | type[StepScope]
     | type[AttemptScope]
+    | type[BodyBudgetScope]
+    | type[StreamBudgetScope]
+    | type[ComparisonBudgetScope]
+    | type[ArtifactBudgetScope]
+    | type[ExternalCapabilityBudgetScope]
 )
 
-_RUNTIME_SCOPE_TYPES: Final[Mapping[BudgetScopeKind, RuntimeScopeType]] = MappingProxyType(
+_BUDGET_SCOPE_TYPES: Final[Mapping[BudgetScopeKind, BudgetScopeType]] = MappingProxyType(
     {
         BudgetScopeKind.RUN: RunScope,
         BudgetScopeKind.CELL: CellScope,
@@ -60,6 +70,11 @@ _RUNTIME_SCOPE_TYPES: Final[Mapping[BudgetScopeKind, RuntimeScopeType]] = Mappin
         BudgetScopeKind.EXECUTION: ExecutionScope,
         BudgetScopeKind.STEP: StepScope,
         BudgetScopeKind.ATTEMPT: AttemptScope,
+        BudgetScopeKind.BODY: BodyBudgetScope,
+        BudgetScopeKind.STREAM: StreamBudgetScope,
+        BudgetScopeKind.COMPARISON: ComparisonBudgetScope,
+        BudgetScopeKind.ARTIFACT: ArtifactBudgetScope,
+        BudgetScopeKind.EXTERNAL_CAPABILITY: ExternalCapabilityBudgetScope,
     }
 )
 
@@ -76,7 +91,7 @@ class BudgetOperation(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("budget operation must be a lowercase dotted token")
 
 
-class BudgetContributionKind(StrEnum):
+class BudgetContributionKind(DomainStrEnum):
     """How one configuration origin participates in budget derivation."""
 
     DEFAULT = "default"
@@ -165,7 +180,7 @@ class ResourceBudget(msgspec.Struct, frozen=True, kw_only=True):
     cap: BudgetAmount | None
     contributions: tuple[BudgetContribution, ...]
     usage: BudgetUsage
-    scope: RuntimeScope | None = None
+    scope: BudgetScope | None = None
 
     def __post_init__(self) -> None:
         """Validate units, derivation evidence, and effective minimum semantics."""
@@ -196,26 +211,31 @@ def _validate_budget_identity(budget: ResourceBudget) -> None:
         ExecutionScope,
         StepScope,
         AttemptScope,
+        BodyBudgetScope,
+        StreamBudgetScope,
+        ComparisonBudgetScope,
+        ArtifactBudgetScope,
+        ExternalCapabilityBudgetScope,
     }:
-        raise TypeError("budget scope must be a supported RuntimeScope")
+        raise TypeError("budget scope must be a supported BudgetScope")
     _validate_budget_scope(budget.scope_kind, budget.scope)
 
 
 def _validate_budget_scope(
     scope_kind: BudgetScopeKind,
-    scope: RuntimeScope | None,
+    scope: BudgetScope | None,
 ) -> None:
     """Require a concrete runtime coordinate exactly when its kind is addressable."""
-    expected_scope = _RUNTIME_SCOPE_TYPES.get(scope_kind)
+    expected_scope = _BUDGET_SCOPE_TYPES.get(scope_kind)
 
     if expected_scope is None:
         if scope is not None:
-            raise ValueError("non-runtime budget scope kind cannot carry a RuntimeScope")
+            raise ValueError("unaddressed budget scope kind cannot carry a concrete scope")
         return
     if scope is None:
-        raise ValueError("runtime-addressable budget scope kind requires a concrete scope")
+        raise ValueError("addressable budget scope kind requires a concrete scope")
     if type(scope) is not expected_scope:
-        raise ValueError("budget scope kind must match the concrete RuntimeScope")
+        raise ValueError("budget scope kind must match the concrete BudgetScope")
 
 
 def _validate_budget_derivation(budget: ResourceBudget) -> None:
@@ -264,6 +284,11 @@ def _validate_budget_inputs(budget: ResourceBudget) -> None:
         *optional_cap,
         *amounts,
     )
+    _validate_budget_usage(budget)
+
+
+def _validate_budget_usage(budget: ResourceBudget) -> None:
+    """Validate one usage snapshot against its dimension's accounting contract."""
     contract = budget_dimension_contract(budget.resource)
     if type(budget.requested) is not contract.amount_type:
         raise TypeError("budget resource requires its contract-defined amount type")
@@ -275,6 +300,12 @@ def _validate_budget_inputs(budget: ResourceBudget) -> None:
         budget.usage.consumed, budget.effective
     ):
         raise ValueError("cumulative budget consumption must not exceed the effective limit")
+    if contract.accounting is BudgetAccountingMode.CUMULATIVE and _amount_value(
+        budget.usage.consumed
+    ) + _amount_value(budget.usage.in_use) > _amount_value(budget.effective):
+        raise ValueError(
+            "cumulative consumed and in-use amounts must not exceed the effective limit"
+        )
 
 
 def _validate_ordinary_contributions(

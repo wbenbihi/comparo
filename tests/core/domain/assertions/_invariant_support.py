@@ -52,6 +52,8 @@ from comparo.core.domain.assertions.rules import CompiledAssertionRule
 from comparo.core.domain.assertions.rules import CompletenessRequirement
 from comparo.core.domain.assertions.rules import Quantifier
 from comparo.core.domain.assertions.rules import Severity
+from comparo.core.domain.capabilities import CapabilityTargetKind
+from comparo.core.domain.capabilities import NamedCapabilityTarget
 from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.http.media_types import MediaType
 from comparo.core.domain.http.media_types import MediaTypeTokenValue
@@ -202,7 +204,10 @@ def _application() -> AssertionApplication:
 def _operators() -> tuple[AssertionOperator, ...]:
     remote_schema = CompiledSchema(
         fingerprint=_fingerprint(),
-        remote_uri="https://schemas.example.test/response.json",
+        remote_uri=NamedCapabilityTarget(
+            kind=CapabilityTargetKind.SCHEMA_SOURCE,
+            identifier="https://schemas.example.test/response.json",
+        ),
     )
     return (
         EqualityOperator(relation=EqualityRelation.EQUALS, expected=_literal()),
@@ -223,7 +228,10 @@ def _operators() -> tuple[AssertionOperator, ...]:
         LengthOperator(relation=CountRelation.AT_LEAST, expected=Count(value=1)),
         SchemaOperator(
             schema=remote_schema,
-            default_dialect="https://json-schema.org/draft/2020-12/schema",
+            default_dialect=NamedCapabilityTarget(
+                kind=CapabilityTargetKind.SCHEMA_SOURCE,
+                identifier="https://json-schema.org/draft/2020-12/schema",
+            ),
         ),
         DecodeOperator(view=BodyViewKind.JSON),
         MediaTypeOperator(

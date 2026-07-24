@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.primitives import Fingerprint
@@ -72,7 +72,7 @@ def is_singular_item_selector(selector: object) -> TypeGuard[CompiledItemSelecto
     )
 
 
-class ItemPredicateKind(StrEnum):
+class ItemPredicateKind(DomainStrEnum):
     """Initial pure predicate vocabulary for filtering current items."""
 
     EQUALS = "equals"

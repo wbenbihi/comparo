@@ -6,25 +6,26 @@ import pytest
 
 from comparo.core.domain.assertions.results import Satisfied
 from comparo.core.domain.gates.model import AssertionGateOutcome
-from comparo.core.domain.gates.model import AssertionGateRuleOutcome
-from comparo.core.domain.gates.model import AssertionGateSummary
 from comparo.core.domain.gates.model import CompiledGateProfile
 from comparo.core.domain.gates.model import EnvironmentRole
+from comparo.core.domain.gates.model import GateEnvironmentExecution
 from comparo.core.domain.gates.model import GateFailureReason
 from comparo.core.domain.gates.model import GateResult
 from comparo.core.domain.gates.model import GateSeverity
 from comparo.core.domain.gates.model import GateThreshold
 from comparo.core.domain.gates.model import GateVerdict
 from comparo.core.domain.gates.model import NormalizedFactSummary
-from comparo.core.domain.gates.model import RunCompletion
+from comparo.core.domain.gates.normalization import normalize_assertion_fact
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.lifecycle import RunComplete
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Sha256Digest
+from comparo.core.domain.primitives import UtcInstant
 from tests.core.domain.gates.test_normalization import _assertion_fact
 from tests.core.domain.gates.test_normalization import _zero_assertion_counts
 
@@ -63,13 +64,16 @@ def _threshold() -> GateThreshold:
 
 def test_exact_zero_assertion_still_counts_as_evaluated_rule_coverage() -> None:
     fact = _assertion_fact(Satisfied(), _zero_assertion_counts())
-    rule = AssertionGateRuleOutcome(fact=fact)
-    assertion = AssertionGateSummary(
-        role=EnvironmentRole.BASELINE,
-        rules=(rule,),
+    assertion = normalize_assertion_fact(
+        fact,
+        execution=GateEnvironmentExecution(
+            environment=fact.application.environment,
+            execution_id=fact.application.environment_execution_id,
+            roles=(EnvironmentRole.BASELINE,),
+        ),
     )
     summary = NormalizedFactSummary(
-        completion=RunCompletion.COMPLETE,
+        completion=RunComplete(completed_at=UtcInstant(unix_nanoseconds=1)),
         assertions=(assertion,),
     )
 

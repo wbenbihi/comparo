@@ -16,20 +16,30 @@ from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import BudgetStage
 from comparo.core.domain.budgets import BudgetUsage
 from comparo.core.domain.budgets import ResourceBudget
+from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Ratio
+from comparo.core.domain.scopes import BodyBudgetScope
 from comparo.core.domain.scopes import RunScope
 from tests.core.domain.budget_origin_factories import default_budget_origin
 from tests.core.domain.budget_origin_factories import definition_budget_origin
 from tests.core.domain.budget_origin_factories import invocation_budget_origin
+from tests.core.domain.http.budget_factories import attempt_scope
 
 _REQUESTED = Count(value=10)
 _EFFECTIVE = Count(value=8)
 _CAP = Count(value=8)
+
+
+def _body_scope() -> BodyBudgetScope:
+    return BodyBudgetScope(
+        attempt=attempt_scope(),
+        body_id=BodyId(value=UUID(int=2)),
+    )
 
 
 def _contribution(
@@ -154,6 +164,7 @@ def test_multiple_ceilings_use_the_exact_lowest_value() -> None:
         cap=low,
         contributions=contributions,
         usage=_usage(requested),
+        scope=_body_scope(),
     )
     assert budget.cap == low
 
@@ -178,6 +189,7 @@ def test_duration_budgets_compare_exact_nanoseconds() -> None:
             ),
         ),
         usage=_usage(requested),
+        scope=_body_scope(),
     )
     assert type(budget.effective) is Duration
     assert budget.effective.nanoseconds == 10
@@ -255,6 +267,56 @@ def test_budget_usage_is_typed_and_unit_consistent() -> None:
                 high_water=Count(value=0),
             )
         )
+    with pytest.raises(ValueError, match="consumed and in-use"):
+        _budget(
+            usage=BudgetUsage(
+                consumed=Count(value=5),
+                in_use=Count(value=4),
+                high_water=Count(value=4),
+            )
+        )
+
+
+def test_cumulative_commitment_uses_exact_rational_arithmetic() -> None:
+    limit = Ratio.from_decimal(Decimal("1"))
+    with pytest.raises(ValueError, match="consumed and in-use"):
+        ResourceBudget(
+            resource=BudgetResource.DECOMPRESSION_RATIO,
+            scope_kind=BudgetScopeKind.BODY,
+            stage=BudgetStage.DECODING,
+            operation=BudgetOperation(value="decode.expansion"),
+            requested=limit,
+            effective=limit,
+            cap=None,
+            contributions=(_contribution(limit),),
+            usage=BudgetUsage(
+                consumed=Ratio.from_decimal(Decimal("0.75")),
+                in_use=Ratio.from_decimal(Decimal("0.5")),
+                high_water=Ratio.from_decimal(Decimal("0.5")),
+            ),
+            scope=_body_scope(),
+        )
+
+
+def test_concurrent_budget_caps_live_use_without_capping_lifetime_consumption() -> None:
+    limit = Count(value=8)
+    budget = ResourceBudget(
+        resource=BudgetResource.QUEUED_WORK,
+        scope_kind=BudgetScopeKind.RUN,
+        stage=BudgetStage.SCHEDULING,
+        operation=BudgetOperation(value="schedule.queue"),
+        requested=limit,
+        effective=limit,
+        cap=None,
+        contributions=(_contribution(limit),),
+        usage=BudgetUsage(
+            consumed=Count(value=100),
+            in_use=limit,
+            high_water=limit,
+        ),
+        scope=RunScope(run_id=RunId(value=UUID(int=1))),
+    )
+    assert budget.usage.consumed == Count(value=100)
 
 
 @pytest.mark.parametrize(
@@ -319,6 +381,7 @@ def test_budget_rejects_invalid_amount_and_contribution_shapes() -> None:
             cap=None,
             contributions=(_contribution(Count(value=1)),),
             usage=_usage(Count(value=1)),
+            scope=_body_scope(),
         )
     with pytest.raises(ValueError, match="scope/stage placement"):
         ResourceBudget(

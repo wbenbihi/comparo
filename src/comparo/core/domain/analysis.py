@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Final
 from typing import Protocol
 from typing import cast
@@ -10,6 +9,7 @@ from typing import final
 
 import msgspec
 
+from comparo.core.domain.analysis_budget_validation import validate_analysis_budgets
 from comparo.core.domain.analysis_results import AnalysisBudgetExhausted as AnalysisBudgetExhausted
 from comparo.core.domain.analysis_results import AnalysisCancelled as AnalysisCancelled
 from comparo.core.domain.analysis_results import AnalysisEvidence as AnalysisEvidence
@@ -19,18 +19,28 @@ from comparo.core.domain.analysis_results import AnalysisProviderFailed as Analy
 from comparo.core.domain.analysis_results import AnalysisSucceeded as AnalysisSucceeded
 from comparo.core.domain.analysis_results import AnalysisTimedOut as AnalysisTimedOut
 from comparo.core.domain.analysis_results import AnalysisVerdict as AnalysisVerdict
-from comparo.core.domain.budgets import BudgetOperation
+from comparo.core.domain.analysis_types import AnalysisContractVersion
+from comparo.core.domain.analysis_types import AnalysisModelId
+from comparo.core.domain.analysis_types import AnalysisProviderId
+from comparo.core.domain.analysis_types import AnalysisSchemaId
+from comparo.core.domain.analysis_usage import (
+    AnalysisBudgetUsageReport as AnalysisBudgetUsageReport,
+)
+from comparo.core.domain.analysis_usage import analysis_usage_budget
+from comparo.core.domain.analysis_usage import budget_contract_matches
+from comparo.core.domain.analysis_usage import validate_analysis_usage_report
+from comparo.core.domain.analysis_usage import validate_success_usage
+from comparo.core.domain.budgets import BudgetExceeded
 from comparo.core.domain.budgets import BudgetResource
-from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import ResourceBudget
-from comparo.core.domain.capabilities import CapabilityCategory
-from comparo.core.domain.capabilities import CapabilityDenied
-from comparo.core.domain.capabilities import CapabilityGranted
+from comparo.core.domain.capabilities import CapabilityDenialReason
 from comparo.core.domain.capabilities import CapabilityId
 from comparo.core.domain.capabilities import CapabilityOperation
-from comparo.core.domain.capabilities import CapabilityRequest
 from comparo.core.domain.capabilities import CapabilityTargetKind
+from comparo.core.domain.capabilities import ExecutionPolicyAuthority
 from comparo.core.domain.capabilities import NamedCapabilityTarget
+from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.http.media_types import MediaType
 from comparo.core.domain.identity import AnalysisId
 from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import FactId
@@ -40,8 +50,7 @@ from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
-
-_PROVIDER_TOKEN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
+from comparo.core.domain.sensitivity import is_sensitive_value
 
 ANALYSIS_CAPABILITY_ID: Final = CapabilityId(
     namespace="comparo.core",
@@ -56,35 +65,27 @@ SECRET_EGRESS_CAPABILITY_ID: Final = CapabilityId(
 )
 SECRET_EGRESS_OPERATION: Final = CapabilityOperation(value="egress")
 
-_ANALYSIS_BUDGET_OPERATIONS: Final = {
-    BudgetResource.EXTERNAL_INPUT_BYTES: BudgetOperation(value="analysis.input"),
-    BudgetResource.EXTERNAL_OUTPUT_BYTES: BudgetOperation(value="analysis.output"),
-    BudgetResource.DEADLINE: BudgetOperation(value="analysis.deadline"),
-    BudgetResource.EXTERNAL_WORK: BudgetOperation(value="analysis.work"),
-}
-
 
 @final
 class AnalysisProvider(msgspec.Struct, frozen=True, kw_only=True):
     """A versioned provider/model and its declared data destination."""
 
-    provider: str
-    provider_version: str
-    model: str
-    model_version: str
+    provider: AnalysisProviderId
+    provider_version: AnalysisContractVersion
+    model: AnalysisModelId
+    model_version: AnalysisContractVersion
     destination: NamedCapabilityTarget
 
     def __post_init__(self) -> None:
         """Require explicit stable identities and a destination target."""
-        if type(self.provider) is not str or _PROVIDER_TOKEN.fullmatch(self.provider) is None:
-            raise ValueError("analysis provider must be a lowercase namespaced token")
-        for label, value in (
-            ("provider version", self.provider_version),
-            ("model", self.model),
-            ("model version", self.model_version),
-        ):
-            if type(value) is not str or not value.strip():
-                raise ValueError(f"analysis {label} must be non-blank text")
+        if type(self.provider) is not AnalysisProviderId:
+            raise TypeError("analysis provider must be an AnalysisProviderId")
+        if type(self.provider_version) is not AnalysisContractVersion:
+            raise TypeError("analysis provider version must be an AnalysisContractVersion")
+        if type(self.model) is not AnalysisModelId:
+            raise TypeError("analysis model must be an AnalysisModelId")
+        if type(self.model_version) is not AnalysisContractVersion:
+            raise TypeError("analysis model version must be an AnalysisContractVersion")
         if type(self.destination) is not NamedCapabilityTarget:
             raise TypeError("analysis destination must be a NamedCapabilityTarget")
         if self.destination.kind is not CapabilityTargetKind.DESTINATION:
@@ -95,18 +96,21 @@ class AnalysisProvider(msgspec.Struct, frozen=True, kw_only=True):
 class AnalysisSchema(msgspec.Struct, frozen=True, kw_only=True):
     """The exact structured-output contract requested from an analysis provider."""
 
-    identifier: str
-    version: str
+    identifier: AnalysisSchemaId
+    version: AnalysisContractVersion
     fingerprint: Fingerprint
+    allows_empty_output: bool = False
 
     def __post_init__(self) -> None:
         """Require a stable identity, explicit version, and content fingerprint."""
-        if type(self.identifier) is not str or _PROVIDER_TOKEN.fullmatch(self.identifier) is None:
-            raise ValueError("analysis schema identifier must be a lowercase namespaced token")
-        if type(self.version) is not str or not self.version.strip():
-            raise ValueError("analysis schema version must be non-blank text")
+        if type(self.identifier) is not AnalysisSchemaId:
+            raise TypeError("analysis schema identifier must be an AnalysisSchemaId")
+        if type(self.version) is not AnalysisContractVersion:
+            raise TypeError("analysis schema version must be an AnalysisContractVersion")
         if type(self.fingerprint) is not Fingerprint:
             raise TypeError("analysis schema fingerprint must be a Fingerprint")
+        if type(self.allows_empty_output) is not bool:
+            raise TypeError("analysis schema empty-output permission must be bool")
 
 
 type AnalysisInputSource = BodyId | ViewId | FactId
@@ -120,27 +124,25 @@ class AnalysisInput(msgspec.Struct, frozen=True, kw_only=True):
     digest: Fingerprint | SensitiveValue[Fingerprint]
     bytes: ByteCount
     sensitivity: Sensitivity
-    media_type: str | None = None
+    media_type: MediaType | None = None
 
     def __post_init__(self) -> None:
         """Require typed source identity and non-payload metadata."""
         if type(self.source) not in {BodyId, ViewId, FactId}:
             raise TypeError("analysis input source must be BodyId, ViewId, or FactId")
         if type(self.digest) is not Fingerprint and not (
-            isinstance(self.digest, SensitiveValue) and self.digest.payload_type is Fingerprint
+            is_sensitive_value(self.digest) and self.digest.payload_type is Fingerprint
         ):
             raise TypeError("analysis input digest must contain a Fingerprint")
         if type(self.bytes) is not ByteCount:
             raise TypeError("analysis input bytes must be a ByteCount")
         if type(self.sensitivity) is not Sensitivity:
             raise TypeError("analysis input sensitivity must be a Sensitivity")
-        digest_is_sensitive = isinstance(self.digest, SensitiveValue)
+        digest_is_sensitive = is_sensitive_value(self.digest)
         if digest_is_sensitive != (self.sensitivity is Sensitivity.SENSITIVE):
             raise ValueError("analysis input digest containment must match input sensitivity")
-        if self.media_type is not None and (
-            type(self.media_type) is not str or not self.media_type.strip()
-        ):
-            raise ValueError("analysis input media type must be absent or non-blank text")
+        if self.media_type is not None and type(self.media_type) is not MediaType:
+            raise TypeError("analysis input media type must be absent or MediaType")
 
 
 @final
@@ -166,47 +168,94 @@ class AnalysisRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("analysis request requires an AnalysisSchema")
         if type(self.timeout) is not Duration:
             raise TypeError("analysis timeout must be a Duration")
-        _validate_budgets(self.budgets, inputs=self.inputs, timeout=self.timeout)
+        validate_analysis_budgets(
+            self.budgets,
+            analysis_id=self.analysis_id,
+            input_bytes=tuple(item.bytes for item in self.inputs),
+            timeout=self.timeout,
+        )
         _validate_request_fingerprint(self.fingerprint, inputs=self.inputs)
 
 
 @final
-class AnalysisAuthorizationGrant(msgspec.Struct, frozen=True, kw_only=True):
-    """Operator authority bound to one exact immutable analysis recipe.
-
-    The complete request is nested in the grant instead of re-stating only its destination. This
-    prevents an authorized destination from being reused with a different model, input set,
-    output schema, timeout, or budget set.
-    """
+class AnalysisSecretEgressApproval(msgspec.Struct, frozen=True, kw_only=True):
+    """ExecutionPolicy authority to disclose sensitive inputs for one exact analysis."""
 
     analysis: AnalysisRequest
-    capability: CapabilityGranted
-    secret_egress: CapabilityGranted | None = None
+    authority: ExecutionPolicyAuthority
+    capability_id: CapabilityId = SECRET_EGRESS_CAPABILITY_ID
+    operation: CapabilityOperation = SECRET_EGRESS_OPERATION
 
     def __post_init__(self) -> None:
-        """Require the built-in operation and externally owned authority for this recipe."""
+        """Bind the secret-egress approval to the full immutable request and policy revision."""
         if type(self.analysis) is not AnalysisRequest:
-            raise TypeError("analysis authorization must bind an AnalysisRequest")
-        if type(self.capability) is not CapabilityGranted:
-            raise TypeError("analysis authorization requires a final CapabilityGranted")
-        _validate_analysis_capability(
-            self.capability.request,
-            destination=self.analysis.provider.destination,
+            raise TypeError("secret-egress approval must bind an AnalysisRequest")
+        if type(self.authority) is not ExecutionPolicyAuthority:
+            raise TypeError("analysis authority must be exact ExecutionPolicyAuthority")
+        _validate_contract(
+            actual_id=self.capability_id,
+            actual_operation=self.operation,
+            capability_id=SECRET_EGRESS_CAPABILITY_ID,
+            operation=SECRET_EGRESS_OPERATION,
         )
-        contains_sensitive_input = any(
-            item.sensitivity is Sensitivity.SENSITIVE for item in self.analysis.inputs
-        )
-        if contains_sensitive_input:
-            if type(self.secret_egress) is not CapabilityGranted:
-                raise ValueError("sensitive analysis requires an exact secret-egress grant")
-            _validate_secret_egress_capability(
-                self.secret_egress.request,
-                destination=self.analysis.provider.destination,
+
+
+@final
+class AnalysisAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
+    """Complete immutable input presented to the external-analysis authority."""
+
+    analysis: AnalysisRequest
+    effective_policy_authority: ExecutionPolicyAuthority
+    secret_egress_approval: AnalysisSecretEgressApproval | None = None
+
+    def __post_init__(self) -> None:
+        """Bind any sensitive-data approval to this exact request and policy revision."""
+        if type(self.analysis) is not AnalysisRequest:
+            raise TypeError("analysis authorization intent must bind an AnalysisRequest")
+        if type(self.effective_policy_authority) is not ExecutionPolicyAuthority:
+            raise TypeError(
+                "effective analysis policy binding must be exact ExecutionPolicyAuthority"
             )
-            if self.secret_egress.authority != self.capability.authority:
-                raise ValueError("analysis capability grants must use the same policy authority")
-        elif self.secret_egress is not None:
+        sensitive = any(item.sensitivity is Sensitivity.SENSITIVE for item in self.analysis.inputs)
+        if sensitive and self.secret_egress_approval is None:
+            raise ValueError("sensitive analysis requires an exact secret-egress approval")
+        if not sensitive and self.secret_egress_approval is not None:
             raise ValueError("public analysis must not carry unnecessary secret-egress authority")
+        if self.secret_egress_approval is not None:
+            if type(self.secret_egress_approval) is not AnalysisSecretEgressApproval:
+                raise TypeError("secret-egress approval must be AnalysisSecretEgressApproval")
+            if (
+                self.secret_egress_approval.analysis != self.analysis
+                or self.secret_egress_approval.authority != self.effective_policy_authority
+            ):
+                raise ValueError("secret-egress approval is not bound to this analysis intent")
+
+
+@final
+class AnalysisAuthorizationGrant(msgspec.Struct, frozen=True, kw_only=True):
+    """Final ExecutionPolicy decision bound to one complete analysis intent."""
+
+    intent: AnalysisAuthorizationIntent
+    authority: ExecutionPolicyAuthority
+    capability_id: CapabilityId = ANALYSIS_CAPABILITY_ID
+    operation: CapabilityOperation = ANALYSIS_EXECUTE_OPERATION
+
+    def __post_init__(self) -> None:
+        """Require the exact built-in contract, policy revision, and approval issuer."""
+        if type(self.intent) is not AnalysisAuthorizationIntent:
+            raise TypeError(
+                "analysis authorization grant intent must be AnalysisAuthorizationIntent"
+            )
+        if type(self.authority) is not ExecutionPolicyAuthority:
+            raise TypeError("analysis authority must be exact ExecutionPolicyAuthority")
+        if self.authority != self.intent.effective_policy_authority:
+            raise ValueError("analysis grant authority is not the exact effective policy authority")
+        _validate_contract(
+            actual_id=self.capability_id,
+            actual_operation=self.operation,
+            capability_id=ANALYSIS_CAPABILITY_ID,
+            operation=ANALYSIS_EXECUTE_OPERATION,
+        )
 
 
 @final
@@ -223,7 +272,80 @@ class AuthorizedAnalysisRequest(msgspec.Struct, frozen=True, kw_only=True):
     @property
     def analysis(self) -> AnalysisRequest:
         """Return the exact immutable recipe nested in the authorization grant."""
-        return self.grant.analysis
+        return self.grant.intent.analysis
+
+
+@final
+class AnalysisExecutionFact(msgspec.Struct, frozen=True, kw_only=True):
+    """One terminal external-analysis result bound to its exact authorized request."""
+
+    request: AuthorizedAnalysisRequest
+    result: AnalysisExecutionResult
+    usage: AnalysisBudgetUsageReport
+
+    def __post_init__(self) -> None:
+        """Reject untyped results and budget evidence from another analysis contract."""
+        if type(self.request) is not AuthorizedAnalysisRequest:
+            raise TypeError("analysis execution fact requires an AuthorizedAnalysisRequest")
+        if type(self.result) not in {
+            AnalysisSucceeded,
+            AnalysisTimedOut,
+            AnalysisProviderFailed,
+            AnalysisMalformed,
+            AnalysisCancelled,
+            AnalysisBudgetExhausted,
+        }:
+            raise TypeError("analysis execution fact requires a typed terminal result")
+        analysis = self.request.analysis
+        validate_analysis_usage_report(
+            analysis.budgets,
+            self.usage,
+            expected_input_bytes=ByteCount(
+                value=sum(item.bytes.value for item in analysis.inputs),
+            ),
+        )
+        if type(self.result) is AnalysisSucceeded:
+            validate_success_usage(
+                self.usage,
+                allows_empty_output=analysis.output_schema.allows_empty_output,
+            )
+        if (
+            type(self.result) is AnalysisTimedOut
+            and self.result.elapsed.nanoseconds < self.request.analysis.timeout.nanoseconds
+        ):
+            raise ValueError("analysis timeout evidence must reach the authorized timeout")
+        if type(self.result) is AnalysisTimedOut:
+            deadline = analysis_usage_budget(self.usage, BudgetResource.DEADLINE)
+            elapsed = cast("Duration", deadline.usage.consumed)
+            if elapsed.nanoseconds < self.result.elapsed.nanoseconds:
+                raise ValueError("analysis timeout must be backed by terminal deadline usage")
+        if type(self.result) is AnalysisBudgetExhausted:
+            _validate_exhausted_budget(self.request.analysis, self.result.exhaustion, self.usage)
+
+
+def validate_analysis_execution(
+    request: AuthorizedAnalysisRequest,
+    fact: AnalysisExecutionFact,
+) -> None:
+    """Require an executor result to belong to the exact request passed to that call."""
+    if type(request) is not AuthorizedAnalysisRequest:
+        raise TypeError("analysis execution validation requires an AuthorizedAnalysisRequest")
+    if type(fact) is not AnalysisExecutionFact:
+        raise TypeError("analysis execution validation requires an AnalysisExecutionFact")
+    if fact.request != request:
+        raise ValueError("analysis execution fact belongs to a different authorized request")
+
+
+def _validate_exhausted_budget(
+    analysis: AnalysisRequest,
+    exhaustion: BudgetExceeded,
+    usage: AnalysisBudgetUsageReport,
+) -> None:
+    exhausted = exhaustion.budget
+    if not any(budget_contract_matches(exhausted, item) for item in analysis.budgets):
+        raise ValueError("analysis exhaustion is not bound to an authorized request budget")
+    if exhausted != analysis_usage_budget(usage, exhausted.resource):
+        raise ValueError("analysis exhaustion budget must equal its terminal usage snapshot")
 
 
 def _validate_inputs(inputs: tuple[AnalysisInput, ...]) -> None:
@@ -235,89 +357,17 @@ def _validate_inputs(inputs: tuple[AnalysisInput, ...]) -> None:
         raise TypeError("analysis inputs must contain AnalysisInput values")
 
 
-def _validate_analysis_capability(
-    capability: CapabilityRequest,
+def _validate_contract(
     *,
-    destination: NamedCapabilityTarget | None,
+    actual_id: CapabilityId,
+    actual_operation: CapabilityOperation,
+    capability_id: CapabilityId,
+    operation: CapabilityOperation,
 ) -> None:
-    if capability.category is not CapabilityCategory.EXTERNAL_ANALYSIS:
-        raise ValueError("analysis authorization must grant external analysis")
-    if capability.capability_id != ANALYSIS_CAPABILITY_ID:
-        raise ValueError("analysis authorization must use the built-in capability identity")
-    if capability.operation != ANALYSIS_EXECUTE_OPERATION:
-        raise ValueError("analysis authorization must use the built-in execute operation")
-    if type(capability.target) is not NamedCapabilityTarget:
-        raise TypeError("analysis authorization target must be a NamedCapabilityTarget")
-    if capability.target.kind is not CapabilityTargetKind.DESTINATION:
-        raise ValueError("analysis authorization target must identify a destination")
-    if destination is not None and capability.target != destination:
-        raise ValueError("analysis authorization target must match the provider destination")
-
-
-def _validate_secret_egress_capability(
-    capability: CapabilityRequest,
-    *,
-    destination: NamedCapabilityTarget,
-) -> None:
-    if capability.category is not CapabilityCategory.SECRET_EGRESS:
-        raise ValueError("sensitive analysis authorization must grant secret egress")
-    if capability.capability_id != SECRET_EGRESS_CAPABILITY_ID:
-        raise ValueError("secret-egress authorization must use the built-in capability identity")
-    if capability.operation != SECRET_EGRESS_OPERATION:
-        raise ValueError("secret-egress authorization must use the built-in egress operation")
-    if capability.target != destination:
-        raise ValueError("secret-egress authorization target must match the provider destination")
-
-
-def _validate_budgets(
-    budgets: tuple[ResourceBudget, ...],
-    *,
-    inputs: tuple[AnalysisInput, ...],
-    timeout: Duration,
-) -> None:
-    by_resource = _index_analysis_budgets(budgets)
-    _validate_analysis_budget_coordinates(by_resource)
-    _validate_analysis_budget_limits(by_resource, inputs=inputs, timeout=timeout)
-
-
-def _index_analysis_budgets(
-    budgets: tuple[ResourceBudget, ...],
-) -> dict[BudgetResource, ResourceBudget]:
-    if type(budgets) is not tuple:
-        raise TypeError("analysis budgets must be an immutable tuple")
-    if any(type(budget) is not ResourceBudget for budget in budgets):
-        raise TypeError("analysis budgets must contain ResourceBudget values")
-    if len(budgets) != len(_ANALYSIS_BUDGET_OPERATIONS):
-        raise ValueError("analysis requires exact input, output, deadline, and work budgets")
-    by_resource = {budget.resource: budget for budget in budgets}
-    if frozenset(by_resource) != frozenset(_ANALYSIS_BUDGET_OPERATIONS):
-        raise ValueError("analysis budgets must contain each required dimension exactly once")
-    return by_resource
-
-
-def _validate_analysis_budget_coordinates(
-    by_resource: dict[BudgetResource, ResourceBudget],
-) -> None:
-    for resource, operation in _ANALYSIS_BUDGET_OPERATIONS.items():
-        budget = by_resource[resource]
-        if budget.scope_kind is not BudgetScopeKind.EXTERNAL_CAPABILITY:
-            raise ValueError("analysis budgets must use the external-capability scope")
-        if budget.operation != operation:
-            raise ValueError("analysis budget must use its canonical operation identity")
-
-
-def _validate_analysis_budget_limits(
-    by_resource: dict[BudgetResource, ResourceBudget],
-    *,
-    inputs: tuple[AnalysisInput, ...],
-    timeout: Duration,
-) -> None:
-    input_limit = cast("ByteCount", by_resource[BudgetResource.EXTERNAL_INPUT_BYTES].effective)
-    deadline = cast("Duration", by_resource[BudgetResource.DEADLINE].effective)
-    if sum(item.bytes.value for item in inputs) > input_limit.value:
-        raise ValueError("analysis input bytes exceed the effective external input budget")
-    if timeout.nanoseconds > deadline.nanoseconds:
-        raise ValueError("analysis timeout exceeds the effective deadline budget")
+    if type(actual_id) is not CapabilityId or type(actual_operation) is not CapabilityOperation:
+        raise TypeError("analysis authority contract identity must use typed capability values")
+    if actual_id != capability_id or actual_operation != operation:
+        raise ValueError("analysis authority grant uses the wrong built-in capability contract")
 
 
 def _validate_request_fingerprint(
@@ -326,54 +376,51 @@ def _validate_request_fingerprint(
     inputs: tuple[AnalysisInput, ...],
 ) -> None:
     if type(fingerprint) is not Fingerprint and not (
-        isinstance(fingerprint, SensitiveValue) and fingerprint.payload_type is Fingerprint
+        is_sensitive_value(fingerprint) and fingerprint.payload_type is Fingerprint
     ):
         raise TypeError("analysis fingerprint must contain a Fingerprint")
     contains_sensitive_input = any(item.sensitivity is Sensitivity.SENSITIVE for item in inputs)
-    if isinstance(fingerprint, SensitiveValue) != contains_sensitive_input:
+    if is_sensitive_value(fingerprint) != contains_sensitive_input:
         raise ValueError("analysis fingerprint containment must match input sensitivity")
+
+
+class AnalysisAuthorizationRequirement(DomainStrEnum):
+    """The exact external-analysis safeguard refused by policy."""
+
+    EXECUTION = "execution"
+    SECRET_EGRESS = "secret-egress"  # noqa: S105
 
 
 @final
 class AnalysisDenied(msgspec.Struct, frozen=True, kw_only=True):
-    """External analysis was denied before provider invocation."""
+    """A typed policy denial bound to one complete immutable analysis request."""
 
     analysis: AnalysisRequest
-    decision: CapabilityDenied
+    requirement: AnalysisAuthorizationRequirement
+    reason: CapabilityDenialReason
+    authority: ExecutionPolicyAuthority
 
     def __post_init__(self) -> None:
-        """Bind the denial to the exact recipe and its requested destination."""
+        """Bind the denied safeguard, request, and exact effective policy revision."""
         if type(self.analysis) is not AnalysisRequest:
             raise TypeError("analysis denial must bind an AnalysisRequest")
-        if type(self.decision) is not CapabilityDenied:
-            raise TypeError("analysis denial requires a CapabilityDenied")
-        if self.decision.request.category is CapabilityCategory.EXTERNAL_ANALYSIS:
-            _validate_analysis_capability(
-                self.decision.request,
-                destination=self.analysis.provider.destination,
-            )
-            return
-        contains_sensitive_input = any(
-            item.sensitivity is Sensitivity.SENSITIVE for item in self.analysis.inputs
-        )
-        if (
-            self.decision.request.category is CapabilityCategory.SECRET_EGRESS
-            and contains_sensitive_input
-        ):
-            _validate_secret_egress_capability(
-                self.decision.request,
-                destination=self.analysis.provider.destination,
-            )
-            return
-        raise ValueError("analysis denial must refuse required analysis authority")
+        if type(self.requirement) is not AnalysisAuthorizationRequirement:
+            raise TypeError("analysis denial requirement must be AnalysisAuthorizationRequirement")
+        if type(self.reason) is not CapabilityDenialReason:
+            raise TypeError("analysis denial reason must be CapabilityDenialReason")
+        if type(self.authority) is not ExecutionPolicyAuthority:
+            raise TypeError("analysis denial authority must be exact ExecutionPolicyAuthority")
+        sensitive = any(item.sensitivity is Sensitivity.SENSITIVE for item in self.analysis.inputs)
+        if self.requirement is AnalysisAuthorizationRequirement.SECRET_EGRESS and not sensitive:
+            raise ValueError("public analysis cannot be denied for unnecessary secret egress")
 
 
-type AnalysisResult = AnalysisDenied | AnalysisExecutionResult
+type AnalysisResult = AnalysisDenied | AnalysisExecutionFact
 
 
 class AnalysisExecutor(Protocol):
     """Narrow runtime port for an authorized, bounded external analysis."""
 
-    def execute(self, request: AuthorizedAnalysisRequest) -> AnalysisExecutionResult:
-        """Execute one already authorized request and return a typed terminal result."""
+    def execute(self, request: AuthorizedAnalysisRequest) -> AnalysisExecutionFact:
+        """Execute one request and return a terminal fact carrying that exact authority."""
         ...

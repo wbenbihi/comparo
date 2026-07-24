@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import cast
 from typing import final
 
@@ -14,13 +13,15 @@ from comparo.core.domain.assertions.rules import CompiledAssertionRule
 from comparo.core.domain.assertions.rules import Quantifier
 from comparo.core.domain.assertions.rules import Severity
 from comparo.core.domain.diagnostics import DiagnosticCode
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.results import SelectionMatch
+from comparo.core.domain.selectors.results import require_match_contract
 
 
-class MatchOutcome(StrEnum):
+class MatchOutcome(DomainStrEnum):
     """Concrete predicate outcomes for one selected value."""
 
     SATISFIED = "satisfied"
@@ -96,7 +97,7 @@ class Satisfied(msgspec.Struct, frozen=True, kw_only=True):
     """The quantified predicate and cardinality were satisfied."""
 
 
-class ViolationReason(StrEnum):
+class ViolationReason(DomainStrEnum):
     """Parent-level assertion violation categories."""
 
     PREDICATE = "predicate"
@@ -177,6 +178,9 @@ class AssertionFact(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("assertion fact outcome has an unsupported type")
         if type(self.counts) is not AssertionCounts or type(self.evidence) is not AssertionEvidence:
             raise TypeError("assertion fact requires typed counts and evidence")
+        if any(fact.fact_id == self.fact_id for fact in self.evidence.retained):
+            raise ValueError("assertion parent fact ID must differ from retained child fact IDs")
+        _require_evidence_binding(self.evidence, self.application, self.rule)
         if len(self.evidence.retained) + self.evidence.omitted.value != self.counts.evaluated.value:
             raise ValueError("evidence must cover every evaluated match")
         _require_evidence_buckets(self.evidence, self.counts)
@@ -203,6 +207,22 @@ def _require_application_rule_identity(
         or application.rule_fingerprint != rule.fingerprint
     ):
         raise ValueError("assertion application does not identify the effective compiled rule")
+
+
+def _require_evidence_binding(
+    evidence: AssertionEvidence,
+    application: AssertionApplication,
+    rule: CompiledAssertionRule,
+) -> None:
+    for fact in evidence.retained:
+        require_match_contract(
+            fact.match,
+            rule.selector,
+            application.environment_execution_id,
+        )
+    locations = tuple(fact.match.location for fact in evidence.retained)
+    if not rule.selector.capabilities.may_duplicate and len(set(locations)) != len(locations):
+        raise ValueError("assertion evidence cannot repeat a location for this selector")
 
 
 def _require_evidence_buckets(evidence: AssertionEvidence, counts: AssertionCounts) -> None:

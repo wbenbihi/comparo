@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
-from typing import TypeGuard
+from typing import cast
 from typing import final
 
 import msgspec
@@ -11,68 +10,34 @@ import msgspec
 from comparo.core.domain.budget_contracts import BudgetStage
 from comparo.core.domain.budgets import BudgetExceeded
 from comparo.core.domain.diagnostics import DiagnosticCode
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import BodyId
+from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import ViewId
-from comparo.core.domain.primitives import ByteCount
-from comparo.core.domain.primitives import Count
-from comparo.core.domain.primitives import Duration
-from comparo.core.domain.primitives import Ratio
-from comparo.core.domain.primitives import UtcInstant
+from comparo.core.domain.selectors.contracts import contract_accepts_runtime_kind
+from comparo.core.domain.selectors.locations import BodyLocation
 from comparo.core.domain.selectors.locations import ConcreteLocation
+from comparo.core.domain.selectors.locations import JsonLocation
+from comparo.core.domain.selectors.locations import StreamLocation
+from comparo.core.domain.selectors.locations import ViewLocation
 from comparo.core.domain.selectors.locations import is_concrete_location
+from comparo.core.domain.selectors.locations import location_environment_execution_id
+from comparo.core.domain.selectors.model import CompiledSelector
+from comparo.core.domain.selectors.model import require_location_matches_selector
 from comparo.core.domain.selectors.sources import BodyViewKind
+from comparo.core.domain.selectors.sources import SelectorCardinality
+from comparo.core.domain.selectors.sources import SelectorSource
+from comparo.core.domain.selectors.values import BareQueryFieldValue
+from comparo.core.domain.selectors.values import HttpFieldItems as HttpFieldItems
+from comparo.core.domain.selectors.values import HttpFieldTextValue as HttpFieldTextValue
+from comparo.core.domain.selectors.values import SelectedValue as SelectedValue
+from comparo.core.domain.selectors.values import is_selected_value as is_selected_value
+from comparo.core.domain.selectors.values import is_selected_value_type
+from comparo.core.domain.selectors.values import selected_value_kind_type
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
-from comparo.core.domain.values import BytesValue
-from comparo.core.domain.values import ExactValue
-from comparo.core.domain.values import JsonArray
-from comparo.core.domain.values import JsonBoolean
-from comparo.core.domain.values import JsonDecimal
-from comparo.core.domain.values import JsonInteger
-from comparo.core.domain.values import JsonNull
-from comparo.core.domain.values import JsonObject
-from comparo.core.domain.values import JsonString
-from comparo.core.domain.values import is_json_value
-
-type SelectedValue = (
-    ExactValue | Duration | ByteCount | Count | Ratio | UtcInstant | BodyId | ViewId
-)
-
-
-def is_selected_value(value: object) -> TypeGuard[SelectedValue]:
-    """Narrow a value to the closed selector-value union."""
-    return is_json_value(value) or type(value) in {
-        BytesValue,
-        Duration,
-        ByteCount,
-        Count,
-        Ratio,
-        UtcInstant,
-        BodyId,
-        ViewId,
-    }
-
-
-def _is_selected_value_type(value_type: type[SelectedValue]) -> bool:
-    """Validate a sealed sensitive wrapper using only its non-secret payload type."""
-    return value_type in {
-        BytesValue,
-        Duration,
-        ByteCount,
-        Count,
-        Ratio,
-        UtcInstant,
-        BodyId,
-        ViewId,
-        JsonNull,
-        JsonBoolean,
-        JsonInteger,
-        JsonDecimal,
-        JsonString,
-        JsonArray,
-        JsonObject,
-    }
+from comparo.core.domain.sensitivity import is_sensitive_value
 
 
 @final
@@ -84,45 +49,108 @@ class SelectionMatch(msgspec.Struct, frozen=True, kw_only=True):
 
     def __post_init__(self) -> None:
         """Require closed typed value and location unions."""
-        if isinstance(self.value, SensitiveValue) and not _is_selected_value_type(
-            self.value.payload_type
-        ):
+        if is_sensitive_value(self.value) and not is_selected_value_type(self.value.payload_type):
             raise TypeError("sensitive selection payload has an unsupported type")
-        if not isinstance(self.value, SensitiveValue) and not is_selected_value(self.value):
+        if not is_sensitive_value(self.value) and not is_selected_value(self.value):
             raise TypeError("selection match value has an unsupported type")
         if not is_concrete_location(self.location):
             raise TypeError("selection match location has an unsupported type")
+        _require_handle_identity(self)
 
     @property
     def sensitivity(self) -> Sensitivity:
         """Derive sensitivity from containment; callers cannot mislabel a secret public."""
-        if isinstance(self.value, SensitiveValue):
+        if is_sensitive_value(self.value):
             return Sensitivity.SENSITIVE
         return Sensitivity.PUBLIC
 
     @property
     def taint_origins(self) -> tuple[TaintOriginId, ...]:
         """Expose safe lineage identifiers without revealing selected payload data."""
-        if isinstance(self.value, SensitiveValue):
+        if is_sensitive_value(self.value):
             return self.value.origins
         return ()
 
 
 @final
 class SelectionReady(msgspec.Struct, frozen=True, kw_only=True):
-    """A complete ordered result; an empty tuple is valid."""
+    """A complete ordered result satisfying its compiled runtime contract."""
 
+    selector: CompiledSelector
+    environment_execution_id: EnvironmentExecutionId
     matches: tuple[SelectionMatch, ...]
 
     def __post_init__(self) -> None:
         """Preserve immutable deterministic match order."""
+        if type(self.selector) is not CompiledSelector:
+            raise TypeError("selection result requires a CompiledSelector")
+        if type(self.environment_execution_id) is not EnvironmentExecutionId:
+            raise TypeError("selection result requires an EnvironmentExecutionId")
         if type(self.matches) is not tuple:
             raise TypeError("selection matches must be an immutable tuple")
         if any(type(match) is not SelectionMatch for match in self.matches):
             raise TypeError("selection result contains an unsupported match")
+        for match in self.matches:
+            require_match_contract(match, self.selector, self.environment_execution_id)
+        _require_match_collection_contract(self.matches, self.selector)
 
 
-class SourceUnavailableReason(StrEnum):
+def require_match_contract(
+    match: SelectionMatch,
+    selector: CompiledSelector,
+    environment_execution_id: EnvironmentExecutionId,
+) -> None:
+    """Bind one concrete match to its compiled selector and execution contract."""
+    if location_environment_execution_id(match.location) != environment_execution_id:
+        raise ValueError("selection match belongs to a different Environment execution")
+    require_location_matches_selector(match.location, selector)
+    value_type = match.value.payload_type if is_sensitive_value(match.value) else type(match.value)
+    kind = selected_value_kind_type(value_type)
+    if kind is None or not contract_accepts_runtime_kind(selector.output, kind):
+        raise ValueError("selection match value kind contradicts selector output contract")
+    if value_type is BareQueryFieldValue and selector.source is not SelectorSource.REQUEST_QUERY:
+        raise ValueError("bare query values require the request-query selector source")
+    if is_sensitive_value(match.value) and value_type is BareQueryFieldValue:
+        raise ValueError("bare query values cannot carry sensitive payload containment")
+
+
+def _require_match_collection_contract(
+    matches: tuple[SelectionMatch, ...],
+    selector: CompiledSelector,
+) -> None:
+    locations = tuple(match.location for match in matches)
+    if not selector.capabilities.may_duplicate and len(set(locations)) != len(locations):
+        raise ValueError("selector without duplicate semantics cannot repeat a location")
+    cardinality = selector.capabilities.cardinality
+    if cardinality is SelectorCardinality.EXACTLY_ONE and len(matches) != 1:
+        raise ValueError("exactly-one selector result must contain exactly one match")
+    if cardinality is SelectorCardinality.ZERO_OR_ONE and len(matches) > 1:
+        raise ValueError("zero-or-one selector result cannot contain more than one match")
+
+
+def _require_handle_identity(match: SelectionMatch) -> None:
+    if is_sensitive_value(match.value):
+        if match.value.payload_type in {BodyId, ViewId}:
+            raise ValueError("selector handle identities cannot be sensitive")
+        return
+    if type(match.value) is BodyId and (
+        type(match.location) is not BodyLocation or match.location.body_id != match.value
+    ):
+        raise ValueError("selected BodyId must equal its concrete body location")
+    if type(match.value) is not ViewId:
+        return
+    if type(match.location) not in {
+        ViewLocation,
+        JsonLocation,
+        StreamLocation,
+    }:
+        raise ValueError("selected ViewId requires a concrete view location")
+    location = cast("ViewLocation | JsonLocation | StreamLocation", match.location)
+    if location.view_id != match.value:
+        raise ValueError("selected ViewId must equal its concrete view location")
+
+
+class SourceUnavailableReason(DomainStrEnum):
     """Typed reasons the addressed observation source does not exist."""
 
     OBSERVATION_UNAVAILABLE = "observation-unavailable"
@@ -157,7 +185,7 @@ class SelectionDecodeFailure(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("decode failure requires a DiagnosticCode and BodyViewKind")
 
 
-class SelectionIncompleteReason(StrEnum):
+class SelectionIncompleteReason(DomainStrEnum):
     """Non-budget reasons complete selector semantics are unavailable."""
 
     PARTIAL_CAPTURE = "partial-capture"

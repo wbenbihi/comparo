@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
@@ -16,13 +15,19 @@ from comparo.core.domain.diffs.operations import require_operation_family
 from comparo.core.domain.diffs.rules import CompiledDiffRule
 from comparo.core.domain.diffs.rules import DiffApplication
 from comparo.core.domain.diffs.rules import DiffSeverity
+from comparo.core.domain.diffs.side_coverage_validation import require_complete_side_coverage
+from comparo.core.domain.diffs.side_coverage_validation import require_extra_side_shapes
+from comparo.core.domain.diffs.strategies import SingularPairing
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.selectors.locations import ConcreteLocation
 from comparo.core.domain.selectors.locations import is_concrete_location
+from comparo.core.domain.selectors.locations import location_environment_execution_id
+from comparo.core.domain.selectors.model import require_location_matches_selector
 
 
-class DiffFactOutcome(StrEnum):
+class DiffFactOutcome(DomainStrEnum):
     """Concrete directed field facts."""
 
     SAME = "same"
@@ -100,7 +105,7 @@ class Drifted(msgspec.Struct, frozen=True, kw_only=True):
     """Fully resolved comparable coverage with concrete directed drift."""
 
 
-class DiffSide(StrEnum):
+class DiffSide(DomainStrEnum):
     """The side whose state prevented a complete comparison."""
 
     BASELINE = "baseline"
@@ -108,7 +113,7 @@ class DiffSide(StrEnum):
     BOTH = "both"
 
 
-class DiffEvaluationStage(StrEnum):
+class DiffEvaluationStage(DomainStrEnum):
     """The pure pipeline stage at which completeness was lost."""
 
     EXECUTION = "execution"
@@ -119,7 +124,7 @@ class DiffEvaluationStage(StrEnum):
     PAIRING = "pairing"
 
 
-class DiffIncompleteCause(StrEnum):
+class DiffIncompleteCause(DomainStrEnum):
     """Typed causes that are not evaluator defects."""
 
     PARTIAL = "partial"
@@ -170,7 +175,7 @@ class DiffEvaluationError(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("diff evaluation error requires a DiagnosticCode")
 
 
-class DiffNotEvaluatedReason(StrEnum):
+class DiffNotEvaluatedReason(DomainStrEnum):
     """Reasons a rule intentionally produced no comparable facts."""
 
     FALSE_APPLICABILITY = "false-applicability"
@@ -228,6 +233,11 @@ class DiffRuleFact(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("diff rule fact requires typed counts and coverage")
         if type(self.evidence) is not DiffEvidence:
             raise TypeError("diff rule fact evidence must be DiffEvidence")
+        if any(fact.fact_id == self.fact_id for fact in self.evidence.retained):
+            raise ValueError("diff parent fact ID must differ from retained child fact IDs")
+        _require_evidence_binding(self.evidence, self.application, self.rule)
+        if type(self.rule.pipeline.pairing) is SingularPairing and self.coverage.paired.value > 1:
+            raise ValueError("singular pairing cannot produce more than one paired unit")
         if len(self.evidence.retained) + self.evidence.omitted.value != self.counts.total:
             raise ValueError("evidence must cover every concrete fact")
         comparator = self.rule.pipeline.comparator.identity
@@ -238,10 +248,23 @@ class DiffRuleFact(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("compared coverage must equal non-ignored fact counts")
         if self.coverage.ignored.value != self.counts.ignored.value:
             raise ValueError("ignored coverage must equal ignored fact count")
+        _require_side_coverage(self.counts, self.coverage)
+        _require_evidence_side_shapes(self.evidence, self.counts, self.coverage)
+        if type(self.outcome) in {Equivalent, Drifted}:
+            require_complete_side_coverage(self.coverage)
+        if (
+            type(self.outcome) is NotEvaluated
+            and self.outcome.reason is DiffNotEvaluatedReason.ALL_IGNORED
+        ):
+            require_complete_side_coverage(self.coverage)
         drift = self.counts.changed.value + self.counts.added.value + self.counts.removed.value
         unresolved = self.coverage.not_evaluated.value or self.counts.incomparable.value
         if type(self.outcome) is Equivalent and (
-            self.coverage.compared.value == 0 or drift or unresolved
+            self.coverage.compared.value == 0
+            or self.coverage.baseline_derived.value == 0
+            or self.coverage.candidate_derived.value == 0
+            or drift
+            or unresolved
         ):
             raise ValueError("equivalent requires complete comparable coverage without drift")
         if type(self.outcome) is Drifted and (drift == 0 or unresolved):
@@ -255,6 +278,83 @@ class DiffRuleFact(msgspec.Struct, frozen=True, kw_only=True):
     def severity(self) -> DiffSeverity:
         """Return effective severity from the exact bound compiled rule."""
         return self.rule.severity
+
+
+def _require_evidence_binding(
+    evidence: DiffEvidence,
+    application: DiffApplication,
+    rule: CompiledDiffRule,
+) -> None:
+    pair = application.pair
+    for fact in evidence.retained:
+        if fact.baseline_location is not None:
+            if (
+                location_environment_execution_id(fact.baseline_location)
+                != pair.baseline_execution_id
+            ):
+                raise ValueError("baseline diff evidence belongs to a different execution")
+            require_location_matches_selector(
+                fact.baseline_location,
+                rule.pipeline.baseline.selector,
+            )
+        if fact.candidate_location is not None:
+            if (
+                location_environment_execution_id(fact.candidate_location)
+                != pair.candidate_execution_id
+            ):
+                raise ValueError("candidate diff evidence belongs to a different execution")
+            require_location_matches_selector(
+                fact.candidate_location,
+                rule.pipeline.candidate.selector,
+            )
+
+
+def _require_side_coverage(counts: DiffFactCounts, coverage: DiffCoverage) -> None:
+    bilateral = counts.same.value + counts.changed.value
+    baseline_known = bilateral + counts.removed.value
+    candidate_known = bilateral + counts.added.value
+    extra_count = counts.ignored.value + counts.incomparable.value
+    require_extra_side_shapes(
+        baseline_extra=coverage.baseline_resolved.value - baseline_known,
+        candidate_extra=coverage.candidate_resolved.value - candidate_known,
+        extra_count=extra_count,
+        label="diff facts",
+    )
+
+
+def _require_evidence_side_shapes(
+    evidence: DiffEvidence,
+    counts: DiffFactCounts,
+    coverage: DiffCoverage,
+) -> None:
+    bilateral = counts.same.value + counts.changed.value
+    baseline_extra = coverage.baseline_resolved.value - bilateral - counts.removed.value
+    candidate_extra = coverage.candidate_resolved.value - bilateral - counts.added.value
+    extra_count = counts.ignored.value + counts.incomparable.value
+    expected_baseline_only = extra_count - candidate_extra
+    expected_candidate_only = extra_count - baseline_extra
+    expected_bilateral = baseline_extra + candidate_extra - extra_count
+    retained = tuple(
+        fact
+        for fact in evidence.retained
+        if fact.outcome in {DiffFactOutcome.IGNORED, DiffFactOutcome.INCOMPARABLE}
+    )
+    retained_baseline_only = sum(
+        fact.baseline_location is not None and fact.candidate_location is None for fact in retained
+    )
+    retained_candidate_only = sum(
+        fact.baseline_location is None and fact.candidate_location is not None for fact in retained
+    )
+    retained_bilateral = sum(
+        fact.baseline_location is not None and fact.candidate_location is not None
+        for fact in retained
+    )
+    if (
+        retained_baseline_only > expected_baseline_only
+        or retained_candidate_only > expected_candidate_only
+        or retained_bilateral > expected_bilateral
+    ):
+        raise ValueError("retained ignored or incomparable locations contradict side coverage")
 
 
 def _require_evidence_buckets(evidence: DiffEvidence, counts: DiffFactCounts) -> None:

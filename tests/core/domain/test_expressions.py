@@ -1,5 +1,6 @@
 """Tests for the canonical value-expression tree."""
 
+from decimal import Decimal
 from typing import cast
 
 import pytest
@@ -20,12 +21,22 @@ from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import SymbolPath
 from comparo.core.domain.expressions import ValueNamespace
 from comparo.core.domain.expressions import expression_dependencies
+from comparo.core.domain.expressions import expression_output_kinds
+from comparo.core.domain.expressions import expression_outputs_only
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.scopes import ValueScopeKind
+from comparo.core.domain.value_kinds import ValueKind
 from comparo.core.domain.values import BytesValue
+from comparo.core.domain.values import ExactValue
+from comparo.core.domain.values import JsonArray
+from comparo.core.domain.values import JsonBoolean
+from comparo.core.domain.values import JsonDecimal
+from comparo.core.domain.values import JsonInteger
+from comparo.core.domain.values import JsonNull
+from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
 
 
@@ -40,6 +51,20 @@ def _lookup(name: str = "TOKEN") -> LookupExpr:
             symbol=SymbolPath(segments=(name,)),
             available_at=ValueScopeKind.ENVIRONMENT,
         ),
+        provenance=_provenance(),
+    )
+
+
+def _literal(value: ExactValue) -> LiteralExpr:
+    return LiteralExpr(value=value, provenance=_provenance())
+
+
+def _raw_file() -> FileExpr:
+    return FileExpr(
+        path=_literal(JsonString(value="fixture")),
+        conversion=None,
+        trim=FileTrim.NONE,
+        maximum_bytes=ByteCount(value=10),
         provenance=_provenance(),
     )
 
@@ -135,6 +160,51 @@ def test_file_expression_requires_explicit_bounded_read_semantics() -> None:
             maximum_bytes=ByteCount(value=1024),
             provenance=_provenance(),
         )
+
+
+def test_file_path_accepts_text_and_defers_unknown_outputs() -> None:
+    text = _literal(JsonString(value="fixture"))
+    unknown = _lookup()
+    dynamic_text = FallbackExpr(sources=(unknown, text), provenance=_provenance())
+    for path in (text, unknown, dynamic_text):
+        expression = FileExpr(
+            path=path,
+            conversion=None,
+            trim=FileTrim.NONE,
+            maximum_bytes=ByteCount(value=10),
+            provenance=_provenance(),
+        )
+        assert expression.path is path
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        _literal(BytesValue(value=b"fixture")),
+        _literal(JsonArray(items=())),
+        _literal(JsonObject(members=())),
+        ConvertExpr(
+            source=_lookup(),
+            target=ConversionType.JSON,
+            provenance=_provenance(),
+        ),
+        FallbackExpr(
+            sources=(_lookup(), _literal(JsonString(value="fixture")), _raw_file()),
+            provenance=_provenance(),
+        ),
+    ],
+)
+def test_file_path_rejects_every_statically_incompatible_output(
+    path: LiteralExpr | ConvertExpr | FallbackExpr,
+) -> None:
+    with pytest.raises(ValueError, match="must resolve to text"):
+        FileExpr(
+            path=path,
+            conversion=None,
+            trim=FileTrim.NONE,
+            maximum_bytes=ByteCount(value=10),
+            provenance=_provenance(),
+        )
     with pytest.raises(TypeError, match="value expression"):
         FileExpr(
             path="token.txt",  # type: ignore[arg-type]
@@ -185,6 +255,111 @@ def test_interpolation_distinguishes_native_whole_value_from_embedded_text() -> 
             segments=(LiteralTextSegment(value="prefix"), segment),
             provenance=_provenance(),
         )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        _lookup(),
+        _literal(JsonNull()),
+        _literal(JsonBoolean(value=True)),
+        _literal(JsonInteger(value=1)),
+        _literal(JsonDecimal(value=Decimal("1.5"))),
+        _literal(JsonString(value="value")),
+        ConvertExpr(
+            source=_lookup(),
+            target=ConversionType.DURATION,
+            provenance=_provenance(),
+        ),
+        ConvertExpr(
+            source=_lookup(),
+            target=ConversionType.SIZE,
+            provenance=_provenance(),
+        ),
+        FallbackExpr(
+            sources=(_lookup(), _literal(JsonInteger(value=1))),
+            provenance=_provenance(),
+        ),
+    ],
+)
+def test_embedded_text_accepts_scalar_renderable_and_unknown_outputs(
+    expression: LookupExpr | LiteralExpr | ConvertExpr | FallbackExpr,
+) -> None:
+    interpolation = InterpolationExpr(
+        mode=InterpolationMode.EMBEDDED_TEXT,
+        segments=(LiteralTextSegment(value="value="), ExpressionSegment(expression=expression)),
+        provenance=_provenance(),
+    )
+    assert expression_output_kinds(interpolation) == frozenset({ValueKind.STRING})
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        _literal(BytesValue(value=b"value")),
+        _literal(JsonArray(items=())),
+        _literal(JsonObject(members=())),
+        ConvertExpr(
+            source=_lookup(),
+            target=ConversionType.JSON,
+            provenance=_provenance(),
+        ),
+        ConvertExpr(
+            source=_lookup(),
+            target=ConversionType.YAML,
+            provenance=_provenance(),
+        ),
+        FallbackExpr(
+            sources=(_lookup(), _literal(JsonObject(members=()))),
+            provenance=_provenance(),
+        ),
+    ],
+)
+def test_embedded_text_rejects_every_statically_non_renderable_output(
+    expression: LiteralExpr | ConvertExpr | FallbackExpr,
+) -> None:
+    with pytest.raises(ValueError, match="scalar-text-renderable"):
+        InterpolationExpr(
+            mode=InterpolationMode.EMBEDDED_TEXT,
+            segments=(ExpressionSegment(expression=expression),),
+            provenance=_provenance(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    [
+        (BytesValue(value=b"value"), ValueKind.BYTES),
+        (JsonArray(items=()), ValueKind.ARRAY),
+        (JsonObject(members=()), ValueKind.OBJECT),
+    ],
+)
+def test_whole_value_interpolation_preserves_native_output(
+    value: ExactValue,
+    kind: ValueKind,
+) -> None:
+    interpolation = InterpolationExpr(
+        mode=InterpolationMode.WHOLE_VALUE,
+        segments=(ExpressionSegment(expression=_literal(value)),),
+        provenance=_provenance(),
+    )
+    assert expression_output_kinds(interpolation) == frozenset({kind})
+
+
+def test_output_inference_preserves_unknown_and_every_known_fallback_branch() -> None:
+    fallback = FallbackExpr(
+        sources=(
+            _lookup(),
+            _literal(JsonString(value="value")),
+            _literal(BytesValue(value=b"value")),
+        ),
+        provenance=_provenance(),
+    )
+    assert expression_output_kinds(fallback) == frozenset(
+        {ValueKind.UNKNOWN, ValueKind.STRING, ValueKind.BYTES}
+    )
+    assert not expression_outputs_only(fallback, frozenset({ValueKind.STRING}))
+    assert expression_outputs_only(_lookup(), frozenset({ValueKind.STRING}))
     with pytest.raises(ValueError, match="at least one expression"):
         InterpolationExpr(
             mode=InterpolationMode.EMBEDDED_TEXT,
@@ -287,3 +462,12 @@ def test_interpolation_rejects_invalid_container_and_mode_states() -> None:
 def test_dependency_collection_rejects_values_outside_closed_union() -> None:
     with pytest.raises(TypeError, match="unsupported value expression"):
         expression_dependencies(cast("LiteralExpr", object()))
+
+
+def test_output_compatibility_rejects_values_outside_its_closed_inputs() -> None:
+    with pytest.raises(TypeError, match="requires a value expression"):
+        expression_outputs_only(cast("LiteralExpr", object()), frozenset({ValueKind.STRING}))
+    with pytest.raises(TypeError, match="frozenset of ValueKind"):
+        expression_outputs_only(_lookup(), cast("frozenset[ValueKind]", {ValueKind.STRING}))
+    with pytest.raises(TypeError, match="unsupported value expression"):
+        expression_output_kinds(cast("LiteralExpr", object()))

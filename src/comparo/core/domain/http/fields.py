@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import Sensitivity
+from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.sensitivity import is_sensitive_value
 
 _TOKEN_PATTERN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _METHOD_PATTERN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Z-]+")
@@ -131,7 +134,7 @@ class HeaderText(msgspec.Struct, frozen=True, kw_only=True):
 type HeaderValue = HeaderText | SensitiveValue[HeaderText]
 
 
-class HeaderSource(StrEnum):
+class HeaderSource(DomainStrEnum):
     """The mechanism that contributed an effective request field."""
 
     AUTHORED = "authored"
@@ -152,18 +155,16 @@ class HeaderField(msgspec.Struct, frozen=True, kw_only=True):
         """Require validated field components and value-free provenance."""
         if type(self.name) is not HeaderName:
             raise TypeError("header field name must be HeaderName")
-        if type(self.value) is not HeaderText and not isinstance(self.value, SensitiveValue):
+        if type(self.value) is not HeaderText and not is_sensitive_value(self.value):
             raise TypeError("header field value must be HeaderText or SensitiveValue")
-        if isinstance(self.value, SensitiveValue) and self.value.payload_type is not HeaderText:
+        if is_sensitive_value(self.value) and self.value.payload_type is not HeaderText:
             raise TypeError("sensitive header field payload must be HeaderText")
         if type(self.source) is not HeaderSource:
             raise TypeError("header field source must be HeaderSource")
-        if self.source is HeaderSource.AUTHENTICATION and not isinstance(
-            self.value, SensitiveValue
-        ):
+        if self.source is HeaderSource.AUTHENTICATION and not is_sensitive_value(self.value):
             raise ValueError("authentication-generated headers must remain sensitive")
-        if self.name.value in MANDATORY_SENSITIVE_HEADER_NAMES and not isinstance(
-            self.value, SensitiveValue
+        if self.name.value in MANDATORY_SENSITIVE_HEADER_NAMES and not is_sensitive_value(
+            self.value
         ):
             raise ValueError("known credential header values must remain sensitive")
         _require_provenance(self.provenance)
@@ -228,7 +229,7 @@ class BareQueryValue(msgspec.Struct, frozen=True, kw_only=True):
 type QueryValue = BareQueryValue | QueryText | SensitiveValue[QueryText]
 
 
-class QuerySource(StrEnum):
+class QuerySource(DomainStrEnum):
     """The mechanism that contributed a query occurrence."""
 
     AUTHORED = "authored"
@@ -248,18 +249,18 @@ class QueryParameter(msgspec.Struct, frozen=True, kw_only=True):
         """Require an exact query value, source, and provenance."""
         if type(self.name) is not QueryName:
             raise TypeError("query parameter name must be QueryName")
-        if type(self.value) not in {BareQueryValue, QueryText} and not isinstance(
-            self.value, SensitiveValue
+        if type(self.value) not in {BareQueryValue, QueryText} and not is_sensitive_value(
+            self.value
         ):
             raise TypeError("query parameter value must be a supported QueryValue")
-        if isinstance(self.value, SensitiveValue) and self.value.payload_type is not QueryText:
+        if is_sensitive_value(self.value) and self.value.payload_type is not QueryText:
             raise TypeError("sensitive query parameter payload must be QueryText")
         if type(self.source) is not QuerySource:
             raise TypeError("query parameter source must be QuerySource")
-        if self.source is QuerySource.AUTHENTICATION and not isinstance(self.value, SensitiveValue):
+        if self.source is QuerySource.AUTHENTICATION and not is_sensitive_value(self.value):
             raise ValueError("authentication-generated query values must remain sensitive")
-        if self.name.value.casefold() in MANDATORY_SENSITIVE_QUERY_NAMES and not isinstance(
-            self.value, SensitiveValue
+        if self.name.value.casefold() in MANDATORY_SENSITIVE_QUERY_NAMES and not is_sensitive_value(
+            self.value
         ):
             raise ValueError("known credential query values must remain sensitive")
         _require_provenance(self.provenance)
@@ -277,6 +278,24 @@ class QueryParameters(msgspec.Struct, frozen=True, kw_only=True):
             type(parameter) is not QueryParameter for parameter in self.parameters
         ):
             raise TypeError("query parameters must be an immutable tuple of QueryParameter values")
+
+    @property
+    def sensitivity(self) -> Sensitivity:
+        """Derive collection sensitivity from its value containment."""
+        if any(is_sensitive_value(parameter.value) for parameter in self.parameters):
+            return Sensitivity.SENSITIVE
+        return Sensitivity.PUBLIC
+
+    @property
+    def taint_origins(self) -> tuple[TaintOriginId, ...]:
+        """Return the stable union of every sealed query value's lineage."""
+        origins = (
+            origin
+            for parameter in self.parameters
+            if is_sensitive_value(parameter.value)
+            for origin in parameter.value.origins
+        )
+        return tuple(dict.fromkeys(origins))
 
 
 @final
@@ -309,7 +328,7 @@ class CookieText(msgspec.Struct, frozen=True, kw_only=True):
 type CookieValue = SensitiveValue[CookieText]
 
 
-class CookieSource(StrEnum):
+class CookieSource(DomainStrEnum):
     """The typed source of a request cookie."""
 
     EXPLICIT = "explicit"
@@ -330,7 +349,7 @@ class RequestCookie(msgspec.Struct, frozen=True, kw_only=True):
         """Require validated cookie components and value-free provenance."""
         if type(self.name) is not CookieName:
             raise TypeError("request cookie name must be CookieName")
-        if not isinstance(self.value, SensitiveValue):
+        if not is_sensitive_value(self.value):
             raise TypeError("request cookie value must remain sensitive")
         if self.value.payload_type is not CookieText:
             raise TypeError("sensitive request cookie payload must be CookieText")
@@ -358,4 +377,4 @@ class RequestCookies(msgspec.Struct, frozen=True, kw_only=True):
 
 def is_header_value(value: object) -> TypeGuard[HeaderValue]:
     """Narrow to the outer header-value union; receiving fields validate sealed payload types."""
-    return type(value) is HeaderText or isinstance(value, SensitiveValue)
+    return type(value) is HeaderText or is_sensitive_value(value)

@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import UUID
 
 import msgspec
 import pytest
 
+from comparo.core.domain.identity import RunId
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.provenance import ResolutionProvenance
+from comparo.core.domain.provenance import ResolutionSource
+from comparo.core.domain.provenance import ResolutionStep
+from comparo.core.domain.provenance import ResolutionStepOutcome
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.provenance import ValueProviderIdentity
+from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.value_references import SymbolPath
+from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import Blocked
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import Error
@@ -34,8 +44,32 @@ from comparo.core.domain.values import is_json_value
 from comparo.core.domain.values import json_number
 
 
-def _provenance() -> ValueProvenance:
+def _configuration_provenance() -> ValueProvenance:
     return ValueProvenance(entries=(ProvenanceEntry(kind=ProvenanceKind.VERSIONED_DEFAULT),))
+
+
+def _provenance(
+    outcome: ResolutionStepOutcome = ResolutionStepOutcome.PRESENT,
+    *,
+    namespace: ValueNamespace = ValueNamespace.VARIABLES,
+    source_namespace: ValueNamespace = ValueNamespace.VARIABLES,
+) -> ResolutionProvenance:
+    provider = ValueProviderIdentity(namespace="comparo.core", name="literal", version="1")
+    scope = RunScope(run_id=RunId(value=UUID("00000000-0000-0000-0000-000000000001")))
+    source = ResolutionSource(
+        namespace=source_namespace,
+        symbol=SymbolPath(segments=("value",)),
+        provider=provider,
+        configuration=_configuration_provenance(),
+        scope=scope,
+    )
+    return ResolutionProvenance(
+        namespace=namespace,
+        symbol=source.symbol,
+        provider=provider,
+        scope=scope,
+        steps=(ResolutionStep(source=source, outcome=outcome),),
+    )
 
 
 def test_json_scalars_retain_exact_types() -> None:
@@ -135,20 +169,23 @@ def test_present_distinguishes_falsy_values_from_other_resolution_outcomes() -> 
     assert zero.sensitivity is Sensitivity.PUBLIC
     assert null.sensitivity is Sensitivity.PUBLIC
     assert zero.taint_origins == ()
-    unavailable = Unavailable(reason=UnavailableReason.NOT_FOUND, provenance=provenance)
+    unavailable = Unavailable(
+        reason=UnavailableReason.NOT_FOUND,
+        provenance=_provenance(ResolutionStepOutcome.UNAVAILABLE),
+    )
     assert isinstance(unavailable, Unavailable)
-    assert isinstance(Missing(provenance=provenance), Missing)
+    assert isinstance(Missing(provenance=_provenance(ResolutionStepOutcome.MISSING)), Missing)
     assert isinstance(
         Error(
             code=ResolutionErrorCode.CONVERSION_FAILED,
-            provenance=provenance,
+            provenance=_provenance(ResolutionStepOutcome.ERROR),
         ),
         Error,
     )
     assert isinstance(
         Blocked(
             code=ResolutionBlockCode.SOURCE_DENIED,
-            provenance=provenance,
+            provenance=_provenance(ResolutionStepOutcome.BLOCKED),
         ),
         Blocked,
     )
@@ -170,11 +207,43 @@ def test_present_derives_taint_and_cannot_serialize_a_sensitive_graph() -> None:
     assert secret not in str(built.value)
 
 
-def test_resolution_outcomes_validate_direct_construction() -> None:
-    provenance = _provenance()
+@pytest.mark.parametrize(
+    ("namespace", "source_namespace"),
+    [
+        (ValueNamespace.SECRETS, ValueNamespace.VARIABLES),
+        (ValueNamespace.VARIABLES, ValueNamespace.SECRETS),
+    ],
+)
+def test_secret_namespace_present_values_cannot_claim_public_sensitivity(
+    namespace: ValueNamespace,
+    source_namespace: ValueNamespace,
+) -> None:
+    provenance = _provenance(namespace=namespace, source_namespace=source_namespace)
+    with pytest.raises(ValueError, match="must be SensitiveValue"):
+        Present(value=JsonString(value="secret"), provenance=provenance)
 
+
+def test_secret_namespace_accepts_a_sealed_sensitive_value() -> None:
+    origin = TaintOriginId(value="secret/project/api-token")
+    value = SensitiveValue(JsonString(value="secret"), origins=(origin,))
+    present = Present(
+        value=value,
+        provenance=_provenance(
+            namespace=ValueNamespace.SECRETS,
+            source_namespace=ValueNamespace.SECRETS,
+        ),
+    )
+
+    assert present.sensitivity is Sensitivity.SENSITIVE
+    assert present.taint_origins == (origin,)
+
+
+def test_resolution_outcomes_validate_direct_construction() -> None:
     with pytest.raises(TypeError, match="UnavailableReason"):
-        Unavailable(reason="not-found", provenance=provenance)  # type: ignore[arg-type]
+        Unavailable(
+            reason="not-found",  # type: ignore[arg-type]
+            provenance=_provenance(ResolutionStepOutcome.UNAVAILABLE),
+        )
     with pytest.raises(TypeError, match="provenance"):
         Present(value=JsonNull(), provenance=object())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="provenance"):
@@ -187,7 +256,7 @@ def test_resolution_outcomes_validate_direct_construction() -> None:
     with pytest.raises(TypeError, match="ResolutionErrorCode"):
         Error(
             code="provider-failed",  # type: ignore[arg-type]
-            provenance=provenance,
+            provenance=_provenance(ResolutionStepOutcome.ERROR),
         )
     with pytest.raises(TypeError, match="provenance"):
         Error(
@@ -197,10 +266,18 @@ def test_resolution_outcomes_validate_direct_construction() -> None:
     with pytest.raises(TypeError, match="ResolutionBlockCode"):
         Blocked(
             code="source-denied",  # type: ignore[arg-type]
-            provenance=provenance,
+            provenance=_provenance(ResolutionStepOutcome.BLOCKED),
         )
     with pytest.raises(TypeError, match="provenance"):
         Blocked(
             code=ResolutionBlockCode.CAPABILITY_DENIED,
             provenance=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_resolution_outcome_must_match_the_terminal_provenance_step() -> None:
+    with pytest.raises(ValueError, match="must end with a present resolution step"):
+        Present(
+            value=JsonNull(),
+            provenance=_provenance(ResolutionStepOutcome.UNAVAILABLE),
         )

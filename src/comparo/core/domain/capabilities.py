@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import final
+from urllib.parse import urlsplit
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
 
 _TOKEN_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
+_TARGET_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,254}")
+_EXTERNAL_TARGET_PATTERN = re.compile(
+    r"https?://[A-Za-z0-9][A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]{0,2040}"
+)
 
 
-class CapabilityCategory(StrEnum):
+class CapabilityCategory(DomainStrEnum):
     """Security-relevant effect categories controlled by ExecutionPolicy."""
 
     HTTP = "http"
@@ -66,7 +71,7 @@ class CapabilityOperation(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("capability operation must be a lowercase dotted token")
 
 
-class CapabilityTargetKind(StrEnum):
+class CapabilityTargetKind(DomainStrEnum):
     """The kind of non-secret identifier to which a capability applies."""
 
     RESOURCE = "resource"
@@ -79,19 +84,54 @@ class CapabilityTargetKind(StrEnum):
     ARTIFACT_STORE = "artifact-store"
 
 
+_EXTERNAL_TARGET_KINDS = frozenset(
+    {CapabilityTargetKind.DESTINATION, CapabilityTargetKind.SCHEMA_SOURCE}
+)
+
+
+def _is_external_target_identifier(identifier: object) -> bool:
+    """Recognize a bounded HTTP(S) target without embedded user-info credentials."""
+    if type(identifier) is not str or _EXTERNAL_TARGET_PATTERN.fullmatch(identifier) is None:
+        return False
+    try:
+        parsed = urlsplit(identifier)
+        _ = parsed.port
+    except ValueError:
+        return False
+    return parsed.username is None and not parsed.query and not parsed.fragment
+
+
 @final
 class NamedCapabilityTarget(msgspec.Struct, frozen=True, kw_only=True):
-    """A logical, non-payload target identifier used during authorization."""
+    """A safe exact external target or logical alias used during authorization."""
 
     kind: CapabilityTargetKind
     identifier: str
 
     def __post_init__(self) -> None:
-        """Validate the target category and non-blank logical identifier."""
+        """Validate the target category and bounded non-payload identifier."""
         if type(self.kind) is not CapabilityTargetKind:
             raise TypeError("capability target kind must be a CapabilityTargetKind")
-        if type(self.identifier) is not str or not self.identifier.strip():
-            raise ValueError("capability target identifier must be non-blank text")
+        if self.kind is CapabilityTargetKind.RESOURCE:
+            raise ValueError("resource capability targets require ResourceIdentity")
+        if self.kind in _EXTERNAL_TARGET_KINDS:
+            if not (
+                type(self.identifier) is str
+                and (
+                    _TARGET_IDENTIFIER_PATTERN.fullmatch(self.identifier) is not None
+                    or _is_external_target_identifier(self.identifier)
+                )
+            ):
+                raise ValueError(
+                    "external capability target must be a logical alias or bounded HTTP(S) URL"
+                )
+        elif (
+            type(self.identifier) is not str
+            or _TARGET_IDENTIFIER_PATTERN.fullmatch(self.identifier) is None
+        ):
+            raise ValueError(
+                "logical capability target identifier must be a bounded structural token"
+            )
 
 
 type CapabilityTarget = ResourceIdentity | NamedCapabilityTarget
@@ -121,7 +161,7 @@ class CapabilityRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("capability target must be a supported typed target")
 
 
-class CapabilityDenialReason(StrEnum):
+class CapabilityDenialReason(DomainStrEnum):
     """Stable reasons why effective authority refused a capability request."""
 
     NOT_ALLOWED = "not-allowed"

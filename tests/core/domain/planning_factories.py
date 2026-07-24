@@ -34,7 +34,7 @@ from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Ratio
 from comparo.core.domain.primitives import Sha256Digest
-from comparo.core.domain.scopes import RunScope
+from comparo.core.domain.scopes import BudgetScope
 from tests.core.domain.budget_origin_factories import default_budget_origin
 
 
@@ -112,9 +112,13 @@ def _planning_budget(resource: BudgetResource, limit: int) -> ResourceBudget:
     )
 
 
-def _plan_budgets(cardinality: RunPlanCardinality) -> tuple[ResourceBudget, ...]:
+def _plan_budgets(
+    cardinality: RunPlanCardinality,
+    *,
+    requests: int = 1,
+) -> tuple[ResourceBudget, ...]:
     return (
-        _planning_budget(BudgetResource.REQUESTS, 1),
+        _planning_budget(BudgetResource.REQUESTS, requests),
         _planning_budget(BudgetResource.MATRIX_CELLS, cardinality.cells.value),
         _planning_budget(BudgetResource.TRIALS, cardinality.trials.value),
         _planning_budget(
@@ -127,18 +131,25 @@ def _plan_budgets(cardinality: RunPlanCardinality) -> tuple[ResourceBudget, ...]
 
 
 def _run_plan() -> RunPlan:
-    plan_slice = _slice()
+    return _run_plan_for_slices(_slice())
+
+
+def _run_plan_for_slices(*plan_slices: PlanSlice) -> RunPlan:
     cardinality = RunPlanCardinality(
-        cells=plan_slice.cardinality.cells,
-        trials=plan_slice.cardinality.trials,
-        environment_executions=plan_slice.cardinality.environment_executions,
-        comparisons=plan_slice.cardinality.comparisons,
-        maximum_attempts=plan_slice.cardinality.maximum_attempts,
+        cells=Count(value=sum(item.cardinality.cells.value for item in plan_slices)),
+        trials=Count(value=sum(item.cardinality.trials.value for item in plan_slices)),
+        environment_executions=Count(
+            value=sum(item.cardinality.environment_executions.value for item in plan_slices)
+        ),
+        comparisons=Count(value=sum(item.cardinality.comparisons.value for item in plan_slices)),
+        maximum_attempts=Count(
+            value=sum(item.cardinality.maximum_attempts.value for item in plan_slices)
+        ),
     )
     return RunPlan(
         run_id=RunId(value=UUID("12345678-1234-5678-1234-567812345678")),
-        slices=(plan_slice,),
-        budgets=_plan_budgets(cardinality),
+        slices=plan_slices,
+        budgets=_plan_budgets(cardinality, requests=len(plan_slices)),
         ordering=PlanOrdering.SUBJECT_MATRIX_TRIAL_ENVIRONMENT,
         cardinality=cardinality,
         fingerprint=Fingerprint(
@@ -155,7 +166,7 @@ def _extra_budget(
     stage: BudgetStage,
     amount: Duration | Ratio,
     consumed: Duration | Ratio,
-    scope: RunScope | None = None,
+    scope: BudgetScope | None = None,
 ) -> ResourceBudget:
     zero = Duration(nanoseconds=0) if type(amount) is Duration else Ratio.from_decimal(Decimal(0))
     return ResourceBudget(

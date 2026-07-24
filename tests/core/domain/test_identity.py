@@ -1,5 +1,6 @@
 """Tests for stable and occurrence domain identities."""
 
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InlineFragment
 from comparo.core.domain.identity import InvocationId
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
@@ -72,17 +74,27 @@ def test_definition_reference_validates_components() -> None:
         DefinitionRef(identity=identity, fingerprint="a" * 64)  # type: ignore[arg-type]
 
 
-def test_inline_origin_requires_hash_fragment_and_typed_owner() -> None:
+def test_inline_origin_requires_structural_fragment_and_typed_owner() -> None:
     owner = ResourceIdentity(
         namespace=NamespaceId(value="local"),
         kind=ResourceKind.EXECUTION_PROFILE,
         resource_id=ResourceId(value="release"),
     )
-    assert InlineDefinitionOrigin(owner=owner, fragment="#safety").fragment == "#safety"
-    with pytest.raises(ValueError, match="beginning with '#'"):
-        InlineDefinitionOrigin(owner=owner, fragment="safety")
-    with pytest.raises(TypeError):
-        InlineDefinitionOrigin(owner="release", fragment="#safety")  # type: ignore[arg-type]
+    fragment = InlineFragment(value="#safety")
+    assert InlineDefinitionOrigin(owner=owner, fragment=fragment).fragment is fragment
+    for unsafe in (
+        "safety",
+        "#/Users/operator/project",
+        "#https://example.test",
+        "#secret value",
+        "#line\nbreak",
+    ):
+        with pytest.raises(ValueError, match="structural token"):
+            InlineFragment(value=unsafe)
+    with pytest.raises(TypeError, match="InlineFragment"):
+        InlineDefinitionOrigin(owner=owner, fragment=cast("InlineFragment", "#safety"))
+    with pytest.raises(TypeError, match="owner"):
+        InlineDefinitionOrigin(owner=cast("ResourceIdentity", "release"), fragment=fragment)
 
 
 def test_occurrence_identifiers_are_type_distinct() -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
@@ -13,6 +12,7 @@ from comparo.core.domain.assertions.operators import AssertionOperator
 from comparo.core.domain.assertions.operators import AssertionOperatorIdentity
 from comparo.core.domain.assertions.operators import operator_uses_match_predicate
 from comparo.core.domain.assertions.operators import require_operator
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EffectiveRuleId
 from comparo.core.domain.identity import EnvironmentExecutionId
@@ -25,7 +25,7 @@ from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.selectors.model import CompiledSelector
 
 
-class Severity(StrEnum):
+class Severity(DomainStrEnum):
     """Rule importance, independent of logical outcome and gate policy."""
 
     BLOCKING = "blocking"
@@ -33,7 +33,7 @@ class Severity(StrEnum):
     INFO = "info"
 
 
-class Quantifier(StrEnum):
+class Quantifier(DomainStrEnum):
     """Explicit selector-match aggregation semantics."""
 
     ONE = "one"
@@ -42,7 +42,7 @@ class Quantifier(StrEnum):
     NONE = "none"
 
 
-class CompletenessRequirement(StrEnum):
+class CompletenessRequirement(DomainStrEnum):
     """The minimum source completeness admitted by an operator."""
 
     COMPLETE = "complete"

@@ -191,6 +191,8 @@ def test_reducer_pairing_and_comparator_closed_unions() -> None:
     assert not is_diff_reducer("count")
     assert not is_diff_pairing("ordered")
     assert not is_diff_comparator("exact")
+    with pytest.raises(ValueError, match="keyed-objects"):
+        CollectionComparisonKind("keyed-objects")
 
 
 def test_operation_strategies_reject_untyped_or_mismatched_fields() -> None:

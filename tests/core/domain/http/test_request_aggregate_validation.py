@@ -15,9 +15,15 @@ from comparo.core.domain.http.auth import BasicWireEncoding
 from comparo.core.domain.http.auth import CookieApiKeyPlacement
 from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.auth import QueryApiKeyPlacement
+from comparo.core.domain.http.bodies import BodyText
 from comparo.core.domain.http.bodies import FinalizedBody
+from comparo.core.domain.http.bodies import MaterializedBody
+from comparo.core.domain.http.bodies import MultipartBody
+from comparo.core.domain.http.bodies import MultipartBoundary
 from comparo.core.domain.http.bodies import NoBody
+from comparo.core.domain.http.bodies import NoMaterializedBody
 from comparo.core.domain.http.bodies import RequestBody
+from comparo.core.domain.http.bodies import TextBody
 from comparo.core.domain.http.fields import CookieName
 from comparo.core.domain.http.fields import CookieSource
 from comparo.core.domain.http.fields import CookieText
@@ -37,8 +43,11 @@ from comparo.core.domain.http.fields import RequestHeaders
 from comparo.core.domain.http.policies import DeclaredIdempotentRetry
 from comparo.core.domain.http.policies import IdempotencyKeyRetry
 from comparo.core.domain.http.policies import RequestPolicies
+from comparo.core.domain.http.request_materialization import RequestMaterializationProof
 from comparo.core.domain.http.requests import EffectiveRequest
+from comparo.core.domain.http.requests import FinalizedWireRequest
 from comparo.core.domain.http.requests import RequestDefinition
+from comparo.core.domain.http.requests import prove_request_materialization
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import BaseRelativeTarget
 from comparo.core.domain.http.url import DnsHost
@@ -51,6 +60,7 @@ from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.provenance import ValueProvenance
 from tests.core.domain.http.factories import api_key_secret
 from tests.core.domain.http.factories import definition
+from tests.core.domain.http.factories import digest
 from tests.core.domain.http.factories import finalized_request
 from tests.core.domain.http.factories import fingerprint
 from tests.core.domain.http.factories import logical_request
@@ -60,6 +70,23 @@ from tests.core.domain.http.factories import policies
 from tests.core.domain.http.factories import provenance
 from tests.core.domain.http.factories import retry_policies
 from tests.core.domain.http.factories import sensitive
+
+
+def _effective_for(
+    request: FinalizedWireRequest,
+    body: RequestBody,
+) -> EffectiveRequest:
+    return EffectiveRequest(
+        environment=request.environment,
+        logical_request_fingerprint=request.logical_request_fingerprint,
+        method=request.method,
+        url=request.url,
+        headers=request.headers,
+        cookies=request.cookies,
+        body=body,
+        policies=request.policies,
+        provenance=request.provenance,
+    )
 
 
 def test_request_target_and_retry_compatibility_branches() -> None:
@@ -226,8 +253,12 @@ def test_effective_field_collisions_cover_content_type_and_loop_continuity() -> 
     )
     second = msgspec.structs.replace(first, value=HeaderText(value="text/plain"))
     base = finalized_request()
+    changed_headers = RequestHeaders(fields=(first, second))
     with pytest.raises(ValueError, match="multiple Content-Type"):
-        msgspec.structs.replace(base, headers=RequestHeaders(fields=(first, second)))
+        msgspec.structs.replace(
+            _effective_for(base, NoBody()),
+            headers=changed_headers,
+        )
 
     one = QueryParameter(
         name=QueryName(value="key"),
@@ -240,7 +271,8 @@ def test_effective_field_collisions_cover_content_type_and_loop_continuity() -> 
         base.url,
         query=QueryParameters(parameters=(one, two)),
     )
-    assert len(msgspec.structs.replace(base, url=url).url.query.parameters) == 2
+    changed = msgspec.structs.replace(base, url=url)
+    assert len(changed.url.query.parameters) == 2
 
 
 def test_request_payload_and_logical_request_components_are_closed() -> None:
@@ -301,3 +333,126 @@ def test_effective_identity_and_body_components_are_closed() -> None:
             finalized_request(),
             body=cast("FinalizedBody", object()),
         )
+
+
+def test_materialization_proof_preserves_exact_body_sensitivity_lineage() -> None:
+    """Reject direct construction that drops taint or swaps the proof's exact output."""
+    base = finalized_request()
+    effective = _effective_for(
+        base,
+        TextBody(value=sensitive(BodyText(value="secret"))),
+    )
+    materialized, _ = multipart_body()
+    public_output = msgspec.structs.replace(materialized, multipart=None)
+    with pytest.raises(ValueError, match="digest does not cover"):
+        prove_request_materialization(
+            effective,
+            public_output,
+            effective_request_fingerprint=sensitive(fingerprint("9")),
+        )
+
+    sensitive_source = msgspec.structs.replace(
+        public_output.source,
+        digest=sensitive(digest("f")),
+    )
+    protected_output = MaterializedBody(source=sensitive_source)
+    proof = prove_request_materialization(
+        effective,
+        protected_output,
+        effective_request_fingerprint=sensitive(fingerprint("9")),
+    )
+    assert proof.body is protected_output
+    with pytest.raises(ValueError, match="body is not bound"):
+        msgspec.structs.replace(base, body=protected_output)
+
+
+def test_materialization_proof_requires_multipart_validation_iff_input_is_multipart() -> None:
+    """Keep multipart collision evidence inseparable from its exact typed input boundary."""
+    base = finalized_request()
+    materialized, validation = multipart_body()
+    multipart_input = _effective_for(
+        base,
+        MultipartBody(boundary=validation.boundary, parts=()),
+    )
+    with pytest.raises(ValueError, match="multipart validation"):
+        prove_request_materialization(
+            multipart_input,
+            msgspec.structs.replace(materialized, multipart=None),
+            effective_request_fingerprint=fingerprint("9"),
+        )
+    with pytest.raises(ValueError, match="exact input boundary"):
+        prove_request_materialization(
+            msgspec.structs.replace(
+                multipart_input,
+                body=MultipartBody(boundary=MultipartBoundary(value="other"), parts=()),
+            ),
+            materialized,
+            effective_request_fingerprint=fingerprint("9"),
+        )
+    with pytest.raises(ValueError, match="non-multipart input"):
+        prove_request_materialization(
+            msgspec.structs.replace(
+                multipart_input,
+                body=TextBody(value=BodyText(value="public")),
+            ),
+            materialized,
+            effective_request_fingerprint=fingerprint("9"),
+        )
+
+
+def test_materialization_proof_and_final_request_reject_untyped_or_mismatched_bindings() -> None:
+    """Exercise direct-construction boundaries for both sides of the materialization proof."""
+    base = finalized_request()
+    with pytest.raises(TypeError, match="requires EffectiveRequest"):
+        prove_request_materialization(
+            cast("EffectiveRequest", object()),
+            base.body,
+            effective_request_fingerprint=fingerprint("9"),
+        )
+    with pytest.raises(TypeError, match="output must be a finalized body"):
+        prove_request_materialization(
+            _effective_for(base, NoBody()),
+            cast("FinalizedBody", object()),
+            effective_request_fingerprint=fingerprint("9"),
+        )
+
+    materialized, _ = multipart_body()
+    with pytest.raises(ValueError, match="absent body cannot carry"):
+        prove_request_materialization(
+            _effective_for(base, NoBody()),
+            materialized,
+            effective_request_fingerprint=fingerprint("9"),
+        )
+    present = _effective_for(
+        base,
+        TextBody(value=BodyText(value="present")),
+    )
+    with pytest.raises(ValueError, match="present body requires"):
+        prove_request_materialization(
+            present,
+            NoMaterializedBody(),
+            effective_request_fingerprint=fingerprint("9"),
+        )
+    with pytest.raises(TypeError, match="materialization must be"):
+        msgspec.structs.replace(
+            base,
+            materialization=cast("RequestMaterializationProof", object()),
+        )
+    with pytest.raises(ValueError, match="effective request identity"):
+        msgspec.structs.replace(
+            base,
+            logical_request_fingerprint=fingerprint("b"),
+        )
+
+
+def test_materialization_proof_retains_no_effective_request_or_payload_body_shape() -> None:
+    """Keep finalized authorization graphs free of the original inline or large body value."""
+    proof_fields = {
+        field.name for field in msgspec.structs.fields(type(finalized_request().materialization))
+    }
+    input_fields = {
+        field.name
+        for field in msgspec.structs.fields(type(finalized_request().materialization.input_body))
+    }
+    assert "effective_request" not in proof_fields
+    assert not {"value", "fields", "parts", "source"} & input_fields

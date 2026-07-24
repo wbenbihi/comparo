@@ -217,6 +217,8 @@ def test_host_types_require_canonical_unambiguous_forms() -> None:
         Ipv6Host(value="not-v6")
     with pytest.raises(ValueError, match="canonical compressed"):
         Ipv6Host(value="2001:0db8:0:0:0:0:0:1")
+    with pytest.raises(ValueError, match="zone identifier"):
+        Ipv6Host(value="fe80::1%eth0")
 
 
 def test_path_segment_forms_are_explicit_and_canonical() -> None:

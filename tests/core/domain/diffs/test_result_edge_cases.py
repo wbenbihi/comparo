@@ -57,6 +57,10 @@ def test_diff_coverage_and_aggregate_precedence_never_hide_unresolved_work() -> 
             candidate_selected=Count(value=2),
             baseline_derived=Count(value=2),
             candidate_derived=Count(value=2),
+            baseline_consumed=Count(value=2),
+            candidate_consumed=Count(value=2),
+            baseline_resolved=Count(value=1),
+            candidate_resolved=Count(value=1),
             paired=Count(value=2),
             compared=Count(value=1),
             ignored=Count(value=0),
@@ -75,12 +79,16 @@ def test_diff_coverage_and_aggregate_precedence_never_hide_unresolved_work() -> 
         candidate_selected=Count(value=2),
         baseline_derived=Count(value=2),
         candidate_derived=Count(value=2),
+        baseline_consumed=Count(value=2),
+        candidate_consumed=Count(value=2),
+        baseline_resolved=Count(value=1),
+        candidate_resolved=Count(value=1),
         paired=Count(value=2),
         compared=Count(value=1),
         ignored=Count(value=0),
         not_evaluated=Count(value=1),
     )
-    with pytest.raises(ValueError, match="complete comparable coverage"):
+    with pytest.raises(ValueError, match=r"singular pairing|complete comparable coverage"):
         DiffRuleFact(
             fact_id=FactId(value=UUID(int=970)),
             application=_application(),
@@ -98,7 +106,7 @@ def test_diff_evidence_ids_and_outcome_buckets_cannot_contradict_counts() -> Non
         outcome=DiffFactOutcome.SAME,
         comparator=_operation(DiffOperationFamily.COMPARATOR, "exact"),
         baseline_location=_location(972),
-        candidate_location=_location(973),
+        candidate_location=_location(973, candidate=True),
     )
     with pytest.raises(ValueError, match="unique"):
         DiffEvidence(retained=(detail, detail), omitted=Count(value=0))
@@ -121,6 +129,10 @@ def test_diff_evidence_ids_and_outcome_buckets_cannot_contradict_counts() -> Non
                 candidate_selected=Count(value=1),
                 baseline_derived=Count(value=1),
                 candidate_derived=Count(value=1),
+                baseline_consumed=Count(value=1),
+                candidate_consumed=Count(value=1),
+                baseline_resolved=Count(value=1),
+                candidate_resolved=Count(value=1),
                 paired=Count(value=1),
                 compared=Count(value=1),
                 ignored=Count(value=0),
@@ -145,6 +157,10 @@ def test_not_evaluated_reasons_require_reason_specific_zero_coverage() -> None:
         candidate_selected=zero,
         baseline_derived=zero,
         candidate_derived=zero,
+        baseline_consumed=zero,
+        candidate_consumed=zero,
+        baseline_resolved=zero,
+        candidate_resolved=zero,
         paired=zero,
         compared=zero,
         ignored=zero,

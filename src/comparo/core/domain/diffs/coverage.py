@@ -58,6 +58,10 @@ class DiffCoverage(msgspec.Struct, frozen=True, kw_only=True):
     candidate_selected: Count
     baseline_derived: Count
     candidate_derived: Count
+    baseline_consumed: Count
+    candidate_consumed: Count
+    baseline_resolved: Count
+    candidate_resolved: Count
     paired: Count
     compared: Count
     ignored: Count
@@ -70,6 +74,10 @@ class DiffCoverage(msgspec.Struct, frozen=True, kw_only=True):
             self.candidate_selected,
             self.baseline_derived,
             self.candidate_derived,
+            self.baseline_consumed,
+            self.candidate_consumed,
+            self.baseline_resolved,
+            self.candidate_resolved,
             self.paired,
             self.compared,
             self.ignored,
@@ -77,6 +85,44 @@ class DiffCoverage(msgspec.Struct, frozen=True, kw_only=True):
         )
         if any(type(count) is not Count for count in values):
             raise TypeError("diff coverage must use Count values")
+        if self.baseline_consumed.value > self.baseline_derived.value:
+            raise ValueError("baseline consumed values cannot exceed baseline derived values")
+        if self.candidate_consumed.value > self.candidate_derived.value:
+            raise ValueError("candidate consumed values cannot exceed candidate derived values")
+        if self.baseline_resolved.value > self.baseline_consumed.value:
+            raise ValueError("baseline resolved values cannot exceed baseline consumed values")
+        if self.candidate_resolved.value > self.candidate_consumed.value:
+            raise ValueError("candidate resolved values cannot exceed candidate consumed values")
         resolved = self.compared.value + self.ignored.value + self.not_evaluated.value
         if resolved != self.paired.value:
             raise ValueError("every paired unit must be compared, ignored, or not evaluated")
+        _require_unit_footprints(
+            units=self.paired.value,
+            baseline=self.baseline_consumed.value,
+            candidate=self.candidate_consumed.value,
+            label="paired",
+        )
+        resolved_units = self.compared.value + self.ignored.value
+        _require_unit_footprints(
+            units=resolved_units,
+            baseline=self.baseline_resolved.value,
+            candidate=self.candidate_resolved.value,
+            label="resolved",
+        )
+        _require_unit_footprints(
+            units=self.not_evaluated.value,
+            baseline=self.baseline_consumed.value - self.baseline_resolved.value,
+            candidate=self.candidate_consumed.value - self.candidate_resolved.value,
+            label="not-evaluated",
+        )
+
+
+def _require_unit_footprints(
+    *,
+    units: int,
+    baseline: int,
+    candidate: int,
+    label: str,
+) -> None:
+    if units < max(baseline, candidate) or units > baseline + candidate:
+        raise ValueError(f"{label} units contradict exact per-side value coverage")

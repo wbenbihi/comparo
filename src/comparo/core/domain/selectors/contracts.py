@@ -2,57 +2,18 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import TypeGuard
-from typing import cast
 from typing import final
 
 import msgspec
 
-from comparo.core.domain.expressions import ConversionType
-from comparo.core.domain.expressions import ConvertExpr
-from comparo.core.domain.expressions import ExpressionSegment
-from comparo.core.domain.expressions import FallbackExpr
-from comparo.core.domain.expressions import FileExpr
-from comparo.core.domain.expressions import InterpolationExpr
-from comparo.core.domain.expressions import InterpolationMode
 from comparo.core.domain.expressions import LiteralExpr
-from comparo.core.domain.expressions import LookupExpr
-from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import ValueExpression
+from comparo.core.domain.expressions import expression_output_kinds
 from comparo.core.domain.selectors.sources import SelectorCardinality
-from comparo.core.domain.values import BytesValue
-from comparo.core.domain.values import JsonArray
-from comparo.core.domain.values import JsonBoolean
+from comparo.core.domain.value_kinds import ValueKind as ValueKind
 from comparo.core.domain.values import JsonDecimal
 from comparo.core.domain.values import JsonInteger
-from comparo.core.domain.values import JsonNull
-from comparo.core.domain.values import JsonObject
-from comparo.core.domain.values import JsonString
-
-
-class ValueKind(StrEnum):
-    """Exact runtime value categories visible to static evaluation planning."""
-
-    UNKNOWN = "unknown"
-    NULL = "null"
-    BOOLEAN = "boolean"
-    INTEGER = "integer"
-    NUMBER = "number"
-    STRING = "string"
-    ARRAY = "array"
-    OBJECT = "object"
-    BYTES = "bytes"
-    DURATION = "duration"
-    SIZE = "size"
-    INSTANT = "instant"
-    COUNT = "count"
-    RATIO = "ratio"
-    BODY_HANDLE = "body-handle"
-    VIEW_HANDLE = "view-handle"
-    MEDIA_TYPE = "media-type"
-    HTTP_FIELD_ITEMS = "http-field-items"
-
 
 JSON_VALUE_KINDS = frozenset(
     {
@@ -124,6 +85,15 @@ def contract_accepts(actual: ValueContract, accepted: frozenset[ValueKind]) -> b
     return all(_kind_is_accepted(kind, accepted) for kind in actual.kinds)
 
 
+def contract_accepts_runtime_kind(contract: ValueContract, kind: ValueKind) -> bool:
+    """Return whether one exact runtime kind satisfies a compiled output contract."""
+    if type(contract) is not ValueContract or type(kind) is not ValueKind:
+        raise TypeError("runtime kind validation requires ValueContract and ValueKind values")
+    if ValueKind.UNKNOWN in contract.kinds:
+        return True
+    return _kind_is_accepted(kind, frozenset(contract.kinds))
+
+
 def contracts_overlap(left: ValueContract, right: ValueContract) -> bool:
     """Return whether two contracts can contain strictly comparable values."""
     if type(left) is not ValueContract or type(right) is not ValueContract:
@@ -148,43 +118,8 @@ def contract_can_feed(actual: ValueContract, expected: ValueContract) -> bool:
 
 
 def expression_kinds(expression: ValueExpression) -> frozenset[ValueKind]:
-    """Infer every kind known from the closed compiled expression tree."""
-    if type(expression) in {LiteralExpr, LookupExpr, FileExpr, ConvertExpr}:
-        return _atomic_expression_kinds(cast("AtomicExpression", expression))
-    return _composite_expression_kinds(cast("CompositeExpression", expression))
-
-
-type AtomicExpression = LiteralExpr | LookupExpr | FileExpr | ConvertExpr
-type CompositeExpression = FallbackExpr | OptionalExpr | InterpolationExpr
-
-
-def _atomic_expression_kinds(expression: AtomicExpression) -> frozenset[ValueKind]:
-    if type(expression) is LiteralExpr:
-        return frozenset({_literal_kind(expression)})
-    if type(expression) is LookupExpr:
-        return frozenset({ValueKind.UNKNOWN})
-    if type(expression) is FileExpr:
-        if expression.conversion is None:
-            return frozenset({ValueKind.BYTES})
-        return _conversion_kinds(expression.conversion)
-    return _conversion_kinds(expression.target)
-
-
-def _composite_expression_kinds(expression: CompositeExpression) -> frozenset[ValueKind]:
-    if type(expression) is FallbackExpr:
-        kinds = frozenset().union(*(expression_kinds(source) for source in expression.sources))
-        if ValueKind.UNKNOWN in kinds:
-            return frozenset({ValueKind.UNKNOWN})
-        return kinds
-    if type(expression) is OptionalExpr:
-        return expression_kinds(expression.source)
-    interpolation = expression
-    if interpolation.mode is InterpolationMode.EMBEDDED_TEXT:
-        return frozenset({ValueKind.STRING})
-    segment = interpolation.segments[0]
-    if type(segment) is not ExpressionSegment:  # pragma: no cover - guarded by expression
-        raise TypeError("whole-value interpolation requires an expression segment")
-    return expression_kinds(segment.expression)
+    """Expose the canonical expression inference through selector contracts."""
+    return expression_output_kinds(expression)
 
 
 def expression_accepts(
@@ -193,9 +128,7 @@ def expression_accepts(
 ) -> bool:
     """Return whether a statically known operand is compatible with an operation."""
     kinds = expression_kinds(expression)
-    if ValueKind.UNKNOWN in kinds:
-        return True
-    return all(_kind_is_accepted(kind, accepted) for kind in kinds)
+    return all(kind is ValueKind.UNKNOWN or _kind_is_accepted(kind, accepted) for kind in kinds)
 
 
 def is_statically_negative_number(expression: ValueExpression) -> bool:
@@ -217,33 +150,3 @@ def _kind_is_accepted(kind: ValueKind, accepted: frozenset[ValueKind]) -> bool:
     if kind in accepted:
         return True
     return kind is ValueKind.INTEGER and ValueKind.NUMBER in accepted
-
-
-def _literal_kind(expression: LiteralExpr) -> ValueKind:
-    value = expression.value
-    mapping: dict[type[object], ValueKind] = {
-        JsonNull: ValueKind.NULL,
-        JsonBoolean: ValueKind.BOOLEAN,
-        JsonInteger: ValueKind.INTEGER,
-        JsonDecimal: ValueKind.NUMBER,
-        JsonString: ValueKind.STRING,
-        JsonArray: ValueKind.ARRAY,
-        JsonObject: ValueKind.OBJECT,
-        BytesValue: ValueKind.BYTES,
-    }
-    return mapping[type(value)]
-
-
-def _conversion_kinds(conversion: ConversionType) -> frozenset[ValueKind]:
-    mapping = {
-        ConversionType.STRING: frozenset({ValueKind.STRING}),
-        ConversionType.BYTES: frozenset({ValueKind.BYTES}),
-        ConversionType.INTEGER: frozenset({ValueKind.INTEGER}),
-        ConversionType.NUMBER: frozenset({ValueKind.NUMBER}),
-        ConversionType.BOOLEAN: frozenset({ValueKind.BOOLEAN}),
-        ConversionType.JSON: JSON_VALUE_KINDS,
-        ConversionType.YAML: JSON_VALUE_KINDS,
-        ConversionType.DURATION: frozenset({ValueKind.DURATION}),
-        ConversionType.SIZE: frozenset({ValueKind.SIZE}),
-    }
-    return mapping[conversion]

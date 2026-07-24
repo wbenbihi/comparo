@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.primitives import Fingerprint
 
 
-class RegexMode(StrEnum):
+class RegexMode(DomainStrEnum):
     """Bounded RE2-compatible matching modes."""
 
     SEARCH = "search"
     FULL = "full"
 
 
-class RegexDialect(StrEnum):
+class RegexDialect(DomainStrEnum):
     """Versioned bounded regular-expression dialects."""
 
     RE2 = "re2"

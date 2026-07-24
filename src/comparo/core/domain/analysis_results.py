@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
@@ -12,15 +11,17 @@ from comparo.core.domain.budgets import BudgetStage
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticSeverity
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Ratio
 from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import is_sensitive_value
 
 
-class AnalysisVerdict(StrEnum):
+class AnalysisVerdict(DomainStrEnum):
     """Semantic judgments returned by an authorized external analysis."""
 
     EQUIVALENT = "equivalent"
@@ -40,10 +41,7 @@ class AnalysisEvidence(msgspec.Struct, frozen=True, kw_only=True):
         """Require stable structured evidence without arbitrary provider prose."""
         if type(self.code) is not DiagnosticCode:
             raise TypeError("analysis evidence code must be a DiagnosticCode")
-        if (
-            not isinstance(self.digest, SensitiveValue)
-            or self.digest.payload_type is not Fingerprint
-        ):
+        if not is_sensitive_value(self.digest) or self.digest.payload_type is not Fingerprint:
             raise TypeError("analysis evidence digest must be a sensitive Fingerprint")
         if type(self.items) is not Count:
             raise TypeError("analysis evidence items must be a Count")

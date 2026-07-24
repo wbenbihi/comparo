@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import final
 from uuid import UUID
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.primitives import Fingerprint
 
 _SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_INLINE_FRAGMENT_PATTERN = re.compile(r"#[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
 
 
-class ResourceKind(StrEnum):
+class ResourceKind(DomainStrEnum):
     """The accepted authored resource kinds across project and operator authorities."""
 
     PROJECT = "Project"
@@ -87,6 +88,11 @@ class ArtifactId(_SlugIdentifier, frozen=True, kw_only=True):
 
 
 @final
+class SourceId(_SlugIdentifier, frozen=True, kw_only=True):
+    """A logical configuration-source identity that can never contain a filesystem path."""
+
+
+@final
 class ResourceIdentity(msgspec.Struct, frozen=True, kw_only=True):
     """The canonical namespace, kind, and stable ID of an authored resource."""
 
@@ -120,18 +126,34 @@ class DefinitionRef(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class InlineFragment(msgspec.Struct, frozen=True, kw_only=True):
+    """A constrained structural label for an anonymous inline definition."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        """Reject paths, prose, controls, and payload-bearing free-form fragments."""
+        if (
+            type(self.value) is not str
+            or len(self.value) > 127
+            or _INLINE_FRAGMENT_PATTERN.fullmatch(self.value) is None
+        ):
+            raise ValueError("inline fragment must be a bounded lowercase structural token")
+
+
+@final
 class InlineDefinitionOrigin(msgspec.Struct, frozen=True, kw_only=True):
     """A diagnostic origin for an anonymous inline definition, never a reference target."""
 
     owner: ResourceIdentity
-    fragment: str
+    fragment: InlineFragment
 
     def __post_init__(self) -> None:
         """Validate an explicit non-empty diagnostic fragment."""
         if type(self.owner) is not ResourceIdentity:
             raise TypeError("inline owner must be a ResourceIdentity")
-        if type(self.fragment) is not str or not self.fragment or not self.fragment.startswith("#"):
-            raise ValueError("inline fragment must be a non-empty value beginning with '#'")
+        if type(self.fragment) is not InlineFragment:
+            raise TypeError("inline definition origin requires an InlineFragment")
 
 
 class _UuidIdentifier(msgspec.Struct, frozen=True, kw_only=True):
@@ -202,6 +224,11 @@ class FactId(_UuidIdentifier, frozen=True, kw_only=True):
 @final
 class BodyId(_UuidIdentifier, frozen=True, kw_only=True):
     """One captured body occurrence."""
+
+
+@final
+class StreamId(_UuidIdentifier, frozen=True, kw_only=True):
+    """One logical stream observation occurrence."""
 
 
 @final

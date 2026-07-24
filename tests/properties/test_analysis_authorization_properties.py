@@ -2,18 +2,22 @@
 
 from uuid import UUID
 
+import msgspec
 import pytest
 from hypothesis import assume
 from hypothesis import given
 from hypothesis import strategies as st
 
-from comparo.core.domain.analysis import ANALYSIS_CAPABILITY_ID
-from comparo.core.domain.analysis import ANALYSIS_EXECUTE_OPERATION
-from comparo.core.domain.analysis import AnalysisAuthorizationGrant
+from comparo.core.domain.analysis import AnalysisAuthorizationIntent
 from comparo.core.domain.analysis import AnalysisInput
 from comparo.core.domain.analysis import AnalysisProvider
 from comparo.core.domain.analysis import AnalysisRequest
 from comparo.core.domain.analysis import AnalysisSchema
+from comparo.core.domain.analysis import AnalysisSecretEgressApproval
+from comparo.core.domain.analysis_types import AnalysisContractVersion
+from comparo.core.domain.analysis_types import AnalysisModelId
+from comparo.core.domain.analysis_types import AnalysisProviderId
+from comparo.core.domain.analysis_types import AnalysisSchemaId
 from comparo.core.domain.budgets import BudgetContribution
 from comparo.core.domain.budgets import BudgetContributionKind
 from comparo.core.domain.budgets import BudgetOperation
@@ -22,9 +26,6 @@ from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import BudgetStage
 from comparo.core.domain.budgets import BudgetUsage
 from comparo.core.domain.budgets import ResourceBudget
-from comparo.core.domain.capabilities import CapabilityCategory
-from comparo.core.domain.capabilities import CapabilityGranted
-from comparo.core.domain.capabilities import CapabilityRequest
 from comparo.core.domain.capabilities import CapabilityTargetKind
 from comparo.core.domain.capabilities import ExecutionPolicyAuthority
 from comparo.core.domain.capabilities import NamedCapabilityTarget
@@ -35,21 +36,20 @@ from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.identity import RunId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Sha256Digest
+from comparo.core.domain.scopes import ExternalCapabilityBudgetScope
+from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
 from tests.core.domain.budget_origin_factories import default_budget_origin
 
-_DESTINATIONS = st.text(
-    alphabet="abcdefghijklmnopqrstuvwxyz0123456789.-",
-    min_size=1,
-    max_size=40,
-).filter(lambda value: bool(value.strip()))
+_DESTINATIONS = st.from_regex(r"[a-z0-9][a-z0-9.-]{0,39}", fullmatch=True)
 
 
 def _fingerprint(character: str) -> Fingerprint:
@@ -63,6 +63,7 @@ def _budget(
     resource: BudgetResource,
     amount: Count | ByteCount | Duration,
     operation: str,
+    scope: ExternalCapabilityBudgetScope,
 ) -> ResourceBudget:
     if type(amount) is Count:
         zero: Count | ByteCount | Duration = Count(value=0)
@@ -86,15 +87,26 @@ def _budget(
             ),
         ),
         usage=BudgetUsage(consumed=zero, in_use=zero, high_water=zero),
+        scope=scope,
     )
 
 
-def _budgets() -> tuple[ResourceBudget, ...]:
+def _budgets(scope: ExternalCapabilityBudgetScope) -> tuple[ResourceBudget, ...]:
     return (
-        _budget(BudgetResource.EXTERNAL_INPUT_BYTES, ByteCount(value=1), "analysis.input"),
-        _budget(BudgetResource.EXTERNAL_OUTPUT_BYTES, ByteCount(value=1), "analysis.output"),
-        _budget(BudgetResource.DEADLINE, Duration(nanoseconds=1), "analysis.deadline"),
-        _budget(BudgetResource.EXTERNAL_WORK, Count(value=1), "analysis.work"),
+        _budget(
+            BudgetResource.EXTERNAL_INPUT_BYTES,
+            ByteCount(value=1),
+            "analysis.input",
+            scope,
+        ),
+        _budget(
+            BudgetResource.EXTERNAL_OUTPUT_BYTES,
+            ByteCount(value=1),
+            "analysis.output",
+            scope,
+        ),
+        _budget(BudgetResource.DEADLINE, Duration(nanoseconds=1), "analysis.deadline", scope),
+        _budget(BudgetResource.EXTERNAL_WORK, Count(value=1), "analysis.work", scope),
     )
 
 
@@ -126,13 +138,18 @@ def _analysis(destination: str, *, sensitive: bool) -> AnalysisRequest:
     else:
         input_digest = _fingerprint("a")
         request_fingerprint = _fingerprint("b")
+    analysis_id = AnalysisId(value=UUID(int=1))
+    scope = ExternalCapabilityBudgetScope(
+        run=RunScope(run_id=RunId(value=UUID(int=10))),
+        analysis_id=analysis_id,
+    )
     return AnalysisRequest(
-        analysis_id=AnalysisId(value=UUID(int=1)),
+        analysis_id=analysis_id,
         provider=AnalysisProvider(
-            provider="example.judge",
-            provider_version="1",
-            model="judge",
-            model_version="1",
+            provider=AnalysisProviderId(value="example.judge"),
+            provider_version=AnalysisContractVersion(value="1"),
+            model=AnalysisModelId(value="judge"),
+            model_version=AnalysisContractVersion(value="1"),
             destination=NamedCapabilityTarget(
                 kind=CapabilityTargetKind.DESTINATION,
                 identifier=destination,
@@ -147,11 +164,11 @@ def _analysis(destination: str, *, sensitive: bool) -> AnalysisRequest:
             ),
         ),
         output_schema=AnalysisSchema(
-            identifier="comparo.analysis-result",
-            version="1",
+            identifier=AnalysisSchemaId(value="comparo.analysis-result"),
+            version=AnalysisContractVersion(value="1"),
             fingerprint=_fingerprint("c"),
         ),
-        budgets=_budgets(),
+        budgets=_budgets(scope),
         timeout=Duration(nanoseconds=1),
         fingerprint=request_fingerprint,
     )
@@ -163,20 +180,17 @@ def test_authority_for_one_destination_never_authorizes_another(
     authorized_destination: str,
 ) -> None:
     assume(destination != authorized_destination)
-    analysis = _analysis(destination, sensitive=False)
-    capability = CapabilityRequest(
-        category=CapabilityCategory.EXTERNAL_ANALYSIS,
-        capability_id=ANALYSIS_CAPABILITY_ID,
-        operation=ANALYSIS_EXECUTE_OPERATION,
-        target=NamedCapabilityTarget(
-            kind=CapabilityTargetKind.DESTINATION,
-            identifier=authorized_destination,
-        ),
+    analysis = _analysis(destination, sensitive=True)
+    authorized_analysis = _analysis(authorized_destination, sensitive=True)
+    approval = AnalysisSecretEgressApproval(
+        analysis=authorized_analysis,
+        authority=_authority(),
     )
-    with pytest.raises(ValueError, match="provider destination"):
-        AnalysisAuthorizationGrant(
+    with pytest.raises(ValueError, match="not bound to this analysis intent"):
+        AnalysisAuthorizationIntent(
             analysis=analysis,
-            capability=CapabilityGranted(request=capability, authority=_authority()),
+            effective_policy_authority=_authority(),
+            secret_egress_approval=approval,
         )
 
 
@@ -184,3 +198,25 @@ def test_authority_for_one_destination_never_authorizes_another(
 def test_request_fingerprint_sensitivity_tracks_every_input(sensitive: bool) -> None:
     analysis = _analysis("judge.example.invalid", sensitive=sensitive)
     assert isinstance(analysis.fingerprint, SensitiveValue) is sensitive
+
+
+@given(model_version=st.integers(min_value=2, max_value=1_000).map(str))
+def test_same_destination_approval_never_authorizes_a_changed_recipe(
+    model_version: str,
+) -> None:
+    analysis = _analysis("judge.example.invalid", sensitive=True)
+    authority = _authority()
+    approval = AnalysisSecretEgressApproval(analysis=analysis, authority=authority)
+    changed = msgspec.structs.replace(
+        analysis,
+        provider=msgspec.structs.replace(
+            analysis.provider,
+            model_version=AnalysisContractVersion(value=model_version),
+        ),
+    )
+    with pytest.raises(ValueError, match="not bound to this analysis intent"):
+        AnalysisAuthorizationIntent(
+            analysis=changed,
+            effective_policy_authority=authority,
+            secret_egress_approval=approval,
+        )

@@ -12,6 +12,15 @@ from comparo.core.domain.selectors.contracts import JSON_VALUE_KINDS
 from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.contracts import contract_accepts
+from comparo.core.domain.selectors.locations import BodyLocation
+from comparo.core.domain.selectors.locations import ConcreteLocation
+from comparo.core.domain.selectors.locations import JsonLocation
+from comparo.core.domain.selectors.locations import StreamLocation
+from comparo.core.domain.selectors.locations import ViewLocation
+from comparo.core.domain.selectors.locations import is_concrete_location
+from comparo.core.domain.selectors.locations import location_body_view
+from comparo.core.domain.selectors.locations import location_selector_source
+from comparo.core.domain.selectors.locations import location_static_field
 from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointerPath
 from comparo.core.domain.selectors.paths import NoPath
@@ -24,31 +33,66 @@ from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
 
-_BODY_SOURCES = {SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_BODY}
-_JSON_VALUE_SOURCES = {
-    SelectorSource.REQUEST_BODY,
-    SelectorSource.RESPONSE_BODY,
-    SelectorSource.STREAM_RECORDS,
-    SelectorSource.SCENARIO_STEP,
-}
-_SCALAR_SOURCES = {
-    SelectorSource.REQUEST_METHOD,
-    SelectorSource.REQUEST_URL,
-    SelectorSource.RESPONSE_PROTOCOL,
-    SelectorSource.RESPONSE_STATUS,
-}
-_PLURAL_SOURCES = {
-    SelectorSource.REQUEST_QUERY,
-    SelectorSource.REQUEST_HEADERS,
-    SelectorSource.REQUEST_COOKIES,
-    SelectorSource.RESPONSE_INFORMATIONAL,
-    SelectorSource.RESPONSE_HEADERS,
-    SelectorSource.RESPONSE_TRAILERS,
-    SelectorSource.RESPONSE_ENCODINGS,
-    SelectorSource.STREAM_EVENTS,
-    SelectorSource.STREAM_RECORDS,
-    SelectorSource.STREAM_CONTROLS,
-}
+_BODY_SOURCES = frozenset({SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_BODY})
+_JSON_VALUE_SOURCES = frozenset(
+    {
+        SelectorSource.REQUEST_BODY,
+        SelectorSource.RESPONSE_BODY,
+        SelectorSource.STREAM_EVENTS,
+        SelectorSource.STREAM_RECORDS,
+        SelectorSource.SCENARIO_STEP,
+    }
+)
+_SCALAR_SOURCES = frozenset(
+    {
+        SelectorSource.REQUEST_METHOD,
+        SelectorSource.REQUEST_URL,
+        SelectorSource.RESPONSE_PROTOCOL,
+        SelectorSource.RESPONSE_STATUS,
+    }
+)
+_STATIC_FIELD_SOURCES = frozenset(
+    {
+        SelectorSource.EXECUTION,
+        SelectorSource.ATTEMPT,
+        SelectorSource.EXCHANGE,
+        SelectorSource.RESPONSE_MEDIA,
+        SelectorSource.RESPONSE_TIMINGS,
+        SelectorSource.RESPONSE_ENDPOINT,
+        SelectorSource.RESPONSE_TLS,
+        SelectorSource.STREAM_TERMINATION,
+        SelectorSource.SCENARIO_STEP,
+    }
+)
+_PLURAL_SOURCES = frozenset(
+    {
+        SelectorSource.REQUEST_QUERY,
+        SelectorSource.REQUEST_HEADERS,
+        SelectorSource.REQUEST_COOKIES,
+        SelectorSource.RESPONSE_INFORMATIONAL,
+        SelectorSource.RESPONSE_HEADERS,
+        SelectorSource.RESPONSE_TRAILERS,
+        SelectorSource.RESPONSE_ENCODINGS,
+        SelectorSource.STREAM_EVENTS,
+        SelectorSource.STREAM_RECORDS,
+        SelectorSource.STREAM_CONTROLS,
+    }
+)
+_NO_PATH_FIELDS = (
+    (SelectorSource.EXECUTION, StaticFieldPath(segments=("execution",))),
+    (SelectorSource.ATTEMPT, StaticFieldPath(segments=("attempt",))),
+    (SelectorSource.EXCHANGE, StaticFieldPath(segments=("exchange",))),
+    (SelectorSource.REQUEST_METHOD, StaticFieldPath(segments=("request", "method"))),
+    (SelectorSource.REQUEST_URL, StaticFieldPath(segments=("request", "url"))),
+    (SelectorSource.RESPONSE_PROTOCOL, StaticFieldPath(segments=("response", "protocol"))),
+    (SelectorSource.RESPONSE_STATUS, StaticFieldPath(segments=("response", "status"))),
+    (SelectorSource.RESPONSE_MEDIA, StaticFieldPath(segments=("response", "media"))),
+    (SelectorSource.RESPONSE_TIMINGS, StaticFieldPath(segments=("response", "timings"))),
+    (SelectorSource.RESPONSE_ENDPOINT, StaticFieldPath(segments=("response", "endpoint"))),
+    (SelectorSource.RESPONSE_TLS, StaticFieldPath(segments=("response", "tls"))),
+    (SelectorSource.STREAM_TERMINATION, StaticFieldPath(segments=("stream", "termination"))),
+    (SelectorSource.SCENARIO_STEP, StaticFieldPath(segments=("scenario", "step"))),
+)
 
 
 @final
@@ -106,6 +150,79 @@ def is_singular_selector(selector: object) -> TypeGuard[CompiledSelector]:
     )
 
 
+def require_location_matches_selector(
+    location: ConcreteLocation,
+    selector: CompiledSelector,
+) -> None:
+    """Bind one runtime location to the exact compiled source and body view."""
+    if not is_concrete_location(location):
+        raise TypeError("selector location must be a ConcreteLocation")
+    if type(selector) is not CompiledSelector:
+        raise TypeError("location validation requires a CompiledSelector")
+    if location_selector_source(location) is not selector.source:
+        raise ValueError("concrete location source does not match the compiled selector")
+    if location_body_view(location) is not selector.body_view:
+        raise ValueError("concrete location body view does not match the compiled selector")
+    _require_location_path(location, selector)
+
+
+def _require_location_path(
+    location: ConcreteLocation,
+    selector: CompiledSelector,
+) -> None:
+    path = selector.path
+    if selector.source in _BODY_SOURCES and type(path) is NoPath:
+        _require_whole_body_location(location, selector.body_view)
+        return
+    if type(path) is JsonPointerPath:
+        _require_pointer_location(location, path)
+        return
+    if type(path) is JsonPathExpression:
+        if type(location) not in {JsonLocation, StreamLocation}:
+            raise ValueError("JSONPath selector requires a JSON-addressable location")
+        if type(location) is StreamLocation and location.nested_pointer is None:
+            raise ValueError("stream JSONPath result requires an exact nested JSON pointer")
+        return
+    if type(path) is StaticFieldPath:
+        if location_static_field(location) != path:
+            raise ValueError("concrete field location does not match the compiled selector path")
+        return
+    if type(location) is StreamLocation and location.nested_pointer is not None:
+        raise ValueError("whole stream-item selector cannot retain a nested JSON coordinate")
+    expected_field = next(
+        (field for source, field in _NO_PATH_FIELDS if source is selector.source),
+        None,
+    )
+    if expected_field is not None and location_static_field(location) != expected_field:
+        raise ValueError("concrete field location does not match the selector source")
+
+
+def _require_whole_body_location(
+    location: ConcreteLocation,
+    body_view: BodyViewKind | None,
+) -> None:
+    expected_type = (
+        BodyLocation
+        if body_view in {BodyViewKind.HANDLE, BodyViewKind.ENTITY_BYTES}
+        else ViewLocation
+    )
+    if type(location) is not expected_type:
+        raise ValueError("whole body selector requires a whole body or decoded-view location")
+
+
+def _require_pointer_location(
+    location: ConcreteLocation,
+    path: JsonPointerPath,
+) -> None:
+    if type(location) is JsonLocation:
+        if location.pointer != path.pointer:
+            raise ValueError("JSON location pointer does not match the compiled selector")
+        return
+    if type(location) is StreamLocation and location.nested_pointer == path.pointer:
+        return
+    raise ValueError("JSON Pointer selector requires its exact concrete pointer location")
+
+
 def _require_path_source_compatibility(
     source: SelectorSource,
     path: SelectorPath,
@@ -124,6 +241,8 @@ def _require_path_source_compatibility(
         JsonPathExpression,
     }:
         raise ValueError("body selectors support whole-view or JSON paths only")
+    if type(path) is StaticFieldPath and source not in _STATIC_FIELD_SOURCES:
+        raise ValueError("static field selector path is incompatible with its source")
 
 
 def _derived_capabilities(
@@ -131,13 +250,22 @@ def _derived_capabilities(
     path: SelectorPath,
 ) -> SelectorCapabilities:
     if type(path) is JsonPathExpression:
-        return path.capabilities
+        if source not in _PLURAL_SOURCES:
+            return path.capabilities
+        return SelectorCapabilities(
+            cardinality=SelectorCardinality.ZERO_OR_MORE,
+            access=path.capabilities.access,
+            may_duplicate=path.capabilities.may_duplicate,
+            uses_descendant=path.capabilities.uses_descendant,
+            uses_filter=path.capabilities.uses_filter,
+            function_dependencies=path.capabilities.function_dependencies,
+        )
     cardinality = (
         SelectorCardinality.ZERO_OR_MORE
         if source in _PLURAL_SOURCES
         else SelectorCardinality.EXACTLY_ONE
     )
-    if type(path) is JsonPointerPath:
+    if type(path) is JsonPointerPath and source not in _PLURAL_SOURCES:
         cardinality = SelectorCardinality.ZERO_OR_ONE
     return SelectorCapabilities(
         cardinality=cardinality,
@@ -184,6 +312,16 @@ def _whole_source_kinds(
     }
     if source in scalar:
         return scalar[source]
+    if source in {
+        SelectorSource.REQUEST_QUERY,
+        SelectorSource.REQUEST_HEADERS,
+        SelectorSource.REQUEST_COOKIES,
+        SelectorSource.RESPONSE_INFORMATIONAL,
+        SelectorSource.RESPONSE_HEADERS,
+        SelectorSource.RESPONSE_TRAILERS,
+        SelectorSource.RESPONSE_ENCODINGS,
+    }:
+        return frozenset({ValueKind.HTTP_FIELD_VALUE})
     if source in _BODY_SOURCES:
         if body_view is None:  # pragma: no cover - guarded by selector validation
             raise ValueError("body source requires an explicit view")
@@ -197,6 +335,8 @@ def _whole_source_kinds(
             BodyViewKind.JSON_SEQUENCE_RECORDS: frozenset({ValueKind.ARRAY}),
             BodyViewKind.AUTO: frozenset({ValueKind.UNKNOWN}),
         }[body_view]
+    if source is SelectorSource.STREAM_EVENTS:
+        return frozenset({ValueKind.OBJECT})
     if source in {SelectorSource.STREAM_RECORDS, SelectorSource.SCENARIO_STEP}:
         return JSON_VALUE_KINDS
     return None

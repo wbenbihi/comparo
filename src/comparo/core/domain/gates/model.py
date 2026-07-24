@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.gates.summaries import AssertionGateCounts
 from comparo.core.domain.gates.summaries import AssertionGateRuleOutcome
 from comparo.core.domain.gates.summaries import AssertionGateSummary
 from comparo.core.domain.gates.summaries import DiffGateCoverage
 from comparo.core.domain.gates.summaries import DiffGateFactCounts
 from comparo.core.domain.gates.summaries import DiffGateRuleOutcome
 from comparo.core.domain.gates.summaries import DiffGateSummary
+from comparo.core.domain.gates.summaries import GateEnvironmentExecution
 from comparo.core.domain.gates.summaries import GateEnvironmentPair
 from comparo.core.domain.gates.summaries import NormalizedFactSummary
 from comparo.core.domain.gates.types import AssertionGateOutcome
@@ -20,12 +22,12 @@ from comparo.core.domain.gates.types import DiffGateOutcome
 from comparo.core.domain.gates.types import EnvironmentRole
 from comparo.core.domain.gates.types import GateRuleLineage
 from comparo.core.domain.gates.types import GateSeverity
-from comparo.core.domain.gates.types import RunCompletion
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import Count
 
 __all__ = (
+    "AssertionGateCounts",
     "AssertionGateOutcome",
     "AssertionGateRuleOutcome",
     "AssertionGateSummary",
@@ -36,6 +38,7 @@ __all__ = (
     "DiffGateRuleOutcome",
     "DiffGateSummary",
     "EnvironmentRole",
+    "GateEnvironmentExecution",
     "GateEnvironmentPair",
     "GateFailureReason",
     "GateResult",
@@ -44,7 +47,6 @@ __all__ = (
     "GateThreshold",
     "GateVerdict",
     "NormalizedFactSummary",
-    "RunCompletion",
 )
 
 
@@ -117,7 +119,7 @@ class CompiledGateProfile(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("gate thresholds must cover exactly the selected severities")
 
 
-class GateVerdict(StrEnum):
+class GateVerdict(DomainStrEnum):
     """The only possible gate results, independent of run completion."""
 
     PASSED = "passed"
@@ -125,7 +127,7 @@ class GateVerdict(StrEnum):
     NOT_REQUESTED = "not-requested"
 
 
-class GateFailureReason(StrEnum):
+class GateFailureReason(DomainStrEnum):
     """Value-free reasons a requested gate failed."""
 
     RUN_INCOMPLETE = "run-incomplete"

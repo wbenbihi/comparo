@@ -16,6 +16,7 @@ from collections.abc import MutableSequence
 from collections.abc import MutableSet
 from collections.abc import Sequence
 from collections.abc import Set
+from enum import StrEnum
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -30,6 +31,7 @@ import msgspec
 import pytest
 
 import comparo.core.domain
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 
@@ -139,7 +141,6 @@ _MUTABLE_OR_DYNAMIC_ORIGINS = frozenset(
         list,
         dict,
         set,
-        frozenset,
         bytearray,
         memoryview,
         Collection,
@@ -270,6 +271,8 @@ def _annotation_violations(annotation: object, *, seen: set[int] | None = None) 
     if atomic_violation is not None:
         return {atomic_violation}
     if isinstance(annotation, TypeVar):
+        if annotation.__bound__ is None and not annotation.__constraints__:
+            return {"unbounded TypeVar"}
         violations: set[str] = set()
         if annotation.__bound__ is not None:
             violations.update(_annotation_violations(annotation.__bound__, seen=active))
@@ -431,6 +434,23 @@ def test_every_domain_struct_is_explicitly_frozen_keyword_only_and_final() -> No
     assert not violations, "\n".join(violations)
 
 
+def test_every_domain_string_enum_uses_the_hardened_common_base() -> None:
+    violations: list[str] = []
+    for module in _domain_modules():
+        violations.extend(
+            f"{_qualified_name(candidate)}: raw StrEnum subclass"
+            for candidate in vars(module).values()
+            if (
+                inspect.isclass(candidate)
+                and candidate.__module__ == module.__name__
+                and issubclass(candidate, StrEnum)
+                and candidate is not DomainStrEnum
+                and not issubclass(candidate, DomainStrEnum)
+            )
+        )
+    assert not violations, "\n".join(violations)
+
+
 def test_private_struct_base_allowances_remain_narrow() -> None:
     structs = {_qualified_name(struct): struct for struct in _domain_structs()}
     violations: list[str] = []
@@ -471,6 +491,29 @@ def test_domain_struct_state_has_no_mutable_or_dynamic_escape_hatches() -> None:
     assert not violations, "\n".join(violations)
 
 
+def test_generic_domain_carriers_are_bounded_or_explicitly_sealed() -> None:
+    """Forbid new runtime-erased generic payload stores without an immutable boundary."""
+    violations: list[str] = []
+    for module in _domain_modules():
+        for candidate in vars(module).values():
+            if not inspect.isclass(candidate) or candidate.__module__ != module.__name__:
+                continue
+            parameters = getattr(candidate, "__type_params__", ())
+            if not parameters:
+                continue
+            if candidate is SensitiveValue:
+                continue
+            if not issubclass(candidate, msgspec.Struct):
+                violations.append(f"{_qualified_name(candidate)}: unsealed generic carrier")
+                continue
+            violations.extend(
+                f"{_qualified_name(candidate)}.{parameter.__name__}: unbounded TypeVar"
+                for parameter in parameters
+                if parameter.__bound__ is None and not parameter.__constraints__
+            )
+    assert not violations, "\n".join(violations)
+
+
 def test_domain_source_has_no_io_framework_mutation_or_serialization_effects() -> None:
     violations: list[str] = []
     for module_name, _, tree in _domain_sources():
@@ -483,6 +526,29 @@ def test_domain_source_has_no_io_framework_mutation_or_serialization_effects() -
         guard = _DomainAstGuard(module_name=module_name, aliases=aliases)
         guard.visit(tree)
         violations.extend(f"{module_name}: {problem}" for problem in guard.problems)
+    assert not violations, "\n".join(violations)
+
+
+def test_domain_module_constants_have_no_mutable_semantic_containers() -> None:
+    """Prevent process-global validation rules from being changed after import."""
+    violations: list[str] = []
+    for module_name, _, tree in _domain_sources():
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            if value is None:
+                continue
+            mutable_literal = isinstance(value, (ast.Dict, ast.List, ast.Set))
+            mutable_constructor = (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id in {"bytearray", "dict", "list", "set"}
+            )
+            if mutable_literal or mutable_constructor:
+                violations.append(
+                    f"{module_name}: line {node.lineno}: mutable module-level container"
+                )
     assert not violations, "\n".join(violations)
 
 
@@ -510,6 +576,27 @@ def test_domain_source_has_no_explicit_any_annotations() -> None:
                 if is_imported_any or is_qualified_any:
                     line_number = part.lineno if isinstance(part, ast.expr) else "unknown"
                     violations.append(f"{module_name}: line {line_number}: explicit Any annotation")
+    assert not violations, "\n".join(violations)
+
+
+def test_domain_receivers_never_accept_sensitive_value_subclasses() -> None:
+    """Keep the sealed wrapper exact so subclasses cannot replace fail-closed behavior."""
+    violations: list[str] = []
+    for module_name, _, tree in _domain_sources():
+        aliases = _import_aliases(tree)
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and _call_name(node.func, aliases) in {"isinstance", "builtins.isinstance"}
+                and len(node.args) >= 2
+            ):
+                continue
+            checked_type = _call_name(node.args[1], aliases)
+            if checked_type == "comparo.core.domain.sensitivity.SensitiveValue":
+                violations.append(
+                    f"{module_name}: line {node.lineno}: "
+                    "isinstance accepts SensitiveValue subclasses"
+                )
     assert not violations, "\n".join(violations)
 
 

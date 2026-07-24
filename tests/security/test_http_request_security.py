@@ -11,8 +11,10 @@ from tests.core.domain.http.factories import authority
 from tests.core.domain.http.factories import definition
 from tests.core.domain.http.factories import digest
 from tests.core.domain.http.factories import fingerprint
+from tests.core.domain.http.factories import materialization_fingerprint
 from tests.core.domain.http.factories import policies
 from tests.core.domain.http.factories import provenance
+from tests.core.domain.http.factories import request_occurrence
 
 from comparo.core.domain.capabilities import ExecutionPolicyAuthority
 from comparo.core.domain.http.auth import ApiKeyCredential
@@ -23,7 +25,9 @@ from comparo.core.domain.http.authorization import HttpAuthorizationGrant
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import MutationApproval
 from comparo.core.domain.http.authorization import ProxyDnsApproval
+from comparo.core.domain.http.bodies import BytesBody
 from comparo.core.domain.http.bodies import MaterializedBody
+from comparo.core.domain.http.bodies import MultipartBody
 from comparo.core.domain.http.bodies import MultipartBoundary
 from comparo.core.domain.http.bodies import MultipartBoundaryValidation
 from comparo.core.domain.http.bodies import MultipartDispositionFilename
@@ -48,10 +52,13 @@ from comparo.core.domain.http.policies import ExplicitProxy
 from comparo.core.domain.http.policies import IdempotencyKeyRetry
 from comparo.core.domain.http.policies import MutationApprovalRequired
 from comparo.core.domain.http.policies import NoBackoff
+from comparo.core.domain.http.policies import ProxyTlsPolicy
 from comparo.core.domain.http.policies import RequestPolicies
 from comparo.core.domain.http.policies import RetryCondition
 from comparo.core.domain.http.policies import RetryPolicy
+from comparo.core.domain.http.requests import EffectiveRequest
 from comparo.core.domain.http.requests import FinalizedWireRequest
+from comparo.core.domain.http.requests import prove_request_materialization
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import ClientResolvedTarget
 from comparo.core.domain.http.url import DirectResolvedRoute
@@ -99,19 +106,49 @@ def finalized(
         digest=digest("a"),
         provenance=provenance(),
     )
+    actual_body = body or MaterializedBody(source=source)
+    environment = definition(ResourceKind.ENVIRONMENT, "staging")
+    request_fingerprint = fingerprint("b")
+    method = HttpMethod(value="POST")
+    url = AbsoluteHttpUrl(
+        scheme=HttpScheme.HTTPS,
+        authority=HttpAuthority(host=DnsHost(value="api.example.test")),
+    )
+    actual_headers = headers or RequestHeaders()
+    actual_cookies = RequestCookies()
+    actual_policies = request_policies or policies()
+    actual_provenance = provenance()
+    effective_body = (
+        BytesBody(value=actual_body.source)
+        if actual_body.multipart is None
+        else MultipartBody(boundary=actual_body.multipart.boundary, parts=())
+    )
+    effective = EffectiveRequest(
+        environment=environment,
+        logical_request_fingerprint=request_fingerprint,
+        method=method,
+        url=url,
+        headers=actual_headers,
+        cookies=actual_cookies,
+        body=effective_body,
+        policies=actual_policies,
+        provenance=actual_provenance,
+    )
     return FinalizedWireRequest(
-        environment=definition(ResourceKind.ENVIRONMENT, "staging"),
-        logical_request_fingerprint=fingerprint("b"),
-        method=HttpMethod(value="POST"),
-        url=AbsoluteHttpUrl(
-            scheme=HttpScheme.HTTPS,
-            authority=HttpAuthority(host=DnsHost(value="api.example.test")),
+        environment=environment,
+        logical_request_fingerprint=request_fingerprint,
+        method=method,
+        url=url,
+        headers=actual_headers,
+        cookies=actual_cookies,
+        body=actual_body,
+        materialization=prove_request_materialization(
+            effective,
+            actual_body,
+            effective_request_fingerprint=materialization_fingerprint(effective),
         ),
-        headers=headers or RequestHeaders(),
-        cookies=RequestCookies(),
-        body=body or MaterializedBody(source=source),
-        policies=request_policies or policies(),
-        provenance=provenance(),
+        policies=actual_policies,
+        provenance=actual_provenance,
     )
 
 
@@ -294,6 +331,7 @@ def test_authorization_binds_the_entire_final_request_and_pinned_direct_route() 
     intent = HttpAuthorizationIntent(
         request=request,
         route=route,
+        occurrence=request_occurrence(),
         plan_fingerprint=fingerprint("c"),
         effective_policy_fingerprint=fingerprint("d"),
     )
@@ -315,6 +353,7 @@ def test_authorization_binds_the_entire_final_request_and_pinned_direct_route() 
     changed_intent = HttpAuthorizationIntent(
         request=changed,
         route=route,
+        occurrence=request_occurrence(),
         plan_fingerprint=fingerprint("c"),
         effective_policy_fingerprint=fingerprint("d"),
     )
@@ -327,6 +366,7 @@ def test_dedicated_http_decision_requires_execution_policy_authority() -> None:
     intent = HttpAuthorizationIntent(
         request=request,
         route=route,
+        occurrence=request_occurrence(),
         plan_fingerprint=fingerprint("3"),
         effective_policy_fingerprint=fingerprint("4"),
     )
@@ -358,28 +398,34 @@ def test_proxy_route_pins_proxy_and_declares_target_resolution_owner() -> None:
                 scheme=HttpScheme.HTTPS,
                 authority=HttpAuthority(host=proxy_host),
                 authentication=NoAuthentication(),
+                tls=ProxyTlsPolicy(policy=defaults.tls),
             ),
             redirects=defaults.redirects,
         )
     )
+    occurrence = request_occurrence()
+    denied_proxy_dns_intent = HttpAuthorizationIntent(
+        request=request,
+        route=route,
+        occurrence=occurrence,
+        plan_fingerprint=fingerprint("d"),
+        effective_policy_fingerprint=fingerprint("e"),
+    )
     with pytest.raises(ValueError, match="proxy-side DNS requires explicit"):
-        HttpAuthorizationIntent(
-            request=request,
-            route=route,
-            plan_fingerprint=fingerprint("d"),
-            effective_policy_fingerprint=fingerprint("e"),
-        )
+        HttpAuthorizationGrant(intent=denied_proxy_dns_intent, authority=authority("e"))
     delegated_target = route.target
     assert type(delegated_target) is ProxyResolvedTarget
     proxy_dns_approval = ProxyDnsApproval(
         request=request,
         route=route,
+        occurrence=occurrence,
         plan_fingerprint=fingerprint("d"),
         authority=authority("e"),
     )
     intent = HttpAuthorizationIntent(
         request=request,
         route=route,
+        occurrence=occurrence,
         plan_fingerprint=fingerprint("d"),
         effective_policy_fingerprint=fingerprint("e"),
         proxy_dns_approval=proxy_dns_approval,
@@ -410,23 +456,28 @@ def test_unsafe_method_honors_explicit_execution_policy_approval_requirement() -
     )
     route = DirectResolvedRoute(destination=destination(DnsHost(value="api.example.test")))
     plan = fingerprint("1")
+    occurrence = request_occurrence()
+    denied_intent = HttpAuthorizationIntent(
+        request=request,
+        route=route,
+        occurrence=occurrence,
+        plan_fingerprint=plan,
+        effective_policy_fingerprint=fingerprint("2"),
+    )
     with pytest.raises(ValueError, match="requires ExecutionPolicy mutation approval"):
-        HttpAuthorizationIntent(
-            request=request,
-            route=route,
-            plan_fingerprint=plan,
-            effective_policy_fingerprint=fingerprint("2"),
-        )
+        HttpAuthorizationGrant(intent=denied_intent, authority=authority("2"))
 
     approval = MutationApproval(
         request=request,
         route=route,
+        occurrence=occurrence,
         plan_fingerprint=plan,
         authority=authority("2"),
     )
     intent = HttpAuthorizationIntent(
         request=request,
         route=route,
+        occurrence=occurrence,
         plan_fingerprint=plan,
         effective_policy_fingerprint=fingerprint("2"),
         mutation_approval=approval,

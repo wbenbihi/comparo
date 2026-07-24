@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import EffectiveRuleId
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.identity import RuleApplicationId
@@ -14,7 +14,7 @@ from comparo.core.domain.identity import RuleId
 from comparo.core.domain.primitives import Fingerprint
 
 
-class GateSeverity(StrEnum):
+class GateSeverity(DomainStrEnum):
     """Severity dimensions normalized from exact compiled rules."""
 
     BLOCKING = "blocking"
@@ -22,22 +22,12 @@ class GateSeverity(StrEnum):
     INFO = "info"
 
 
-class EnvironmentRole(StrEnum):
+class EnvironmentRole(DomainStrEnum):
     """Invocation-owned transient roles; Environment resources remain role-neutral."""
 
     BASELINE = "baseline"
     CANDIDATE = "candidate"
     OTHER = "other"
-
-
-class RunCompletion(StrEnum):
-    """Execution completion, kept independent from the gate verdict."""
-
-    COMPLETE = "complete"
-    PARTIAL = "partial"
-    CANCELLED = "cancelled"
-    REJECTED = "rejected"
-    INTERNAL_ERROR = "internal-error"
 
 
 @final
@@ -67,7 +57,7 @@ class GateRuleLineage(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("gate lineage severity must be a GateSeverity")
 
 
-class AssertionGateOutcome(StrEnum):
+class AssertionGateOutcome(DomainStrEnum):
     """Value-free terminal assertion outcomes retained per exact rule."""
 
     SATISFIED = "satisfied"
@@ -77,7 +67,7 @@ class AssertionGateOutcome(StrEnum):
     ERROR = "error"
 
 
-class DiffGateOutcome(StrEnum):
+class DiffGateOutcome(DomainStrEnum):
     """Value-free terminal diff outcomes retained per exact rule."""
 
     EQUIVALENT = "equivalent"

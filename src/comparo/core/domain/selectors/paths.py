@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.selectors.sources import SelectorCapabilities
 
 _SEGMENT_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
-class PathDialect(StrEnum):
+class PathDialect(DomainStrEnum):
     """Versioned path dialects recognized by the compiler."""
 
     STATIC_FIELDS = "comparo.static-fields"

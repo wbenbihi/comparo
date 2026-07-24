@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
@@ -17,12 +16,13 @@ from comparo.core.domain.diffs.strategies import DiffReducer
 from comparo.core.domain.diffs.strategies import is_diff_comparator
 from comparo.core.domain.diffs.strategies import is_diff_pairing
 from comparo.core.domain.diffs.strategies import is_diff_reducer
+from comparo.core.domain.diffs.stream_validation import require_stream_projection_source
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import ComparisonId
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EffectiveRuleId
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import InlineDefinitionOrigin
-from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RuleApplicationId
 from comparo.core.domain.identity import RuleId
@@ -36,7 +36,7 @@ from comparo.core.domain.selectors.model import is_singular_selector
 from comparo.core.domain.selectors.sources import SelectorCardinality
 
 
-class DiffSeverity(StrEnum):
+class DiffSeverity(DomainStrEnum):
     """Rule importance, independent of facts and gate policy."""
 
     BLOCKING = "blocking"
@@ -44,7 +44,7 @@ class DiffSeverity(StrEnum):
     INFO = "info"
 
 
-class DiffCompletenessRequirement(StrEnum):
+class DiffCompletenessRequirement(DomainStrEnum):
     """Minimum source completeness admitted by a pipeline."""
 
     COMPLETE = "complete"
@@ -52,7 +52,7 @@ class DiffCompletenessRequirement(StrEnum):
     PARTIAL_PREFIX = "partial-prefix"
 
 
-class ApplicabilityExpectation(StrEnum):
+class ApplicabilityExpectation(DomainStrEnum):
     """The exact boolean condition required independently on both sides."""
 
     TRUE = "true"
@@ -101,6 +101,7 @@ class SidePipeline(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("side pipeline contains an unsupported transform")
         if self.reducer is not None and not is_diff_reducer(self.reducer):
             raise TypeError("side reducer has an unsupported type")
+        require_stream_projection_source(self.selector, self.transforms)
         derive_side_contract(self.selector.output, self.transforms, self.reducer)
 
     @property
@@ -195,9 +196,9 @@ class DirectedEnvironmentPair(msgspec.Struct, frozen=True, kw_only=True):
     """The non-reversible baseline-to-candidate runtime coordinate."""
 
     comparison_id: ComparisonId
-    baseline_environment: ResourceIdentity
+    baseline_environment: DefinitionRef
     baseline_execution_id: EnvironmentExecutionId
-    candidate_environment: ResourceIdentity
+    candidate_environment: DefinitionRef
     candidate_execution_id: EnvironmentExecutionId
 
     def __post_init__(self) -> None:
@@ -205,11 +206,11 @@ class DirectedEnvironmentPair(msgspec.Struct, frozen=True, kw_only=True):
         if type(self.comparison_id) is not ComparisonId:
             raise TypeError("comparison ID must be a ComparisonId")
         for environment in (self.baseline_environment, self.candidate_environment):
-            if type(environment) is not ResourceIdentity:
-                raise TypeError("pair environments must be ResourceIdentity values")
-            if environment.kind is not ResourceKind.ENVIRONMENT:
+            if type(environment) is not DefinitionRef:
+                raise TypeError("pair environments must be DefinitionRef values")
+            if environment.identity.kind is not ResourceKind.ENVIRONMENT:
                 raise ValueError("pair resources must be Environments")
-        if self.baseline_environment == self.candidate_environment:
+        if self.baseline_environment.identity == self.candidate_environment.identity:
             raise ValueError("directed pair requires distinct Environments")
         if type(self.baseline_execution_id) is not EnvironmentExecutionId:
             raise TypeError("baseline execution ID must be an EnvironmentExecutionId")

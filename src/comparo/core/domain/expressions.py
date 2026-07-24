@@ -2,84 +2,52 @@
 
 from __future__ import annotations
 
-import re
-from enum import StrEnum
 from typing import TypeGuard
+from typing import cast
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.expression_types import ConversionType as ConversionType
+from comparo.core.domain.expression_types import FileTrim as FileTrim
+from comparo.core.domain.expression_types import InterpolationMode as InterpolationMode
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.scopes import ValueScopeKind
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import is_sensitive_value
+from comparo.core.domain.value_kinds import ValueKind
+from comparo.core.domain.value_references import _NAMESPACE_SCOPES as _NAMESPACE_SCOPES
+from comparo.core.domain.value_references import SymbolPath as SymbolPath
+from comparo.core.domain.value_references import ValueNamespace as ValueNamespace
+from comparo.core.domain.value_references import namespace_supports_declared_scope
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import ExactValue
+from comparo.core.domain.values import JsonArray
+from comparo.core.domain.values import JsonBoolean
+from comparo.core.domain.values import JsonDecimal
+from comparo.core.domain.values import JsonInteger
+from comparo.core.domain.values import JsonNull
+from comparo.core.domain.values import JsonObject
+from comparo.core.domain.values import JsonString
+from comparo.core.domain.values import is_exact_value_type
 from comparo.core.domain.values import is_json_value
 
-_SYMBOL_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
-
-
-class ValueNamespace(StrEnum):
-    """Disjoint symbol tables available to explicit value lookups."""
-
-    VARIABLES = "variables"
-    SECRETS = "secrets"
-    ENV = "env"
-    PARAMETERS = "parameters"
-    MATRIX = "matrix"
-    STEPS = "steps"
-
-
-_NAMESPACE_SCOPES = {
-    ValueNamespace.VARIABLES: frozenset(ValueScopeKind),
-    ValueNamespace.SECRETS: frozenset(ValueScopeKind),
-    ValueNamespace.ENV: frozenset({ValueScopeKind.ENVIRONMENT}),
-    ValueNamespace.PARAMETERS: frozenset({ValueScopeKind.CELL, ValueScopeKind.STEP}),
-    ValueNamespace.MATRIX: frozenset({ValueScopeKind.CELL}),
-    ValueNamespace.STEPS: frozenset({ValueScopeKind.STEP}),
-}
-
-
-class ConversionType(StrEnum):
-    """The strict, explicit value-conversion vocabulary."""
-
-    STRING = "string"
-    BYTES = "bytes"
-    INTEGER = "integer"
-    NUMBER = "number"
-    BOOLEAN = "boolean"
-    JSON = "json"
-    YAML = "yaml"
-    DURATION = "duration"
-    SIZE = "size"
-
-
-class FileTrim(StrEnum):
-    """Explicit text trimming behavior for file conversion."""
-
-    NONE = "none"
-    START = "start"
-    END = "end"
-    BOTH = "both"
-
-
-@final
-class SymbolPath(msgspec.Struct, frozen=True, kw_only=True):
-    """A non-empty static namespace path such as ``login.token``."""
-
-    segments: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        """Require an immutable path of deterministic symbol segments."""
-        if type(self.segments) is not tuple:
-            raise TypeError("symbol path segments must be an immutable tuple")
-        if not self.segments:
-            raise ValueError("symbol path must contain at least one segment")
-        if any(
-            type(segment) is not str or _SYMBOL_PATTERN.fullmatch(segment) is None
-            for segment in self.segments
-        ):
-            raise ValueError("symbol path contains an invalid segment")
+_JSON_OUTPUT_KINDS = frozenset(
+    {
+        ValueKind.NULL,
+        ValueKind.BOOLEAN,
+        ValueKind.INTEGER,
+        ValueKind.NUMBER,
+        ValueKind.STRING,
+        ValueKind.ARRAY,
+        ValueKind.OBJECT,
+    }
+)
+_TEXT_OUTPUT_KINDS = frozenset({ValueKind.STRING})
+_TEXT_RENDERABLE_OUTPUT_KINDS = _JSON_OUTPUT_KINDS - frozenset(
+    {ValueKind.ARRAY, ValueKind.OBJECT}
+) | frozenset({ValueKind.DURATION, ValueKind.SIZE})
 
 
 @final
@@ -98,7 +66,7 @@ class ExpressionDependency(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("dependency symbol must be a SymbolPath")
         if type(self.available_at) is not ValueScopeKind:
             raise TypeError("dependency scope must be a ValueScopeKind")
-        if self.available_at not in _NAMESPACE_SCOPES[self.namespace]:
+        if not namespace_supports_declared_scope(self.namespace, self.available_at):
             raise ValueError("dependency namespace is unavailable at the declared scope")
 
 
@@ -113,6 +81,20 @@ class LiteralExpr(msgspec.Struct, frozen=True, kw_only=True):
         """Require exact data and value-free provenance."""
         if not (is_json_value(self.value) or type(self.value) is BytesValue):
             raise TypeError("literal expression requires an exact value")
+        _require_provenance(self.provenance)
+
+
+@final
+class SensitiveLiteralExpr(msgspec.Struct, frozen=True, kw_only=True):
+    """A sealed literal compiled from a secret declaration without exposing its payload."""
+
+    value: SensitiveValue[ExactValue]
+    provenance: ValueProvenance
+
+    def __post_init__(self) -> None:
+        """Require the exact sealed carrier and one closed literal payload type."""
+        if not is_sensitive_value(self.value) or not is_exact_value_type(self.value.payload_type):
+            raise TypeError("sensitive literal expression requires a sealed exact value")
         _require_provenance(self.provenance)
 
 
@@ -144,6 +126,8 @@ class FileExpr(msgspec.Struct, frozen=True, kw_only=True):
         """Require an expression path and explicit finite read policy."""
         if not is_value_expression(self.path):
             raise TypeError("file path must be a value expression")
+        if not expression_outputs_only(self.path, _TEXT_OUTPUT_KINDS):
+            raise ValueError("file path expression must resolve to text")
         if self.conversion is not None and type(self.conversion) is not ConversionType:
             raise TypeError("file conversion must be a ConversionType")
         if type(self.trim) is not FileTrim:
@@ -231,13 +215,6 @@ class ExpressionSegment(msgspec.Struct, frozen=True, kw_only=True):
 type InterpolationSegment = LiteralTextSegment | ExpressionSegment
 
 
-class InterpolationMode(StrEnum):
-    """Whether interpolation retains a native value or constructs text."""
-
-    WHOLE_VALUE = "whole-value"
-    EMBEDDED_TEXT = "embedded-text"
-
-
 @final
 class InterpolationExpr(msgspec.Struct, frozen=True, kw_only=True):
     """Compiled interpolation with explicit whole-value versus text semantics."""
@@ -266,11 +243,23 @@ class InterpolationExpr(msgspec.Struct, frozen=True, kw_only=True):
             len(self.segments) != 1 or type(self.segments[0]) is not ExpressionSegment
         ):
             raise ValueError("whole-value interpolation requires exactly one expression segment")
+        if self.mode is InterpolationMode.EMBEDDED_TEXT and any(
+            type(segment) is ExpressionSegment
+            and not expression_outputs_only(
+                segment.expression,
+                _TEXT_RENDERABLE_OUTPUT_KINDS,
+            )
+            for segment in self.segments
+        ):
+            raise ValueError(
+                "embedded-text interpolation expressions must be scalar-text-renderable"
+            )
         _require_provenance(self.provenance)
 
 
 type ValueExpression = (
     LiteralExpr
+    | SensitiveLiteralExpr
     | LookupExpr
     | FileExpr
     | FallbackExpr
@@ -284,6 +273,7 @@ def is_value_expression(value: object) -> TypeGuard[ValueExpression]:
     """Narrow a value to the closed canonical expression union."""
     return type(value) in {
         LiteralExpr,
+        SensitiveLiteralExpr,
         LookupExpr,
         FileExpr,
         FallbackExpr,
@@ -303,8 +293,73 @@ def expression_dependencies(expression: ValueExpression) -> tuple[ExpressionDepe
     )
 
 
-def _all_dependencies(expression: ValueExpression) -> tuple[ExpressionDependency, ...]:
+def expression_output_kinds(expression: ValueExpression) -> frozenset[ValueKind]:
+    """Infer every possible static output kind without depending on a consumer layer."""
+    if type(expression) in {
+        LiteralExpr,
+        SensitiveLiteralExpr,
+        LookupExpr,
+        FileExpr,
+        ConvertExpr,
+    }:
+        return _atomic_expression_output_kinds(cast("AtomicExpression", expression))
+    if type(expression) in {FallbackExpr, OptionalExpr, InterpolationExpr}:
+        return _composite_expression_output_kinds(cast("CompositeExpression", expression))
+    raise TypeError("unsupported value expression")
+
+
+type AtomicExpression = LiteralExpr | SensitiveLiteralExpr | LookupExpr | FileExpr | ConvertExpr
+type CompositeExpression = FallbackExpr | OptionalExpr | InterpolationExpr
+
+
+def _atomic_expression_output_kinds(expression: AtomicExpression) -> frozenset[ValueKind]:
     if type(expression) is LiteralExpr:
+        return frozenset({_literal_output_kind(expression)})
+    if type(expression) is SensitiveLiteralExpr:
+        return frozenset({_literal_type_output_kind(expression.value.payload_type)})
+    if type(expression) is LookupExpr:
+        return frozenset({ValueKind.UNKNOWN})
+    if type(expression) is FileExpr:
+        if expression.conversion is None:
+            return frozenset({ValueKind.BYTES})
+        return _conversion_output_kinds(expression.conversion)
+    return _conversion_output_kinds(expression.target)
+
+
+def _composite_expression_output_kinds(
+    expression: CompositeExpression,
+) -> frozenset[ValueKind]:
+    if type(expression) is FallbackExpr:
+        return frozenset().union(
+            *(expression_output_kinds(source) for source in expression.sources)
+        )
+    if type(expression) is OptionalExpr:
+        return expression_output_kinds(expression.source)
+    if expression.mode is InterpolationMode.EMBEDDED_TEXT:
+        return _TEXT_OUTPUT_KINDS
+    segment = expression.segments[0]
+    if type(segment) is not ExpressionSegment:  # pragma: no cover - constructor invariant
+        raise TypeError("whole-value interpolation requires an expression segment")
+    return expression_output_kinds(segment.expression)
+
+
+def expression_outputs_only(
+    expression: ValueExpression,
+    accepted: frozenset[ValueKind],
+) -> bool:
+    """Accept unknown output while requiring every statically known kind to be compatible."""
+    if not is_value_expression(expression):
+        raise TypeError("output compatibility requires a value expression")
+    if type(accepted) is not frozenset or any(type(kind) is not ValueKind for kind in accepted):
+        raise TypeError("accepted output kinds must be a frozenset of ValueKind values")
+    return all(
+        kind is ValueKind.UNKNOWN or kind in accepted
+        for kind in expression_output_kinds(expression)
+    )
+
+
+def _all_dependencies(expression: ValueExpression) -> tuple[ExpressionDependency, ...]:
+    if type(expression) in {LiteralExpr, SensitiveLiteralExpr}:
         return ()
     if type(expression) is LookupExpr:
         return (expression.dependency,)
@@ -326,6 +381,54 @@ def _all_dependencies(expression: ValueExpression) -> tuple[ExpressionDependency
             for dependency in _all_dependencies(segment.expression)
         )
     raise TypeError("unsupported value expression")
+
+
+def _literal_output_kind(expression: LiteralExpr) -> ValueKind:
+    return _literal_type_output_kind(type(expression.value))
+
+
+def _literal_type_output_kind(value_type: type[object]) -> ValueKind:
+    if value_type is JsonNull:
+        return ValueKind.NULL
+    if value_type is JsonBoolean:
+        return ValueKind.BOOLEAN
+    if value_type is JsonInteger:
+        return ValueKind.INTEGER
+    if value_type is JsonDecimal:
+        return ValueKind.NUMBER
+    if value_type is JsonString:
+        return ValueKind.STRING
+    if value_type is JsonArray:
+        return ValueKind.ARRAY
+    if value_type is JsonObject:
+        return ValueKind.OBJECT
+    if value_type is BytesValue:
+        return ValueKind.BYTES
+    raise TypeError(  # pragma: no cover - literal constructors enforce the closed value union
+        "literal expression contains an unsupported value"
+    )
+
+
+def _conversion_output_kinds(conversion: ConversionType) -> frozenset[ValueKind]:
+    if conversion is ConversionType.STRING:
+        return frozenset({ValueKind.STRING})
+    if conversion is ConversionType.BYTES:
+        return frozenset({ValueKind.BYTES})
+    if conversion is ConversionType.INTEGER:
+        return frozenset({ValueKind.INTEGER})
+    if conversion is ConversionType.NUMBER:
+        return frozenset({ValueKind.NUMBER})
+    if conversion is ConversionType.BOOLEAN:
+        return frozenset({ValueKind.BOOLEAN})
+    if conversion in {ConversionType.JSON, ConversionType.YAML}:
+        return _JSON_OUTPUT_KINDS
+    if conversion is ConversionType.DURATION:
+        return frozenset({ValueKind.DURATION})
+    if conversion is ConversionType.SIZE:
+        return frozenset({ValueKind.SIZE})
+    raise TypeError(  # pragma: no cover - expression constructors require ConversionType
+        "unsupported conversion type"
+    )
 
 
 def _require_provenance(provenance: object) -> None:

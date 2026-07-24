@@ -13,6 +13,7 @@ from enum import StrEnum
 import msgspec
 import pytest
 
+from comparo.core.domain.primitives import Duration
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import SensitiveValueAccess
 from comparo.core.domain.sensitivity import Sensitivity
@@ -57,12 +58,23 @@ def _origin(value: str = "secret/project/api-token") -> TaintOriginId:
     return TaintOriginId(value=value)
 
 
-def test_taint_origin_requires_an_exact_non_empty_string() -> None:
-    with pytest.raises(ValueError, match="non-empty string"):
-        TaintOriginId(value="")
-
-    with pytest.raises(ValueError, match="non-empty string"):
-        TaintOriginId(value=1)  # type: ignore[arg-type]
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "",
+        "Secret/project/token",
+        "secret//token",
+        "secret token",
+        "api-key=do-not-store",
+        "secret/token\nforged",
+        "/absolute/path",
+        "a" * 256,
+        1,
+    ],
+)
+def test_taint_origin_requires_a_bounded_structural_path(invalid: object) -> None:
+    with pytest.raises(ValueError, match="bounded lowercase structural path"):
+        TaintOriginId(value=invalid)  # type: ignore[arg-type]
 
 
 def test_sensitive_value_requires_unique_typed_origins() -> None:
@@ -99,10 +111,10 @@ def test_sensitive_value_is_redacted_in_all_string_rendering() -> None:
 
 def test_reveal_requires_an_explicit_access_capability() -> None:
     sensitive = SensitiveValue("do-not-leak", origins=(_origin(),))
-    access = SensitiveValueAccess(purpose="construct an HTTP request")
+    access = SensitiveValueAccess(purpose="http.request.materialize")
 
     assert sensitive.reveal(access=access) == "do-not-leak"
-    assert access.purpose == "construct an HTTP request"
+    assert access.purpose == "http.request.materialize"
     assert sensitive.sensitivity is Sensitivity.SENSITIVE
     assert sensitive.payload_type is str
     assert sensitive.origins == (_origin(),)
@@ -112,12 +124,15 @@ def test_reveal_requires_an_explicit_access_capability() -> None:
 
 
 def test_access_capability_validates_purpose_and_has_safe_repr() -> None:
-    access = SensitiveValueAccess(purpose="authorize outbound bytes")
-    assert repr(access) == "SensitiveValueAccess(purpose='authorize outbound bytes')"
-    with pytest.raises(ValueError, match="non-empty string"):
+    access = SensitiveValueAccess(purpose="http.bytes.authorize")
+    assert repr(access) == "SensitiveValueAccess(purpose='http.bytes.authorize')"
+    with pytest.raises(ValueError, match="structural token"):
         SensitiveValueAccess(purpose="")
-    with pytest.raises(ValueError, match="non-empty string"):
+    with pytest.raises(ValueError, match="structural token"):
         SensitiveValueAccess(purpose=1)  # type: ignore[arg-type]
+    for unsafe in ("token=secret", "purpose\nforged", "human readable prose", "a" * 128):
+        with pytest.raises(ValueError, match="structural token"):
+            SensitiveValueAccess(purpose=unsafe)
 
 
 def test_deep_immutability_accepts_only_closed_immutable_graphs() -> None:
@@ -126,7 +141,7 @@ def test_deep_immutability_accepts_only_closed_immutable_graphs() -> None:
         None,
         Decimal("1.25"),
         ("a", 1, Decimal("2")),
-        _FrozenPayload("value"),
+        Duration(nanoseconds=1),
     )
     for value in accepted:
         assert SensitiveValue(value, origins=origin).payload_type is type(value)
@@ -138,6 +153,7 @@ def test_deep_immutability_accepts_only_closed_immutable_graphs() -> None:
         ("safe", []),
         _MutablePayload("value"),
         _FrozenWithMutablePayload(["value"]),
+        _FrozenPayload("value"),
     )
     for value in rejected:
         with pytest.raises(TypeError, match="deeply immutable"):
@@ -146,7 +162,7 @@ def test_deep_immutability_accepts_only_closed_immutable_graphs() -> None:
 
 def test_sensitive_values_and_access_capabilities_are_immutable() -> None:
     sensitive = SensitiveValue("token", origins=(_origin(),))
-    access = SensitiveValueAccess(purpose="construct authorization header")
+    access = SensitiveValueAccess(purpose="http.authorization.header")
 
     with pytest.raises(AttributeError, match="immutable"):
         sensitive.__setattr__("_origins", ())

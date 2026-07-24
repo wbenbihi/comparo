@@ -1,6 +1,7 @@
 """Tests for runtime and non-runtime budget scope contracts."""
 
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -14,8 +15,12 @@ from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import BudgetStage
 from comparo.core.domain.budgets import BudgetUsage
 from comparo.core.domain.budgets import ResourceBudget
+from comparo.core.domain.identity import AnalysisId
+from comparo.core.domain.identity import ArtifactId
 from comparo.core.domain.identity import AttemptId
+from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import CellId
+from comparo.core.domain.identity import ComparisonId
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
@@ -23,19 +28,26 @@ from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.identity import StepExecutionId
+from comparo.core.domain.identity import StreamId
 from comparo.core.domain.identity import TrialId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Ratio
+from comparo.core.domain.scopes import ArtifactBudgetScope
 from comparo.core.domain.scopes import AttemptScope
+from comparo.core.domain.scopes import BodyBudgetScope
 from comparo.core.domain.scopes import CellScope
+from comparo.core.domain.scopes import ComparisonBudgetScope
 from comparo.core.domain.scopes import EnvironmentScope
 from comparo.core.domain.scopes import ExecutionScope
+from comparo.core.domain.scopes import ExternalCapabilityBudgetScope
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.scopes import RuntimeScope
 from comparo.core.domain.scopes import StepScope
+from comparo.core.domain.scopes import StreamBudgetScope
 from comparo.core.domain.scopes import TrialScope
+from comparo.core.domain.scopes import run_scope_of
 from tests.core.domain.budget_origin_factories import default_budget_origin
 from tests.core.domain.budget_origin_factories import definition_budget_origin
 from tests.core.domain.budget_origin_factories import invocation_budget_origin
@@ -185,32 +197,55 @@ def test_runtime_budget_scope_kind_requires_its_exact_concrete_scope() -> None:
         _with_scope(BudgetScopeKind.CELL, run)
 
 
-def test_non_runtime_budget_scope_kinds_forbid_runtime_coordinates() -> None:
+def test_specialized_budget_scope_kinds_require_exact_coordinates() -> None:
+    runtime = dict(_runtime_scopes())
+    run = runtime[BudgetScopeKind.RUN]
+    cell = runtime[BudgetScopeKind.CELL]
+    attempt = runtime[BudgetScopeKind.ATTEMPT]
+    execution = runtime[BudgetScopeKind.EXECUTION]
+    assert type(run) is RunScope
+    assert type(cell) is CellScope
+    assert type(attempt) is AttemptScope
+    assert type(execution) is ExecutionScope
     definitions = (
-        (BudgetResource.REQUESTS, BudgetScopeKind.PLAN, BudgetStage.PLANNING, Count(value=1)),
-        (BudgetResource.REQUEST_BYTES, BudgetScopeKind.BODY, BudgetStage.HTTP, ByteCount(value=1)),
-        (BudgetResource.STREAM_EVENTS, BudgetScopeKind.STREAM, BudgetStage.STREAM, Count(value=1)),
+        (
+            BudgetResource.REQUEST_BYTES,
+            BudgetScopeKind.BODY,
+            BudgetStage.HTTP,
+            ByteCount(value=1),
+            BodyBudgetScope(attempt=attempt, body_id=BodyId(value=UUID(int=20))),
+        ),
+        (
+            BudgetResource.STREAM_EVENTS,
+            BudgetScopeKind.STREAM,
+            BudgetStage.STREAM,
+            Count(value=1),
+            StreamBudgetScope(execution=execution, stream_id=StreamId(value=UUID(int=21))),
+        ),
         (
             BudgetResource.SELECTION_WORK,
             BudgetScopeKind.COMPARISON,
             BudgetStage.SELECTION,
             Count(value=1),
+            ComparisonBudgetScope(run=run, comparison_id=ComparisonId(value=UUID(int=22))),
         ),
         (
             BudgetResource.ARTIFACT_BLOBS,
             BudgetScopeKind.ARTIFACT,
             BudgetStage.ARTIFACT,
             Count(value=1),
+            ArtifactBudgetScope(run=run, artifact_id=ArtifactId(value="artifact-23")),
         ),
         (
             BudgetResource.EXTERNAL_WORK,
             BudgetScopeKind.EXTERNAL_CAPABILITY,
             BudgetStage.EXTERNAL_CAPABILITY,
             Count(value=1),
+            ExternalCapabilityBudgetScope(run=run, analysis_id=AnalysisId(value=UUID(int=24))),
         ),
     )
-    run = _runtime_scopes()[0][1]
-    for resource, scope_kind, stage, amount in definitions:
+    for resource, scope_kind, stage, amount, scope in definitions:
+        assert run_scope_of(scope) == run
         values = {
             "resource": resource,
             "scope_kind": scope_kind,
@@ -222,6 +257,72 @@ def test_non_runtime_budget_scope_kinds_forbid_runtime_coordinates() -> None:
             "contributions": (_contribution(amount),),
             "usage": _usage(amount),
         }
-        assert ResourceBudget(**values).scope is None  # type: ignore[arg-type]
-        with pytest.raises(ValueError, match="cannot carry"):
+        assert ResourceBudget(**values, scope=scope).scope is scope  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="requires a concrete scope"):
+            ResourceBudget(**values)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="must match"):
             ResourceBudget(**values, scope=run)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="body budget scope"):
+        BodyBudgetScope(attempt=cast("AttemptScope", run), body_id=BodyId(value=UUID(int=30)))
+    with pytest.raises(TypeError, match="body budget scope"):
+        BodyBudgetScope(attempt=attempt, body_id=cast("BodyId", StreamId(value=UUID(int=30))))
+    with pytest.raises(TypeError, match="stream budget scope"):
+        StreamBudgetScope(
+            execution=cast("ExecutionScope", run),
+            stream_id=StreamId(value=UUID(int=31)),
+        )
+    with pytest.raises(TypeError, match="stream budget scope"):
+        StreamBudgetScope(
+            execution=execution,
+            stream_id=cast("StreamId", BodyId(value=UUID(int=31))),
+        )
+    with pytest.raises(TypeError, match="comparison budget scope"):
+        ComparisonBudgetScope(
+            run=cast("RunScope", cell),
+            comparison_id=ComparisonId(value=UUID(int=32)),
+        )
+    with pytest.raises(TypeError, match="comparison budget scope"):
+        ComparisonBudgetScope(
+            run=run,
+            comparison_id=cast("ComparisonId", BodyId(value=UUID(int=32))),
+        )
+    with pytest.raises(TypeError, match="artifact budget scope"):
+        ArtifactBudgetScope(
+            run=cast("RunScope", cell),
+            artifact_id=ArtifactId(value="artifact-33"),
+        )
+    with pytest.raises(TypeError, match="artifact budget scope"):
+        ArtifactBudgetScope(
+            run=run,
+            artifact_id=cast("ArtifactId", BodyId(value=UUID(int=33))),
+        )
+    with pytest.raises(TypeError, match="external capability budget scope"):
+        ExternalCapabilityBudgetScope(
+            run=cast("RunScope", cell),
+            analysis_id=AnalysisId(value=UUID(int=34)),
+        )
+    with pytest.raises(TypeError, match="external capability budget scope"):
+        ExternalCapabilityBudgetScope(
+            run=run,
+            analysis_id=cast("AnalysisId", BodyId(value=UUID(int=34))),
+        )
+    with pytest.raises(TypeError, match="unsupported runtime scope"):
+        run_scope_of(cast("RuntimeScope", object()))
+
+
+def test_plan_budget_scope_remains_intentionally_unaddressed() -> None:
+    values = {
+        "resource": BudgetResource.REQUESTS,
+        "scope_kind": BudgetScopeKind.PLAN,
+        "stage": BudgetStage.PLANNING,
+        "operation": BudgetOperation(value="test.plan"),
+        "requested": Count(value=1),
+        "effective": Count(value=1),
+        "cap": None,
+        "contributions": (_contribution(Count(value=1)),),
+        "usage": _usage(Count(value=1)),
+    }
+    assert ResourceBudget(**values).scope is None  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="cannot carry"):
+        ResourceBudget(**values, scope=_runtime_scopes()[0][1])  # type: ignore[arg-type]

@@ -4,4 +4,4 @@ from __future__ import annotations
 
 from comparo.core.domain.diffs.rules import CompiledDiffRule
 
-__all__ = ["CompiledDiffRule"]
+__all__ = ("CompiledDiffRule",)

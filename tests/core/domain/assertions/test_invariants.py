@@ -46,6 +46,8 @@ from comparo.core.domain.assertions.rules import AnyConditions
 from comparo.core.domain.assertions.rules import PredicateCondition
 from comparo.core.domain.assertions.rules import Quantifier
 from comparo.core.domain.assertions.rules import is_applicability_condition
+from comparo.core.domain.capabilities import CapabilityTargetKind
+from comparo.core.domain.capabilities import NamedCapabilityTarget
 from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.http.media_types import MediaType
 from comparo.core.domain.http.media_types import MediaTypeTokenValue
@@ -180,11 +182,19 @@ def test_operator_fields_reject_untyped_direct_construction() -> None:
 
 
 def test_extended_operator_fields_reject_untyped_direct_construction() -> None:
-    remote = CompiledSchema(fingerprint=_fingerprint(), remote_uri="https://example.test/schema")
+    remote_uri = NamedCapabilityTarget(
+        kind=CapabilityTargetKind.SCHEMA_SOURCE,
+        identifier="https://example.test/schema",
+    )
+    dialect = NamedCapabilityTarget(
+        kind=CapabilityTargetKind.SCHEMA_SOURCE,
+        identifier="https://json-schema.org/draft/2020-12/schema",
+    )
+    remote = CompiledSchema(fingerprint=_fingerprint(), remote_uri=remote_uri)
     with pytest.raises(TypeError, match="fingerprint"):
         CompiledSchema(
             fingerprint=cast("Fingerprint", "bad"),
-            remote_uri="https://example.test/schema",
+            remote_uri=remote_uri,
         )
     with pytest.raises(ValueError, match="Schema resource"):
         CompiledSchema(
@@ -199,16 +209,25 @@ def test_extended_operator_fields_reject_untyped_direct_construction() -> None:
             ),
         )
     with pytest.raises(ValueError, match="URI"):
-        CompiledSchema(fingerprint=_fingerprint(), remote_uri="")
+        CompiledSchema(
+            fingerprint=_fingerprint(),
+            remote_uri=cast("NamedCapabilityTarget", ""),
+        )
     with pytest.raises(TypeError, match="CompiledSchema"):
         SchemaOperator(
             schema=cast("CompiledSchema", "bad"),
-            default_dialect="2020-12",
+            default_dialect=dialect,
         )
     with pytest.raises(ValueError, match="dialect"):
-        SchemaOperator(schema=remote, default_dialect="")
+        SchemaOperator(
+            schema=remote,
+            default_dialect=NamedCapabilityTarget(
+                kind=CapabilityTargetKind.PROVIDER,
+                identifier="json-schema-dialect",
+            ),
+        )
     with pytest.raises(TypeError, match="format"):
-        SchemaOperator(schema=remote, default_dialect="2020-12", assert_formats=cast("bool", 1))
+        SchemaOperator(schema=remote, default_dialect=dialect, assert_formats=cast("bool", 1))
     with pytest.raises(TypeError, match="BodyViewKind"):
         DecodeOperator(view=cast("BodyViewKind", "json"))
     with pytest.raises(TypeError, match="MediaRelation"):

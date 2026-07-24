@@ -23,7 +23,11 @@ from comparo.core.domain.http.url import ProxyResolvedTarget
 from comparo.core.domain.http.url import ResolvedRoute
 from comparo.core.domain.http.url import effective_port
 from comparo.core.domain.http.url import is_resolved_route
+from comparo.core.domain.identity import AttemptId
+from comparo.core.domain.identity import EnvironmentExecutionId
+from comparo.core.domain.identity import ExchangeId
 from comparo.core.domain.primitives import Fingerprint
+from comparo.core.domain.scopes import AttemptScope
 
 _HTTP_EXECUTE_ID = CapabilityId(namespace="comparo", name="http", version="1")
 _HTTP_EXECUTE_OPERATION = CapabilityOperation(value="request.execute")
@@ -140,11 +144,70 @@ def _validate_policy_authority(
 
 
 @final
+class HttpRequestOccurrence(msgspec.Struct, frozen=True, kw_only=True):
+    """Exact outbound occurrence for which an HTTP request is authorized."""
+
+    attempt: AttemptScope
+    exchange_id: ExchangeId
+
+    def __post_init__(self) -> None:
+        """Reject untyped occurrence identities at the authorization boundary."""
+        if type(self.attempt) is not AttemptScope:
+            raise TypeError("HTTP occurrence attempt must be AttemptScope")
+        if type(self.exchange_id) is not ExchangeId:
+            raise TypeError("HTTP occurrence exchange ID must be ExchangeId")
+
+    @property
+    def execution_id(self) -> EnvironmentExecutionId:
+        """Return the Environment execution ID from the exact attempt scope."""
+        return self.attempt.execution.execution_id
+
+    @property
+    def attempt_id(self) -> AttemptId:
+        """Return the attempt ID from the exact attempt scope."""
+        return self.attempt.attempt_id
+
+
+def _validate_occurrence_request(
+    occurrence: HttpRequestOccurrence,
+    request: FinalizedWireRequest,
+) -> None:
+    """Bind a full outbound occurrence scope to the request Environment identity."""
+    if occurrence.attempt.execution.environment.environment != request.environment.identity:
+        raise ValueError("HTTP authorization occurrence changed its Environment identity")
+
+
+def _requires_mutation_approval(intent: HttpAuthorizationIntent) -> bool:
+    """Return whether this exact route-pinned intent requires mutation authority."""
+    return (
+        intent.request.method.value not in _SAFE_METHODS
+        and type(intent.request.policies.mutation_approval) is MutationApprovalRequired
+    )
+
+
+def _requires_proxy_dns_approval(intent: HttpAuthorizationIntent) -> bool:
+    """Return whether this exact route delegates target resolution to its proxy."""
+    return (
+        type(intent.route) is ProxyResolvedRoute
+        and type(intent.route.target) is ProxyResolvedTarget
+    )
+
+
+def _validate_required_safeguard_approvals(intent: HttpAuthorizationIntent) -> None:
+    """Require every positive safeguard before issuing final HTTP send authority."""
+    if _requires_mutation_approval(intent) and intent.mutation_approval is None:
+        raise ValueError("unsafe HTTP method requires ExecutionPolicy mutation approval")
+    if _requires_proxy_dns_approval(intent) and intent.proxy_dns_approval is None:
+        raise ValueError("proxy-side DNS requires explicit ExecutionPolicy approval")
+
+
+@final
 class MutationApproval(msgspec.Struct, frozen=True, kw_only=True):
     """ExecutionPolicy authority for one exact unsafe request intent."""
 
     request: FinalizedWireRequest
     route: ResolvedRoute
+    occurrence: HttpRequestOccurrence
     plan_fingerprint: Fingerprint
     authority: ExecutionPolicyAuthority
     capability_id: CapabilityId = _HTTP_MUTATION_ID
@@ -156,6 +219,9 @@ class MutationApproval(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("mutation approval request must be FinalizedWireRequest")
         if not is_resolved_route(self.route):
             raise TypeError("mutation approval route must be ResolvedRoute")
+        if type(self.occurrence) is not HttpRequestOccurrence:
+            raise TypeError("mutation approval occurrence must be HttpRequestOccurrence")
+        _validate_occurrence_request(self.occurrence, self.request)
         if type(self.plan_fingerprint) is not Fingerprint:
             raise TypeError("mutation approval plan binding must be Fingerprint")
         _validate_policy_authority(self.authority, self.authority.policy.fingerprint)
@@ -179,6 +245,7 @@ class ProxyDnsApproval(msgspec.Struct, frozen=True, kw_only=True):
 
     request: FinalizedWireRequest
     route: ResolvedRoute
+    occurrence: HttpRequestOccurrence
     plan_fingerprint: Fingerprint
     authority: ExecutionPolicyAuthority
     capability_id: CapabilityId = _PROXY_DNS_ID
@@ -190,6 +257,9 @@ class ProxyDnsApproval(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("proxy DNS approval request must be FinalizedWireRequest")
         if not is_resolved_route(self.route):
             raise TypeError("proxy DNS approval route must be ResolvedRoute")
+        if type(self.occurrence) is not HttpRequestOccurrence:
+            raise TypeError("proxy DNS approval occurrence must be HttpRequestOccurrence")
+        _validate_occurrence_request(self.occurrence, self.request)
         if (
             type(self.route) is not ProxyResolvedRoute
             or type(self.route.target) is not ProxyResolvedTarget
@@ -218,6 +288,7 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
 
     request: FinalizedWireRequest
     route: ResolvedRoute
+    occurrence: HttpRequestOccurrence
     plan_fingerprint: Fingerprint
     effective_policy_fingerprint: Fingerprint
     mutation_approval: MutationApproval | None = None
@@ -229,6 +300,9 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("HTTP authorization intent request must be FinalizedWireRequest")
         if not is_resolved_route(self.route):
             raise TypeError("HTTP authorization intent route must be ResolvedRoute")
+        if type(self.occurrence) is not HttpRequestOccurrence:
+            raise TypeError("HTTP authorization occurrence must be HttpRequestOccurrence")
+        _validate_occurrence_request(self.occurrence, self.request)
         if type(self.plan_fingerprint) is not Fingerprint:
             raise TypeError("HTTP authorization plan binding must be Fingerprint")
         if type(self.effective_policy_fingerprint) is not Fingerprint:
@@ -239,9 +313,6 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
 
     def _validate_mutation_approval(self) -> None:
         unsafe = self.request.method.value not in _SAFE_METHODS
-        required = type(self.request.policies.mutation_approval) is MutationApprovalRequired
-        if unsafe and required and self.mutation_approval is None:
-            raise ValueError("unsafe HTTP method requires ExecutionPolicy mutation approval")
         if not unsafe and self.mutation_approval is not None:
             raise ValueError("safe HTTP methods cannot carry mutation approval")
         if self.mutation_approval is not None:
@@ -250,6 +321,7 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
             if (
                 self.mutation_approval.request != self.request
                 or self.mutation_approval.route != self.route
+                or self.mutation_approval.occurrence != self.occurrence
                 or self.mutation_approval.plan_fingerprint != self.plan_fingerprint
                 or self.mutation_approval.effective_policy_fingerprint
                 != self.effective_policy_fingerprint
@@ -270,17 +342,19 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
         )
         if delegated is None and self.proxy_dns_approval is not None:
             raise ValueError("client-resolved routes cannot carry proxy DNS approval")
-        if delegated is not None:
-            if self.proxy_dns_approval is None:
-                raise ValueError("proxy-side DNS requires explicit ExecutionPolicy approval")
-            if (
+        if (
+            delegated is not None
+            and self.proxy_dns_approval is not None
+            and (
                 self.proxy_dns_approval.request != self.request
                 or self.proxy_dns_approval.route != self.route
+                or self.proxy_dns_approval.occurrence != self.occurrence
                 or self.proxy_dns_approval.plan_fingerprint != self.plan_fingerprint
                 or self.proxy_dns_approval.effective_policy_fingerprint
                 != self.effective_policy_fingerprint
-            ):
-                raise ValueError("proxy DNS approval is not bound to this HTTP intent")
+            )
+        ):
+            raise ValueError("proxy DNS approval is not bound to this HTTP intent")
 
 
 @final
@@ -296,6 +370,7 @@ class HttpAuthorizationGrant(msgspec.Struct, frozen=True, kw_only=True):
         """Require the exact built-in ``comparo/http@1 request.execute`` capability contract."""
         if type(self.intent) is not HttpAuthorizationIntent:
             raise TypeError("HTTP authorization grant intent must be HttpAuthorizationIntent")
+        _validate_required_safeguard_approvals(self.intent)
         _validate_policy_authority(self.authority, self.intent.effective_policy_fingerprint)
         approvals = (self.intent.mutation_approval, self.intent.proxy_dns_approval)
         if any(
@@ -332,3 +407,8 @@ class AuthorizedExchangeRequest(msgspec.Struct, frozen=True, kw_only=True):
     def route(self) -> ResolvedRoute:
         """Return the exact pinned route carried by the authorized intent."""
         return self.authorization.intent.route
+
+    @property
+    def occurrence(self) -> HttpRequestOccurrence:
+        """Return the exact execution, attempt, and exchange authorized to send."""
+        return self.authorization.intent.occurrence

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.selectors.items import CompiledItemPredicate
 from comparo.core.domain.selectors.items import CompiledItemSelector
 from comparo.core.domain.selectors.items import is_singular_item_selector
@@ -19,7 +19,7 @@ BUILTIN_DIFF_NAMESPACE = "comparo.core"
 BUILTIN_DIFF_VERSION = "1"
 
 
-class DiffOperationFamily(StrEnum):
+class DiffOperationFamily(DomainStrEnum):
     """Distinct pure pipeline stages."""
 
     TRANSFORM = "transform"
@@ -94,7 +94,7 @@ class Exclusion(msgspec.Struct, frozen=True, kw_only=True):
         _require_pointers(self.pointers)
 
 
-class TrimMode(StrEnum):
+class TrimMode(DomainStrEnum):
     """Explicit text trimming."""
 
     NONE = "none"
@@ -103,14 +103,14 @@ class TrimMode(StrEnum):
     BOTH = "both"
 
 
-class NewlineMode(StrEnum):
+class NewlineMode(DomainStrEnum):
     """Explicit newline treatment."""
 
     PRESERVE = "preserve"
     LF = "lf"
 
 
-class CaseMode(StrEnum):
+class CaseMode(DomainStrEnum):
     """Explicit case treatment."""
 
     PRESERVE = "preserve"
@@ -166,7 +166,7 @@ class CollectionFilter(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("collection filter requires a CompiledItemPredicate")
 
 
-class LengthUnit(StrEnum):
+class LengthUnit(DomainStrEnum):
     """Explicit units for string, byte, and collection lengths."""
 
     UNICODE_SCALARS = "unicode-scalars"
@@ -200,7 +200,7 @@ class ValueTypeTransform(msgspec.Struct, frozen=True, kw_only=True):
         require_operation(self.identity, DiffOperationFamily.TRANSFORM, "value-type")
 
 
-class JsonShapeArrayMode(StrEnum):
+class JsonShapeArrayMode(DomainStrEnum):
     """How array members contribute to a derived JSON shape."""
 
     POSITIONAL = "positional"
@@ -221,7 +221,7 @@ class JsonShapeTransform(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("JSON shape array mode must be a JsonShapeArrayMode")
 
 
-class DiffDigestAlgorithm(StrEnum):
+class DiffDigestAlgorithm(DomainStrEnum):
     """Initial deterministic digest transforms."""
 
     SHA256 = "sha256"
@@ -242,7 +242,7 @@ class DigestTransform(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("digest transform algorithm must be a DiffDigestAlgorithm")
 
 
-class StreamSemanticSource(StrEnum):
+class StreamSemanticSource(DomainStrEnum):
     """Application records that deliberately exclude HTTP chunk boundaries."""
 
     SSE_EVENT = "sse-event"
@@ -268,7 +268,7 @@ class StreamProjection(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("stream projection selector must be a CompiledItemSelector")
 
 
-class SortDirection(StrEnum):
+class SortDirection(DomainStrEnum):
     """Explicit deterministic sort direction."""
 
     ASCENDING = "ascending"

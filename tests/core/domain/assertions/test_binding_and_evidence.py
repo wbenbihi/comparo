@@ -32,13 +32,16 @@ from comparo.core.domain.assertions.rules import Severity
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.identity import EffectiveRuleId
 from comparo.core.domain.identity import EnvironmentExecutionId
+from comparo.core.domain.identity import ExchangeId
 from comparo.core.domain.identity import FactId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
-from comparo.core.domain.selectors.locations import ExecutionLocation
+from comparo.core.domain.selectors.locations import ExchangeLocation
 from comparo.core.domain.selectors.paths import StaticFieldPath
 from comparo.core.domain.selectors.results import SelectionMatch
+from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.values import JsonInteger
+from comparo.core.domain.values import JsonString
 from tests.core.domain.assertions._invariant_support import _application
 from tests.core.domain.assertions._invariant_support import _assertion_fact
 from tests.core.domain.assertions._invariant_support import _compiled_rule
@@ -175,8 +178,10 @@ def test_quantifier_and_predicate_free_cardinality_outcome_laws() -> None:
 def test_assertion_evidence_ids_and_outcome_buckets_cannot_contradict_counts() -> None:
     match = SelectionMatch(
         value=JsonInteger(value=200),
-        location=ExecutionLocation(
-            execution_id=EnvironmentExecutionId(value=UUID(int=704)),
+        location=ExchangeLocation(
+            environment_execution_id=_application().environment_execution_id,
+            source=SelectorSource.RESPONSE_STATUS,
+            exchange_id=ExchangeId(value=UUID(int=7041)),
             field=StaticFieldPath(segments=("response", "status")),
         ),
     )
@@ -201,6 +206,122 @@ def test_assertion_evidence_ids_and_outcome_buckets_cannot_contradict_counts() -
                 errors=Count(value=0),
             ),
             evidence=AssertionEvidence(retained=(fact,), omitted=Count(value=0)),
+        )
+
+
+def test_assertion_retained_locations_bind_execution_and_selector_source() -> None:
+    application = _application()
+    rule = _compiled_rule()
+    location = ExchangeLocation(
+        environment_execution_id=application.environment_execution_id,
+        source=SelectorSource.RESPONSE_STATUS,
+        exchange_id=ExchangeId(value=UUID(int=710)),
+        field=StaticFieldPath(segments=("response", "status")),
+    )
+    retained = MatchFact(
+        fact_id=FactId(value=UUID(int=711)),
+        match=SelectionMatch(value=JsonInteger(value=200), location=location),
+        outcome=MatchOutcome.SATISFIED,
+    )
+    counts = AssertionCounts(
+        selected=Count(value=1),
+        evaluated=Count(value=1),
+        satisfied=Count(value=1),
+        violated=Count(value=0),
+        errors=Count(value=0),
+    )
+
+    valid = AssertionFact(
+        fact_id=FactId(value=UUID(int=712)),
+        application=application,
+        rule=rule,
+        outcome=Satisfied(),
+        counts=counts,
+        evidence=AssertionEvidence(retained=(retained,), omitted=Count(value=0)),
+    )
+    with pytest.raises(ValueError, match="parent fact ID"):
+        msgspec.structs.replace(valid, fact_id=retained.fact_id)
+    with pytest.raises(ValueError, match="different Environment execution"):
+        msgspec.structs.replace(
+            valid,
+            evidence=AssertionEvidence(
+                retained=(
+                    msgspec.structs.replace(
+                        retained,
+                        match=msgspec.structs.replace(
+                            retained.match,
+                            location=msgspec.structs.replace(
+                                location,
+                                environment_execution_id=EnvironmentExecutionId(
+                                    value=UUID(int=713)
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                omitted=Count(value=0),
+            ),
+        )
+    with pytest.raises(ValueError, match="source does not match"):
+        msgspec.structs.replace(
+            valid,
+            evidence=AssertionEvidence(
+                retained=(
+                    msgspec.structs.replace(
+                        retained,
+                        match=msgspec.structs.replace(
+                            retained.match,
+                            location=msgspec.structs.replace(
+                                location,
+                                source=SelectorSource.RESPONSE_PROTOCOL,
+                                field=StaticFieldPath(segments=("response", "protocol")),
+                            ),
+                        ),
+                    ),
+                ),
+                omitted=Count(value=0),
+            ),
+        )
+
+    false_retained = MatchFact(
+        fact_id=FactId(value=UUID(int=7131)),
+        match=SelectionMatch(value=JsonString(value="not-an-integer"), location=location),
+        outcome=MatchOutcome.VIOLATED,
+    )
+    with pytest.raises(ValueError, match="value kind contradicts"):
+        AssertionFact(
+            fact_id=FactId(value=UUID(int=7132)),
+            application=application,
+            rule=rule,
+            outcome=Violated(reason=ViolationReason.PREDICATE),
+            counts=AssertionCounts(
+                selected=Count(value=1),
+                evaluated=Count(value=1),
+                satisfied=Count(value=0),
+                violated=Count(value=1),
+                errors=Count(value=0),
+            ),
+            evidence=AssertionEvidence(retained=(false_retained,), omitted=Count(value=0)),
+        )
+
+    repeated = msgspec.structs.replace(
+        retained,
+        fact_id=FactId(value=UUID(int=714)),
+    )
+    with pytest.raises(ValueError, match="cannot repeat a location"):
+        msgspec.structs.replace(
+            valid,
+            counts=AssertionCounts(
+                selected=Count(value=2),
+                evaluated=Count(value=2),
+                satisfied=Count(value=2),
+                violated=Count(value=0),
+                errors=Count(value=0),
+            ),
+            evidence=AssertionEvidence(
+                retained=(retained, repeated),
+                omitted=Count(value=0),
+            ),
         )
 
 

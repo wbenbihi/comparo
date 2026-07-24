@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from enum import StrEnum
 from types import MappingProxyType
 from typing import NamedTuple
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Ratio
 
 
-class BudgetResource(StrEnum):
+class BudgetResource(DomainStrEnum):
     """Independently configurable resource dimensions."""
 
     REQUESTS = "requests"
@@ -68,7 +68,7 @@ class BudgetResource(StrEnum):
     EXTERNAL_WORK = "external-work"
 
 
-class BudgetScopeKind(StrEnum):
+class BudgetScopeKind(DomainStrEnum):
     """The accounting boundary for a resource budget."""
 
     PLAN = "plan"
@@ -86,7 +86,7 @@ class BudgetScopeKind(StrEnum):
     EXTERNAL_CAPABILITY = "external-capability"
 
 
-class BudgetStage(StrEnum):
+class BudgetStage(DomainStrEnum):
     """The stage responsible for enforcing and reporting a budget."""
 
     PLANNING = "planning"
@@ -103,14 +103,14 @@ class BudgetStage(StrEnum):
     EXTERNAL_CAPABILITY = "external-capability"
 
 
-class BudgetAccountingMode(StrEnum):
+class BudgetAccountingMode(DomainStrEnum):
     """How usage fields are interpreted for a budget dimension."""
 
     CUMULATIVE = "cumulative"
     CONCURRENT = "concurrent"
 
 
-class BudgetExhaustionEffect(StrEnum):
+class BudgetExhaustionEffect(DomainStrEnum):
     """The typed consequence of exhaustion at the responsible stage."""
 
     PLAN_REJECTED = "plan-rejected"
@@ -361,6 +361,21 @@ _CONTRACTS = MappingProxyType(
         BudgetResource.EVIDENCE_BYTES: _contract(
             ByteCount, _EVALUATION_SCOPES, frozenset({BudgetStage.EVIDENCE}), _EVIDENCE_EFFECT
         ),
+        BudgetResource.MEMORY_BYTES: _contract(
+            ByteCount,
+            frozenset(set(_STORAGE_SCOPES) | {BudgetScopeKind.BODY}),
+            frozenset({BudgetStage.STORAGE, BudgetStage.DECODING}),
+            frozenset(set(_OBSERVATION_EFFECTS) | set(_EVALUATION_EFFECT)),
+            accounting=BudgetAccountingMode.CONCURRENT,
+            placements=frozenset(
+                {(scope, BudgetStage.STORAGE) for scope in _STORAGE_SCOPES}
+                | {(BudgetScopeKind.BODY, BudgetStage.DECODING)}
+            ),
+            stage_effects={
+                BudgetStage.STORAGE: _OBSERVATION_EFFECTS,
+                BudgetStage.DECODING: _EVALUATION_EFFECT,
+            },
+        ),
         **{
             resource: _contract(
                 ByteCount,
@@ -370,7 +385,6 @@ _CONTRACTS = MappingProxyType(
                 accounting=BudgetAccountingMode.CONCURRENT,
             )
             for resource in {
-                BudgetResource.MEMORY_BYTES,
                 BudgetResource.TRANSIENT_STORAGE_BYTES,
                 BudgetResource.STORE_QUOTA_BYTES,
             }

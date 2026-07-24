@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+import re
 from typing import TypeGuard
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.http.auth import BasicAuthentication
 from comparo.core.domain.http.auth import BearerAuthentication
 from comparo.core.domain.http.auth import NoAuthentication
@@ -18,6 +19,8 @@ from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Ratio
+
+_LOGICAL_TLS_REFERENCE_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 @final
@@ -66,7 +69,7 @@ class TimeoutPolicy(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("execution total timeout cannot be shorter than attempt total")
 
 
-class RetryCondition(StrEnum):
+class RetryCondition(DomainStrEnum):
     """Observable conditions on which a new attempt may be scheduled."""
 
     DNS_FAILURE = "dns-failure"
@@ -199,14 +202,14 @@ class RetryPolicy(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("mutation retry must be a supported tagged strategy")
 
 
-class TlsVersion(StrEnum):
+class TlsVersion(DomainStrEnum):
     """Supported minimum TLS protocol versions."""
 
     TLS_1_2 = "tls-1.2"
     TLS_1_3 = "tls-1.3"
 
 
-class TrustSource(StrEnum):
+class TrustSource(DomainStrEnum):
     """The explicit source of server-certificate trust anchors."""
 
     OPERATING_SYSTEM = "operating-system"
@@ -220,9 +223,13 @@ class TrustStoreRef(msgspec.Struct, frozen=True, kw_only=True):
     value: str
 
     def __post_init__(self) -> None:
-        """Require a non-blank logical trust-store identity."""
-        if type(self.value) is not str or not self.value.strip():
-            raise ValueError("trust-store reference must be non-blank text")
+        """Require a bounded logical identity, never path or certificate material."""
+        if (
+            type(self.value) is not str
+            or len(self.value) > 63
+            or _LOGICAL_TLS_REFERENCE_PATTERN.fullmatch(self.value) is None
+        ):
+            raise ValueError("trust-store reference must be a lowercase logical slug")
 
 
 @final
@@ -232,9 +239,13 @@ class ClientIdentityRef(msgspec.Struct, frozen=True, kw_only=True):
     value: str
 
     def __post_init__(self) -> None:
-        """Require a non-blank logical client identity."""
-        if type(self.value) is not str or not self.value.strip():
-            raise ValueError("client-identity reference must be non-blank text")
+        """Require a bounded logical identity, never path or private-key material."""
+        if (
+            type(self.value) is not str
+            or len(self.value) > 63
+            or _LOGICAL_TLS_REFERENCE_PATTERN.fullmatch(self.value) is None
+        ):
+            raise ValueError("client-identity reference must be a lowercase logical slug")
 
 
 @final
@@ -268,6 +279,29 @@ class TlsPolicy(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ProxyTlsDisabled(msgspec.Struct, frozen=True, kw_only=True):
+    """Declare that the explicit proxy connection itself uses clear text."""
+
+    def __post_init__(self) -> None:
+        """Retain a uniform direct-construction validation boundary."""
+
+
+@final
+class ProxyTlsPolicy(msgspec.Struct, frozen=True, kw_only=True):
+    """TLS policy applied only to the connection between Comparo and a proxy."""
+
+    policy: TlsPolicy
+
+    def __post_init__(self) -> None:
+        """Keep proxy trust and mTLS authority structurally separate from the target."""
+        if type(self.policy) is not TlsPolicy:
+            raise TypeError("proxy TLS policy must contain a TlsPolicy")
+
+
+type ProxyTlsConfiguration = ProxyTlsDisabled | ProxyTlsPolicy
+
+
+@final
 class NoProxy(msgspec.Struct, frozen=True, kw_only=True):
     """Disable proxying and all ambient proxy discovery."""
 
@@ -285,6 +319,7 @@ class ExplicitProxy(msgspec.Struct, frozen=True, kw_only=True):
     scheme: HttpScheme
     authority: HttpAuthority
     authentication: ProxyAuthentication
+    tls: ProxyTlsConfiguration
 
     def __post_init__(self) -> None:
         """Require an explicit endpoint and closed proxy-authentication variant."""
@@ -298,12 +333,18 @@ class ExplicitProxy(msgspec.Struct, frozen=True, kw_only=True):
             BearerAuthentication,
         }:
             raise TypeError("proxy authentication must be none, Basic, or Bearer")
+        if type(self.tls) not in {ProxyTlsDisabled, ProxyTlsPolicy}:
+            raise TypeError("proxy TLS configuration must be explicit")
+        if self.scheme is HttpScheme.HTTPS and type(self.tls) is not ProxyTlsPolicy:
+            raise ValueError("an HTTPS proxy requires an independent proxy TLS policy")
+        if self.scheme is HttpScheme.HTTP and type(self.tls) is not ProxyTlsDisabled:
+            raise ValueError("a clear-text proxy cannot carry a proxy TLS policy")
 
 
 type ProxyPolicy = NoProxy | ExplicitProxy
 
 
-class RedirectMethodMode(StrEnum):
+class RedirectMethodMode(DomainStrEnum):
     """Method handling for historically ambiguous 301 and 302 responses."""
 
     STRICT_PRESERVE = "strict-preserve"

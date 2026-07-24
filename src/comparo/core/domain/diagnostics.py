@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.provenance import SourceLocation
@@ -28,7 +28,7 @@ class DiagnosticCode(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("diagnostic code must be a lowercase namespaced token")
 
 
-class DiagnosticSeverity(StrEnum):
+class DiagnosticSeverity(DomainStrEnum):
     """The stable severity levels understood by all reporting adapters."""
 
     ERROR = "error"
@@ -36,7 +36,7 @@ class DiagnosticSeverity(StrEnum):
     INFO = "info"
 
 
-class DiagnosticStage(StrEnum):
+class DiagnosticStage(DomainStrEnum):
     """The engine stage that produced a diagnostic without exposing input values."""
 
     CONFIGURATION = "configuration"

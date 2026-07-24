@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
@@ -16,6 +15,7 @@ from comparo.core.domain.assertions.extended_operators import MediaTypeOperator
 from comparo.core.domain.assertions.extended_operators import SchemaOperator
 from comparo.core.domain.assertions.extended_operators import TokenOperator
 from comparo.core.domain.assertions.regex import RegexOperator
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.primitives import Count
@@ -26,7 +26,7 @@ BUILTIN_ASSERTION_NAMESPACE = "comparo.core"
 BUILTIN_ASSERTION_VERSION = "1"
 
 
-class AssertionOperatorKind(StrEnum):
+class AssertionOperatorKind(DomainStrEnum):
     """Stable built-in operation names."""
 
     EQUALITY = "equality"
@@ -72,7 +72,7 @@ class AssertionOperatorIdentity(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("operator version must be positive")
 
 
-class EqualityRelation(StrEnum):
+class EqualityRelation(DomainStrEnum):
     """Strict structural equality relations."""
 
     EQUALS = "equals"
@@ -93,7 +93,7 @@ class EqualityOperator(msgspec.Struct, frozen=True, kw_only=True):
         _require_expression(self.expected)
 
 
-class MembershipRelation(StrEnum):
+class MembershipRelation(DomainStrEnum):
     """Strict immutable-choice membership relations."""
 
     IN = "in"
@@ -114,7 +114,7 @@ class MembershipOperator(msgspec.Struct, frozen=True, kw_only=True):
         _require_expressions(self.choices)
 
 
-class ExactValueType(StrEnum):
+class ExactValueType(DomainStrEnum):
     """Types visible to strict operator dispatch."""
 
     NULL = "null"
@@ -142,7 +142,7 @@ class TypeOperator(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("expected type must be an ExactValueType")
 
 
-class OrderingRelation(StrEnum):
+class OrderingRelation(DomainStrEnum):
     """Exact numeric, duration, size, and instant relations."""
 
     LESS = "less"
@@ -202,7 +202,7 @@ class ApproximateOperator(msgspec.Struct, frozen=True, kw_only=True):
                     raise ValueError("approximate tolerances cannot be negative")
 
 
-class StringRelation(StrEnum):
+class StringRelation(DomainStrEnum):
     """Literal string relations without implicit normalization."""
 
     CONTAINS = "contains"
@@ -225,7 +225,7 @@ class StringOperator(msgspec.Struct, frozen=True, kw_only=True):
         _require_expression(self.expected)
 
 
-class ContainsMode(StrEnum):
+class ContainsMode(DomainStrEnum):
     """Explicit collection containment quantification."""
 
     ONE = "one"
@@ -249,7 +249,7 @@ class ContainsOperator(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("contains one requires exactly one expected value")
 
 
-class KeySetRelation(StrEnum):
+class KeySetRelation(DomainStrEnum):
     """Explicit object-key set relations."""
 
     HAS = "has"
@@ -276,7 +276,7 @@ class KeySetOperator(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("key-set keys must be unique")
 
 
-class CountRelation(StrEnum):
+class CountRelation(DomainStrEnum):
     """Exact count relations used by length and cardinality."""
 
     EQUALS = "equals"

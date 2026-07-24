@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.capabilities import CapabilityTargetKind
+from comparo.core.domain.capabilities import NamedCapabilityTarget
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.http.media_types import MediaType
@@ -24,7 +26,7 @@ class CompiledSchema(msgspec.Struct, frozen=True, kw_only=True):
 
     fingerprint: Fingerprint
     resource: DefinitionRef | None = None
-    remote_uri: str | None = None
+    remote_uri: NamedCapabilityTarget | None = None
 
     def __post_init__(self) -> None:
         """Require exactly one local or remote source coordinate."""
@@ -38,9 +40,11 @@ class CompiledSchema(msgspec.Struct, frozen=True, kw_only=True):
         ):
             raise ValueError("local schema must reference a Schema resource")
         if self.remote_uri is not None and (
-            type(self.remote_uri) is not str or not self.remote_uri
+            type(self.remote_uri) is not NamedCapabilityTarget
+            or self.remote_uri.kind is not CapabilityTargetKind.SCHEMA_SOURCE
+            or not self.remote_uri.identifier.startswith(("http://", "https://"))
         ):
-            raise ValueError("remote schema URI must be non-empty text")
+            raise ValueError("remote schema URI must be an exact public schema-source URL")
 
 
 @final
@@ -48,15 +52,19 @@ class SchemaOperator(msgspec.Struct, frozen=True, kw_only=True):
     """Non-mutating JSON Schema validation with explicit dialect behavior."""
 
     schema: CompiledSchema
-    default_dialect: str
+    default_dialect: NamedCapabilityTarget
     assert_formats: bool = False
 
     def __post_init__(self) -> None:
         """Require compiled schema and explicit format behavior."""
         if type(self.schema) is not CompiledSchema:
             raise TypeError("schema operator requires a CompiledSchema")
-        if type(self.default_dialect) is not str or not self.default_dialect:
-            raise ValueError("schema default dialect must be non-empty text")
+        if (
+            type(self.default_dialect) is not NamedCapabilityTarget
+            or self.default_dialect.kind is not CapabilityTargetKind.SCHEMA_SOURCE
+            or not self.default_dialect.identifier.startswith(("http://", "https://"))
+        ):
+            raise ValueError("schema default dialect must be an exact public schema-source URL")
         if type(self.assert_formats) is not bool:
             raise TypeError("schema format behavior must be a bool")
 
@@ -73,7 +81,7 @@ class DecodeOperator(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("decode view must be a BodyViewKind")
 
 
-class MediaRelation(StrEnum):
+class MediaRelation(DomainStrEnum):
     """Parsed HTTP media-type relations."""
 
     EXACT = "exact"
@@ -109,7 +117,7 @@ class TokenOperator(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("HTTP token must be a MediaTypeTokenValue")
 
 
-class DigestAlgorithm(StrEnum):
+class DigestAlgorithm(DomainStrEnum):
     """Initial streaming digest algorithms."""
 
     SHA256 = "sha256"

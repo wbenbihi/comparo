@@ -10,12 +10,22 @@ from comparo.core.domain.overrides import KeepBase
 from comparo.core.domain.overrides import KeyedSet
 from comparo.core.domain.overrides import ReplaceBase
 from comparo.core.domain.overrides import SetValue
+from comparo.core.domain.values import JsonArray
+from comparo.core.domain.values import JsonString
+
+
+def _text(value: str) -> JsonString:
+    return JsonString(value=value)
+
+
+def _pair(name: str, value: str) -> JsonArray:
+    return JsonArray(items=(_text(name), _text(value)))
 
 
 def test_scalar_override_states_distinguish_inherit_clear_and_falsy_set() -> None:
     states: tuple[object, object] = (Inherit(), Clear())
     assert states[0] != states[1]
-    assert SetValue(value="").value == ""
+    assert SetValue(value=_text("")).value == _text("")
 
 
 def test_replace_base_requires_an_immutable_tuple() -> None:
@@ -25,12 +35,12 @@ def test_replace_base_requires_an_immutable_tuple() -> None:
 
 
 def test_collection_plan_retains_fixed_operation_groups() -> None:
-    operation = KeyedSet(identity="accept", item=("accept", "application/json"))
+    operation = KeyedSet(identity=_text("accept"), item=_pair("accept", "application/json"))
     plan = CollectionOverridePlan(
         base=ClearBase(),
-        remove=("cookie",),
+        remove=(_text("cookie"),),
         set_items=(operation,),
-        add=(("x-trace", "enabled"),),
+        add=(_pair("x-trace", "enabled"),),
     )
     assert plan.base == ClearBase()
     assert plan.set_items == (operation,)
@@ -63,12 +73,15 @@ def test_collection_plan_rejects_unknown_base_and_set_operation() -> None:
 
 def test_collection_plan_rejects_duplicate_remove_or_set_identities() -> None:
     with pytest.raises(ValueError, match="removed identities"):
-        CollectionOverridePlan(base=KeepBase(), remove=("cookie", "cookie"))
+        CollectionOverridePlan(
+            base=KeepBase(),
+            remove=(_text("cookie"), _text("cookie")),
+        )
     with pytest.raises(ValueError, match="set identities"):
         CollectionOverridePlan(
             base=KeepBase(),
             set_items=(
-                KeyedSet(identity="accept", item="json"),
-                KeyedSet(identity="accept", item="text"),
+                KeyedSet(identity=_text("accept"), item=_text("json")),
+                KeyedSet(identity=_text("accept"), item=_text("text")),
             ),
         )

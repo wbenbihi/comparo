@@ -21,6 +21,8 @@ from comparo.core.domain.http.policies import MutationRetry
 from comparo.core.domain.http.policies import NoBackoff
 from comparo.core.domain.http.policies import ProxyAuthentication
 from comparo.core.domain.http.policies import ProxyPolicy
+from comparo.core.domain.http.policies import ProxyTlsDisabled
+from comparo.core.domain.http.policies import ProxyTlsPolicy
 from comparo.core.domain.http.policies import RedirectMethodMode
 from comparo.core.domain.http.policies import RedirectPolicy
 from comparo.core.domain.http.policies import RetryBackoff
@@ -102,7 +104,7 @@ def test_retry_policy_rejects_every_untyped_component() -> None:
 def test_tls_policy_rejects_untyped_identity_and_verification_components() -> None:
     """Exercise trust references, verification flags, protocol, trust source, and mTLS identity."""
     for constructor in (TrustStoreRef, ClientIdentityRef):
-        with pytest.raises(ValueError, match="non-blank"):
+        with pytest.raises(ValueError, match="lowercase logical slug"):
             constructor(value=cast("str", 1))
     valid = policies().tls
     with pytest.raises(TypeError, match="verification flags"):
@@ -123,12 +125,14 @@ def test_proxy_redirect_and_policy_bundle_reject_wrong_types() -> None:
             scheme=cast("HttpScheme", "https"),
             authority=authority,
             authentication=NoAuthentication(),
+            tls=ProxyTlsPolicy(policy=policies().tls),
         )
     with pytest.raises(TypeError, match="proxy authority"):
         ExplicitProxy(
             scheme=HttpScheme.HTTPS,
             authority=cast("HttpAuthority", object()),
             authentication=NoAuthentication(),
+            tls=ProxyTlsPolicy(policy=policies().tls),
         )
     with pytest.raises(TypeError, match="proxy authentication"):
         ExplicitProxy(
@@ -141,6 +145,30 @@ def test_proxy_redirect_and_policy_bundle_reject_wrong_types() -> None:
                     placement=HeaderApiKeyPlacement(name=HeaderName(value="x-api-key")),
                 ),
             ),
+            tls=ProxyTlsPolicy(policy=policies().tls),
+        )
+    with pytest.raises(TypeError, match="proxy TLS policy"):
+        ProxyTlsPolicy(policy=cast("TlsPolicy", object()))
+    with pytest.raises(TypeError, match="TLS configuration"):
+        ExplicitProxy(
+            scheme=HttpScheme.HTTPS,
+            authority=authority,
+            authentication=NoAuthentication(),
+            tls=cast("ProxyTlsPolicy", object()),
+        )
+    with pytest.raises(ValueError, match="HTTPS proxy"):
+        ExplicitProxy(
+            scheme=HttpScheme.HTTPS,
+            authority=authority,
+            authentication=NoAuthentication(),
+            tls=ProxyTlsDisabled(),
+        )
+    with pytest.raises(ValueError, match="clear-text proxy"):
+        ExplicitProxy(
+            scheme=HttpScheme.HTTP,
+            authority=authority,
+            authentication=NoAuthentication(),
+            tls=ProxyTlsPolicy(policy=policies().tls),
         )
 
     redirect = RedirectPolicy(max_hops=Count(value=1))

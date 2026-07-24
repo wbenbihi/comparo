@@ -4,11 +4,9 @@ from typing import cast
 
 import pytest
 
-from comparo.core.domain.analysis import ANALYSIS_CAPABILITY_ID
-from comparo.core.domain.analysis import ANALYSIS_EXECUTE_OPERATION
-from comparo.core.domain.analysis import SECRET_EGRESS_CAPABILITY_ID
-from comparo.core.domain.analysis import SECRET_EGRESS_OPERATION
 from comparo.core.domain.analysis import AnalysisAuthorizationGrant
+from comparo.core.domain.analysis import AnalysisAuthorizationIntent
+from comparo.core.domain.analysis import AnalysisAuthorizationRequirement
 from comparo.core.domain.analysis import AnalysisBudgetExhausted
 from comparo.core.domain.analysis import AnalysisCancelled
 from comparo.core.domain.analysis import AnalysisDenied
@@ -16,6 +14,7 @@ from comparo.core.domain.analysis import AnalysisEvidence
 from comparo.core.domain.analysis import AnalysisMalformed
 from comparo.core.domain.analysis import AnalysisProviderFailed
 from comparo.core.domain.analysis import AnalysisRequest
+from comparo.core.domain.analysis import AnalysisSecretEgressApproval
 from comparo.core.domain.analysis import AnalysisSucceeded
 from comparo.core.domain.analysis import AnalysisTimedOut
 from comparo.core.domain.analysis import AnalysisVerdict
@@ -25,15 +24,10 @@ from comparo.core.domain.budgets import BudgetExhaustionEffect
 from comparo.core.domain.budgets import BudgetResource
 from comparo.core.domain.budgets import BudgetScopeKind
 from comparo.core.domain.budgets import BudgetStage
-from comparo.core.domain.capabilities import CapabilityCategory
 from comparo.core.domain.capabilities import CapabilityDenialReason
-from comparo.core.domain.capabilities import CapabilityDenied
-from comparo.core.domain.capabilities import CapabilityGranted
 from comparo.core.domain.capabilities import CapabilityId
 from comparo.core.domain.capabilities import CapabilityOperation
-from comparo.core.domain.capabilities import CapabilityRequest
-from comparo.core.domain.capabilities import CapabilityTargetKind
-from comparo.core.domain.capabilities import NamedCapabilityTarget
+from comparo.core.domain.capabilities import ExecutionPolicyAuthority
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticSeverity
@@ -48,112 +42,102 @@ from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from tests.core.domain.analysis_factories import _authority
 from tests.core.domain.analysis_factories import _budget
-from tests.core.domain.analysis_factories import _capability
-from tests.core.domain.analysis_factories import _destination
 from tests.core.domain.analysis_factories import _fingerprint
 from tests.core.domain.analysis_factories import _grant
 from tests.core.domain.analysis_factories import _request
 from tests.core.domain.analysis_factories import _sensitive_fingerprint
 
 
-def test_analysis_authorization_rejects_generic_or_mismatched_capability() -> None:
+def test_analysis_authorization_rejects_untyped_or_mismatched_components() -> None:
     request = _request()
-    exact = CapabilityGranted(request=_capability(), authority=_authority())
-    with pytest.raises(TypeError, match="AnalysisRequest"):
-        AnalysisAuthorizationGrant(
+    authority = _authority()
+    approval = AnalysisSecretEgressApproval(analysis=request, authority=authority)
+    with pytest.raises(TypeError, match="bind an AnalysisRequest"):
+        AnalysisSecretEgressApproval(
             analysis=cast("AnalysisRequest", object()),
-            capability=exact,
+            authority=authority,
         )
-    with pytest.raises(TypeError, match="CapabilityGranted"):
-        AnalysisAuthorizationGrant(
+    with pytest.raises(TypeError, match="exact ExecutionPolicyAuthority"):
+        AnalysisSecretEgressApproval(
             analysis=request,
-            capability=cast("CapabilityGranted", object()),
+            authority=cast("ExecutionPolicyAuthority", object()),
         )
-    wrong_id = CapabilityId(namespace="example", name="external-analysis", version="1")
-    wrong_operation = CapabilityOperation(value="inspect")
-    cases = (
-        (_capability(category=CapabilityCategory.HTTP), "grant external analysis"),
-        (_capability(capability_id=wrong_id), "built-in capability identity"),
-        (_capability(operation=wrong_operation), "built-in execute operation"),
-        (
-            CapabilityRequest(
-                category=CapabilityCategory.EXTERNAL_ANALYSIS,
-                capability_id=ANALYSIS_CAPABILITY_ID,
-                operation=ANALYSIS_EXECUTE_OPERATION,
-                target=None,
-            ),
-            "NamedCapabilityTarget",
-        ),
-        (
-            _capability(
-                target=NamedCapabilityTarget(
-                    kind=CapabilityTargetKind.PROVIDER,
-                    identifier="example",
-                )
-            ),
-            "identify a destination",
-        ),
-        (_capability(target=_destination("other.invalid")), "match the provider destination"),
-    )
-    for capability, message in cases:
-        with pytest.raises((TypeError, ValueError), match=message):
-            _grant(request, capability)
+    with pytest.raises(ValueError, match="wrong built-in capability"):
+        AnalysisSecretEgressApproval(
+            analysis=request,
+            authority=authority,
+            operation=CapabilityOperation(value="send"),
+        )
+    with pytest.raises(TypeError, match="typed capability"):
+        AnalysisSecretEgressApproval(
+            analysis=request,
+            authority=authority,
+            capability_id=cast("CapabilityId", object()),
+        )
 
-    with pytest.raises(ValueError, match="secret-egress grant"):
+    with pytest.raises(ValueError, match="secret-egress approval"):
         _grant(request, egress=False)
     public = _request(sensitive=False)
-    assert _grant(public, egress=False).secret_egress is None
-    with pytest.raises(ValueError, match="unnecessary secret-egress"):
+    assert _grant(public, egress=False).intent.secret_egress_approval is None
+    with pytest.raises(ValueError, match="unnecessary secret-egress authority"):
         _grant(public)
-    wrong_egress = CapabilityGranted(request=_capability(), authority=_authority())
-    with pytest.raises(ValueError, match="grant secret egress"):
-        _grant(request, egress=wrong_egress)
-    other_authority_egress = CapabilityGranted(
-        request=CapabilityRequest(
-            category=CapabilityCategory.SECRET_EGRESS,
-            capability_id=SECRET_EGRESS_CAPABILITY_ID,
-            operation=SECRET_EGRESS_OPERATION,
-            target=request.provider.destination,
-        ),
-        authority=_authority("f"),
+
+    with pytest.raises(TypeError, match="authorization intent"):
+        AnalysisAuthorizationIntent(
+            analysis=cast("AnalysisRequest", object()),
+            effective_policy_authority=authority,
+        )
+    with pytest.raises(TypeError, match="policy binding"):
+        AnalysisAuthorizationIntent(
+            analysis=request,
+            effective_policy_authority=cast("ExecutionPolicyAuthority", object()),
+            secret_egress_approval=approval,
+        )
+    with pytest.raises(TypeError, match="AnalysisSecretEgressApproval"):
+        AnalysisAuthorizationIntent(
+            analysis=request,
+            effective_policy_authority=authority,
+            secret_egress_approval=cast("AnalysisSecretEgressApproval", object()),
+        )
+    foreign_issuer = AnalysisSecretEgressApproval(
+        analysis=request,
+        authority=_authority(resource_id="other-policy"),
     )
-    with pytest.raises(ValueError, match="same policy authority"):
-        _grant(request, egress=other_authority_egress)
-    egress_cases = (
-        (
-            CapabilityRequest(
-                category=CapabilityCategory.SECRET_EGRESS,
-                capability_id=CapabilityId(namespace="example", name="secret-egress", version="1"),
-                operation=SECRET_EGRESS_OPERATION,
-                target=request.provider.destination,
-            ),
-            "built-in capability identity",
-        ),
-        (
-            CapabilityRequest(
-                category=CapabilityCategory.SECRET_EGRESS,
-                capability_id=SECRET_EGRESS_CAPABILITY_ID,
-                operation=CapabilityOperation(value="send"),
-                target=request.provider.destination,
-            ),
-            "built-in egress operation",
-        ),
-        (
-            CapabilityRequest(
-                category=CapabilityCategory.SECRET_EGRESS,
-                capability_id=SECRET_EGRESS_CAPABILITY_ID,
-                operation=SECRET_EGRESS_OPERATION,
-                target=_destination("other.invalid"),
-            ),
-            "provider destination",
-        ),
-    )
-    for egress_request, message in egress_cases:
-        with pytest.raises(ValueError, match=message):
-            _grant(
-                request,
-                egress=CapabilityGranted(request=egress_request, authority=_authority()),
-            )
+    with pytest.raises(ValueError, match="not bound to this analysis intent"):
+        AnalysisAuthorizationIntent(
+            analysis=request,
+            effective_policy_authority=authority,
+            secret_egress_approval=foreign_issuer,
+        )
+
+
+def test_analysis_grant_requires_exact_policy_and_capability_contract() -> None:
+    request = _request()
+    authority = _authority()
+    grant = _grant(request, authority=authority)
+    assert grant.intent.analysis is request
+    with pytest.raises(TypeError, match="grant intent"):
+        AnalysisAuthorizationGrant(
+            intent=cast("AnalysisAuthorizationIntent", object()),
+            authority=authority,
+        )
+    with pytest.raises(TypeError, match="exact ExecutionPolicyAuthority"):
+        AnalysisAuthorizationGrant(
+            intent=grant.intent,
+            authority=cast("ExecutionPolicyAuthority", object()),
+        )
+    with pytest.raises(ValueError, match="exact effective policy authority"):
+        AnalysisAuthorizationGrant(
+            intent=grant.intent,
+            authority=_authority(resource_id="other-policy"),
+        )
+    with pytest.raises(ValueError, match="wrong built-in capability"):
+        _grant(
+            request,
+            capability_id=CapabilityId(namespace="example", name="analysis", version="1"),
+        )
+    with pytest.raises(TypeError, match="typed capability"):
+        _grant(request, operation=cast("CapabilityOperation", object()))
 
 
 def test_authorized_analysis_requires_dedicated_grant() -> None:
@@ -240,59 +224,56 @@ def _diagnostic(severity: DiagnosticSeverity = DiagnosticSeverity.ERROR) -> Diag
 
 
 def test_analysis_terminal_results_validate_typed_causes() -> None:
-    denial = CapabilityDenied(
-        request=_capability(),
-        reason=CapabilityDenialReason.NOT_ALLOWED,
-        authority=_authority(),
-    )
     request = _request()
-    assert AnalysisDenied(analysis=request, decision=denial).decision is denial
-    egress_denial = CapabilityDenied(
-        request=CapabilityRequest(
-            category=CapabilityCategory.SECRET_EGRESS,
-            capability_id=SECRET_EGRESS_CAPABILITY_ID,
-            operation=SECRET_EGRESS_OPERATION,
-            target=request.provider.destination,
-        ),
+    denial = AnalysisDenied(
+        analysis=request,
+        requirement=AnalysisAuthorizationRequirement.EXECUTION,
         reason=CapabilityDenialReason.NOT_ALLOWED,
         authority=_authority(),
     )
-    assert AnalysisDenied(analysis=request, decision=egress_denial).decision is egress_denial
-    with pytest.raises(ValueError, match="required analysis authority"):
-        AnalysisDenied(analysis=_request(sensitive=False), decision=egress_denial)
+    assert denial.analysis is request
+    assert denial.requirement is AnalysisAuthorizationRequirement.EXECUTION
+    egress_denial = AnalysisDenied(
+        analysis=request,
+        requirement=AnalysisAuthorizationRequirement.SECRET_EGRESS,
+        reason=CapabilityDenialReason.NOT_ALLOWED,
+        authority=_authority(),
+    )
+    assert egress_denial.reason is CapabilityDenialReason.NOT_ALLOWED
+    with pytest.raises(ValueError, match="unnecessary secret egress"):
+        AnalysisDenied(
+            analysis=_request(sensitive=False),
+            requirement=AnalysisAuthorizationRequirement.SECRET_EGRESS,
+            reason=CapabilityDenialReason.NOT_ALLOWED,
+            authority=_authority(),
+        )
     with pytest.raises(TypeError, match="AnalysisRequest"):
         AnalysisDenied(
             analysis=cast("AnalysisRequest", object()),
-            decision=denial,
+            requirement=AnalysisAuthorizationRequirement.EXECUTION,
+            reason=CapabilityDenialReason.NOT_ALLOWED,
+            authority=_authority(),
         )
-    with pytest.raises(TypeError, match="CapabilityDenied"):
+    with pytest.raises(TypeError, match="denial authority"):
         AnalysisDenied(
             analysis=request,
-            decision=cast("CapabilityDenied", object()),
+            requirement=AnalysisAuthorizationRequirement.EXECUTION,
+            reason=CapabilityDenialReason.NOT_ALLOWED,
+            authority=cast("ExecutionPolicyAuthority", object()),
         )
-    with pytest.raises(ValueError, match="built-in capability identity"):
+    with pytest.raises(TypeError, match="requirement"):
         AnalysisDenied(
             analysis=request,
-            decision=CapabilityDenied(
-                request=_capability(
-                    capability_id=CapabilityId(
-                        namespace="example",
-                        name="external-analysis",
-                        version="1",
-                    )
-                ),
-                reason=CapabilityDenialReason.NOT_ALLOWED,
-                authority=_authority(),
-            ),
+            requirement=cast("AnalysisAuthorizationRequirement", object()),
+            reason=CapabilityDenialReason.NOT_ALLOWED,
+            authority=_authority(),
         )
-    with pytest.raises(ValueError, match="match the provider destination"):
+    with pytest.raises(TypeError, match="denial reason"):
         AnalysisDenied(
             analysis=request,
-            decision=CapabilityDenied(
-                request=_capability(target=_destination("another.invalid")),
-                reason=CapabilityDenialReason.OUTSIDE_ALLOWED_TARGETS,
-                authority=_authority(),
-            ),
+            requirement=AnalysisAuthorizationRequirement.EXECUTION,
+            reason=cast("CapabilityDenialReason", object()),
+            authority=_authority(),
         )
     assert AnalysisTimedOut(elapsed=Duration(nanoseconds=1)).elapsed.nanoseconds == 1
     with pytest.raises(TypeError, match="Duration"):

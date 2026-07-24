@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import cast
+from uuid import UUID
 from uuid import uuid4
 
 import msgspec
@@ -13,8 +14,11 @@ from comparo.core.domain.http.auth import BasicPassword
 from comparo.core.domain.http.auth import BearerToken
 from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
+from comparo.core.domain.http.authorization import HttpRequestOccurrence
+from comparo.core.domain.http.bodies import BytesBody
 from comparo.core.domain.http.bodies import FinalizedBody
 from comparo.core.domain.http.bodies import MaterializedBody
+from comparo.core.domain.http.bodies import MultipartBody
 from comparo.core.domain.http.bodies import MultipartBoundary
 from comparo.core.domain.http.bodies import MultipartBoundaryValidation
 from comparo.core.domain.http.bodies import NoBody
@@ -29,6 +33,7 @@ from comparo.core.domain.http.policies import DeclaredIdempotentRetry
 from comparo.core.domain.http.policies import ExplicitProxy
 from comparo.core.domain.http.policies import NoBackoff
 from comparo.core.domain.http.policies import NoProxy
+from comparo.core.domain.http.policies import ProxyTlsPolicy
 from comparo.core.domain.http.policies import RedirectPolicy
 from comparo.core.domain.http.policies import RequestPolicies
 from comparo.core.domain.http.policies import RetryCondition
@@ -37,8 +42,12 @@ from comparo.core.domain.http.policies import TimeoutPolicy
 from comparo.core.domain.http.policies import TlsPolicy
 from comparo.core.domain.http.policies import TlsVersion
 from comparo.core.domain.http.policies import TrustSource
+from comparo.core.domain.http.request_materialization import EffectiveRequestFingerprint
+from comparo.core.domain.http.request_materialization import effective_request_taint_origins
+from comparo.core.domain.http.requests import EffectiveRequest
 from comparo.core.domain.http.requests import FinalizedWireRequest
 from comparo.core.domain.http.requests import LogicalRequest
+from comparo.core.domain.http.requests import prove_request_materialization
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import BaseRelativeTarget
 from comparo.core.domain.http.url import ClientResolvedTarget
@@ -52,12 +61,18 @@ from comparo.core.domain.http.url import NetworkDestination
 from comparo.core.domain.http.url import ProxyResolvedRoute
 from comparo.core.domain.http.url import ProxyResolvedTarget
 from comparo.core.domain.http.url import RequestTarget
+from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import BodyId
+from comparo.core.domain.identity import CellId
 from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import EnvironmentExecutionId
+from comparo.core.domain.identity import ExchangeId
 from comparo.core.domain.identity import NamespaceId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.identity import RunId
+from comparo.core.domain.identity import TrialId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
@@ -68,6 +83,12 @@ from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.scopes import AttemptScope
+from comparo.core.domain.scopes import CellScope
+from comparo.core.domain.scopes import EnvironmentScope
+from comparo.core.domain.scopes import ExecutionScope
+from comparo.core.domain.scopes import RunScope
+from comparo.core.domain.scopes import TrialScope
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 
@@ -87,12 +108,55 @@ def authority(character: str = "e") -> ExecutionPolicyAuthority:
     )
 
 
+def request_occurrence(
+    *,
+    execution: int = 1,
+    attempt: int = 1,
+    exchange: int = 1,
+    environment: ResourceIdentity | None = None,
+) -> HttpRequestOccurrence:
+    """Return one deterministic outbound HTTP occurrence identity."""
+    run = RunScope(run_id=RunId(value=UUID(int=10)))
+    return HttpRequestOccurrence(
+        attempt=AttemptScope(
+            execution=ExecutionScope(
+                trial=TrialScope(
+                    cell=CellScope(run=run, cell_id=CellId(value=UUID(int=11))),
+                    trial_id=TrialId(value=UUID(int=12)),
+                ),
+                environment=EnvironmentScope(
+                    run=run,
+                    environment=environment
+                    or definition(ResourceKind.ENVIRONMENT, "staging").identity,
+                ),
+                execution_id=EnvironmentExecutionId(value=UUID(int=execution)),
+            ),
+            attempt_id=AttemptId(value=UUID(int=attempt)),
+        ),
+        exchange_id=ExchangeId(value=UUID(int=exchange)),
+    )
+
+
 def digest(character: str = "a") -> Sha256Digest:
     return Sha256Digest(hex_value=character * 64)
 
 
 def fingerprint(character: str = "a") -> Fingerprint:
     return Fingerprint(algorithm="sha256", digest=digest(character))
+
+
+def materialization_fingerprint(
+    effective_request: EffectiveRequest,
+) -> EffectiveRequestFingerprint:
+    """Build a deterministic test identity with complete request sensitivity lineage."""
+    value = fingerprint("9")
+    origins = effective_request_taint_origins(
+        effective_request.url,
+        effective_request.headers,
+        effective_request.cookies,
+        effective_request.body,
+    )
+    return SensitiveValue(value, origins=origins) if origins else value
 
 
 def definition(
@@ -193,20 +257,53 @@ def finalized_request(
     request_policies: RequestPolicies | None = None,
 ) -> FinalizedWireRequest:
     """Build one valid finalized request with configurable aggregate components."""
+    actual_environment = definition(ResourceKind.ENVIRONMENT, "staging")
+    actual_fingerprint = fingerprint("a")
+    actual_method = HttpMethod(value=method)
+    actual_url = url or AbsoluteHttpUrl(
+        scheme=HttpScheme.HTTPS,
+        authority=HttpAuthority(host=DnsHost(value="api.example.test")),
+    )
+    actual_headers = headers or RequestHeaders()
+    actual_cookies = cookies or RequestCookies()
+    actual_body = body or NoMaterializedBody()
+    actual_policies = request_policies or policies()
+    actual_provenance = provenance()
+    if type(actual_body) is NoMaterializedBody:
+        effective_body: RequestBody = NoBody()
+    elif actual_body.multipart is None:
+        effective_body = BytesBody(value=actual_body.source)
+    else:
+        effective_body = MultipartBody(
+            boundary=actual_body.multipart.boundary,
+            parts=(),
+        )
+    effective = EffectiveRequest(
+        environment=actual_environment,
+        logical_request_fingerprint=actual_fingerprint,
+        method=actual_method,
+        url=actual_url,
+        headers=actual_headers,
+        cookies=actual_cookies,
+        body=effective_body,
+        policies=actual_policies,
+        provenance=actual_provenance,
+    )
     return FinalizedWireRequest(
-        environment=definition(ResourceKind.ENVIRONMENT, "staging"),
-        logical_request_fingerprint=fingerprint("a"),
-        method=HttpMethod(value=method),
-        url=url
-        or AbsoluteHttpUrl(
-            scheme=HttpScheme.HTTPS,
-            authority=HttpAuthority(host=DnsHost(value="api.example.test")),
+        environment=actual_environment,
+        logical_request_fingerprint=actual_fingerprint,
+        method=actual_method,
+        url=actual_url,
+        headers=actual_headers,
+        cookies=actual_cookies,
+        body=actual_body,
+        materialization=prove_request_materialization(
+            effective,
+            actual_body,
+            effective_request_fingerprint=materialization_fingerprint(effective),
         ),
-        headers=headers or RequestHeaders(),
-        cookies=cookies or RequestCookies(),
-        body=body or NoMaterializedBody(),
-        policies=request_policies or policies(),
-        provenance=provenance(),
+        policies=actual_policies,
+        provenance=actual_provenance,
     )
 
 
@@ -268,6 +365,7 @@ def proxy_request_and_route(
         scheme=HttpScheme.HTTPS,
         authority=HttpAuthority(host=DnsHost(value=proxy_host)),
         authentication=NoAuthentication(),
+        tls=ProxyTlsPolicy(policy=policies().tls),
     )
     request = finalized_request(
         request_policies=msgspec.structs.replace(policies(), proxy=proxy_policy)
@@ -275,12 +373,17 @@ def proxy_request_and_route(
     return request, ProxyResolvedRoute(proxy_destination=proxy_destination, target=target)
 
 
-def direct_intent(*, request: FinalizedWireRequest | None = None) -> HttpAuthorizationIntent:
+def direct_intent(
+    *,
+    request: FinalizedWireRequest | None = None,
+    occurrence: HttpRequestOccurrence | None = None,
+) -> HttpAuthorizationIntent:
     """Build one valid direct-route authorization intent."""
     actual_request = request or finalized_request()
     return HttpAuthorizationIntent(
         request=actual_request,
         route=DirectResolvedRoute(destination=destination()),
+        occurrence=occurrence or request_occurrence(),
         plan_fingerprint=fingerprint("c"),
         effective_policy_fingerprint=fingerprint("e"),
     )

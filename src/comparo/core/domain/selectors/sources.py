@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
+
 _FUNCTION_PATTERN = re.compile(r"[a-z][a-z0-9-]*")
 
 
-class SelectorSource(StrEnum):
+class SelectorSource(DomainStrEnum):
     """Closed typed observation sources shared by every selector consumer."""
 
     EXECUTION = "execution"
@@ -41,7 +42,7 @@ class SelectorSource(StrEnum):
     SCENARIO_STEP = "scenario.step"
 
 
-class BodyViewKind(StrEnum):
+class BodyViewKind(DomainStrEnum):
     """Explicit representations; ``auto`` is media-driven, never content sniffing."""
 
     HANDLE = "handle"
@@ -54,7 +55,7 @@ class BodyViewKind(StrEnum):
     AUTO = "auto"
 
 
-class SelectorCardinality(StrEnum):
+class SelectorCardinality(DomainStrEnum):
     """Cardinality proven by static compilation."""
 
     EXACTLY_ONE = "exactly-one"
@@ -62,7 +63,7 @@ class SelectorCardinality(StrEnum):
     ZERO_OR_MORE = "zero-or-more"
 
 
-class SelectionAccess(StrEnum):
+class SelectionAccess(DomainStrEnum):
     """The strongest storage capability required by selection."""
 
     INCREMENTAL = "incremental"

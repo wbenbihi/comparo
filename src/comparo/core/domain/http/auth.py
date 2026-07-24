@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.http.fields import FORBIDDEN_API_KEY_HEADER_NAMES
 from comparo.core.domain.http.fields import CookieName
 from comparo.core.domain.http.fields import HeaderName
 from comparo.core.domain.http.fields import QueryName
 from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import is_sensitive_value
 
 
 @final
@@ -57,7 +58,7 @@ class BasicPassword(msgspec.Struct, frozen=True, kw_only=True):
         _require_credential_text(self.value, label="Basic password")
 
 
-class BasicWireEncoding(StrEnum):
+class BasicWireEncoding(DomainStrEnum):
     """The explicit pre-Base64 octet encoding used for Basic credentials."""
 
     UTF_8 = "utf-8"
@@ -94,7 +95,7 @@ def _require_credential_text(value: str, *, label: str) -> None:
 
 
 def _require_sensitive_payload(value: object, expected: type[object], *, label: str) -> None:
-    if not isinstance(value, SensitiveValue):
+    if not is_sensitive_value(value):
         raise TypeError(f"{label} must be SensitiveValue")
     if value.payload_type is not expected:
         raise TypeError(f"{label} sensitive payload has the wrong credential type")
@@ -129,14 +130,9 @@ class BasicAuthentication(msgspec.Struct, frozen=True, kw_only=True):
 
     def __post_init__(self) -> None:
         """Require validated username and sensitive password containment."""
-        if type(self.username) is not BasicUsername and not isinstance(
-            self.username, SensitiveValue
-        ):
+        if type(self.username) is not BasicUsername and not is_sensitive_value(self.username):
             raise TypeError("basic username must be BasicUsername or SensitiveValue")
-        if (
-            isinstance(self.username, SensitiveValue)
-            and self.username.payload_type is not BasicUsername
-        ):
+        if is_sensitive_value(self.username) and self.username.payload_type is not BasicUsername:
             raise TypeError("sensitive Basic username payload must be BasicUsername")
         _require_sensitive_payload(self.password, BasicPassword, label="basic password")
         if type(self.wire_encoding) is not BasicWireEncoding:

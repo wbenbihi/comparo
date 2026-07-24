@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import TypeGuard
 from typing import final
 from typing import override
 
 import msgspec
 
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.http.fields import HeaderText
 from comparo.core.domain.http.media_types import MediaType as MediaType
 from comparo.core.domain.http.media_types import MediaTypeParameter as MediaTypeParameter
@@ -25,6 +25,7 @@ from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.sensitivity import is_sensitive_value
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import JsonArray
 from comparo.core.domain.values import JsonBoolean
@@ -38,15 +39,17 @@ from comparo.core.domain.values import is_json_value
 
 _PARAMETER_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _BOUNDARY_PATTERN = re.compile(r"[0-9A-Za-z'()+_,./:=?-]{1,70}")
-_JSON_VALUE_TYPES = {
-    JsonNull,
-    JsonBoolean,
-    JsonInteger,
-    JsonDecimal,
-    JsonString,
-    JsonArray,
-    JsonObject,
-}
+_JSON_VALUE_TYPES = frozenset(
+    {
+        JsonNull,
+        JsonBoolean,
+        JsonInteger,
+        JsonDecimal,
+        JsonString,
+        JsonArray,
+        JsonObject,
+    }
+)
 
 
 def _require_body_text(value: str, *, label: str, allow_empty: bool = True) -> None:
@@ -91,9 +94,9 @@ class RepeatableByteSource(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("byte-source ID must be an opaque BodyId")
         if type(self.byte_count) is not ByteCount:
             raise TypeError("byte-source byte count must be ByteCount")
-        if type(self.digest) is not Sha256Digest and not isinstance(self.digest, SensitiveValue):
+        if type(self.digest) is not Sha256Digest and not is_sensitive_value(self.digest):
             raise TypeError("byte-source digest must be public or sensitivity-contained")
-        if isinstance(self.digest, SensitiveValue) and self.digest.payload_type is not Sha256Digest:
+        if is_sensitive_value(self.digest) and self.digest.payload_type is not Sha256Digest:
             raise TypeError("sensitive byte-source digest payload must be Sha256Digest")
         if type(self.provenance) is not ValueProvenance:
             raise TypeError("byte-source provenance must be ValueProvenance")
@@ -101,21 +104,21 @@ class RepeatableByteSource(msgspec.Struct, frozen=True, kw_only=True):
     @property
     def sensitivity(self) -> Sensitivity:
         """Derive sensitivity from containment instead of trusting a parallel flag."""
-        if isinstance(self.digest, SensitiveValue):
+        if is_sensitive_value(self.digest):
             return Sensitivity.SENSITIVE
         return Sensitivity.PUBLIC
 
     @property
     def taint_origins(self) -> tuple[TaintOriginId, ...]:
         """Expose non-secret lineage for sensitive snapshots."""
-        if isinstance(self.digest, SensitiveValue):
+        if is_sensitive_value(self.digest):
             return self.digest.origins
         return ()
 
     @override
     def __repr__(self) -> str:
         """Refuse generic rendering when even the content digest is sensitivity-contained."""
-        if isinstance(self.digest, SensitiveValue):
+        if is_sensitive_value(self.digest):
             raise TypeError("sensitive byte-source descriptors cannot be rendered")
         return (
             f"{type(self).__name__}(source_id={self.source_id!r}, "
@@ -124,7 +127,7 @@ class RepeatableByteSource(msgspec.Struct, frozen=True, kw_only=True):
         )
 
 
-class JsonSerialization(StrEnum):
+class JsonSerialization(DomainStrEnum):
     """Named deterministic JSON wire representations."""
 
     COMPARO_V1 = "comparo-v1"
@@ -148,12 +151,9 @@ class JsonBody(msgspec.Struct, frozen=True, kw_only=True):
 
     def __post_init__(self) -> None:
         """Require an exact immutable JSON payload and named serialization."""
-        if not is_json_value(self.value) and not isinstance(self.value, SensitiveValue):
+        if not is_json_value(self.value) and not is_sensitive_value(self.value):
             raise TypeError("JSON body value must be JsonValue or SensitiveValue")
-        if (
-            isinstance(self.value, SensitiveValue)
-            and self.value.payload_type not in _JSON_VALUE_TYPES
-        ):
+        if is_sensitive_value(self.value) and self.value.payload_type not in _JSON_VALUE_TYPES:
             raise TypeError("sensitive JSON body payload must be a typed JsonValue")
         if type(self.serialization) is not JsonSerialization:
             raise TypeError("JSON body serialization must be JsonSerialization")
@@ -170,9 +170,9 @@ class TextBody(msgspec.Struct, frozen=True, kw_only=True):
 
     def __post_init__(self) -> None:
         """Require immutable UTF-8 text and an optional typed media type."""
-        if type(self.value) is not BodyText and not isinstance(self.value, SensitiveValue):
+        if type(self.value) is not BodyText and not is_sensitive_value(self.value):
             raise TypeError("text body value must be BodyText or SensitiveValue")
-        if isinstance(self.value, SensitiveValue) and self.value.payload_type is not BodyText:
+        if is_sensitive_value(self.value) and self.value.payload_type is not BodyText:
             raise TypeError("sensitive text body payload must be BodyText")
         if self.media_type is not None and type(self.media_type) is not MediaType:
             raise TypeError("text body media type must be MediaType")
@@ -187,11 +187,11 @@ class BytesBody(msgspec.Struct, frozen=True, kw_only=True):
 
     def __post_init__(self) -> None:
         """Require immutable inline bytes or a repeatable byte source."""
-        if type(self.value) not in {BytesValue, RepeatableByteSource} and not isinstance(
-            self.value, SensitiveValue
+        if type(self.value) not in {BytesValue, RepeatableByteSource} and not is_sensitive_value(
+            self.value
         ):
             raise TypeError("bytes body value must be BytesValue, SensitiveValue, or byte source")
-        if isinstance(self.value, SensitiveValue) and self.value.payload_type is not BytesValue:
+        if is_sensitive_value(self.value) and self.value.payload_type is not BytesValue:
             raise TypeError("sensitive bytes body payload must be BytesValue")
         if self.media_type is not None and type(self.media_type) is not MediaType:
             raise TypeError("bytes body media type must be MediaType")
@@ -219,9 +219,9 @@ class FormField(msgspec.Struct, frozen=True, kw_only=True):
         """Require typed immutable field components."""
         if type(self.name) is not FormName:
             raise TypeError("form field name must be FormName")
-        if type(self.value) is not BodyText and not isinstance(self.value, SensitiveValue):
+        if type(self.value) is not BodyText and not is_sensitive_value(self.value):
             raise TypeError("form field value must be BodyText or SensitiveValue")
-        if isinstance(self.value, SensitiveValue) and self.value.payload_type is not BodyText:
+        if is_sensitive_value(self.value) and self.value.payload_type is not BodyText:
             raise TypeError("sensitive form field payload must be BodyText")
 
 
@@ -298,9 +298,9 @@ class MultipartTextPart(msgspec.Struct, frozen=True, kw_only=True):
         """Require immutable typed text-part components."""
         if type(self.name) is not MultipartDispositionName:
             raise TypeError("multipart text-part name must be MultipartDispositionName")
-        if type(self.value) is not BodyText and not isinstance(self.value, SensitiveValue):
+        if type(self.value) is not BodyText and not is_sensitive_value(self.value):
             raise TypeError("multipart text-part value must be BodyText or SensitiveValue")
-        if isinstance(self.value, SensitiveValue) and self.value.payload_type is not BodyText:
+        if is_sensitive_value(self.value) and self.value.payload_type is not BodyText:
             raise TypeError("sensitive multipart text payload must be BodyText")
         if self.media_type is not None and type(self.media_type) is not MediaType:
             raise TypeError("multipart text-part media type must be MediaType")
@@ -319,20 +319,20 @@ class MultipartFilePart(msgspec.Struct, frozen=True, kw_only=True):
         """Require typed filename, byte content, and media metadata."""
         if type(self.name) is not MultipartDispositionName:
             raise TypeError("multipart file-part name must be MultipartDispositionName")
-        if type(self.filename) is not MultipartDispositionFilename and not isinstance(
-            self.filename, SensitiveValue
+        if type(self.filename) is not MultipartDispositionFilename and not is_sensitive_value(
+            self.filename
         ):
             raise TypeError("multipart filename must use a safe disposition filename type")
         if (
-            isinstance(self.filename, SensitiveValue)
+            is_sensitive_value(self.filename)
             and self.filename.payload_type is not MultipartDispositionFilename
         ):
             raise TypeError("sensitive multipart filename payload has the wrong type")
-        if type(self.value) not in {BytesValue, RepeatableByteSource} and not isinstance(
-            self.value, SensitiveValue
+        if type(self.value) not in {BytesValue, RepeatableByteSource} and not is_sensitive_value(
+            self.value
         ):
             raise TypeError("multipart file content must be immutable bytes or byte source")
-        if isinstance(self.value, SensitiveValue) and self.value.payload_type is not BytesValue:
+        if is_sensitive_value(self.value) and self.value.payload_type is not BytesValue:
             raise TypeError("sensitive multipart file payload must be BytesValue")
         if type(self.media_type) is not MediaType:
             raise TypeError("multipart file-part media type must be MediaType")
@@ -411,9 +411,9 @@ class MultipartBoundaryValidation(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("multipart validation boundary must be MultipartBoundary")
         if type(self.source_id) is not BodyId:
             raise TypeError("multipart validation source must be BodyId")
-        if type(self.digest) is not Sha256Digest and not isinstance(self.digest, SensitiveValue):
+        if type(self.digest) is not Sha256Digest and not is_sensitive_value(self.digest):
             raise TypeError("multipart validation digest must preserve sensitivity")
-        if isinstance(self.digest, SensitiveValue) and self.digest.payload_type is not Sha256Digest:
+        if is_sensitive_value(self.digest) and self.digest.payload_type is not Sha256Digest:
             raise TypeError("sensitive multipart validation digest must contain Sha256Digest")
         if type(self.encoded_content_type) is not HeaderText:
             raise TypeError("multipart validation Content-Type must be HeaderText")

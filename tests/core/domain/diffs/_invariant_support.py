@@ -269,11 +269,14 @@ def _literal(value: str = "") -> LiteralExpr:
     )
 
 
-def _environment(name: str) -> ResourceIdentity:
-    return ResourceIdentity(
-        namespace=NamespaceId(value="demo"),
-        kind=ResourceKind.ENVIRONMENT,
-        resource_id=ResourceId(value=name),
+def _environment(name: str) -> DefinitionRef:
+    return DefinitionRef(
+        identity=ResourceIdentity(
+            namespace=NamespaceId(value="demo"),
+            kind=ResourceKind.ENVIRONMENT,
+            resource_id=ResourceId(value=name),
+        ),
+        fingerprint=_fingerprint(),
     )
 
 
@@ -325,8 +328,10 @@ def _compiled_rule(
     )
 
 
-def _location(index: int) -> ExchangeLocation:
+def _location(index: int, *, candidate: bool = False) -> ExchangeLocation:
     return ExchangeLocation(
+        environment_execution_id=EnvironmentExecutionId(value=UUID(int=63 if candidate else 62)),
+        source=SelectorSource.RESPONSE_STATUS,
         exchange_id=ExchangeId(value=UUID(int=index)),
         field=StaticFieldPath(segments=("response", "status")),
     )
