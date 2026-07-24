@@ -16,11 +16,14 @@ from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import MatrixBindingId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.overrides import Clear
 from comparo.core.domain.overrides import CollectionOverridePlan
+from comparo.core.domain.overrides import Inherit
 from comparo.core.domain.overrides import KeepBase
 from comparo.core.domain.overrides import KeyedSet
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.values import JsonBoolean
 from comparo.core.domain.values import JsonInteger
 from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonObjectMember
@@ -30,6 +33,7 @@ from comparo.core.planning._canonical import literal_string
 from comparo.core.planning._canonical import resource_spec
 from comparo.core.planning._errors import PlanningError
 from comparo.core.planning.binding import _append_value_layer
+from comparo.core.planning.binding import _bind_bool
 from comparo.core.planning.binding import _bind_count
 from comparo.core.planning.binding import _expand_profiles
 from comparo.core.planning.binding import _Layer
@@ -69,6 +73,61 @@ def test_canonical_accessors_reject_wrong_spec_and_static_string_shape(
         resource_spec(malformed)
     with pytest.raises(PlanningError, match=r"planning.matrix.static-id-required"):
         literal_string(JsonString(value="wrong"), owner=request, field="id")
+
+
+def test_boolean_binding_defends_static_shape_and_all_override_variants(
+    comparison_project: CompiledProject,
+) -> None:
+    owner = comparison_project.project
+    enabled = _Layer(
+        owner,
+        CanonicalObject(members=(CanonicalMember(name="failFast", value=JsonBoolean(value=True)),)),
+        ProvenanceKind.PROJECT,
+    )
+    value, sources = _bind_bool(
+        (enabled,),
+        Inherit(),
+        field="failFast",
+        default=False,
+        invocation=invocation(),
+    )
+    assert value is True
+    assert tuple(item.kind for item in sources) == (
+        ProvenanceKind.VERSIONED_DEFAULT,
+        ProvenanceKind.PROJECT,
+    )
+
+    cleared, clear_sources = _bind_bool(
+        (enabled,),
+        Clear(),
+        field="failFast",
+        default=False,
+        invocation=invocation(),
+    )
+    assert cleared is False
+    assert clear_sources[-1].kind is ProvenanceKind.INVOCATION
+
+    malformed = _Layer(
+        owner,
+        CanonicalObject(members=(CanonicalMember(name="failFast", value=JsonString(value="yes")),)),
+        ProvenanceKind.PROJECT,
+    )
+    with pytest.raises(PlanningError, match=r"planning.field.shape-invalid"):
+        _bind_bool(
+            (malformed,),
+            Inherit(),
+            field="failFast",
+            default=False,
+            invocation=invocation(),
+        )
+    with pytest.raises(TypeError, match="boolean override"):
+        _bind_bool(
+            (),
+            cast("Inherit", object()),
+            field="failFast",
+            default=False,
+            invocation=invocation(),
+        )
 
 
 def test_subject_and_topology_helpers_defend_link_shape_and_fingerprint(
