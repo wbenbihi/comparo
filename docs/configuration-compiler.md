@@ -182,7 +182,8 @@ filesystem paths. Runtime value sources remain typed expression nodes and Step 6
 the correct run scope without re-reading configuration.
 
 Static execution fields required before resolution include subject and Environment topology,
-Matrix attachments, positive trial and maximum-attempt counts, and typed planning-budget maps.
+Matrix attachments, positive trial and maximum-attempt counts, the boolean `failFast` policy, and
+typed planning-budget maps.
 The deterministic planner consumes the canonical graph, applies a typed invocation and external
 policy authority, and emits an admitted compact plan; it never asks the frontend or YAML adapter
 to merge configuration. See [Deterministic run planner](run-planner.md).

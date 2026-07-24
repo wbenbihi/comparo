@@ -264,6 +264,10 @@ Exit criteria:
 
 ## Step 7: runtime with a fake transport
 
+Status: completed on 2026-07-25. The bounded scheduler, authorized transport seam, offline
+vertical slice, cancellation behavior, and verification contract are documented in
+[Offline runtime](offline-runtime.md).
+
 Define the HTTP transport port and first implement a programmable fake. Build the runtime around a
 bounded worker queue, explicit state transitions, structured progress events, cancellation,
 fail-fast policy, attempt handling, observation normalization, deterministic final ordering, and
@@ -285,12 +289,13 @@ comparo/v1alpha1 configuration
 
 Exit criteria:
 
-- Large fake plans run with bounded tasks and memory.
-- Resource ledgers expose requested, effective, consumed, and limiting budgets with provenance.
-- Cancellation leaves no work behind.
-- One cell failure does not abort unrelated cells unless policy requests fail-fast.
-- Randomized completion order still produces deterministic results.
-- CLI and TUI concerns do not appear in the runtime.
+- Large fake plans run with bounded tasks and memory: complete.
+- Resource ledgers expose requested, effective, consumed, and limiting budgets with provenance:
+  complete.
+- Cancellation leaves no work behind: complete.
+- One cell failure does not abort unrelated cells unless policy requests fail-fast: complete.
+- Randomized completion order still produces deterministic results: complete.
+- CLI and TUI concerns do not appear in the runtime: complete.
 
 ## Step 8: production HTTP adapter
 

@@ -40,6 +40,7 @@ else:
   comparison candidates;
 - Matrix attachment edits with local binding aliases;
 - trial and maximum-attempt overrides;
+- a fail-fast override, defaulting to independent execution failures;
 - ordinary planning-budget requests;
 - unresolved global and Environment-specific value overlays.
 
@@ -150,12 +151,16 @@ ordinary requested limits:
 | Environment executions | 50,000 |
 | maximum attempts | 150,000 |
 | binary comparisons | 50,000 |
+| queued work | 64 |
+| concurrency | 8 |
 
 Project or `ExecutionProfile` requests and invocation overrides may raise or lower these values.
 Applicable safety ceilings and the mandatory external policy ceiling cap them. Every resulting
 `ResourceBudget` records the requested, cap, effective value, contribution kind, and exact
 value-free origin. A large finite run is valid when its operator authority and available resources
 permit it; exceeding any effective dimension fails before value resolution or network activity.
+The runtime later replaces the zero-valued usage placeholders on queued-work and concurrency
+budgets with consumed, in-use, and high-water evidence.
 
 ## Identity, determinism, and preview safety
 
@@ -181,9 +186,10 @@ diagnostic codes without resolving secrets.
 
 Step 5 does not materialize HTTP requests, resolve values, execute Scenarios, schedule tasks,
 authorize a resolved destination or redirect, fetch remote Schemas, perform transport I/O, or
-create artifacts. Step 6 owns scoped values and secrets. Later runtime and transport stages must
-re-authorize finalized effects under the same exact `ExecutionPolicy`; an admitted plan is not a
-reusable network capability.
+create artifacts. Step 6 owns scoped values and secrets. Step 7 consumes the scheduling budgets
+and effective fail-fast choice through an injected transport boundary. Finalized effects still
+require authorization under the same exact `ExecutionPolicy`; an admitted plan is not a reusable
+network capability.
 
 Architecture contracts forbid adapter, HTTP client, filesystem, ambient environment, clock,
 randomness, scheduler, CLI, and TUI imports from `comparo.core.planning`. The planner suite covers
