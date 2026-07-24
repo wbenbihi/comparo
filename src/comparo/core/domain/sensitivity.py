@@ -138,6 +138,11 @@ class SensitiveValue[SensitiveT]:
         """Identify the wrapper as sensitive without examining its contents."""
         return Sensitivity.SENSITIVE
 
+    @property
+    def payload_type(self) -> type[SensitiveT]:
+        """Expose only the runtime payload type so receiving fields can enforce their contract."""
+        return type(self.__value)
+
     def reveal(self, *, access: SensitiveValueAccess) -> SensitiveT:
         """Reveal the live value to code holding an explicit access capability."""
         _require_access(access, operation="revealing")

@@ -67,6 +67,7 @@ def test_reveal_requires_an_explicit_access_capability() -> None:
     assert sensitive.reveal(access=access) == "do-not-leak"
     assert access.purpose == "construct an HTTP request"
     assert sensitive.sensitivity is Sensitivity.SENSITIVE
+    assert sensitive.payload_type is str
     assert sensitive.origins == (_origin(),)
 
     with pytest.raises(TypeError, match="requires SensitiveValueAccess"):

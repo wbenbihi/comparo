@@ -296,39 +296,31 @@ class Missing(msgspec.Struct, frozen=True, kw_only=True):
 
 @final
 class Error(msgspec.Struct, frozen=True, kw_only=True):
-    """A deterministic resolution failure that must stop fallback evaluation."""
+    """A value-free resolution failure that must stop fallback evaluation."""
 
     code: ResolutionErrorCode
-    message: str
     provenance: ValueProvenance
 
     def __post_init__(self) -> None:
-        """Require a typed failure code, safe message, and provenance."""
+        """Require a typed failure code and non-secret provenance."""
         if type(self.code) is not ResolutionErrorCode:
             msg = "resolution error code must be a ResolutionErrorCode"
             raise TypeError(msg)
-        if type(self.message) is not str or not self.message:
-            msg = "resolution error message must be non-empty text"
-            raise ValueError(msg)
         _require_value_provenance(self.provenance, outcome="resolution error")
 
 
 @final
 class Blocked(msgspec.Struct, frozen=True, kw_only=True):
-    """A policy denial that must stop fallback evaluation."""
+    """A value-free policy denial that must stop fallback evaluation."""
 
     code: ResolutionBlockCode
-    message: str
     provenance: ValueProvenance
 
     def __post_init__(self) -> None:
-        """Require a typed policy code, safe message, and provenance."""
+        """Require a typed policy code and non-secret provenance."""
         if type(self.code) is not ResolutionBlockCode:
             msg = "resolution block code must be a ResolutionBlockCode"
             raise TypeError(msg)
-        if type(self.message) is not str or not self.message:
-            msg = "resolution block message must be non-empty text"
-            raise ValueError(msg)
         _require_value_provenance(self.provenance, outcome="resolution block")
 
 

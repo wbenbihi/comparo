@@ -126,7 +126,6 @@ def test_present_distinguishes_falsy_values_from_other_resolution_outcomes() -> 
     assert isinstance(
         Error(
             code=ResolutionErrorCode.CONVERSION_FAILED,
-            message="input is not a base-ten integer",
             provenance=provenance,
         ),
         Error,
@@ -134,7 +133,6 @@ def test_present_distinguishes_falsy_values_from_other_resolution_outcomes() -> 
     assert isinstance(
         Blocked(
             code=ResolutionBlockCode.SOURCE_DENIED,
-            message="source is outside the authorized namespace",
             provenance=provenance,
         ),
         Blocked,
@@ -162,7 +160,13 @@ def test_resolution_outcomes_validate_direct_construction() -> None:
 
     with pytest.raises(TypeError, match="UnavailableReason"):
         Unavailable(reason="not-found", provenance=provenance)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="non-empty text"):
-        Error(code=ResolutionErrorCode.PROVIDER_FAILED, message="", provenance=provenance)
-    with pytest.raises(ValueError, match="non-empty text"):
-        Blocked(code=ResolutionBlockCode.CAPABILITY_DENIED, message="", provenance=provenance)
+    with pytest.raises(TypeError, match="provenance"):
+        Error(
+            code=ResolutionErrorCode.PROVIDER_FAILED,
+            provenance=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="provenance"):
+        Blocked(
+            code=ResolutionBlockCode.CAPABILITY_DENIED,
+            provenance=object(),  # type: ignore[arg-type]
+        )

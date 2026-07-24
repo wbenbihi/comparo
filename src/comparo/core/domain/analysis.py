@@ -30,6 +30,7 @@ from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import Ratio
+from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 
 _PROVIDER_TOKEN = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*")
@@ -70,7 +71,7 @@ class AnalysisInput(msgspec.Struct, frozen=True, kw_only=True):
     """A bounded data descriptor; payload access remains an authorized runtime concern."""
 
     source: AnalysisInputSource
-    digest: Fingerprint
+    digest: Fingerprint | SensitiveValue[Fingerprint]
     bytes: ByteCount
     sensitivity: Sensitivity
     media_type: str | None = None
@@ -79,12 +80,17 @@ class AnalysisInput(msgspec.Struct, frozen=True, kw_only=True):
         """Require typed source identity and non-payload metadata."""
         if type(self.source) not in {BodyId, ViewId, FactId}:
             raise TypeError("analysis input source must be BodyId, ViewId, or FactId")
-        if type(self.digest) is not Fingerprint:
-            raise TypeError("analysis input digest must be a Fingerprint")
+        if type(self.digest) is not Fingerprint and not (
+            isinstance(self.digest, SensitiveValue) and self.digest.payload_type is Fingerprint
+        ):
+            raise TypeError("analysis input digest must contain a Fingerprint")
         if type(self.bytes) is not ByteCount:
             raise TypeError("analysis input bytes must be a ByteCount")
         if type(self.sensitivity) is not Sensitivity:
             raise TypeError("analysis input sensitivity must be a Sensitivity")
+        digest_is_sensitive = isinstance(self.digest, SensitiveValue)
+        if digest_is_sensitive != (self.sensitivity is Sensitivity.SENSITIVE):
+            raise ValueError("analysis input digest containment must match input sensitivity")
         if self.media_type is not None and (
             type(self.media_type) is not str or not self.media_type.strip()
         ):
@@ -163,15 +169,18 @@ class AnalysisEvidence(msgspec.Struct, frozen=True, kw_only=True):
     """Value-free evidence identity and exact count from an external analysis."""
 
     code: DiagnosticCode
-    digest: Fingerprint
+    digest: SensitiveValue[Fingerprint]
     items: Count
 
     def __post_init__(self) -> None:
         """Require stable structured evidence without arbitrary provider prose."""
         if type(self.code) is not DiagnosticCode:
             raise TypeError("analysis evidence code must be a DiagnosticCode")
-        if type(self.digest) is not Fingerprint:
-            raise TypeError("analysis evidence digest must be a Fingerprint")
+        if (
+            not isinstance(self.digest, SensitiveValue)
+            or self.digest.payload_type is not Fingerprint
+        ):
+            raise TypeError("analysis evidence digest must be a sensitive Fingerprint")
         if type(self.items) is not Count:
             raise TypeError("analysis evidence items must be a Count")
 

@@ -40,7 +40,9 @@ from comparo.core.domain.primitives import Ratio
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
+from comparo.core.domain.sensitivity import TaintOriginId
 
 
 def _fingerprint(character: str = "a") -> Fingerprint:
@@ -112,7 +114,10 @@ def _request() -> AnalysisRequest:
         inputs=(
             AnalysisInput(
                 source=BodyId(value=UUID("22345678-1234-5678-1234-567812345678")),
-                digest=_fingerprint("b"),
+                digest=SensitiveValue(
+                    _fingerprint("b"),
+                    origins=(TaintOriginId(value="response/body"),),
+                ),
                 bytes=ByteCount(value=100),
                 sensitivity=Sensitivity.SENSITIVE,
                 media_type="application/json",
@@ -147,6 +152,16 @@ def test_analysis_request_binds_inputs_authority_budgets_and_destination() -> No
             budgets=(),
             timeout=request.timeout,
             fingerprint=request.fingerprint,
+        )
+
+
+def test_analysis_input_digest_containment_matches_payload_sensitivity() -> None:
+    with pytest.raises(ValueError, match="must match input sensitivity"):
+        AnalysisInput(
+            source=BodyId(value=UUID("32345678-1234-5678-1234-567812345678")),
+            digest=_fingerprint("d"),
+            bytes=ByteCount(value=1),
+            sensitivity=Sensitivity.SENSITIVE,
         )
 
 
