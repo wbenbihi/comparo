@@ -25,6 +25,7 @@ classifiers = [
 ]
 dependencies = [
   "msgspec>=0.21.1,<1",
+  "pyyaml>=6.0.3,<7",
 ]
 
 [project.urls]
@@ -43,6 +44,7 @@ dev = [
   "import-linter>=2.1.0",
   "pre-commit>=4.0.0",
   "python-semantic-release==10.6.1",
+  "types-pyyaml>=6.0.12.20250516",
 ]
 
 [tool.hatch.build]
