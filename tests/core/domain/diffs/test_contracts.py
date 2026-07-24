@@ -68,6 +68,7 @@ from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.paths import SelectorPath
+from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectionAccess
 from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
@@ -99,7 +100,8 @@ def _selector(
     cardinality: SelectorCardinality = SelectorCardinality.EXACTLY_ONE,
 ) -> CompiledSelector:
     plural = cardinality is SelectorCardinality.ZERO_OR_MORE
-    source = SelectorSource.SCENARIO_STEP if plural else SelectorSource.EXECUTION
+    body_view = BodyViewKind.ENTITY_BYTES if kind is ValueKind.BYTES else None
+    source = SelectorSource.RESPONSE_BODY if body_view is not None else SelectorSource.SCENARIO_STEP
     capabilities = SelectorCapabilities(
         cardinality=cardinality,
         access=SelectionAccess.INCREMENTAL,
@@ -113,6 +115,7 @@ def _selector(
         path=(compile_jsonpath("$[*]") if plural else NoPath()),
         capabilities=capabilities,
         output=_contract(kind, cardinality),
+        body_view=body_view,
     )
 
 

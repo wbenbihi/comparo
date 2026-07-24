@@ -35,6 +35,7 @@ _EXCHANGE_SOURCES = frozenset(
         SelectorSource.RESPONSE_TIMINGS,
         SelectorSource.RESPONSE_ENDPOINT,
         SelectorSource.RESPONSE_TLS,
+        SelectorSource.STREAM_TIMINGS,
         SelectorSource.STREAM_TERMINATION,
     }
 )

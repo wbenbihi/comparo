@@ -39,4 +39,4 @@ def compile_jsonpath(
         raise SelectorSyntaxError(code, 0) from None
 
 
-__all__ = ["compile_json_pointer", "compile_jsonpath"]
+__all__ = ("compile_json_pointer", "compile_jsonpath")

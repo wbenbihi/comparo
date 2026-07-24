@@ -55,7 +55,7 @@ from comparo.core.selection.render import canonical_jsonpath
         ("$[?!=@]", SelectorSyntaxCode.INVALID_EXPRESSION),
         ("$[?count()]", SelectorSyntaxCode.INVALID_TYPE),
         ("$[?1 == @[*]]", SelectorSyntaxCode.INVALID_TYPE),
-        ("$[?!true]", SelectorSyntaxCode.INVALID_TYPE),
+        ("$[?!true]", SelectorSyntaxCode.INVALID_EXPRESSION),
         ("$[?@ && true]", SelectorSyntaxCode.INVALID_TYPE),
         ("$[?@ == 01]", SelectorSyntaxCode.INVALID_NUMBER),
         ("$[?@ == -]", SelectorSyntaxCode.INVALID_NUMBER),
@@ -65,10 +65,14 @@ from comparo.core.selection.render import canonical_jsonpath
         ("$['\\", SelectorSyntaxCode.INVALID_ESCAPE),
         ("$['\ud800']", SelectorSyntaxCode.INVALID_UNICODE),
         ("$[?@.a] trailing", SelectorSyntaxCode.TRAILING_INPUT),
-        ("$ .a", SelectorSyntaxCode.TRAILING_INPUT),
+        ("$ ", SelectorSyntaxCode.TRAILING_INPUT),
+        ("$[-0]", SelectorSyntaxCode.INVALID_NUMBER),
+        ("$[?!!@]", SelectorSyntaxCode.INVALID_EXPRESSION),
+        ("$[?!@==1]", SelectorSyntaxCode.EXPECTED_SYNTAX),
         ("$[9007199254740992]", SelectorSyntaxCode.INVALID_NUMBER),
         ("$[-9007199254740992]", SelectorSyntaxCode.INVALID_NUMBER),
         ("$[?@ == 1e256]", SelectorSyntaxCode.TOO_COMPLEX),
+        ("$[?@==1e9223372036854775807]", SelectorSyntaxCode.TOO_COMPLEX),
     ],
 )
 def test_invalid_jsonpaths_return_structured_safe_failures(
@@ -106,7 +110,7 @@ def test_parser_limits_reject_depth_work_and_numeric_amplification() -> None:
         max_integer_digits=3,
     )
     for path, code in (
-        ("$[?!!!@]", SelectorSyntaxCode.TOO_DEEP),
+        ("$[?!!!@]", SelectorSyntaxCode.INVALID_EXPRESSION),
         ("$[?@==1||@==2]", SelectorSyntaxCode.TOO_COMPLEX),
         ("$.a.b.c", SelectorSyntaxCode.TOO_COMPLEX),
         ("$['a','b','c']", SelectorSyntaxCode.TOO_COMPLEX),

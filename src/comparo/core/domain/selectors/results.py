@@ -11,12 +11,18 @@ from comparo.core.domain.budget_contracts import BudgetStage
 from comparo.core.domain.budgets import BudgetExceeded
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.http.streams import StreamCompleteness
+from comparo.core.domain.http.streams import StreamExtent
 from comparo.core.domain.http.views import DecodeErrorCode
 from comparo.core.domain.http.views import DecoderSpec
+from comparo.core.domain.http.views import IncompleteViewReason
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.selectors.locations import StreamLocation
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.result_values import SelectionMatch as SelectionMatch
+from comparo.core.domain.selectors.result_values import (
+    SelectionViewFailureProvenance as SelectionViewFailureProvenance,
+)
 from comparo.core.domain.selectors.result_values import (
     SelectionViewProvenance as SelectionViewProvenance,
 )
@@ -30,7 +36,7 @@ from comparo.core.domain.selectors.result_values import (
     require_view_provenance as require_view_provenance,
 )
 from comparo.core.domain.selectors.sources import BodyViewKind
-from comparo.core.domain.selectors.sources import SelectorCardinality
+from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.selectors.values import HttpFieldItems as HttpFieldItems
 from comparo.core.domain.selectors.values import HttpFieldTextValue as HttpFieldTextValue
 from comparo.core.domain.selectors.values import SelectedValue as SelectedValue
@@ -125,6 +131,7 @@ class SelectionPartial(msgspec.Struct, frozen=True, kw_only=True):
     reason: SelectionPartialReason
     issues: tuple[SelectionItemIssue, ...] = ()
     views: tuple[SelectionViewProvenance, ...] = ()
+    stream_extent: StreamExtent | None = None
 
     def __post_init__(self) -> None:
         """Keep a usable prefix explicit and impossible to mistake for ready."""
@@ -149,10 +156,8 @@ def _require_partial_components(result: SelectionPartial) -> None:
         raise TypeError("partial selection requires a CompiledSelector")
     if type(result.environment_execution_id) is not EnvironmentExecutionId:
         raise TypeError("partial selection requires an EnvironmentExecutionId")
-    if result.selector.capabilities.cardinality is not SelectorCardinality.ZERO_OR_MORE:
-        raise ValueError("only plural selectors can return a partial result")
-    if type(result.matches) is not tuple or not result.matches:
-        raise ValueError("partial selection requires at least one complete match")
+    if type(result.matches) is not tuple:
+        raise TypeError("partial selection matches must be an immutable tuple")
     if any(type(match) is not SelectionMatch for match in result.matches):
         raise TypeError("partial selection contains an unsupported match")
     if type(result.reason) is not SelectionPartialReason:
@@ -162,6 +167,52 @@ def _require_partial_components(result: SelectionPartial) -> None:
         for issue in result.issues
     ):
         raise TypeError("partial selection issues must be an immutable typed tuple")
+    if not result.matches and not result.issues:
+        raise ValueError("partial selection requires a complete match or located issue")
+    if result.stream_extent is not None and type(result.stream_extent) is not StreamExtent:
+        raise TypeError("partial stream extent must be a StreamExtent")
+    stream_source = _is_native_stream_source(result.selector.source)
+    if stream_source != (result.stream_extent is not None):
+        raise ValueError("exactly native stream partial results require their StreamExtent")
+    _require_partial_reason_evidence(result, stream_source=stream_source)
+
+
+def _is_native_stream_source(source: SelectorSource) -> bool:
+    return source in {
+        SelectorSource.STREAM_EVENTS,
+        SelectorSource.STREAM_EVENT_DATA_JSON,
+        SelectorSource.STREAM_RECORDS,
+        SelectorSource.STREAM_CONTROLS,
+    }
+
+
+def _require_partial_reason_evidence(
+    result: SelectionPartial,
+    *,
+    stream_source: bool,
+) -> None:
+    """Bind each partial reason to the exact evidence it promises."""
+    if result.reason is SelectionPartialReason.VIEW_PREFIX:
+        if result.selector.source not in {
+            SelectorSource.REQUEST_BODY,
+            SelectorSource.RESPONSE_BODY,
+        }:
+            raise ValueError("view-prefix partial results require an HTTP body source")
+        if result.issues or result.stream_extent is not None:
+            raise ValueError("view-prefix partial results cannot retain stream evidence")
+    elif result.reason is SelectionPartialReason.ITEM_FAILURE:
+        if not stream_source or not result.issues:
+            raise ValueError("item-failure partial results require located stream issues")
+    elif result.reason is SelectionPartialReason.STREAM_WINDOW_INCOMPLETE:
+        if (
+            not stream_source
+            or result.issues
+            or result.stream_extent is None
+            or result.stream_extent.completeness is not StreamCompleteness.INCOMPLETE
+        ):
+            raise ValueError(
+                "stream-window partial results require an incomplete extent without item issues"
+            )
 
 
 def _require_partial_issue_ownership(result: SelectionPartial) -> None:
@@ -186,6 +237,7 @@ class SourceUnavailableReason(DomainStrEnum):
     NO_TERMINAL_EXCHANGE = "no-terminal-exchange"
     NO_TERMINAL_RESPONSE = "no-terminal-response"
     NO_SUCH_ATTEMPT = "no-such-attempt"
+    NO_SUCH_EXCHANGE = "no-such-exchange"
     NO_SUCH_STEP = "no-such-step"
 
 
@@ -194,11 +246,13 @@ class SelectionSourceUnavailable(msgspec.Struct, frozen=True, kw_only=True):
     """The requested typed source is unavailable."""
 
     reason: SourceUnavailableReason
+    view_failure: SelectionViewFailureProvenance | None = None
 
     def __post_init__(self) -> None:
         """Require a stable source category."""
         if type(self.reason) is not SourceUnavailableReason:
             raise TypeError("selection source reason must be a SourceUnavailableReason")
+        _require_optional_view_failure(self.view_failure)
 
 
 @final
@@ -230,12 +284,19 @@ class SelectionDecodeFailure(msgspec.Struct, frozen=True, kw_only=True):
     """The explicitly requested semantic view failed strict decoding."""
 
     code: DiagnosticCode
-    view: BodyViewKind
+    provenance: SelectionViewFailureProvenance
 
     def __post_init__(self) -> None:
         """Require safe diagnostics and the failed view."""
-        if type(self.code) is not DiagnosticCode or type(self.view) is not BodyViewKind:
-            raise TypeError("decode failure requires a DiagnosticCode and BodyViewKind")
+        if type(self.code) is not DiagnosticCode:
+            raise TypeError("decode failure requires a DiagnosticCode")
+        if type(self.provenance) is not SelectionViewFailureProvenance:
+            raise TypeError("decode failure requires exact view provenance")
+
+    @property
+    def view(self) -> BodyViewKind:
+        """Return the failed requested view from its exact provenance."""
+        return self.provenance.requested
 
 
 class SelectionIncompleteReason(DomainStrEnum):
@@ -252,11 +313,22 @@ class SelectionIncomplete(msgspec.Struct, frozen=True, kw_only=True):
     """The source exists but is too incomplete for the selector contract."""
 
     reason: SelectionIncompleteReason
+    view_failure: SelectionViewFailureProvenance | None = None
+    view_reason: IncompleteViewReason | None = None
 
     def __post_init__(self) -> None:
         """Require a stable incompleteness category."""
         if type(self.reason) is not SelectionIncompleteReason:
             raise TypeError("selection incomplete reason must be a SelectionIncompleteReason")
+        _require_optional_view_failure(self.view_failure)
+        if self.view_reason is not None and type(self.view_reason) is not IncompleteViewReason:
+            raise TypeError("selection incomplete view reason must be typed")
+        if (self.reason is SelectionIncompleteReason.PARTIAL_VIEW) != (
+            self.view_failure is not None
+        ):
+            raise ValueError("exactly partial-view incompleteness requires view provenance")
+        if self.view_reason is not None and self.view_failure is None:
+            raise ValueError("a view incompleteness reason requires view provenance")
 
 
 @final
@@ -264,6 +336,7 @@ class SelectionBudgetExceeded(msgspec.Struct, frozen=True, kw_only=True):
     """Selection or its required decoded view exhausted a canonical budget."""
 
     exhaustion: BudgetExceeded
+    view_failure: SelectionViewFailureProvenance | None = None
 
     def __post_init__(self) -> None:
         """Require shared exact budget evidence."""
@@ -277,6 +350,11 @@ class SelectionBudgetExceeded(msgspec.Struct, frozen=True, kw_only=True):
             BudgetStage.SELECTION,
         }:
             raise ValueError("selection budget evidence must come from decoding or selection")
+        _require_optional_view_failure(self.view_failure)
+        if (self.exhaustion.budget.stage is BudgetStage.DECODING) != (
+            self.view_failure is not None
+        ):
+            raise ValueError("exactly decoding budget exhaustion requires view provenance")
 
 
 @final
@@ -284,11 +362,13 @@ class SelectionUnsupported(msgspec.Struct, frozen=True, kw_only=True):
     """A required implementation capability is unavailable."""
 
     code: DiagnosticCode
+    view_failure: SelectionViewFailureProvenance | None = None
 
     def __post_init__(self) -> None:
         """Require a safe stable diagnostic code."""
         if type(self.code) is not DiagnosticCode:
             raise TypeError("unsupported selection requires a DiagnosticCode")
+        _require_optional_view_failure(self.view_failure)
 
 
 @final
@@ -296,11 +376,18 @@ class SelectionCancelled(msgspec.Struct, frozen=True, kw_only=True):
     """Selection was cancelled before a complete result existed."""
 
     code: DiagnosticCode
+    view_failure: SelectionViewFailureProvenance | None = None
 
     def __post_init__(self) -> None:
         """Require a safe stable diagnostic code."""
         if type(self.code) is not DiagnosticCode:
             raise TypeError("cancelled selection requires a DiagnosticCode")
+        _require_optional_view_failure(self.view_failure)
+
+
+def _require_optional_view_failure(value: object) -> None:
+    if value is not None and type(value) is not SelectionViewFailureProvenance:
+        raise TypeError("selection view failure provenance has an unsupported type")
 
 
 type SelectionResult = (

@@ -12,6 +12,7 @@ from comparo.core.domain.http.views import DecoderIdentity
 from comparo.core.domain.http.views import DecoderSpec
 from comparo.core.domain.http.views import ViewCompleteness
 from comparo.core.domain.http.views import ViewKind
+from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import ViewId
 from comparo.core.domain.primitives import Fingerprint
@@ -26,6 +27,7 @@ from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.results import SelectionDecodeFailure
 from comparo.core.domain.selectors.results import SelectionMatch
 from comparo.core.domain.selectors.results import SelectionReady
+from comparo.core.domain.selectors.results import SelectionViewFailureProvenance
 from comparo.core.domain.selectors.results import SelectionViewProvenance
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectionAccess
@@ -99,6 +101,20 @@ def _json_view(location: JsonLocation) -> SelectionViewProvenance:
     )
 
 
+def _json_view_failure() -> SelectionViewFailureProvenance:
+    return SelectionViewFailureProvenance(
+        body_id=BodyId(value=UUID(int=8)),
+        source=SelectorSource.RESPONSE_BODY,
+        requested=BodyViewKind.JSON,
+        decoder=DecoderSpec(
+            identity=DecoderIdentity(value="comparo.core/json@1"),
+            view=ViewKind.JSON,
+        ),
+        auto_selection=None,
+        media=None,
+    )
+
+
 def test_json_pointer_rejects_ambiguous_escapes() -> None:
     with pytest.raises(ValueError, match="escape"):
         JsonPointer(value="/users/~2")
@@ -146,7 +162,7 @@ def test_ready_empty_is_distinct_from_decode_failure() -> None:
     )
     failure = SelectionDecodeFailure(
         code=DiagnosticCode(value="selector.decode-failed"),
-        view=BodyViewKind.JSON,
+        provenance=_json_view_failure(),
     )
 
     assert ready.matches == ()

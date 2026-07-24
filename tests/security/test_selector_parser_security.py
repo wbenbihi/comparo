@@ -32,10 +32,14 @@ def test_flat_logical_and_negation_bombs_fail_before_python_recursion() -> None:
         max_expressions=10_000,
         max_integer_digits=256,
     )
-    for authored in ("$[?" + "!" * 5_000 + "@]", "$[?" + "@||" * 5_000 + "@]"):
+    authored_codes = (
+        ("$[?" + "!" * 5_000 + "@]", SelectorSyntaxCode.INVALID_EXPRESSION),
+        ("$[?" + "@||" * 5_000 + "@]", SelectorSyntaxCode.TOO_DEEP),
+    )
+    for authored, expected in authored_codes:
         with pytest.raises(SelectorSyntaxError) as captured:
             compile_jsonpath(authored, limits=limits)
-        assert captured.value.code is SelectorSyntaxCode.TOO_DEEP
+        assert captured.value.code is expected
 
 
 def test_numeric_exponent_bomb_is_rejected_before_integer_materialization() -> None:

@@ -40,12 +40,14 @@ from comparo.core.selection import try_compile_jsonpath
         ('$["\\uD834\\uDD1E"]', '$["𝄞"]'),
         ('$["quote\\"slash\\\\"]', '$["quote\\"slash\\\\"]'),
         ('$["\\b\\f\\n\\r\\t\\u0000"]', '$["\\b\\f\\n\\r\\t\\u0000"]'),
-        ("$[-0]", "$[0]"),
+        ("$ .store [ 0 ]", '$["store"][0]'),
         ("$[::-1]", "$[::-1]"),
         ("$[1:2]", "$[1:2]"),
         ("$[?@==null]", "$[?@==null]"),
         ("$[?@==1.5]", "$[?@==1.5]"),
         ("$[?@==1.2e-10]", "$[?@==1.2e-10]"),
+        ("$[?! @.hidden]", '$[?!@["hidden"]]'),
+        ("$[?!(@.a==1)]", '$[?!(@["a"]==1)]'),
     ],
 )
 def test_jsonpath_uses_one_bracket_normalized_canonical_form(

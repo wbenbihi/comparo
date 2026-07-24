@@ -39,8 +39,46 @@ class SelectorSource(DomainStrEnum):
     STREAM_EVENT_DATA_JSON = "stream.events.data-json"
     STREAM_RECORDS = "stream.records"
     STREAM_CONTROLS = "stream.controls"
+    STREAM_TIMINGS = "stream.timings"
     STREAM_TERMINATION = "stream.termination"
     SCENARIO_STEP = "scenario.step"
+
+
+REQUEST_SELECTOR_SOURCES = frozenset(
+    {
+        SelectorSource.REQUEST_METHOD,
+        SelectorSource.REQUEST_URL,
+        SelectorSource.REQUEST_QUERY,
+        SelectorSource.REQUEST_HEADERS,
+        SelectorSource.REQUEST_COOKIES,
+        SelectorSource.REQUEST_BODY,
+    }
+)
+RESPONSE_SELECTOR_SOURCES = frozenset(
+    {
+        SelectorSource.RESPONSE_PROTOCOL,
+        SelectorSource.RESPONSE_STATUS,
+        SelectorSource.RESPONSE_INFORMATIONAL,
+        SelectorSource.RESPONSE_HEADERS,
+        SelectorSource.RESPONSE_TRAILERS,
+        SelectorSource.RESPONSE_MEDIA,
+        SelectorSource.RESPONSE_ENCODINGS,
+        SelectorSource.RESPONSE_BODY,
+        SelectorSource.RESPONSE_TIMINGS,
+        SelectorSource.RESPONSE_ENDPOINT,
+        SelectorSource.RESPONSE_TLS,
+    }
+)
+STREAM_SELECTOR_SOURCES = frozenset(
+    {
+        SelectorSource.STREAM_EVENTS,
+        SelectorSource.STREAM_EVENT_DATA_JSON,
+        SelectorSource.STREAM_RECORDS,
+        SelectorSource.STREAM_CONTROLS,
+        SelectorSource.STREAM_TIMINGS,
+        SelectorSource.STREAM_TERMINATION,
+    }
+)
 
 
 class BodyViewKind(DomainStrEnum):

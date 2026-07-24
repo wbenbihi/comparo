@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from decimal import InvalidOperation
 from typing import Never
 from typing import final
 
@@ -60,7 +61,6 @@ class JsonPathParser:
         if not self._take("$"):
             self._fail(SelectorSyntaxCode.EXPECTED_ROOT)
         segments = self._parse_segments()
-        self._skip_space()
         if not self._at_end:
             self._fail(SelectorSyntaxCode.TRAILING_INPUT)
         return JsonPathAst(segments=segments)
@@ -68,6 +68,8 @@ class JsonPathParser:
     def _parse_segments(self) -> tuple[PathSegment, ...]:
         segments: list[PathSegment] = []
         while True:
+            before_space = self._position
+            self._skip_space()
             if self._take(".."):
                 selectors = (
                     self._parse_bracket_selectors()
@@ -81,6 +83,7 @@ class JsonPathParser:
             elif self._peek() == "[":
                 segments.append(ChildSegment(selectors=self._parse_bracket_selectors()))
             else:
+                self._position = before_space
                 break
             self._segments += 1
             if self._segments > self._limits.max_segments:
@@ -155,6 +158,8 @@ class JsonPathParser:
             self._fail(SelectorSyntaxCode.TOO_COMPLEX, start)
         if len(digits) > 1 and digits.startswith("0"):
             self._fail(SelectorSyntaxCode.INVALID_NUMBER, start)
+        if token.startswith("-0"):
+            self._fail(SelectorSyntaxCode.INVALID_NUMBER, start)
         self._require_interoperable_integer(token, start)
         return int(token)
 
@@ -191,17 +196,28 @@ class JsonPathParser:
         if self._take("!"):
             if self._take("="):
                 self._fail(SelectorSyntaxCode.INVALID_EXPRESSION, self._position - 2)
-            self._enter()
-            operand = self._parse_basic_expression()
-            self._leave()
-            return self._count_expression(NotExpression(operand=operand))
-        if self._take("("):
-            self._enter()
-            expression = self._parse_or_expression()
             self._skip_space()
-            self._expect(")")
+            if self._peek() == "!":
+                self._fail(SelectorSyntaxCode.INVALID_EXPRESSION)
+            self._enter()
+            operand = (
+                self._parse_parenthesized_expression()
+                if self._peek() == "("
+                else self._parse_operand()
+            )
             self._leave()
-            return expression
+            if type(operand) not in {
+                QueryExpression,
+                FunctionExpression,
+                OrExpression,
+                AndExpression,
+                ComparisonExpression,
+                NotExpression,
+            }:
+                self._fail(SelectorSyntaxCode.INVALID_EXPRESSION)
+            return self._count_expression(NotExpression(operand=operand))
+        if self._peek() == "(":
+            return self._parse_parenthesized_expression()
         left = self._parse_operand()
         self._skip_space()
         operator = next((candidate for candidate in _COMPARISONS if self._take(candidate)), None)
@@ -215,6 +231,15 @@ class JsonPathParser:
                 right=right,
             )
         )
+
+    def _parse_parenthesized_expression(self) -> FilterExpression:
+        self._expect("(")
+        self._enter()
+        expression = self._parse_or_expression()
+        self._skip_space()
+        self._expect(")")
+        self._leave()
+        return expression
 
     def _parse_operand(self) -> FilterExpression:
         self._skip_space()
@@ -276,7 +301,18 @@ class JsonPathParser:
             self._fail(SelectorSyntaxCode.TOO_COMPLEX, start)
         if "." not in token and "e" not in token.lower():
             return json_number(int(token))
-        decimal = Decimal(token)
+        exponent_marker = max(token.find("e"), token.find("E"))
+        if exponent_marker >= 0:
+            exponent_text = token[exponent_marker + 1 :].removeprefix("+").removeprefix("-")
+            if (
+                len(exponent_text) > self._limits.max_integer_digits
+                or int(exponent_text) > self._limits.max_integer_digits
+            ):
+                self._fail(SelectorSyntaxCode.TOO_COMPLEX, start)
+        try:
+            decimal = Decimal(token)
+        except InvalidOperation:
+            self._fail(SelectorSyntaxCode.INVALID_NUMBER, start)
         exponent = decimal.as_tuple().exponent
         if type(exponent) is not int or abs(exponent) > self._limits.max_integer_digits:
             self._fail(SelectorSyntaxCode.TOO_COMPLEX, start)

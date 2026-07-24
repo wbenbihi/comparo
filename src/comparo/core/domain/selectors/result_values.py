@@ -15,6 +15,7 @@ from comparo.core.domain.http.views import ViewCompleteness
 from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import ViewId
+from comparo.core.domain.selectors.body_view_semantics import validate_requested_body_decoder
 from comparo.core.domain.selectors.contracts import contract_accepts_runtime_kind
 from comparo.core.domain.selectors.locations import BodyLocation
 from comparo.core.domain.selectors.locations import ConcreteLocation
@@ -97,8 +98,29 @@ class SelectionViewProvenance(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("selection view media must be typed response media metadata")
         if type(self.completeness) is not ViewCompleteness:
             raise TypeError("selection view completeness must be ViewCompleteness")
-        if (self.requested is BodyViewKind.AUTO) != (self.auto_selection is not None):
-            raise ValueError("exactly automatic view selection requires auto provenance")
+        validate_requested_body_decoder(self.requested, self.decoder, self.auto_selection)
+
+
+@final
+class SelectionViewFailureProvenance(msgspec.Struct, frozen=True, kw_only=True):
+    """Safe exact provenance for a decoded view that could not produce a ready value."""
+
+    body_id: BodyId
+    source: SelectorSource
+    requested: BodyViewKind
+    decoder: DecoderSpec
+    auto_selection: AutoViewSelection | None
+    media: MediaTypeMetadata | None
+
+    def __post_init__(self) -> None:
+        """Retain decoder choice without any storage locator or payload fingerprint."""
+        if type(self.body_id) is not BodyId:
+            raise TypeError("view failure provenance requires a BodyId")
+        if self.source not in {SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_BODY}:
+            raise ValueError("view failure provenance requires an HTTP body source")
+        if self.media is not None and not is_media_type_metadata(self.media):
+            raise TypeError("view failure media must be typed response media metadata")
+        validate_requested_body_decoder(self.requested, self.decoder, self.auto_selection)
 
 
 def require_match_contract(

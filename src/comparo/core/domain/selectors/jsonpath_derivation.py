@@ -329,7 +329,14 @@ def _render_expression(expression: FilterExpression, precedence: int = 0) -> str
             + _render_expression(expression.right, 4)
         )
     if type(expression) is NotExpression:
-        return _parenthesize("!" + _render_expression(expression.operand, 3), precedence > 3)
+        operand = expression.operand
+        rendered_operand = _render_expression(operand)
+        rendered = (
+            "!" + rendered_operand
+            if type(operand) in {QueryExpression, FunctionExpression}
+            else "!(" + rendered_operand + ")"
+        )
+        return _parenthesize(rendered, precedence > 3)
     binary = expression
     level, operator = (2, "&&") if type(binary) is AndExpression else (1, "||")
     rendered = (

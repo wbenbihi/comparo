@@ -76,6 +76,7 @@ from comparo.core.domain.selectors.results import SelectionMatch
 from comparo.core.domain.selectors.results import SelectionReady
 from comparo.core.domain.selectors.results import SelectionSourceUnavailable
 from comparo.core.domain.selectors.results import SelectionUnsupported
+from comparo.core.domain.selectors.results import SelectionViewFailureProvenance
 from comparo.core.domain.selectors.results import SelectionViewProvenance
 from comparo.core.domain.selectors.results import SourceUnavailableReason
 from comparo.core.domain.selectors.results import is_selected_value
@@ -116,6 +117,20 @@ def _json_view(location: JsonLocation) -> SelectionViewProvenance:
         auto_selection=None,
         media=None,
         completeness=ViewCompleteness.FULL,
+    )
+
+
+def _json_view_failure() -> SelectionViewFailureProvenance:
+    return SelectionViewFailureProvenance(
+        body_id=BodyId(value=UUID(int=28)),
+        source=SelectorSource.RESPONSE_BODY,
+        requested=BodyViewKind.JSON,
+        decoder=DecoderSpec(
+            identity=DecoderIdentity(value="comparo.core/json@1"),
+            view=ViewKind.JSON,
+        ),
+        auto_selection=None,
+        media=None,
     )
 
 
@@ -1057,7 +1072,7 @@ def test_selection_result_variants_remain_distinct_and_validate_payloads() -> No
     code = DiagnosticCode(value="selector.runtime-state")
     variants = (
         SelectionSourceUnavailable(reason=SourceUnavailableReason.NO_BODY),
-        SelectionDecodeFailure(code=code, view=BodyViewKind.JSON),
+        SelectionDecodeFailure(code=code, provenance=_json_view_failure()),
         SelectionIncomplete(reason=SelectionIncompleteReason.PARTIAL_CAPTURE),
         SelectionUnsupported(code=code),
         SelectionCancelled(code=code),
@@ -1071,7 +1086,7 @@ def test_selection_result_variants_remain_distinct_and_validate_payloads() -> No
     with pytest.raises(TypeError, match="DiagnosticCode"):
         SelectionDecodeFailure(
             code=cast("DiagnosticCode", "bad"),
-            view=BodyViewKind.JSON,
+            provenance=_json_view_failure(),
         )
     with pytest.raises(TypeError, match="incomplete reason"):
         SelectionIncomplete(reason=cast("SelectionIncompleteReason", "bad"))
@@ -1111,7 +1126,13 @@ def test_selection_result_variants_remain_distinct_and_validate_payloads() -> No
         attempted=Count(value=9),
         effect=BudgetExhaustionEffect.EVALUATION_INCOMPLETE,
     )
-    assert SelectionBudgetExceeded(exhaustion=decoding_exhaustion).exhaustion == decoding_exhaustion
+    assert (
+        SelectionBudgetExceeded(
+            exhaustion=decoding_exhaustion,
+            view_failure=_json_view_failure(),
+        ).exhaustion
+        == decoding_exhaustion
+    )
     evaluation_budget = msgspec.structs.replace(
         budget,
         resource=BudgetResource.DERIVED_VALUES,

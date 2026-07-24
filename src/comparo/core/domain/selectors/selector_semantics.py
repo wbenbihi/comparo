@@ -23,11 +23,14 @@ from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.paths import SelectorPath
 from comparo.core.domain.selectors.paths import StaticFieldPath
 from comparo.core.domain.selectors.paths import is_selector_path
+from comparo.core.domain.selectors.sources import STREAM_SELECTOR_SOURCES
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectionAccess
 from comparo.core.domain.selectors.sources import SelectorCapabilities
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
+from comparo.core.domain.selectors.static_fields import STATIC_FIELD_REQUIRED_SOURCES
+from comparo.core.domain.selectors.static_fields import static_field_kind
 
 BODY_SELECTOR_SOURCES = frozenset({SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_BODY})
 TERMINAL_OCCURRENCE = TerminalOccurrence()
@@ -66,19 +69,6 @@ _SCALAR_SOURCES = frozenset(
         SelectorSource.RESPONSE_STATUS,
     }
 )
-_STATIC_FIELD_SOURCES = frozenset(
-    {
-        SelectorSource.EXECUTION,
-        SelectorSource.ATTEMPT,
-        SelectorSource.EXCHANGE,
-        SelectorSource.RESPONSE_MEDIA,
-        SelectorSource.RESPONSE_TIMINGS,
-        SelectorSource.RESPONSE_ENDPOINT,
-        SelectorSource.RESPONSE_TLS,
-        SelectorSource.STREAM_TERMINATION,
-        SelectorSource.SCENARIO_STEP,
-    }
-)
 _PLURAL_SOURCES = frozenset(
     {
         *HTTP_FIELD_SOURCES,
@@ -87,15 +77,6 @@ _PLURAL_SOURCES = frozenset(
         SelectorSource.STREAM_EVENT_DATA_JSON,
         SelectorSource.STREAM_RECORDS,
         SelectorSource.STREAM_CONTROLS,
-    }
-)
-_STREAM_SOURCES = frozenset(
-    {
-        SelectorSource.STREAM_EVENTS,
-        SelectorSource.STREAM_EVENT_DATA_JSON,
-        SelectorSource.STREAM_RECORDS,
-        SelectorSource.STREAM_CONTROLS,
-        SelectorSource.STREAM_TERMINATION,
     }
 )
 
@@ -141,8 +122,11 @@ def _require_path_source_compatibility(
         JsonPathExpression,
     }:
         raise ValueError("body selectors support whole-view or JSON paths only")
-    if type(path) is StaticFieldPath and source not in _STATIC_FIELD_SOURCES:
-        raise ValueError("static field selector path is incompatible with its source")
+    if type(path) is StaticFieldPath:
+        if source is not SelectorSource.SCENARIO_STEP and static_field_kind(source, path) is None:
+            raise ValueError("static field selector path is not in its source catalog")
+    elif source in STATIC_FIELD_REQUIRED_SOURCES:
+        raise ValueError("selector source requires one cataloged static field path")
     if type(path) is HttpFieldPath:
         _require_http_field_path(source, path)
 
@@ -177,7 +161,7 @@ def _require_occurrence_source_compatibility(
         }:
             raise ValueError("attempt source requires terminal, exact, or all-attempt scope")
         return
-    if source in _STREAM_SOURCES:
+    if source in STREAM_SELECTOR_SOURCES:
         if occurrence_type is not TerminalOccurrence:
             raise ValueError("logical stream sources currently require terminal occurrence scope")
         return
@@ -271,6 +255,9 @@ def _whole_source_kinds(
     path: SelectorPath,
     body_view: BodyViewKind | None,
 ) -> frozenset[ValueKind] | None:
+    if type(path) is StaticFieldPath:
+        kind = static_field_kind(source, path)
+        return None if kind is None else frozenset({kind})
     if type(path) is HttpFieldPath:
         kind = (
             ValueKind.HTTP_FIELD_ITEMS
@@ -290,11 +277,16 @@ def _whole_no_path_kinds(
     body_view: BodyViewKind | None,
 ) -> frozenset[ValueKind] | None:
     scalar = {
+        SelectorSource.EXECUTION: frozenset({ValueKind.STRING}),
+        SelectorSource.ATTEMPT: frozenset({ValueKind.STRING}),
+        SelectorSource.EXCHANGE: frozenset({ValueKind.STRING}),
         SelectorSource.REQUEST_METHOD: frozenset({ValueKind.STRING}),
         SelectorSource.REQUEST_URL: frozenset({ValueKind.STRING}),
         SelectorSource.RESPONSE_PROTOCOL: frozenset({ValueKind.STRING}),
         SelectorSource.RESPONSE_STATUS: frozenset({ValueKind.INTEGER}),
         SelectorSource.RESPONSE_MEDIA: frozenset({ValueKind.MEDIA_TYPE}),
+        SelectorSource.STREAM_CONTROLS: frozenset({ValueKind.OBJECT}),
+        SelectorSource.STREAM_TERMINATION: frozenset({ValueKind.STRING}),
     }
     if source in scalar:
         return scalar[source]
