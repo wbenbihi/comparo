@@ -155,6 +155,7 @@ _MUTABLE_OR_DYNAMIC_ORIGINS = frozenset(
 
 _MUTABLE_RUNTIME_TYPES = (list, dict, set, bytearray, memoryview)
 _SENSITIVE_SENTINEL = "architecture-secret-9b66f054"
+_MAX_DOMAIN_SOURCE_LINES = 450
 
 
 def _domain_modules() -> tuple[ModuleType, ...]:
@@ -186,6 +187,15 @@ def _domain_structs() -> tuple[type[msgspec.Struct], ...]:
             ):
                 structs.add(candidate)
     return tuple(sorted(structs, key=lambda struct: f"{struct.__module__}.{struct.__qualname__}"))
+
+
+def test_domain_modules_remain_small_enough_to_have_one_cohesive_responsibility() -> None:
+    oversized = {
+        module_name: len(path.read_text(encoding="utf-8").splitlines())
+        for module_name, path, _ in _domain_sources()
+        if len(path.read_text(encoding="utf-8").splitlines()) > _MAX_DOMAIN_SOURCE_LINES
+    }
+    assert not oversized, f"split oversized domain modules by responsibility: {oversized}"
 
 
 def _qualified_name(candidate: type[object]) -> str:
