@@ -7,13 +7,14 @@ from typing import cast
 import pytest
 import yaml
 
-from comparo.core.configuration import yaml_parser
+from comparo.configuration import yaml_parser
+from comparo.configuration.yaml_parser import YamlParseLimits
+from comparo.configuration.yaml_parser import parse_yaml_source
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.models import ConfigurationParseResult
 from comparo.core.configuration.models import MappingNode
 from comparo.core.configuration.models import ScalarNode
 from comparo.core.configuration.models import SequenceNode
-from comparo.core.configuration.yaml_parser import parse_yaml_source
 from comparo.core.domain.identity import SourceId
 
 _SOURCE = SourceId(value="project-config")
@@ -126,6 +127,30 @@ def test_parser_validates_boundary_types() -> None:
         parse_yaml_source(source_id=cast("SourceId", "project"), text="value: one")
     with pytest.raises(TypeError, match="must be a string"):
         parse_yaml_source(source_id=_SOURCE, text=cast("str", b"value: one"))
+    with pytest.raises(TypeError, match="limits"):
+        parse_yaml_source(
+            source_id=_SOURCE,
+            text="value: one",
+            limits=cast("YamlParseLimits", object()),
+        )
+
+
+def test_parser_limits_are_positive_explicit_and_fail_closed() -> None:
+    with pytest.raises(ValueError, match="positive exact integers"):
+        YamlParseLimits(maximum_bytes=0)
+    with pytest.raises(ValueError, match="positive exact integers"):
+        YamlParseLimits(maximum_nodes=cast("int", True))
+
+    cases = (
+        ("value: long", YamlParseLimits(maximum_bytes=2)),
+        ("---\na: one\n---\nb: two\n", YamlParseLimits(maximum_documents=1)),
+        ("{outer: {inner: value}}", YamlParseLimits(maximum_depth=1)),
+        ("key: value", YamlParseLimits(maximum_nodes=1)),
+    )
+    for text, limits in cases:
+        result = parse_yaml_source(source_id=_SOURCE, text=text, limits=limits)
+        assert result.documents == ()
+        assert result.diagnostics[0].code.value == "configuration.yaml.limit-exceeded"
 
 
 def test_parser_defensively_converts_unknown_scalar_tags_to_safe_diagnostics() -> None:

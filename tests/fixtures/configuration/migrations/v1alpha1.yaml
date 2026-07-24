@@ -1,0 +1,6 @@
+apiVersion: comparo/v1alpha1
+kind: Project
+metadata:
+  id: migration-fixture
+  name: Migration fixture
+spec: {}

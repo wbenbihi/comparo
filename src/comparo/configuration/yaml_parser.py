@@ -1,11 +1,13 @@
-"""A safe YAML 1.2-subset parser that never constructs application objects."""
+"""A safe YAML 1.2-subset adapter that never constructs application objects."""
 
 from __future__ import annotations
 
 import re
 from decimal import Decimal
 from typing import cast
+from typing import final
 
+import msgspec
 import yaml
 from yaml import nodes
 from yaml import tokens
@@ -30,6 +32,30 @@ _BOOL_TAG = "tag:yaml.org,2002:bool"
 _INT_TAG = "tag:yaml.org,2002:int"
 _FLOAT_TAG = "tag:yaml.org,2002:float"
 _STRING_TAG = "tag:yaml.org,2002:str"
+
+
+@final
+class YamlParseLimits(msgspec.Struct, frozen=True, kw_only=True):
+    """Finite caller-overridable admission limits for one YAML source."""
+
+    maximum_bytes: int = 8 * 1024 * 1024
+    maximum_documents: int = 128
+    maximum_depth: int = 256
+    maximum_nodes: int = 1_000_000
+
+    def __post_init__(self) -> None:
+        """Require exact positive limits rather than implicit platform ceilings."""
+        for value in (
+            self.maximum_bytes,
+            self.maximum_documents,
+            self.maximum_depth,
+            self.maximum_nodes,
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError("YAML parse limits must be positive exact integers")
+
+
+DEFAULT_YAML_PARSE_LIMITS = YamlParseLimits()
 
 
 class _Yaml12Loader(yaml.BaseLoader):
@@ -73,6 +99,7 @@ _NON_STRING_KEY = DiagnosticCode(value="configuration.yaml.non-string-key")
 _DUPLICATE_KEY = DiagnosticCode(value="configuration.yaml.duplicate-key")
 _MERGE_KEY = DiagnosticCode(value="configuration.yaml.merge-key-forbidden")
 _UNSUPPORTED_SCALAR = DiagnosticCode(value="configuration.yaml.scalar-unsupported")
+_LIMIT_EXCEEDED = DiagnosticCode(value="configuration.yaml.limit-exceeded")
 
 
 def _location(source_id: SourceId, document: int, line: int, column: int) -> SourceLocation:
@@ -111,22 +138,54 @@ def _document_at(text: str, index: int) -> int:
     return max(1, len(markers))
 
 
+def _forbidden_code(token: tokens.Token) -> DiagnosticCode | None:
+    if type(token) is tokens.AnchorToken:
+        return _FORBIDDEN_ANCHOR
+    if type(token) is tokens.AliasToken:
+        return _FORBIDDEN_ALIAS
+    if type(token) is tokens.TagToken:
+        return _FORBIDDEN_TAG
+    if type(token) is tokens.DirectiveToken:
+        return _FORBIDDEN_DIRECTIVE
+    return None
+
+
+def _budget_counts(
+    token: tokens.Token,
+    *,
+    documents: int,
+    depth: int,
+    nodes_seen: int,
+) -> tuple[int, int, int]:
+    documents += int(type(token) is tokens.DocumentStartToken)
+    if type(token) in {
+        tokens.BlockMappingStartToken,
+        tokens.BlockSequenceStartToken,
+        tokens.FlowMappingStartToken,
+        tokens.FlowSequenceStartToken,
+    }:
+        return documents, depth + 1, nodes_seen + 1
+    if type(token) in {
+        tokens.BlockEndToken,
+        tokens.FlowMappingEndToken,
+        tokens.FlowSequenceEndToken,
+    }:
+        return documents, depth - 1, nodes_seen
+    return documents, depth, nodes_seen + int(type(token) is tokens.ScalarToken)
+
+
 def _scan_forbidden_syntax(
     source_id: SourceId,
     text: str,
+    limits: YamlParseLimits,
 ) -> tuple[ConfigurationDiagnostic, ...]:
     diagnostics: list[ConfigurationDiagnostic] = []
+    documents = 0
+    depth = 0
+    nodes_seen = 0
     try:
         for token in yaml.scan(text, Loader=_Yaml12Loader):
-            code: DiagnosticCode | None = None
-            if type(token) is tokens.AnchorToken:
-                code = _FORBIDDEN_ANCHOR
-            elif type(token) is tokens.AliasToken:
-                code = _FORBIDDEN_ALIAS
-            elif type(token) is tokens.TagToken:
-                code = _FORBIDDEN_TAG
-            elif type(token) is tokens.DirectiveToken:
-                code = _FORBIDDEN_DIRECTIVE
+            code = _forbidden_code(token)
             if code is not None:
                 document = _document_at(text, token.start_mark.index)
                 diagnostics.append(
@@ -135,7 +194,26 @@ def _scan_forbidden_syntax(
                         _span(source_id, document, token.start_mark, token.end_mark),
                     )
                 )
-    except yaml.YAMLError as error:
+            documents, depth, nodes_seen = _budget_counts(
+                token,
+                documents=documents,
+                depth=depth,
+                nodes_seen=nodes_seen,
+            )
+            if (
+                max(1, documents) > limits.maximum_documents
+                or depth > limits.maximum_depth
+                or nodes_seen > limits.maximum_nodes
+            ):
+                document = _document_at(text, token.start_mark.index)
+                diagnostics.append(
+                    _diagnostic(
+                        _LIMIT_EXCEEDED,
+                        _span(source_id, document, token.start_mark, token.end_mark),
+                    )
+                )
+                break
+    except (RecursionError, yaml.YAMLError) as error:
         mark = getattr(error, "problem_mark", None)
         if not isinstance(mark, yaml.Mark):
             mark = yaml.Mark("source", 0, 0, 0, "", 0)
@@ -222,13 +300,25 @@ def _is_empty_document(root: nodes.Node | None) -> bool:
     )
 
 
-def parse_yaml_source(*, source_id: SourceId, text: str) -> ConfigurationParseResult:
+def parse_yaml_source(
+    *,
+    source_id: SourceId,
+    text: str,
+    limits: YamlParseLimits = DEFAULT_YAML_PARSE_LIMITS,
+) -> ConfigurationParseResult:
     """Parse all YAML documents without constructors and aggregate safe diagnostics."""
     if type(source_id) is not SourceId:
         raise TypeError("YAML source requires a logical SourceId")
     if type(text) is not str:
         raise TypeError("YAML source text must be a string")
-    forbidden = _scan_forbidden_syntax(source_id, text)
+    if type(limits) is not YamlParseLimits:
+        raise TypeError("YAML source limits must be YamlParseLimits")
+    if len(text.encode("utf-8", errors="surrogatepass")) > limits.maximum_bytes:
+        byte_mark = yaml.Mark("source", 0, 0, 0, "", 0)
+        return ConfigurationParseResult(
+            diagnostics=(_diagnostic(_LIMIT_EXCEEDED, _span(source_id, 1, byte_mark, byte_mark)),)
+        )
+    forbidden = _scan_forbidden_syntax(source_id, text, limits)
     if forbidden:
         return ConfigurationParseResult(diagnostics=tuple(sorted(forbidden, key=_diagnostic_order)))
     diagnostics: list[ConfigurationDiagnostic] = []
@@ -245,12 +335,17 @@ def parse_yaml_source(*, source_id: SourceId, text: str) -> ConfigurationParseRe
                     root=_convert_node(source_id, document, typed_root, diagnostics),
                 )
             )
-    except yaml.YAMLError as error:
-        mark = getattr(error, "problem_mark", None)
-        if not isinstance(mark, yaml.Mark):
-            mark = yaml.Mark("source", 0, 0, 0, "", 0)
-        document = _document_at(text, mark.index)
-        diagnostics.append(_diagnostic(_SYNTAX_ERROR, _span(source_id, document, mark, mark)))
+    except (RecursionError, yaml.YAMLError) as error:
+        error_mark = getattr(error, "problem_mark", None)
+        if not isinstance(error_mark, yaml.Mark):
+            error_mark = yaml.Mark("source", 0, 0, 0, "", 0)
+        document = _document_at(text, error_mark.index)
+        diagnostics.append(
+            _diagnostic(
+                _SYNTAX_ERROR,
+                _span(source_id, document, error_mark, error_mark),
+            )
+        )
         documents.clear()
     return ConfigurationParseResult(
         documents=tuple(documents),

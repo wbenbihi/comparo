@@ -225,6 +225,30 @@ forbidden_modules = [
   "urllib3",
 ]
 
+[[tool.importlinter.contracts]]
+name = "The core configuration compiler must not import document or filesystem adapters"
+type = "forbidden"
+source_modules = ["comparo.core.configuration"]
+forbidden_modules = [
+  "comparo.configuration",
+  "pathlib",
+  "yaml",
+  "aiohttp",
+  "httpx",
+  "requests",
+  "urllib3",
+]
+
+[[tool.importlinter.contracts]]
+name = "Version frontends must remain independent of canonical compiler stages"
+type = "forbidden"
+source_modules = ["comparo.core.configuration.v1alpha1"]
+forbidden_modules = [
+  "comparo.core.configuration.canonical",
+  "comparo.core.configuration.compiler",
+  "comparo.configuration",
+]
+
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

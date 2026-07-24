@@ -1,0 +1,1702 @@
+{
+  "$defs": {
+    "ArtifactProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "ArtifactProfile"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "capture": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "retention": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "storage": {
+              "$ref": "#/$defs/jsonValue"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "AssertionProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "AssertionProfile"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "edits": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "include": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "parameters": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "rules": {
+              "$ref": "#/$defs/assertionRules"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "DiffProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "DiffProfile"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "edits": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "include": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "parameters": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "rules": {
+              "$ref": "#/$defs/diffRules"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "Environment": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "Environment"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "auth": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "cookies": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "envFiles": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "headers": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "proxy": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "redaction": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "safety": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "secrets": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "timeout": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "tls": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "variables": {
+              "$ref": "#/$defs/resolvableValue"
+            }
+          },
+          "required": [
+            "baseUrl"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "ExecutionProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "ExecutionProfile"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "assertions": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "baseline": {
+              "$ref": "#/$defs/resourceUse"
+            },
+            "candidates": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "diffs": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "environments": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "gate": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "matrices": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "parameters": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "redaction": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "safety": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "secrets": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "subjects": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "trials": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "variables": {
+              "$ref": "#/$defs/resolvableValue"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "GateProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "GateProfile"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "assertions": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "coverage": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "diffs": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "runtime": {
+              "$ref": "#/$defs/jsonValue"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "Matrix": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "Matrix"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "axes": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "cases": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "combine": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "exclude": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "include": {
+              "$ref": "#/$defs/resolvableValue"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "Project": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "Project"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "defaults": {
+              "additionalProperties": false,
+              "properties": {
+                "artifacts": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/resourceUse"
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                },
+                "assertions": {
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/resourceUse"
+                      },
+                      {
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "baseline": {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                "candidates": {
+                  "items": {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  "type": "array"
+                },
+                "diffs": {
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/resourceUse"
+                      },
+                      {
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "environments": {
+                  "items": {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  "type": "array"
+                },
+                "gate": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/resourceUse"
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                },
+                "matrices": {
+                  "items": {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  "type": "array"
+                },
+                "parameters": {
+                  "$ref": "#/$defs/resolvableValue"
+                },
+                "redaction": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/resourceUse"
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                },
+                "safety": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/resourceUse"
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                },
+                "secrets": {
+                  "$ref": "#/$defs/resolvableValue"
+                },
+                "subjects": {
+                  "items": {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  "type": "array"
+                },
+                "trials": {
+                  "$ref": "#/$defs/resolvableValue"
+                },
+                "variables": {
+                  "$ref": "#/$defs/resolvableValue"
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "secrets": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "sources": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "variables": {
+              "$ref": "#/$defs/resolvableValue"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "RedactionProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "RedactionProfile"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "backstop": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "patterns": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "rules": {
+              "$ref": "#/$defs/jsonValue"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "Request": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "Request"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "assertions": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "diffs": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "matrices": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "parameters": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "redaction": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "request": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "responseSchema": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "$ref": "#/$defs/jsonValue"
+                }
+              ]
+            },
+            "safety": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "request"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "SafetyProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "SafetyProfile"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "budgets": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "environment": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "extends": {
+              "$ref": "#/$defs/resourceUse"
+            },
+            "filesystem": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "include": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "network": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "schemas": {
+              "$ref": "#/$defs/jsonValue"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "Scenario": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "Scenario"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "assertions": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "diffs": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/resourceUse"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "matrices": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
+            "parameters": {
+              "$ref": "#/$defs/resolvableValue"
+            },
+            "safety": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/resourceUse"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "steps": {
+              "$ref": "#/$defs/resolvableValue"
+            }
+          },
+          "required": [
+            "steps"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "Schema": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "Schema"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "Value": {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "comparo/v1alpha1"
+        },
+        "kind": {
+          "const": "Value"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/resolvableValue"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "applicationObject": {
+      "additionalProperties": {
+        "$ref": "#/$defs/resolvableValue"
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "^\\$"
+        }
+      },
+      "type": "object"
+    },
+    "assertionOperation": {
+      "oneOf": [
+        {
+          "enum": [
+            "approximatelyEquals",
+            "between",
+            "cardinality",
+            "comparo.core/approximatelyEquals@1",
+            "comparo.core/between@1",
+            "comparo.core/cardinality@1",
+            "comparo.core/conformsTo@1",
+            "comparo.core/contains@1",
+            "comparo.core/containsAll@1",
+            "comparo.core/containsAny@1",
+            "comparo.core/containsToken@1",
+            "comparo.core/decodesAs@1",
+            "comparo.core/digestEquals@1",
+            "comparo.core/endsWith@1",
+            "comparo.core/equals@1",
+            "comparo.core/greater@1",
+            "comparo.core/greaterOrEqual@1",
+            "comparo.core/hasKey@1",
+            "comparo.core/hasKeys@1",
+            "comparo.core/hasOnlyKeys@1",
+            "comparo.core/in@1",
+            "comparo.core/isType@1",
+            "comparo.core/length@1",
+            "comparo.core/less@1",
+            "comparo.core/lessOrEqual@1",
+            "comparo.core/matches@1",
+            "comparo.core/mediaTypeIs@1",
+            "comparo.core/mediaTypeMatches@1",
+            "comparo.core/notContains@1",
+            "comparo.core/notEquals@1",
+            "comparo.core/notIn@1",
+            "comparo.core/notMatches@1",
+            "comparo.core/startsWith@1",
+            "conformsTo",
+            "contains",
+            "containsAll",
+            "containsAny",
+            "containsToken",
+            "decodesAs",
+            "digestEquals",
+            "endsWith",
+            "equals",
+            "greater",
+            "greaterOrEqual",
+            "hasKey",
+            "hasKeys",
+            "hasOnlyKeys",
+            "in",
+            "isType",
+            "length",
+            "less",
+            "lessOrEqual",
+            "matches",
+            "mediaTypeIs",
+            "mediaTypeMatches",
+            "notContains",
+            "notEquals",
+            "notIn",
+            "notMatches",
+            "startsWith"
+          ]
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/resolvableValue"
+          },
+          "properties": {
+            "name": {
+              "enum": [
+                "approximatelyEquals",
+                "between",
+                "cardinality",
+                "comparo.core/approximatelyEquals@1",
+                "comparo.core/between@1",
+                "comparo.core/cardinality@1",
+                "comparo.core/conformsTo@1",
+                "comparo.core/contains@1",
+                "comparo.core/containsAll@1",
+                "comparo.core/containsAny@1",
+                "comparo.core/containsToken@1",
+                "comparo.core/decodesAs@1",
+                "comparo.core/digestEquals@1",
+                "comparo.core/endsWith@1",
+                "comparo.core/equals@1",
+                "comparo.core/greater@1",
+                "comparo.core/greaterOrEqual@1",
+                "comparo.core/hasKey@1",
+                "comparo.core/hasKeys@1",
+                "comparo.core/hasOnlyKeys@1",
+                "comparo.core/in@1",
+                "comparo.core/isType@1",
+                "comparo.core/length@1",
+                "comparo.core/less@1",
+                "comparo.core/lessOrEqual@1",
+                "comparo.core/matches@1",
+                "comparo.core/mediaTypeIs@1",
+                "comparo.core/mediaTypeMatches@1",
+                "comparo.core/notContains@1",
+                "comparo.core/notEquals@1",
+                "comparo.core/notIn@1",
+                "comparo.core/notMatches@1",
+                "comparo.core/startsWith@1",
+                "conformsTo",
+                "contains",
+                "containsAll",
+                "containsAny",
+                "containsToken",
+                "decodesAs",
+                "digestEquals",
+                "endsWith",
+                "equals",
+                "greater",
+                "greaterOrEqual",
+                "hasKey",
+                "hasKeys",
+                "hasOnlyKeys",
+                "in",
+                "isType",
+                "length",
+                "less",
+                "lessOrEqual",
+                "matches",
+                "mediaTypeIs",
+                "mediaTypeMatches",
+                "notContains",
+                "notEquals",
+                "notIn",
+                "notMatches",
+                "startsWith"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "assertionRules": {
+      "items": {
+        "additionalProperties": {
+          "$ref": "#/$defs/resolvableValue"
+        },
+        "properties": {
+          "operator": {
+            "$ref": "#/$defs/assertionOperation"
+          }
+        },
+        "required": [
+          "operator"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "diffComparator": {
+      "oneOf": [
+        {
+          "enum": [
+            "comparo.core/exact@1",
+            "comparo.core/ignore@1",
+            "comparo.core/jsonShape@1",
+            "comparo.core/multiset@1",
+            "comparo.core/numericTolerance@1",
+            "comparo.core/ordered@1",
+            "comparo.core/set@1",
+            "comparo.core/subset@1",
+            "comparo.core/superset@1",
+            "comparo.core/textPredicate@1",
+            "comparo.core/type@1",
+            "exact",
+            "ignore",
+            "jsonShape",
+            "multiset",
+            "numericTolerance",
+            "ordered",
+            "set",
+            "subset",
+            "superset",
+            "textPredicate",
+            "type"
+          ]
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/resolvableValue"
+          },
+          "properties": {
+            "name": {
+              "enum": [
+                "comparo.core/exact@1",
+                "comparo.core/ignore@1",
+                "comparo.core/jsonShape@1",
+                "comparo.core/multiset@1",
+                "comparo.core/numericTolerance@1",
+                "comparo.core/ordered@1",
+                "comparo.core/set@1",
+                "comparo.core/subset@1",
+                "comparo.core/superset@1",
+                "comparo.core/textPredicate@1",
+                "comparo.core/type@1",
+                "exact",
+                "ignore",
+                "jsonShape",
+                "multiset",
+                "numericTolerance",
+                "ordered",
+                "set",
+                "subset",
+                "superset",
+                "textPredicate",
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "diffPairing": {
+      "oneOf": [
+        {
+          "enum": [
+            "comparo.core/keyed@1",
+            "comparo.core/multiset@1",
+            "comparo.core/ordered@1",
+            "comparo.core/set@1",
+            "comparo.core/singular@1",
+            "keyed",
+            "multiset",
+            "ordered",
+            "set",
+            "singular"
+          ]
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/resolvableValue"
+          },
+          "properties": {
+            "name": {
+              "enum": [
+                "comparo.core/keyed@1",
+                "comparo.core/multiset@1",
+                "comparo.core/ordered@1",
+                "comparo.core/set@1",
+                "comparo.core/singular@1",
+                "keyed",
+                "multiset",
+                "ordered",
+                "set",
+                "singular"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "diffReducer": {
+      "oneOf": [
+        {
+          "enum": [
+            "collect",
+            "comparo.core/collect@1",
+            "comparo.core/concatenate@1",
+            "comparo.core/count@1",
+            "comparo.core/distinct@1",
+            "comparo.core/first@1",
+            "comparo.core/groupBy@1",
+            "comparo.core/last@1",
+            "comparo.core/maximum@1",
+            "comparo.core/minimum@1",
+            "comparo.core/multiset@1",
+            "comparo.core/objectFromEntries@1",
+            "comparo.core/set@1",
+            "comparo.core/sum@1",
+            "concatenate",
+            "count",
+            "distinct",
+            "first",
+            "groupBy",
+            "last",
+            "maximum",
+            "minimum",
+            "multiset",
+            "objectFromEntries",
+            "set",
+            "sum"
+          ]
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/resolvableValue"
+          },
+          "properties": {
+            "name": {
+              "enum": [
+                "collect",
+                "comparo.core/collect@1",
+                "comparo.core/concatenate@1",
+                "comparo.core/count@1",
+                "comparo.core/distinct@1",
+                "comparo.core/first@1",
+                "comparo.core/groupBy@1",
+                "comparo.core/last@1",
+                "comparo.core/maximum@1",
+                "comparo.core/minimum@1",
+                "comparo.core/multiset@1",
+                "comparo.core/objectFromEntries@1",
+                "comparo.core/set@1",
+                "comparo.core/sum@1",
+                "concatenate",
+                "count",
+                "distinct",
+                "first",
+                "groupBy",
+                "last",
+                "maximum",
+                "minimum",
+                "multiset",
+                "objectFromEntries",
+                "set",
+                "sum"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "diffRules": {
+      "items": {
+        "additionalProperties": {
+          "$ref": "#/$defs/resolvableValue"
+        },
+        "properties": {
+          "comparator": {
+            "$ref": "#/$defs/diffComparator"
+          },
+          "pairing": {
+            "$ref": "#/$defs/diffPairing"
+          },
+          "reducer": {
+            "$ref": "#/$defs/diffReducer"
+          },
+          "transforms": {
+            "items": {
+              "$ref": "#/$defs/diffTransform"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "comparator"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "diffTransform": {
+      "oneOf": [
+        {
+          "enum": [
+            "collectionFilter",
+            "collectionMap",
+            "comparo.core/collectionFilter@1",
+            "comparo.core/collectionMap@1",
+            "comparo.core/digest@1",
+            "comparo.core/exclude@1",
+            "comparo.core/jsonShape@1",
+            "comparo.core/length@1",
+            "comparo.core/normalizeText@1",
+            "comparo.core/project@1",
+            "comparo.core/relativeSelect@1",
+            "comparo.core/sortBy@1",
+            "comparo.core/streamProject@1",
+            "comparo.core/valueType@1",
+            "digest",
+            "exclude",
+            "jsonShape",
+            "length",
+            "normalizeText",
+            "project",
+            "relativeSelect",
+            "sortBy",
+            "streamProject",
+            "valueType"
+          ]
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/resolvableValue"
+          },
+          "properties": {
+            "name": {
+              "enum": [
+                "collectionFilter",
+                "collectionMap",
+                "comparo.core/collectionFilter@1",
+                "comparo.core/collectionMap@1",
+                "comparo.core/digest@1",
+                "comparo.core/exclude@1",
+                "comparo.core/jsonShape@1",
+                "comparo.core/length@1",
+                "comparo.core/normalizeText@1",
+                "comparo.core/project@1",
+                "comparo.core/relativeSelect@1",
+                "comparo.core/sortBy@1",
+                "comparo.core/streamProject@1",
+                "comparo.core/valueType@1",
+                "digest",
+                "exclude",
+                "jsonShape",
+                "length",
+                "normalizeText",
+                "project",
+                "relativeSelect",
+                "sortBy",
+                "streamProject",
+                "valueType"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "jsonValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "lookupArgument": {
+      "oneOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "as": {
+              "enum": [
+                "boolean",
+                "bytes",
+                "duration",
+                "integer",
+                "json",
+                "number",
+                "size",
+                "string",
+                "yaml"
+              ]
+            },
+            "name": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "resolvableValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/resolvableValue"
+          },
+          "type": "array"
+        },
+        {
+          "$ref": "#/$defs/valueDirective"
+        },
+        {
+          "$ref": "#/$defs/applicationObject"
+        }
+      ]
+    },
+    "resourceUse": {
+      "additionalProperties": false,
+      "properties": {
+        "$use": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "$use"
+      ],
+      "type": "object"
+    },
+    "valueDirective": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/resourceUse"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$var": {
+              "$ref": "#/$defs/lookupArgument"
+            }
+          },
+          "required": [
+            "$var"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$secret": {
+              "$ref": "#/$defs/lookupArgument"
+            }
+          },
+          "required": [
+            "$secret"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$param": {
+              "$ref": "#/$defs/lookupArgument"
+            }
+          },
+          "required": [
+            "$param"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$env": {
+              "$ref": "#/$defs/lookupArgument"
+            }
+          },
+          "required": [
+            "$env"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$literal": {
+              "$ref": "#/$defs/jsonValue"
+            }
+          },
+          "required": [
+            "$literal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$from": {
+              "items": {
+                "$ref": "#/$defs/resolvableValue"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "$from"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$optional": {
+              "$ref": "#/$defs/resolvableValue"
+            }
+          },
+          "required": [
+            "$optional"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$file": {
+              "oneOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "as": {
+                      "enum": [
+                        "boolean",
+                        "bytes",
+                        "duration",
+                        "integer",
+                        "json",
+                        "number",
+                        "size",
+                        "string",
+                        "yaml"
+                      ]
+                    },
+                    "maxBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "path": {
+                      "$ref": "#/$defs/resolvableValue"
+                    },
+                    "trim": {
+                      "enum": [
+                        "none",
+                        "start",
+                        "end",
+                        "both"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "$file"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://comparo.dev/schemas/comparo-v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Project"
+    },
+    {
+      "$ref": "#/$defs/Environment"
+    },
+    {
+      "$ref": "#/$defs/Request"
+    },
+    {
+      "$ref": "#/$defs/Scenario"
+    },
+    {
+      "$ref": "#/$defs/Matrix"
+    },
+    {
+      "$ref": "#/$defs/ExecutionProfile"
+    },
+    {
+      "$ref": "#/$defs/Schema"
+    },
+    {
+      "$ref": "#/$defs/AssertionProfile"
+    },
+    {
+      "$ref": "#/$defs/DiffProfile"
+    },
+    {
+      "$ref": "#/$defs/GateProfile"
+    },
+    {
+      "$ref": "#/$defs/SafetyProfile"
+    },
+    {
+      "$ref": "#/$defs/RedactionProfile"
+    },
+    {
+      "$ref": "#/$defs/ArtifactProfile"
+    },
+    {
+      "$ref": "#/$defs/Value"
+    }
+  ],
+  "title": "Comparo comparo/v1alpha1 resource"
+}

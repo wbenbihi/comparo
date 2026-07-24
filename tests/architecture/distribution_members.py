@@ -109,7 +109,11 @@ def _expected_package_files(source_root: Path) -> frozenset[PurePosixPath]:
     members = frozenset(
         PurePosixPath("comparo") / PurePosixPath(line.removeprefix(source_prefix))
         for line in completed.stdout.splitlines()
-        if line.startswith(source_prefix) and line.endswith((".py", "/py.typed"))
+        if line.startswith(source_prefix)
+        and (
+            line.endswith((".py", "/py.typed"))
+            or line == "src/comparo/schemas/comparo-v1alpha1.schema.json"
+        )
     )
     if not members:
         raise DistributionAuditError("reviewed package member set is empty")
