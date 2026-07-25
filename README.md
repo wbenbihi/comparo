@@ -15,7 +15,7 @@ not a compatibility target. Dedicated CI integration has not yet been migrated.
 The executable subset is deliberately fail-closed: configuration can describe more of the future
 model than the first production runtime implements, and an execution command rejects unsupported
 capabilities before resolving values, performing DNS, or opening a network connection. Review the
-[current CLI limitations](docs/cli.md#current-executable-subset) before using Comparo for a real
+[current CLI limitations](https://github.com/wbenbihi/comparo/blob/main/docs/cli.md#current-executable-subset) before using Comparo for a real
 service. This remains a pre-production release.
 
 ## CLI
@@ -45,8 +45,8 @@ uv run --frozen comparo diff \
   --candidate staging
 ```
 
-See the [CLI reference](docs/cli.md) for headless commands, trust semantics, exit codes,
-persistence, and runtime limits, and the [TUI guide](docs/tui.md) for the four-workspace terminal
+See the [CLI reference](https://github.com/wbenbihi/comparo/blob/main/docs/cli.md) for headless commands, trust semantics, exit codes,
+persistence, and runtime limits, and the [TUI guide](https://github.com/wbenbihi/comparo/blob/main/docs/tui.md) for the four-workspace terminal
 journey.
 
 ## Architecture
@@ -82,7 +82,7 @@ uv run --frozen lint-imports
 uv run --frozen python -m pytest --cov --cov-report=term-missing
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for repository conventions.
+See [CONTRIBUTING.md](https://github.com/wbenbihi/comparo/blob/main/CONTRIBUTING.md) for repository conventions.
 
 ## License
 

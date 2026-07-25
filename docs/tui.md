@@ -42,7 +42,7 @@ versioned starting points rather than application-level maxima; a caller can rep
 | Project and policy loading | `--maximum-config-sources`, every `--maximum-config-yaml-*`, and every `--maximum-policy-yaml-*` option |
 | HTTP capture and decoding | `--body-memory-threshold-bytes`, `--maximum-transient-body-bytes`, `--maximum-authorization-occurrences`, and every `--maximum-encoded-*`, `--maximum-entity-*`, `--maximum-expansion-*`, `--maximum-stream-*`, `--maximum-decoded-*`, `--maximum-text-*`, and `--maximum-json-*` option |
 | Artifact persistence and reads | `--maximum-blobs`, `--maximum-blob-bytes`, `--maximum-total-blob-bytes`, `--maximum-manifest-bytes`, `--maximum-report-bytes`, and every `--maximum-redaction-*` option |
-| Interactive process | `--maximum-report-entries` and `--maximum-outstanding-preparations` |
+| Interactive process | `--maximum-report-entries`, `--maximum-outstanding-preparations`, `--maximum-input-characters`, `--maximum-input-items`, and `--maximum-navigation-frames-per-workspace` |
 
 Run `comparo tui --help` for exact names, descriptions, and current version-owned defaults. Invalid
 values fail as an invalid invocation before the terminal app starts.
@@ -65,9 +65,10 @@ The shell has exactly four persistent workspaces:
 | **Report** | Browse completed authenticated artifact bundles and open their results without executing HTTP again. |
 | **Settings** | Change terminal-only appearance and interaction preferences. It never edits project YAML or execution policy. |
 
-Each workspace retains an independent navigation history. Opening a resource or result never
-redirects to another workspace. A run continues when the user visits Explorer, Report, or
-Settings, and completion does not steal focus.
+Each workspace retains an independent, caller-bounded navigation history. Re-selecting the current
+entity is coalesced; Back restores the prior resource or result detail instead of only changing an
+internal route. Opening a resource or result never redirects to another workspace. A run continues
+when the user visits Explorer, Report, or Settings, and completion does not steal focus.
 
 The shared command catalog is the single declaration site for product commands and keys:
 
@@ -203,6 +204,8 @@ controls contained before it reaches a widget; Rich markup is disabled for data-
 - The TUI package has no backend capability or business rule; deleting it leaves execution,
   evaluation, sanitization, persistence, and reporting intact.
 - Blocking local compilation and artifact reads run off the event loop behind bounded services.
+- Repeated reload, preparation, report, and execution requests are coalesced into finite semantic
+  operation slots; the shell cannot accumulate duplicate background tasks.
 - Backend and unexpected UI failures collapse to closed codes or fixed messages. Textual's default
   value-bearing traceback renderer is replaced at the application boundary.
 - Shutdown cancels unfinished work, waits for cleanup, discards prepared handles, and closes the
