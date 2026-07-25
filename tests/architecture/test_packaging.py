@@ -128,6 +128,33 @@ def test_wheel_member_audit_rejects_extra_package_content() -> None:
         )
 
 
+def test_distribution_audit_allows_only_exact_reviewed_security_module_paths() -> None:
+    """Public security code is not mistaken for credential or secret payload data."""
+    package = frozenset(
+        {
+            PurePosixPath("comparo/core/credentials.py"),
+            PurePosixPath("comparo/core/domain/http/secret_egress.py"),
+        }
+    )
+    sdist = frozenset(
+        {
+            PurePosixPath("comparo-0.2.0/.gitignore"),
+            PurePosixPath("comparo-0.2.0/LICENSE"),
+            PurePosixPath("comparo-0.2.0/PKG-INFO"),
+            PurePosixPath("comparo-0.2.0/README.md"),
+            PurePosixPath("comparo-0.2.0/pyproject.toml"),
+            *(PurePosixPath("comparo-0.2.0/src") / member for member in package),
+        }
+    )
+    verify_sdist_members(sdist, package)
+
+    with pytest.raises(DistributionAuditError, match="sensitive"):
+        verify_sdist_members(
+            sdist | {PurePosixPath("comparo-0.2.0/src/comparo/core/domain/http/another-secret.py")},
+            package,
+        )
+
+
 def test_reviewed_package_members_come_only_from_git_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

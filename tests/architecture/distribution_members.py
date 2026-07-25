@@ -51,6 +51,14 @@ _FORBIDDEN_PARTS = frozenset(
     }
 )
 _FORBIDDEN_SUFFIXES = frozenset({".credentials", ".key", ".p12", ".pem", ".pfx", ".pyc", ".pyo"})
+_REVIEWED_SECURITY_MODULES = frozenset(
+    {
+        PurePosixPath("comparo/core/credentials.py"),
+        PurePosixPath("comparo/core/domain/http/secret_egress.py"),
+        PurePosixPath("src/comparo/core/credentials.py"),
+        PurePosixPath("src/comparo/core/domain/http/secret_egress.py"),
+    }
+)
 
 
 class DistributionAuditError(ValueError):
@@ -91,6 +99,8 @@ def _wheel_entry_points(archive: Path) -> bytes:
 
 def _is_sensitive(member: PurePosixPath) -> bool:
     """Recognize local, generated, credential, internal, and deprecated path forms."""
+    if member in _REVIEWED_SECURITY_MODULES:
+        return False
     for part in member.parts:
         lowered = part.lower()
         if (
