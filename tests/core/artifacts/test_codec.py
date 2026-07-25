@@ -40,6 +40,25 @@ def test_codec_requires_an_explicit_exact_non_negative_limit(limit: object) -> N
     assert error.value.code is ArtifactCodecErrorCode.INVALID_INPUT
 
 
+def test_codec_error_and_input_types_are_closed() -> None:
+    with pytest.raises(TypeError, match="must be typed"):
+        ArtifactCodecError(cast("ArtifactCodecErrorCode", "malformed"))
+    with pytest.raises(ArtifactCodecError) as invalid_artifact:
+        encode_run_artifact(cast("object", {}), maximum_bytes=100)  # type: ignore[arg-type]
+    assert invalid_artifact.value.code is ArtifactCodecErrorCode.INVALID_INPUT
+    with pytest.raises(ArtifactCodecError) as invalid_payload:
+        decode_run_artifact(cast("bytes", bytearray()), maximum_bytes=100)
+    assert invalid_payload.value.code is ArtifactCodecErrorCode.INVALID_INPUT
+
+
+def test_encoding_honors_the_exact_byte_budget() -> None:
+    encoded = encode_run_artifact(_artifact(), maximum_bytes=100_000)
+    assert encode_run_artifact(_artifact(), maximum_bytes=len(encoded)) == encoded
+    with pytest.raises(ArtifactCodecError) as exceeded:
+        encode_run_artifact(_artifact(), maximum_bytes=len(encoded) - 1)
+    assert exceeded.value.code is ArtifactCodecErrorCode.BUDGET_EXCEEDED
+
+
 def test_codec_rejects_oversize_malformed_unknown_and_newer_artifacts() -> None:
     encoded = encode_run_artifact(_artifact(), maximum_bytes=100_000)
     with pytest.raises(ArtifactCodecError) as oversize:
@@ -61,6 +80,13 @@ def test_codec_rejects_oversize_malformed_unknown_and_newer_artifacts() -> None:
     with pytest.raises(ArtifactCodecError) as unsupported:
         decode_run_artifact(msgspec.json.encode(document), maximum_bytes=100_000)
     assert unsupported.value.code is ArtifactCodecErrorCode.UNSUPPORTED_VERSION
+
+
+@pytest.mark.parametrize("payload", [b"null", b"[]", b"{}", b'{"api_version":null}'])
+def test_codec_rejects_non_artifact_envelopes_without_parser_details(payload: bytes) -> None:
+    with pytest.raises(ArtifactCodecError) as error:
+        decode_run_artifact(payload, maximum_bytes=100)
+    assert error.value.code is ArtifactCodecErrorCode.MALFORMED
 
 
 def test_tagged_artifact_values_decode_without_union_ambiguity() -> None:

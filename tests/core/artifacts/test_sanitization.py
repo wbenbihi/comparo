@@ -13,6 +13,7 @@ from uuid import UUID
 
 import pytest
 
+from comparo.core.artifacts import sanitization
 from comparo.core.artifacts.sanitization import SanitizationBoundary
 from comparo.core.artifacts.sanitization import SanitizationBoundaryClosedError
 from comparo.core.artifacts.sanitization import SanitizationBoundarySealedError
@@ -20,6 +21,9 @@ from comparo.core.artifacts.sanitization import SanitizationBoundaryUnsealedErro
 from comparo.core.artifacts.sanitization import SanitizedBytes
 from comparo.core.artifacts.sanitization import SanitizedText
 from comparo.core.domain.identity import RunId
+from comparo.core.domain.primitives import ByteCount
+from comparo.core.domain.primitives import Duration
+from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ResolutionProvenance
@@ -55,6 +59,11 @@ def _secret[ValueT](value: ValueT) -> SensitiveValue[ValueT]:
 async def _chunks(*values: bytes) -> AsyncIterator[bytes]:
     for value in values:
         yield value
+
+
+async def _untyped_chunks() -> AsyncIterator[bytes]:
+    yield b"safe"
+    yield bytearray(b"unsafe")  # type: ignore[misc]
 
 
 def _provenance(run: RunScope) -> ResolutionProvenance:
@@ -197,6 +206,7 @@ def test_boundary_lifecycle_fails_closed_and_close_is_idempotent() -> None:
     boundary = SanitizationBoundary()
     with pytest.raises(SanitizationBoundaryUnsealedError, match="not sealed"):
         boundary.sanitize_bytes(b"value")
+    boundary.register(_secret(JsonString(value="wipe-me")))
     boundary.seal()
     with pytest.raises(SanitizationBoundarySealedError, match="already sealed"):
         boundary.register(_secret(JsonString(value="late")))
@@ -230,4 +240,92 @@ def test_boundary_rejects_untyped_inputs_and_results_validate_accounting() -> No
     with pytest.raises(TypeError, match="must be text"):
         SanitizedText(value=1, redaction_count=0)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="non-negative"):
+        SanitizedText(value="", redaction_count=True)
+    with pytest.raises(TypeError, match="must be bytes"):
+        SanitizedBytes(value=bytearray(), redaction_count=0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="non-negative"):
         SanitizedBytes(value=b"", redaction_count=-1)
+    with pytest.raises(TypeError, match="chunks must be bytes"):
+        asyncio.run(boundary.sanitize_stream(_untyped_chunks(), _writer([])))
+
+
+def test_all_supported_scalar_and_structural_payloads_seed_exact_patterns() -> None:
+    values: tuple[tuple[object, bytes], ...] = (
+        ("raw-text", b"raw-text"),
+        (ByteCount(value=42), b"42"),
+        (Duration(nanoseconds=73), b"73"),
+        (Sha256Digest(hex_value="a" * 64), b"a" * 64),
+    )
+    for value, expected in values:
+        boundary = SanitizationBoundary()
+        boundary.register(_secret(value))
+        boundary.seal()
+        assert boundary.sanitize_bytes(expected).value == b"<redacted>"
+
+    boundary = SanitizationBoundary()
+    boundary.register(_secret(BytesValue(value=b"")))
+    boundary.register(_secret(BytesValue(value=b"\xff\xfe")))
+    boundary.seal()
+    assert boundary.sanitize_bytes(b"before\xff\xfeafter").value == (b"before<redacted>after")
+
+    unsupported = SanitizationBoundary()
+    with pytest.raises(TypeError, match="unsupported sensitive payload"):
+        unsupported.register(_secret(("immutable", "tuple")))
+
+
+def test_literal_replacement_prefers_earliest_then_longest_and_flushes_tail() -> None:
+    buffer = bytearray(b"x-secret-and-token-tail")
+    output, count = sanitization._replace_literals(
+        buffer,
+        [bytearray(b"secret"), bytearray(b"token"), bytearray(b"sec")],
+        b"[x]",
+        final=True,
+    )
+    assert output == b"x-[x]-and-[x]-tail"
+    assert count == 2
+    assert buffer == b""
+
+    partial = bytearray(b"prefix-secr")
+    output, count = sanitization._replace_literals(
+        partial,
+        [bytearray(b"secret")],
+        b"[x]",
+        final=False,
+    )
+    assert output == b"prefix"
+    assert count == 0
+    assert partial == b"-secr"
+
+
+def test_exact_json_rendering_covers_every_closed_variant() -> None:
+    value = JsonObject(
+        members=(
+            JsonObjectMember(
+                name='a"b',
+                value=JsonArray(
+                    items=(
+                        JsonNull(),
+                        JsonBoolean(value=True),
+                        JsonBoolean(value=False),
+                        JsonInteger(value=7),
+                        JsonDecimal(value=Decimal("1.25")),
+                        JsonString(value="text"),
+                    )
+                ),
+            ),
+        )
+    )
+    assert sanitization._json_value_text(value) == (r'{"a\"b":[null,true,false,7,1.25,"text"]}')
+    with pytest.raises(TypeError, match="only exact JSON"):
+        sanitization._json_value_text(BytesValue(value=b"x"))
+
+
+def test_scalar_fallbacks_are_explicit_and_bounded_to_supported_shapes() -> None:
+    class Value:
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+    assert sanitization._sensitive_scalar_bytes(Value("text")) == b"text"
+    assert sanitization._sensitive_scalar_bytes(Value(b"bytes")) == b"bytes"
+    assert sanitization._sensitive_scalar_bytes(Value(12)) == b"12"
+    assert sanitization._sensitive_scalar_bytes(Value(object())) is None

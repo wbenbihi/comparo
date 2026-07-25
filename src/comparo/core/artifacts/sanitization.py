@@ -13,7 +13,6 @@ from urllib.parse import quote_plus
 import msgspec
 
 from comparo.core.artifacts.common import require_text
-from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.sensitivity import SensitiveValue
@@ -288,8 +287,6 @@ def _sensitive_payload_bytes(payload: object) -> tuple[bytes, ...]:
             for component in _sensitive_payload_bytes(member.value)
         )
         return (_json_value_text(payload).encode("utf-8"), *nested)
-    if type(payload) is ByteCount:
-        return (str(payload.value).encode("ascii"),)
     if type(payload) is Duration:
         return (str(payload.nanoseconds).encode("ascii"),)
     raise TypeError("sanitization encountered an unsupported sensitive payload")

@@ -118,6 +118,9 @@ def _artifact_captures(artifact: RunArtifact) -> tuple[ArtifactCapture, ...]:
                     captures.append(exchange.request.body)
                 if exchange.response is not None and exchange.response.body is not None:
                     captures.append(exchange.response.body)
+            request = attempt.terminal_pre_send_request
+            if request is not None and request.body is not None:
+                captures.append(request.body)
     return tuple(captures)
 
 

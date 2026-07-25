@@ -207,7 +207,9 @@ class ArtifactComparison(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
             raise TypeError("artifact unavailable execution IDs must be immutable text")
         _require_exact_tuple(self.diffs, ArtifactFact, "comparison diffs")
         incomplete = self.outcome is ArtifactComparisonOutcome.INCOMPLETE
-        if incomplete != (bool(self.unavailable_execution_ids) and not self.diffs):
+        incomplete_shape = bool(self.unavailable_execution_ids) and not self.diffs
+        evaluated_shape = not self.unavailable_execution_ids
+        if (incomplete and not incomplete_shape) or (not incomplete and not evaluated_shape):
             raise ValueError("artifact comparison outcome contradicts its retained facts")
         if any(item.engine is not ArtifactFactEngine.DIFF for item in self.diffs):
             raise ValueError("artifact comparison may contain only diff facts")
