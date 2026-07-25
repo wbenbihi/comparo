@@ -130,7 +130,7 @@ def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...])
     try:
         current = os.open(project_root, flags)
         descriptors.append(current)
-        _validate_private_directory(current, leaf=False)
+        _validate_private_directory(current)
         for part in parts:
             try:
                 child = os.open(part, flags, dir_fd=current)
@@ -139,7 +139,7 @@ def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...])
                 child = os.open(part, flags, dir_fd=current)
             descriptors.append(child)
             current = child
-            _validate_private_directory(current, leaf=part == parts[-1])
+            _validate_private_directory(current)
     except ArtifactOperationError:
         raise
     except OSError as error:
@@ -161,13 +161,13 @@ def _resolved_contained_root(project_root: Path, selected: Path) -> Path:
     return resolved
 
 
-def _validate_private_directory(descriptor: int, *, leaf: bool) -> None:
+def _validate_private_directory(descriptor: int) -> None:
     metadata = os.fstat(descriptor)
     unsafe_permissions = stat.S_IWGRP | stat.S_IWOTH
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid != os.geteuid()
-        or (leaf and metadata.st_mode & unsafe_permissions)
+        or metadata.st_mode & unsafe_permissions
     ):
         raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
 
