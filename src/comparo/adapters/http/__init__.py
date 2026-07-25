@@ -1,5 +1,7 @@
 """Production HTTP materialization, storage, routing, and transport adapters."""
 
+from comparo.adapters.http.finalization import BodyMaterializer
+from comparo.adapters.http.finalization import HttpRequestFinalizer
 from comparo.adapters.http.materialization import BodyMaterializationError
 from comparo.adapters.http.materialization import BodyMaterializationFailureCode
 from comparo.adapters.http.materialization import BodyMaterializationLimits
@@ -14,8 +16,10 @@ __all__ = (
     "BodyMaterializationError",
     "BodyMaterializationFailureCode",
     "BodyMaterializationLimits",
+    "BodyMaterializer",
     "BodyStoreError",
     "BodyStoreFailureCode",
+    "HttpRequestFinalizer",
     "RequestBodyMaterializer",
     "StoredBodyStream",
     "TransientBodyStore",
