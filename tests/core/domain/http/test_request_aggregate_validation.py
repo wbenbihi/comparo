@@ -261,7 +261,7 @@ def test_effective_field_collisions_cover_content_type_and_loop_continuity() -> 
         )
 
     one = QueryParameter(
-        name=QueryName(value="key"),
+        name=QueryName(value="filter"),
         value=QueryText(value="one"),
         source=QuerySource.AUTHORED,
         provenance=provenance(),
