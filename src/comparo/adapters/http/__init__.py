@@ -11,6 +11,9 @@ from comparo.adapters.http.storage import BodyStoreFailureCode
 from comparo.adapters.http.storage import StoredBodyStream
 from comparo.adapters.http.storage import TransientBodyStore
 from comparo.adapters.http.storage import TransientBodyStoreConfig
+from comparo.adapters.http.streaming import SseDataJsonPolicy
+from comparo.adapters.http.streaming import StoredStreamSnapshotProvider
+from comparo.adapters.http.streaming import StreamDecodingLimits
 
 __all__ = (
     "BodyMaterializationError",
@@ -21,7 +24,10 @@ __all__ = (
     "BodyStoreFailureCode",
     "HttpRequestFinalizer",
     "RequestBodyMaterializer",
+    "SseDataJsonPolicy",
     "StoredBodyStream",
+    "StoredStreamSnapshotProvider",
+    "StreamDecodingLimits",
     "TransientBodyStore",
     "TransientBodyStoreConfig",
 )

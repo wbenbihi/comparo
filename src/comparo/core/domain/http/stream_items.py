@@ -13,6 +13,7 @@ from comparo.core.domain.budgets import BudgetResource
 from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.http.bodies import BodyText
 from comparo.core.domain.http.bodies import TextContent
+from comparo.core.domain.http.timings import TimingUnavailable
 from comparo.core.domain.http.views import DecodedViewHandle
 from comparo.core.domain.http.views import DecodeErrorCode
 from comparo.core.domain.http.views import DecoderSpec
@@ -77,7 +78,7 @@ class StreamItemLocation(msgspec.Struct, frozen=True, kw_only=True):
     category_index: Count
     byte_range: ByteRange
     line: PositiveCount | None
-    received_offset: Duration
+    received_offset: Duration | TimingUnavailable
 
     def __post_init__(self) -> None:
         """Require exact typed coordinates without transport-chunk identity."""
@@ -90,8 +91,8 @@ class StreamItemLocation(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("stream item byte range must be ByteRange")
         if self.line is not None and type(self.line) is not PositiveCount:
             raise TypeError("stream line must be PositiveCount when present")
-        if type(self.received_offset) is not Duration:
-            raise TypeError("stream received offset must be Duration")
+        if type(self.received_offset) not in {Duration, TimingUnavailable}:
+            raise TypeError("stream received offset must be Duration or TimingUnavailable")
 
 
 class SseFieldName(DomainStrEnum):

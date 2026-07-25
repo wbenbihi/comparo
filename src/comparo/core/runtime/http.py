@@ -195,7 +195,7 @@ class HttpExecutionDriver:
             ),
         )
         snapshot = await self._snapshot_provider.snapshot(observation)
-        return ObservedExecution(observation=observation, snapshot=snapshot)
+        return ObservedExecution(observation=snapshot.observation, snapshot=snapshot)
 
     async def _execute_attempt(
         self,

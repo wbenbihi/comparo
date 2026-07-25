@@ -212,13 +212,13 @@ class RetryWaiter(Protocol):
 
 
 class SelectionSnapshotProvider(Protocol):
-    """Load body/view data required by selectors through injected storage adapters."""
+    """Load body/view data and attach their immutable descriptors through storage adapters."""
 
     async def snapshot(
         self,
         observation: EnvironmentExecutionObservation,
     ) -> SelectionSnapshot:
-        """Return an I/O-free snapshot bound to the supplied observation."""
+        """Return an I/O-free snapshot, optionally enriching the observation with view handles."""
         ...
 
     async def close(self) -> None:
