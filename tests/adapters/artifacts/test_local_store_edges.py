@@ -8,6 +8,7 @@ import errno
 import os
 import stat
 import sys
+import threading
 import traceback
 from collections.abc import AsyncIterator
 from hashlib import sha256
@@ -128,6 +129,22 @@ class _ExactSource:
 
         async def chunks() -> AsyncIterator[bytes]:
             yield self._value
+
+        return chunks()
+
+
+class _ClosingOverlongSource:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def read(self, blob: ArtifactBlob) -> AsyncIterator[bytes]:
+        del blob
+
+        async def chunks() -> AsyncIterator[bytes]:
+            try:
+                yield b"too-long"
+            finally:
+                self.closed = True
 
         return chunks()
 
@@ -256,10 +273,84 @@ def test_public_store_errors_do_not_chain_path_bearing_causes(tmp_path: Path) ->
     with pytest.raises(LocalArtifactStoreError) as constructor:
         LocalArtifactBundleSink(missing)
     assert str(missing) not in "".join(traceback.format_exception(constructor.value))
+    assert constructor.value.__cause__ is None
+    assert constructor.value.__context__ is None
 
     with pytest.raises(LocalArtifactStoreError) as reader:
         read_local_artifact_bundle(missing, "artifact-0", limits=_limits())
     assert str(missing) not in "".join(traceback.format_exception(reader.value))
+    assert reader.value.__cause__ is None
+    assert reader.value.__context__ is None
+
+
+def test_authenticated_manifest_parser_errors_retain_no_attacker_payload(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "root")
+    _artifact_value, bundle = _persisted(root)
+    manifest = _manifest(bundle)
+    manifest["LEAK-ME"] = "TOPSECRET"
+    _write_manifest(bundle, manifest)
+    manifest_bytes = (bundle / "manifest.json").read_bytes()
+    (bundle / "COMPLETE").write_bytes(f"{sha256(manifest_bytes).hexdigest()}\n".encode())
+
+    with pytest.raises(LocalArtifactStoreError) as failure:
+        open_local_artifact_bundle(root, "artifact-0", limits=_limits())
+
+    assert failure.value.code is ArtifactStoreErrorCode.INVALID_ARTIFACT
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None
+    assert "LEAK-ME" not in "".join(traceback.format_exception(failure.value))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"{",
+        b"[]",
+        b"{}",
+        b'{"api_version":null}',
+        b'{"api_version":"comparo.bundle/v1alpha1"}',
+        (b'{"api_version":"comparo.bundle/v1alpha1","artifact_api_version":null}'),
+    ],
+)
+def test_manifest_preflight_rejects_every_malformed_version_shape(payload: bytes) -> None:
+    with pytest.raises(LocalArtifactStoreError) as failure:
+        local_module._decode_bundle_manifest(payload)
+    assert failure.value.code is ArtifactStoreErrorCode.INVALID_ARTIFACT
+    assert failure.value.__context__ is None
+
+
+def test_resealed_manifest_artifact_identity_must_match_bundle(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "root")
+    _artifact_value, bundle = _persisted(root)
+    manifest = _manifest(bundle)
+    manifest["artifact_id"] = "different"
+    _write_manifest(bundle, manifest)
+    manifest_bytes = (bundle / "manifest.json").read_bytes()
+    (bundle / "COMPLETE").write_bytes(f"{sha256(manifest_bytes).hexdigest()}\n".encode())
+
+    with pytest.raises(LocalArtifactStoreError) as failure:
+        open_local_artifact_bundle(root, "artifact-0", limits=_limits())
+    assert failure.value.code is ArtifactStoreErrorCode.DIGEST_MISMATCH
+
+
+def test_blocking_io_helper_finishes_worker_before_propagating_cancellation() -> None:
+    async def scenario() -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        def fail_later() -> None:
+            started.set()
+            release.wait(timeout=5)
+            raise OSError("sensitive")
+
+        task = asyncio.create_task(local_module._run_blocking(fail_later))
+        assert await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
 
 
 def test_open_bundle_exposes_only_declared_verified_blobs_for_its_lifetime(
@@ -458,6 +549,14 @@ def test_persist_rejects_non_bytes_short_overlong_and_wrong_digest_sources(
         assert _failure_code(outcome) is expected
         assert not tuple(root.iterdir())
 
+    closing = _ClosingOverlongSource()
+    root = _secure_root(tmp_path / "closing")
+    sink = LocalArtifactBundleSink(root)
+    outcome = asyncio.run(sink.persist(artifact, closing, _limits()))
+    sink.close()
+    assert _failure_code(outcome) is ArtifactStoreErrorCode.DIGEST_MISMATCH
+    assert closing.closed
+
 
 def test_persist_maps_transaction_exception_with_created_staging(
     tmp_path: Path,
@@ -578,7 +677,34 @@ def test_reader_rejects_a_resealed_unsupported_artifact_manifest_version(
 
     with pytest.raises(LocalArtifactStoreError) as failure:
         read_local_artifact_bundle(root, "artifact-0", limits=_limits())
-    assert failure.value.code is ArtifactStoreErrorCode.DIGEST_MISMATCH
+    assert failure.value.code is ArtifactStoreErrorCode.UNSUPPORTED_VERSION
+
+
+def test_reader_classifies_authenticated_versions_before_strict_shape(tmp_path: Path) -> None:
+    manifest_root = _secure_root(tmp_path / "manifest")
+    _artifact_value, manifest_bundle = _persisted(manifest_root)
+    manifest = _manifest(manifest_bundle)
+    manifest["api_version"] = "comparo.bundle/v2"
+    manifest["future_field"] = True
+    _write_manifest(manifest_bundle, manifest)
+    manifest_bytes = (manifest_bundle / "manifest.json").read_bytes()
+    (manifest_bundle / "COMPLETE").write_bytes(f"{sha256(manifest_bytes).hexdigest()}\n".encode())
+
+    with pytest.raises(LocalArtifactStoreError) as manifest_version:
+        read_local_artifact_bundle(manifest_root, "artifact-0", limits=_limits())
+    assert manifest_version.value.code is ArtifactStoreErrorCode.UNSUPPORTED_VERSION
+
+    artifact_root = _secure_root(tmp_path / "artifact")
+    _artifact_value, artifact_bundle = _persisted(artifact_root)
+    results = msgspec.json.decode((artifact_bundle / "results.json").read_bytes())
+    assert type(results) is dict
+    results["api_version"] = "comparo.artifact/v2"
+    results["future_field"] = True
+    _replace_results(artifact_bundle, msgspec.json.encode(results))
+
+    with pytest.raises(LocalArtifactStoreError) as artifact_version:
+        read_local_artifact_bundle(artifact_root, "artifact-0", limits=_limits())
+    assert artifact_version.value.code is ArtifactStoreErrorCode.UNSUPPORTED_VERSION
 
 
 def test_reader_rejects_results_shape_identity_and_blob_catalog_tampering(tmp_path: Path) -> None:

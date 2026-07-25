@@ -11,17 +11,21 @@ import stat
 import sys
 from collections.abc import AsyncIterable
 from collections.abc import AsyncIterator
+from collections.abc import Callable
 from contextlib import suppress
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from secrets import token_hex
 from threading import Lock
 from typing import Final
+from typing import cast
 from typing import final
 
 import msgspec
 
 from comparo.core.artifacts.codec import ArtifactCodecError
+from comparo.core.artifacts.codec import ArtifactCodecErrorCode
 from comparo.core.artifacts.codec import decode_run_artifact
 from comparo.core.artifacts.codec import encode_run_artifact
 from comparo.core.artifacts.common import ARTIFACT_API_VERSION
@@ -71,10 +75,11 @@ class LocalArtifactBundleSink:
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
         if not _atomic_rename_supported():
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.UNSUPPORTED_PLATFORM)
-        try:
+        root_fd = -1
+        with suppress(OSError):
             root_fd = os.open(root, _DIRECTORY_FLAGS)
-        except OSError:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE) from None
+        if root_fd < 0:
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
         try:
             _validate_root_fd(root_fd)
         except Exception:
@@ -105,29 +110,32 @@ class LocalArtifactBundleSink:
                 if self._closed:
                     return _failure(ArtifactStoreErrorCode.CLOSED)
                 transaction_root_fd = os.dup(self._root_fd)
-            transaction = _BundleTransaction.create(
-                transaction_root_fd,
-                bundle_id,
-                owns_root_fd=True,
+            transaction = await _run_blocking(
+                partial(
+                    _BundleTransaction.create,
+                    transaction_root_fd,
+                    bundle_id,
+                    owns_root_fd=True,
+                )
             )
             transaction_root_fd = -1
             await transaction.write(artifact, blobs, limits)
-            transaction.publish()
+            await _run_blocking(transaction.publish)
             return ArtifactPersistenceOutcome(
                 status=ArtifactPersistenceStatus.PERSISTED,
                 bundle_id=bundle_id,
             )
         except asyncio.CancelledError:
             if transaction is not None:
-                transaction.abort()
+                await _run_blocking(transaction.abort)
             raise
         except LocalArtifactStoreError as error:
             if transaction is not None:
-                transaction.abort()
+                await _run_blocking(transaction.abort)
             return _failure(error.code)
         except Exception:  # noqa: BLE001 - never copy exception details into the outcome
             if transaction is not None:
-                transaction.abort()
+                await _run_blocking(transaction.abort)
             return _failure(ArtifactStoreErrorCode.IO_FAILED)
         finally:
             if transaction is not None:
@@ -196,24 +204,28 @@ class LocalArtifactBundle:
         async def chunks() -> AsyncIterator[bytes]:
             directory_fd = -1
             descriptor = -1
+            failure: ArtifactStoreErrorCode | None = None
             try:
                 with self._lock:
                     if self._closed:
                         raise LocalArtifactStoreError(ArtifactStoreErrorCode.CLOSED)
                     directory_fd = os.dup(self._blob_fd)
-                descriptor = _open_read_file(
-                    directory_fd,
-                    blob.sha256,
-                    maximum=blob.byte_count,
+                descriptor = await _run_blocking(
+                    partial(
+                        _open_read_file,
+                        directory_fd,
+                        blob.sha256,
+                        maximum=blob.byte_count,
+                    )
                 )
-                _verify_blob_descriptor(descriptor, blob)
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                while chunk := os.read(descriptor, 65_536):
+                await _run_blocking(partial(_verify_blob_descriptor, descriptor, blob))
+                await _run_blocking(partial(os.lseek, descriptor, 0, os.SEEK_SET))
+                while chunk := await _run_blocking(partial(os.read, descriptor, 65_536)):
                     yield chunk
-            except LocalArtifactStoreError:
-                raise
+            except LocalArtifactStoreError as error:
+                failure = error.code
             except OSError:
-                raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+                failure = ArtifactStoreErrorCode.IO_FAILED
             finally:
                 if descriptor >= 0:
                     with suppress(OSError):
@@ -221,6 +233,8 @@ class LocalArtifactBundle:
                 if directory_fd >= 0:
                     with suppress(OSError):
                         os.close(directory_fd)
+            if failure is not None:
+                raise LocalArtifactStoreError(failure)
 
         return chunks()
 
@@ -336,7 +350,7 @@ class _BundleTransaction:
             )
             raise LocalArtifactStoreError(code) from error
         results_digest = sha256(results).hexdigest()
-        _write_file(self._staging_fd, "results.json", results)
+        await _run_blocking(partial(_write_file, self._staging_fd, "results.json", results))
         self._created_files.append("results.json")
         total = 0
         for blob in artifact.blobs:
@@ -346,7 +360,7 @@ class _BundleTransaction:
             if total > limits.maximum_total_blob_bytes.value:
                 raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
             await self._write_blob(blob, blobs.read(blob))
-        os.fsync(self._blob_fd)
+        await _run_blocking(partial(os.fsync, self._blob_fd))
         bundle = _BundleManifest(
             api_version=_BUNDLE_API_VERSION,
             artifact_api_version=artifact.api_version,
@@ -358,13 +372,13 @@ class _BundleTransaction:
         manifest = msgspec.json.encode(bundle, order="deterministic")
         if len(manifest) > limits.maximum_manifest_bytes.value:
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
-        _write_file(self._staging_fd, "manifest.json", manifest)
+        await _run_blocking(partial(_write_file, self._staging_fd, "manifest.json", manifest))
         self._created_files.append("manifest.json")
-        os.fsync(self._staging_fd)
+        await _run_blocking(partial(os.fsync, self._staging_fd))
         marker = f"{sha256(manifest).hexdigest()}\n".encode("ascii")
-        _write_file(self._staging_fd, "COMPLETE", marker)
+        await _run_blocking(partial(_write_file, self._staging_fd, "COMPLETE", marker))
         self._created_files.append("COMPLETE")
-        os.fsync(self._staging_fd)
+        await _run_blocking(partial(os.fsync, self._staging_fd))
 
     async def _write_blob(
         self,
@@ -380,20 +394,26 @@ class _BundleTransaction:
         self._created_blob_names.append(name)
         digest = sha256()
         size = 0
+        iterator = chunks.__aiter__()
         try:
-            async for chunk in chunks:
+            async for chunk in iterator:
                 if type(chunk) is not bytes:
                     raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
                 size += len(chunk)
                 if size > blob.byte_count:
                     raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
                 digest.update(chunk)
-                _write_all(descriptor, chunk)
+                await _run_blocking(partial(_write_all, descriptor, chunk))
             if size != blob.byte_count or digest.hexdigest() != blob.sha256:
                 raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
-            os.fsync(descriptor)
+            await _run_blocking(partial(os.fsync, descriptor))
         finally:
-            os.close(descriptor)
+            try:
+                close = getattr(iterator, "aclose", None)
+                if close is not None:
+                    await close()
+            finally:
+                os.close(descriptor)
 
     def publish(self) -> None:
         """Atomically publish without overwrite, then durably sync the root directory."""
@@ -440,7 +460,21 @@ class _BundleTransaction:
                 os.close(self._root_fd)
 
 
-def open_local_artifact_bundle(  # noqa: C901
+def open_local_artifact_bundle(
+    root: Path,
+    bundle_id: str,
+    *,
+    limits: ArtifactLimits,
+) -> LocalArtifactBundle:
+    """Open one bundle while severing all unsafe exception provenance."""
+    try:
+        return _open_local_artifact_bundle(root, bundle_id, limits=limits)
+    except LocalArtifactStoreError as error:
+        failure = error.code
+    raise LocalArtifactStoreError(failure)
+
+
+def _open_local_artifact_bundle(  # noqa: C901
     root: Path,
     bundle_id: str,
     *,
@@ -470,12 +504,8 @@ def open_local_artifact_bundle(  # noqa: C901
         )
         if marker != f"{sha256(manifest_bytes).hexdigest()}\n".encode("ascii"):
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
-        manifest = msgspec.json.decode(manifest_bytes, type=_BundleManifest)
-        if (
-            manifest.api_version != _BUNDLE_API_VERSION
-            or manifest.artifact_api_version != ARTIFACT_API_VERSION
-            or manifest.artifact_id != bundle_id
-        ):
+        manifest = _decode_bundle_manifest(manifest_bytes)
+        if manifest.artifact_id != bundle_id:
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
         results = _read_file(
             bundle_fd,
@@ -513,8 +543,13 @@ def open_local_artifact_bundle(  # noqa: C901
         return opened
     except LocalArtifactStoreError:
         raise
-    except ArtifactCodecError:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT) from None
+    except ArtifactCodecError as error:
+        code = (
+            ArtifactStoreErrorCode.UNSUPPORTED_VERSION
+            if error.code is ArtifactCodecErrorCode.UNSUPPORTED_VERSION
+            else ArtifactStoreErrorCode.INVALID_ARTIFACT
+        )
+        raise LocalArtifactStoreError(code) from None
     except (OSError, msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
     finally:
@@ -527,6 +562,40 @@ def open_local_artifact_bundle(  # noqa: C901
         if root_fd >= 0:
             with suppress(OSError):
                 os.close(root_fd)
+
+
+def _decode_bundle_manifest(payload: bytes) -> _BundleManifest:
+    """Decode one manifest while severing all unsafe parser provenance."""
+    try:
+        return _decode_bundle_manifest_inner(payload)
+    except LocalArtifactStoreError as error:
+        failure = error.code
+    raise LocalArtifactStoreError(failure)
+
+
+def _decode_bundle_manifest_inner(payload: bytes) -> _BundleManifest:
+    """Classify authenticated version incompatibility before strict shape validation."""
+    try:
+        untyped = msgspec.json.decode(payload)
+    except msgspec.DecodeError:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT) from None
+    if type(untyped) is not dict:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
+    document = cast("dict[object, object]", untyped)
+    bundle_version = document.get("api_version")
+    if type(bundle_version) is not str:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
+    if bundle_version != _BUNDLE_API_VERSION:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.UNSUPPORTED_VERSION)
+    artifact_version = document.get("artifact_api_version")
+    if type(artifact_version) is not str:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
+    if artifact_version != ARTIFACT_API_VERSION:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.UNSUPPORTED_VERSION)
+    try:
+        return msgspec.convert(untyped, type=_BundleManifest)
+    except (msgspec.ValidationError, TypeError, ValueError):
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT) from None
 
 
 def read_local_artifact_bundle(
@@ -553,7 +622,8 @@ def read_local_artifact_bundle(
     except LocalArtifactStoreError:
         raise
     except OSError:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+        pass
+    raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED)
 
 
 def _write_file(directory_fd: int, name: str, value: bytes) -> None:
@@ -628,6 +698,17 @@ def _verify_blob_descriptor(descriptor: int, blob: ArtifactBlob) -> None:
         digest.update(chunk)
     if size != blob.byte_count or digest.hexdigest() != blob.sha256:
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
+
+
+async def _run_blocking[ResultT](operation: Callable[[], ResultT]) -> ResultT:
+    """Run one descriptor operation without blocking or racing cancellation cleanup."""
+    task = asyncio.create_task(asyncio.to_thread(operation))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        with suppress(Exception):
+            await task
+        raise
 
 
 def _validate_root_fd(descriptor: int) -> None:

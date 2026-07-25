@@ -9,19 +9,11 @@ from typing import final
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.policy import ArtifactLimits
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
+from comparo.core.artifacts.ports import SanitizedBlobError
 
 
-class SanitizedBlobStoreError(RuntimeError):
+class SanitizedBlobStoreError(SanitizedBlobError):
     """A value-free sanitized blob staging failure."""
-
-    __slots__ = ("code",)
-
-    def __init__(self, code: ArtifactStoreErrorCode) -> None:
-        """Retain only a closed failure code."""
-        if type(code) is not ArtifactStoreErrorCode:
-            raise TypeError("sanitized blob store error code must be typed")
-        self.code = code
-        super().__init__(code.value)
 
 
 class InMemorySanitizedBlobStore:

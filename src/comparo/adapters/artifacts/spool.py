@@ -18,6 +18,7 @@ from typing import final
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.policy import ArtifactLimits
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
+from comparo.core.artifacts.ports import SanitizedBlobError
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import PositiveCount
 
@@ -38,17 +39,8 @@ _CREATE_FILE_FLAGS: Final = (
 _READ_FILE_FLAGS: Final = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
-class SanitizedSpoolError(RuntimeError):
+class SanitizedSpoolError(SanitizedBlobError):
     """A value-free sanitized spool failure."""
-
-    __slots__ = ("code",)
-
-    def __init__(self, code: ArtifactStoreErrorCode) -> None:
-        """Retain only one closed failure category."""
-        if type(code) is not ArtifactStoreErrorCode:
-            raise TypeError("sanitized spool error code must be typed")
-        self.code = code
-        super().__init__(code.value)
 
 
 @final
@@ -172,13 +164,13 @@ class PosixSanitizedBlobSpool:
     async def close(self) -> None:
         """Reject new work and share one cancellation-safe cleanup task."""
         async with self._condition:
-            if self._closed:
-                return
-            if self._close_task is None:
+            if self._close_task is not None:
+                task = self._close_task
+            else:
                 self._closing = True
                 self._close_task = asyncio.create_task(self._finish_close())
                 self._close_task.add_done_callback(_consume_task_exception)
-            task = self._close_task
+                task = self._close_task
         await asyncio.shield(task)
 
     async def __aenter__(self) -> PosixSanitizedBlobSpool:
@@ -341,6 +333,7 @@ class _SpoolBlobWriter:
                 raise SanitizedSpoolError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
             await self._store._reserve(len(chunk))
             task = asyncio.create_task(asyncio.to_thread(_write_all, self._descriptor, chunk))
+            io_failed = False
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
@@ -357,7 +350,9 @@ class _SpoolBlobWriter:
                 raise
             except OSError:
                 await self._store._release(len(chunk))
-                raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED) from None
+                io_failed = True
+            if io_failed:
+                raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
             self._digest.update(chunk)
             self._count = attempted
 
@@ -452,12 +447,18 @@ def _open_parent(root: Path) -> int:
 def _create_directory(parent_fd: int) -> tuple[str, int]:
     for _attempt in range(_CREATION_ATTEMPTS):
         name = f".comparo-sanitized-{token_hex(16)}"
+        collision = False
+        mkdir_failed = False
         try:
             os.mkdir(name, mode=0o700, dir_fd=parent_fd)
         except FileExistsError:
-            continue
+            collision = True
         except OSError:
-            raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED) from None
+            mkdir_failed = True
+        if collision:
+            continue
+        if mkdir_failed:
+            raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
         descriptor = -1
         failed = False
         try:
@@ -479,6 +480,8 @@ def _create_pending_file(directory_fd: int) -> tuple[str, int]:
     for _attempt in range(_CREATION_ATTEMPTS):
         name = f".pending-{token_hex(16)}"
         descriptor = -1
+        collision = False
+        open_failed = False
         try:
             descriptor = os.open(
                 name,
@@ -487,15 +490,22 @@ def _create_pending_file(directory_fd: int) -> tuple[str, int]:
                 dir_fd=directory_fd,
             )
         except FileExistsError:
-            continue
+            collision = True
         except OSError:
-            raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED) from None
+            open_failed = True
+        if collision:
+            continue
+        if open_failed:
+            raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
+        chmod_failed = False
         try:
             os.fchmod(descriptor, 0o600)
         except OSError:
+            chmod_failed = True
+        if chmod_failed:
             _close_descriptor(descriptor)
             _unlink(directory_fd, name)
-            raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED) from None
+            raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
         return name, descriptor
     raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
 
@@ -563,14 +573,18 @@ async def _authenticate_blob(
 
 
 def _rewind_descriptor(descriptor: int) -> None:
+    failed = False
     try:
         os.lseek(descriptor, 0, os.SEEK_SET)
     except OSError:
-        raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED) from None
+        failed = True
+    if failed:
+        raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
 
 
 async def _sync_descriptor(descriptor: int) -> None:
     task = asyncio.create_task(asyncio.to_thread(os.fsync, descriptor))
+    failed = False
     try:
         await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -578,19 +592,26 @@ async def _sync_descriptor(descriptor: int) -> None:
             await task
         raise
     except OSError:
-        raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED) from None
+        failed = True
+    if failed:
+        raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
 
 
 async def _read_chunk(descriptor: int, count: int) -> bytes:
     task = asyncio.create_task(asyncio.to_thread(os.read, descriptor, count))
+    value: bytes | None = None
+    failed = False
     try:
-        return await asyncio.shield(task)
+        value = await asyncio.shield(task)
     except asyncio.CancelledError:
         with suppress(OSError):
             await task
         raise
     except OSError:
-        raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED) from None
+        failed = True
+    if failed or value is None:
+        raise SanitizedSpoolError(ArtifactStoreErrorCode.IO_FAILED)
+    return value
 
 
 def _link_noreplace(directory_fd: int, source: str, destination: str) -> object:

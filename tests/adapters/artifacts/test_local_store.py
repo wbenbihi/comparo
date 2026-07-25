@@ -53,7 +53,16 @@ async def _stored_artifact() -> tuple[RunArtifact, InMemorySanitizedBlobStore]:
         msgspec.structs.replace(
             item,
             attempts=tuple(
-                msgspec.structs.replace(item_attempt, exchanges=(exchange,))
+                msgspec.structs.replace(
+                    item_attempt,
+                    exchanges=tuple(
+                        msgspec.structs.replace(
+                            exchange,
+                            exchange_id=item_exchange.exchange_id,
+                        )
+                        for item_exchange in item_attempt.exchanges
+                    ),
+                )
                 for item_attempt in item.attempts
             ),
         )
