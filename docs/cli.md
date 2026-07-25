@@ -28,6 +28,7 @@ rather than falling back to pathname-based file access on Windows.
 | `comparo artifact verify` | local reads | Authenticate a bundle and every declared sanitized blob. |
 | `comparo artifact blob` | local reads | Write one authenticated sanitized blob as exact bytes. |
 | `comparo report` | local reads | Render an authenticated bundle as JSON, JUnit, SARIF, or Markdown. |
+| `comparo tui` | local reads and optional HTTP | Open the four-workspace terminal frontend. |
 | `comparo completion` | none | Generate Bash, Zsh, or Fish completion text. |
 
 Run `comparo COMMAND --help` for the exact installed options. The command graph can also generate
@@ -38,6 +39,13 @@ comparo schema cli markdown
 comparo schema cli html
 comparo schema cli rst
 ```
+
+In an interactive terminal, bare `comparo` opens the TUI with `./comparo.yaml`; redirected or
+non-interactive bare invocation keeps the generated help behavior. `comparo tui` is the explicit
+form. It accepts `--config`, repeatable `--source`, `--policy`, and `--artifact-root`; all
+project/policy YAML, HTTP capture/decode, and artifact byte/count ceilings exposed by the execution
+commands; plus `--maximum-report-entries` and `--maximum-outstanding-preparations`. See the
+[TUI guide](tui.md#launch-limits-and-artifact-root).
 
 ## Trust and ExecutionPolicy
 
@@ -285,6 +293,6 @@ Environment overlays outside the supported fields, `SafetyProfile`, `RedactionPr
 accept those resource shapes so the language can evolve coherently, but execution never silently
 ignores them.
 
-WebSocket, gRPC, browser automation, public plugins, effectful analysis such as an LLM judge, and
-the TUI are not part of this CLI step. Browser automation is outside Comparo's product scope;
-other listed capabilities remain explicit future work.
+WebSocket, gRPC, browser automation, public plugins, and effectful analysis such as an LLM judge
+are not part of this executable subset. Browser automation is outside Comparo's product scope;
+the other listed capabilities remain explicit future work.

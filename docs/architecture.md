@@ -1,10 +1,11 @@
 # Architecture
 
 Comparo is being rebuilt from a pure, immutable domain center outward. The current public source
-tree implements **Steps 1 through 10**: the internal language, shared selector and evaluation
+tree implements **Steps 1 through 11**: the internal language, shared selector and evaluation
 kernels, versioned configuration compiler, deterministic admitted run planner, run-scoped
 value/secrets boundary, bounded runtime, production HTTP adapter, sanitized artifacts/reporters,
-application composition, and local CLI. The TUI and dedicated CI integration remain unmigrated.
+application composition, local CLI, and component-based Textual TUI. Dedicated CI integration
+remains unmigrated.
 
 The accepted destination and implementation order are recorded in the
 [core refactor roadmap](core-refactor-roadmap.md). The exact Step 1 boundary is recorded in the
@@ -29,6 +30,7 @@ src/comparo/
 ├── policy/                 operator-owned ExecutionPolicy document adapter
 ├── reporters/              pure RunArtifact projections
 ├── schemas/                generated public comparo/v1alpha1 JSON Schema
+├── tui/                    Textual adapter, safe backend port, shared widgets, and workspaces
 └── core/
     ├── __init__.py
     ├── configuration/      pure version frontend, linker, and canonical compiler
@@ -52,8 +54,9 @@ src/comparo/
 ```
 
 The previous prototype implementation, tests, and examples are quarantined under
-`deprecated.ignore.folder/`. Hatch excludes that tree from distributions. There is no current
-`comparo.tui` package; the executable `comparo` entry point is the migrated local CLI.
+`deprecated.ignore.folder/`. Hatch excludes that tree from distributions. The executable
+`comparo` entry point dispatches headless Cyclopts commands or lazily launches the Textual adapter;
+importing the CLI does not eagerly import Textual.
 
 ## Dependency direction
 

@@ -360,8 +360,9 @@ validation, doctor, planning, sanitized rendering, run, diff, ExecutionProfile, 
 and shell-completion journeys documented in [the CLI reference](cli.md). Production commands share
 one application planner/runtime composition; caller-owned load and runtime limits, invocation Value
 resource overlays, structured exit outcomes, destination-bound secret egress, and once-only HTTP
-authorization are enforced before effects at their respective boundaries. A dedicated CI wrapper
-and the TUI remain intentionally deferred.
+authorization are enforced before effects at their respective boundaries. At the end of Step 10,
+a dedicated CI wrapper and the TUI remained intentionally deferred; the TUI is migrated in Step 11
+below.
 
 Move commands in increasing order of side effects:
 
@@ -391,6 +392,13 @@ artifacts. It does not resolve values, compose profiles, execute HTTP, evaluate 
 artifacts, or reconstruct secrets.
 
 Exit criterion: removing the TUI package would remove no backend capability or business rule.
+
+Status: complete. Explorer consumes safe project summaries; Compare consumes admitted plan
+previews, cancellable progress sessions, and sanitized result projections; Report consumes a
+bounded authenticated archive; Settings owns terminal-only preferences. The Textual shell and
+widgets contain no configuration, resolution, HTTP, evaluation, gate, or persistence logic. Both
+bare interactive `comparo` and explicit `comparo tui` launch through caller-owned, versioned load,
+execution, artifact, report, and preparation limits.
 
 ## Step 12: scenarios and extensions
 

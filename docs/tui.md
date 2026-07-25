@@ -1,423 +1,216 @@
-# Terminal UI guide
+# Terminal UI
 
-> `comparo` (or `comparo tui --config <manifest>`) — explore, run, diff, report, and configure, without leaving the terminal.
+Comparo's terminal interface is a first-class frontend over the same application services used by
+the headless CLI. It explores a compiled project, prepares and executes HTTP assertions or
+cross-environment comparisons, follows live progress, and opens authenticated reports. It does
+not parse YAML, resolve values, send HTTP requests, evaluate rules, compute gates, or persist
+artifacts itself.
 
-The TUI is one of three front-ends over the shared engine (alongside the [CLI](cli.md) and the
-GitHub Action). It never contains diff or execution logic of its own — it drives
-`comparo.core`, so anything you do here behaves exactly like the headless commands.
+The reusable result surface and its safety boundary are specified in the
+[TUI results implementation contract](tui-results-implementation-contract.md).
 
-Run `comparo` with no command to open the TUI on `./comparo.yaml` (the manifest in the current
-directory); point `--config` at a manifest to open one elsewhere:
+## Launching
+
+From an interactive terminal, either command opens `./comparo.yaml`:
 
 ```console
-comparo                                                    # opens ./comparo.yaml
-comparo tui --config examples/sample-project/comparo.yaml
+comparo
+comparo tui
 ```
 
-If the project does not compile, the TUI opens on a full-screen **error report** instead of the
-shell (see [When a project won't load](#when-a-project-wont-load)).
+Use the explicit command to select another project or authority:
 
-## Table of contents
+```console
+comparo tui \
+  --config examples/project/comparo.yaml \
+  --source team-overrides.yaml \
+  --policy ci-policy.yaml \
+  --artifact-root .comparo/artifacts
+```
 
-- [The shell](#the-shell)
-- [Explorer](#explorer)
-- [Run](#run)
-- [Diff](#diff)
-- [Execution](#execution)
-- [Report](#report)
-- [Settings](#settings)
-- [When a project won't load](#when-a-project-wont-load)
-- [Conventions that hold everywhere](#conventions-that-hold-everywhere)
+`--source` is repeatable. Bare `comparo` opens the TUI only when stdin, stdout, and stderr are
+terminals; in a redirected or non-interactive process it prints CLI help. Every other CLI
+subcommand remains headless.
 
-## The shell
+### Launch limits and artifact root
 
-A top nav bar carries the six screen tabs; the active tab is highlighted, and the right side
-shows a per-screen status. A bottom status bar always lists the keys that are usable *right now*
-(keys coloured, actions dim) plus a context on the right.
+One immutable launch contract owns every operational ceiling for the process. Defaults are named,
+versioned starting points rather than application-level maxima; a caller can replace them all:
 
-Switch screens with the number row — and, because a laptop without a numpad may need Shift for
-digits, each tab is **also** bound to the un-shifted character on the same physical key (handy on
-an AZERTY layout):
+| Boundary | `comparo tui` options |
+| --- | --- |
+| Project and policy loading | `--maximum-config-sources`, every `--maximum-config-yaml-*`, and every `--maximum-policy-yaml-*` option |
+| HTTP capture and decoding | `--body-memory-threshold-bytes`, `--maximum-transient-body-bytes`, `--maximum-authorization-occurrences`, and every `--maximum-encoded-*`, `--maximum-entity-*`, `--maximum-expansion-*`, `--maximum-stream-*`, `--maximum-decoded-*`, `--maximum-text-*`, and `--maximum-json-*` option |
+| Artifact persistence and reads | `--maximum-blobs`, `--maximum-blob-bytes`, `--maximum-total-blob-bytes`, `--maximum-manifest-bytes`, `--maximum-report-bytes`, and every `--maximum-redaction-*` option |
+| Interactive process | `--maximum-report-entries` and `--maximum-outstanding-preparations` |
 
-| Screen    | Key            |
-| --------- | -------------- |
-| Explorer  | `1` or `&`     |
-| Run       | `2` or `é`     |
-| Diff      | `3` or `"`     |
-| Execution | `4` or `'`     |
-| Report    | `5` or `(`     |
-| Settings  | `6` or `-`     |
+Run `comparo tui --help` for exact names, descriptions, and current version-owned defaults. Invalid
+values fail as an invalid invocation before the terminal app starts.
 
-`?` opens a help overlay listing every key for the current screen. **`q` always quits the app —
-it is never "back."** Close a sub-screen or step back a level with `esc` (or `⌫`); every footer
-says so. The **accent border always marks the active panel** — whichever panel the keyboard is
-driving — and `tab` moves focus between panels.
+TUI executions persist sanitized completed artifacts so Report can open them. The default
+`.comparo/artifacts` is resolved relative to the successfully loaded Project root and created as a
+private directory when absent. Every existing ancestor must be owned by the current user and must
+not be group- or world-writable; symlink traversal fails closed. An absolute `--artifact-root`
+selects an operator-managed archive and therefore must already exist. This differs deliberately
+from headless execution, where persistence is opt-in and every selected root must already exist.
 
-Tabs are **self-contained**: a screen never redirects you to a *different* tab to show a result.
-When you drill in — a diff, a report, a cell — it pushes a sub-view **within the same tab**, so
-you never lose your place.
+## Shell
+
+The shell has exactly four persistent workspaces:
+
+| Workspace | Responsibility |
+| --- | --- |
+| **Explorer** | Inspect the compiled project catalog, resource metadata, tags, and source coordinates. |
+| **Compare** | Prepare and run assertions, environment comparisons, and `ExecutionProfile` executions; follow progress and inspect the result. |
+| **Report** | Browse completed authenticated artifact bundles and open their results without executing HTTP again. |
+| **Settings** | Change terminal-only appearance and interaction preferences. It never edits project YAML or execution policy. |
+
+Each workspace retains an independent navigation history. Opening a resource or result never
+redirects to another workspace. A run continues when the user visits Explorer, Report, or
+Settings, and completion does not steal focus.
+
+The shared command catalog is the single declaration site for product commands and keys:
+
+| Key | Command |
+| --- | --- |
+| `1` / `&` | Explorer |
+| `2` / `é` | Compare |
+| `3` / `"` | Report |
+| `4` / `'` | Settings |
+| `esc` / `backspace` | Back within the active workspace |
+| `?` | Active-command help |
+| `ctrl+k` | Command palette |
+| `q` | Quit; it is never Back |
+
+The footer is generated from that catalog for the active context. Screens do not declare private
+copies of navigation or command semantics.
 
 ## Explorer
 
-The Explorer is dedicated to understanding *how the project is configured*. A foldable tree on
-the left lists every object — the `◆` project manifest as a root node, then Environments,
-Requests, Matrices, Schemas, Instances, Diff Profiles, **Assertion Profiles**, and **Execution
-Profiles** (empty kinds are hidden). The detail panel shows the selected object; for a request it
-renders the **resolved outbound request** (method chip, URL, headers with secrets masked in red, a
-syntax-highlighted JSON body) with a **provenance** panel below showing where each value came from.
+Explorer loads the project through a bounded application inspection service. The tree/list shows
+the Project and every compiled resource, including future `Scenario` resources when the compiler
+learns them. The detail panel shows only safe identity and metadata:
 
-Pressing `enter` on an **ExecutionProfile** opens it in the [Execution](#execution) tab, ready to
-launch — the same profile picker the Execution tab opens with.
+- kind, id, namespace, and compiled fingerprint;
+- name, description, and tags;
+- source id, document, line, and column.
 
-| Key     | Action |
-| ------- | ------ |
-| `↑ ↓`   | move through the tree |
-| `space` | fold / unfold a section |
-| `tab`   | switch the active panel (tree ⇄ detail ⇄ provenance) |
-| `enter` | on an **environment**: make it the default everything resolves against |
-| `h`     | on an **environment**: run its health checks live (dot turns green / orange / red) — a manual, point-in-time probe |
-| `r`     | on a **request** or **instance**: toggle raw source ⇄ resolved values |
-| `p`     | on a **request**: show its `curl` (masked); inside, `c` copies the real one |
-| `/`     | filter the tree by name, kind, or tag |
-| `g`     | open the reference graph — what links to what |
+Compiled specifications, resolved values, environment-file contents, and live secret containers
+do not cross this inspection boundary. A failed compilation produces structured, value-free
+diagnostics instead of an exception or raw source dump. `r` reloads the project.
 
-The coloured dot next to an environment reflects its last health check; the red **`live`** badge
-marks an environment whose `baseUrl` is not a loopback host — a reminder that requests hit a real
-server. Health is deliberately **manual** — comparo never auto-probes on focus (that would hammer a
-live env on every cursor move), so the detail shows how fresh the last probe is (`checked 2m ago ·
-press h to re-check`, or `not checked yet · press h`) and you re-run it on demand.
+## Compare
 
-## Run
+Compare contains every kind of current execution in one lifecycle. The mode selector changes the
+inputs, not the underlying planner or runtime:
 
-Run executes selected request cells against the **current environment** (it does not compare
-environments — that is Diff's job). It has two visually distinct states so you always know where
-you are.
+| Mode | Inputs | Effective topology |
+| --- | --- | --- |
+| Assertions | subjects, environments | Execute and evaluate assertions across every selected Environment. |
+| Differences | subjects, baseline, candidates | Execute each directed baseline/candidate pair and evaluate its diff profile. |
+| Execution profile | `ExecutionProfile` id plus optional topology overrides | Use the reusable profile and deliberately replace only the topology fields supplied for this run. |
 
-### Prepare
+Safe project resource identities provide defaults and hints; users may type another valid id. The
+plural selectors use bounded comma-separated ids. Advanced run options expose Matrix bindings,
+trials, maximum attempts, tri-state fail-fast, planning budgets, and parameter/variable/secret
+overlays sourced from compiled `Value` resources. Their adapter syntax is deliberately small:
 
-A calm checklist (not a table). Fold a matrix request to see its cases; the icon shows whether a
-request will run in **full** (`◉`), **partial** (`◐`), or **none** (`○`) of its cases, with a
-`will run` count. A footer CTA spells out the workload — `N requests · M cases × 1 env = C calls ·
-up to 4 in parallel` — and, below it, the **equivalent CLI command** (`$ comparo run --env <env>`):
-every screen is a command, and the TUI writes the flags.
+```text
+subjects:             ping, health
+matrices:             region=regions, tenant=tenants
+planning budgets:     concurrency=4, attempts=20
+parameter Values:     Value/params, staging=Value/staging-params
+secret Values:        Value/secrets, prod=Value/prod-secrets
+```
 
-| Key     | Action |
-| ------- | ------ |
-| `↑ ↓`   | move |
-| `space` | fold a request to reveal its cases |
-| `enter` | toggle a request or cell in / out of the run |
-| `m`     | choose matrix **values** globally — deselecting a value excludes it from *every* request that shares that matrix |
-| `/`     | filter by request name |
-| `x`     | run the selected cells |
+An omitted advanced field inherits project/profile configuration. Fail-fast explicitly selects
+inherit, enabled, or disabled. Invalid adapter text becomes a closed `tui.compare.input.*`
+diagnostic; authored values and parser exceptions never enter diagnostics or backend errors.
 
-### Running
+The form is a frontend draft only. `p` translates it to the application's typed
+`PlanningOptions`, `MatrixOverride`, `BudgetOverride`, and `ValueResourceOverride` contracts. The
+shared planner—not the TUI—applies normal precedence and returns an opaque one-shot handle plus a
+secret-free admitted-plan preview. The preview reports run identity, cells, trials, environment
+executions, comparisons, retry ceiling, slices, and effective budgets.
 
-`x` switches to the **summary strip** over dynamic Miller columns that grow with how deep you
-drill. The strip wears two costumes in one slot: mid-flight it is the run id, the environment, a
-progress bar, and a `✓ · ~ · ✗ · !` cell tally; finished, the bar swaps for the **gate verdict
-pill** (`✓ PASS` / `✗ FAIL` / `! ERROR` — unreachable cells alone grade ERROR, a broken gating
-rule grades FAIL) and the strip's border tints to match. The cell states are the shared grammar:
-`✓` passed, `~` passed with an advisory break, `✗` a gating rule broke, `!` unreachable.
+`x` consumes that exact handle. The workspace cannot silently rebuild a different plan between
+preview and execution. Per-run mutation approval is part of the draft: its Boolean value is
+snapshotted with the admitted handle and applies only when that exact handle starts. Editing it
+invalidates the preview; it never changes application-wide defaults. While running Compare
+displays a bounded, coalesced snapshot—queued, active,
+finished, and comparison counts—rather than retaining an unbounded runtime event history. `a`
+requests first-wins cancellation through the run-owned cancellation port.
 
-- **Requests** table — the triage table: verdict glyph, the request (name, method, payload type
-  — `json · sse · html · pdf` — and `×` for a matrix request), the per-cell strip, an
-  **assertions rollup** (counts only, `✓ 12 · ✗ 3 · ~ 1`; an errored request says
-  `nothing judged — no response`), and P50. A persistent **filter row** sits on top
-  (`/ filter…` shows the active query; `f fails only` is its toggle) and the panel carries the
-  **requests ⇄ rules** pill. Once the run finishes the table snaps **worst-first** (`✗ ! ~ ✓`
-  precedence, plan order within a tier); `o` flips it back to plan order. Requests deselected
-  at Prepare stay visible as dim `⊘ deselected` rows. **When you drill in, the panel switches
-  to the compact index** — one line per request (`✗ Price quote GET json · ✓✗✓`), a matrix
-  request's cells nested and selectable beneath it, the glyph legend at the bottom — and
-  switches back when you step out.
-- **Variants** table (appears when you open a matrix request) — **verdict** (`✓ PASS` /
-  `✗ FAIL` / `! ERROR`), case, HTTP code, time. Rule *names* live in the detail, never here.
-  A single-case request skips this and goes straight to the report.
-- **Detail** — the judging chrome sits ABOVE the evidence as its own block: the **call line**
-  (verdict · `HTTP 500 · time 96 ms · size 231 B · type application/json`), then the
-  **verdict card** — a red/green rounded card whose border carries the phrase
-  (`✗ N of M rules broke on this cell` / `✓ every rule held — N/N`) with every rule inside as
-  a **focusable row**: `tab` into the card, `enter` on a rule opens its record in the rules
-  pivot. The rows:
-  one line per held rule (with its provenance — `profile asserts.q`, `inline · <request>`,
-  `built-in`), two lines per broken rule (label, then the evidence), amber `~` advisories that
-  never fail the run, and the synthesized `reachable` row **last**. A dead cell gets the amber
-  **error card** instead: the verbatim error, attempts and retry policy in a spec table, a
-  "What this means" note, and the resolved request we sent (masked) — no fake N-of-M claim.
-  Below the card, the **evidence tree**: the resolved request and the response; a JSON body
-  pins each body rule's verdict at its exact site (a missing required field is planted red
-  where it should have been) and `n` / `p` hop between the broken anchors. `t` cycles the facet
-  — **all · request · response · headers · raw** — and `y` copies the raw exchange (request
-  line, headers, status line, body) to the clipboard with **secrets masked**.
+Terminal results are projected from the independently sanitized `RunArtifact`; widgets do not
+re-evaluate assertions, diffs, or the gate. TUI executions persist sanitized completed artifacts
+by default under the selected artifact root so the same run becomes available in Report.
 
-**`r` pivots the left column to the rules index**: every assertion rule the run carried, folded
-to one row per *written* rule across all cells — its per-cell `✓~✗!` strip, its provenance, and
-a `broke/enforced` count, worst rules first. `enter` opens the rule's **record card**: the spec
-table (target · op · severity · source), pill-shaped stat chips (`enforced · ✗ broke ·
-~ advisory · ✓ held · ! error`), and the **record table** — request · variant · outcome ·
-expected · got, one row per cell the rule belongs to; `enter` on a row jumps straight to that
-cell's detail in the requests pivot. `esc` unwinds the pivot before leaving Running. A dead
-cell's rules were attached but never evaluated: each record lists it as `! error ·
-never evaluated`, and it never increments a rule's broken count.
+## Shared results
 
-| Key       | Action |
-| --------- | ------ |
-| `↑ ↓`     | move / navigate the focused panel |
-| `tab`     | move focus — index · verdict card · record · evidence tree |
-| `enter`   | drill in · a verdict-card rule ↗ its record · a record row ↗ its cell |
-| `r`       | pivot the left column — requests ⇄ the assertion-rules index |
-| `o`       | flip the requests table worst-first ⇄ plan order |
-| `t`       | cycle the detail facet — all · request · response · headers · raw |
-| `n / p`   | hop to the next / previous broken check pinned in the body |
-| `y`       | copy the raw exchange to the clipboard (secrets masked) |
-| `bksp`    | collapse a split (or return to Prepare) |
-| `z`       | maximize the detail panel |
-| `f`       | filter the tables to failures only |
-| `/`       | filter by ANY attribute — name, method, payload type, case, status, or state (`fail`, `error`, `warn`, `pass`…) |
-| `a`       | abort the run and return to Prepare |
-| `s`       | save the finished run to masked JSON **and archive it as an assertions report** (visible in the Report tab; secrets redacted, even when echoed back) |
+Compare and Report mount the exact same result components. The only capability difference is that
+Compare is a live journey and Report is read-only. Both surfaces show:
 
-## Diff
+- the artifact-owned completion and gate verdict;
+- execution, assertion, comparison, and diff indexes;
+- stable cross-references between those entities;
+- outcomes, rule identities, bounded evidence summaries, attempts, exchanges, and decomposed
+  timing facts already present in the artifact.
 
-The signature screen — interactive, real-time, and, like Run, split into two states.
-
-### Prepare
-
-Choose **what** to diff before running. A checklist of every request (matrix requests fold to
-their cases, with a `will diff` count) and, at the top, the **baseline ⇄ candidate** pair. The
-Diff never silently replays the whole project — it runs exactly what you select. The CTA totals the
-work — `N requests · M cells × 2 envs = C calls` (a diff hits both sides) — and previews the
-equivalent `$ comparo diff --baseline <b> --candidate <c>`.
-
-| Key     | Action |
-| ------- | ------ |
-| `space` / `enter` | toggle a request or matrix case in / out of the diff |
-| `b` / `c` | pick the **baseline** / **candidate** environment in place |
-| `m`     | choose matrix **values** globally (deselecting a value excludes it everywhere) |
-| `x`     | diff the selected requests against the pair → **Running** |
-
-### Running
-
-While the pair is being fetched, a **running** panel (mirroring the Execution tab's) shows a
-progress bar over the plan and the cells in flight, so it's clear results aren't ready yet —
-rather than a blank or stale panel. It gives way to **Results** as soon as the diff completes.
-
-### Results
-
-A bordered **summary bar** — cell counts, the **gate verdict** with the locked precedence
-(`✗ FAIL` when any rule broke; `! ERROR` only when errors are the only failure; `✓ PASS`
-otherwise), and an inline `baseline Stable ● ⇄ candidate Canary ●` selector — over **one
-result set seen through three indexes**, cycled with `r` (the pill in the panel header shows
-which is active):
-
-- **requests** — every request with its matrix variants nested under it, one glyph each
-  (`✓` clean · `✗` a rule broke · `!` error · `⊘` not run — deselected at prepare). A
-  persistent **filter row** heads the index (`/ filter…` shows the active query; `f` is its
-  broken-only toggle). Selecting a cell shows the whole-request inspect: the **call ledger**
-  (a headered table — `baseline · <env>` vs `candidate · <env>` vs Δ — with hairline row
-  separators), the **outbound band** (see below), and the **verdict card** — a red or green
-  rounded card whose border carries the phrase itself (`✗ N of M rules broke on this cell` /
-  `✓ every rule held on this cell`) with the rules as selectable rows inside: broken rules
-  with their evidence on a red card, and on a **clean cell the green card lists every held
-  and silenced rule** — "clean" is a claim you can audit. Below: the **response-headers
-  well** (drifts as −/+, silenced names annotated with their rule) and the **body** — the
-  git-style well for JSON (`v` flips unified ⇄ side-by-side), the **event sequence** for a
-  stream, or the error panel (verbatim engine error, attempts, retry policy, the kept
-  single-sided baseline) for a dead cell. A streamed cell lists **every event as a
-  selectable row** in the card (`✗ event 3 · price.tick`); `enter` opens that event in
-  place — its SSE envelope (id · event · retry, drift marked) and a real per-event **data
-  diff** with the git gutter.
-- **rules** — every effective rule with its record: **broken** in red on top, then **passed**
-  (green — a held rule is auditable too), **ignored** (grey — what the profile chose not to
-  check), and **unused** (matched nothing anywhere: a typo'd path never fails a gate).
-  Selecting a rule shows its spec table, pill-shaped stat chips, and the **record table** —
-  request and variant in their own columns, outcome, detail — one row per cell it touched.
-- **fields** — only the broken paths, one row per field however many cells it hit, each
-  naming its governing rule. The occurrences are the same headered table — request · variant
-  · baseline · candidate — and the tail card explains the drift, including the exact ignore
-  rule `i` would write.
-
-**The traceability loop:** `enter` jumps across indexes — a broken cell lands on its broken
-rule in the rules index, a rule lands on the cell it broke, a field lands on its cell — with
-a `from X — esc returns` crumb; `esc` pops the jump before it ever means "back to Prepare".
-`/` filters the active index, `f` collapses it to broken rows only, and `n`/`p` hop between
-red rows.
-
-| Key   | Action |
-| ----- | ------ |
-| `↑ ↓` | move the active index — the right panel inspects the selection |
-| `enter` | jump across indexes (cell ↔ rule, field → cell) with a return crumb |
-| `r`   | cycle the index: requests → rules → fields |
-| `/`   | filter the active index — names, methods, cases, and state words (`drift`, `error`, `clean`) |
-| `f`   | show only broken / failing rows |
-| `n / p` | hop to the next / previous red row |
-| `v`   | toggle unified ⇄ side-by-side |
-| `o`   | expand / collapse the **outbound band** (see below) |
-| `i`   | **silence** the selected drift — writes an ignore rule into its committed DiffProfile |
-| `s`   | **save** the diff to the archive as a report (redacted; re-openable in the Report tab) |
-| `esc` | pop a cross-index jump, else return to **Prepare** |
-
-**The outbound band** answers the first triage question — *did we even send the same request
-to both sides?* comparo resolves the same request against each environment, so the outbound
-calls differ exactly where env config differs (host, an env var in a query param, an auth
-header). The band shows one line per cell: `✓ same request sent to both sides — any response
-drift is the service's`, or `⚠ we sent DIFFERENT requests · N fields (url, x-tenant…)` — in
-which case some drift may be your config, not the service. `o` expands it into the full
-side-by-side outbound diff (values masked) and collapses it back.
-
-Silencing is a reviewable act: `i` opens a confirmation naming the exact file, then appends a
-`{path, mode: ignore}` rule to the profile's YAML (comments preserved), so quieting a diff shows
-up in `git diff`. Re-run to confirm it's gone. Each finished diff is archived to the
-[Report](#report).
-
-## Execution
-
-The Execution tab runs an **ExecutionProfile** — one declarative run that asserts **both**
-environments *and* diffs the pair — as a **self-contained flow of five in-tab views**. It is
-**Run + Diff + Report consulted together**; nothing ever redirects you to another tab.
-
-### Launch
-
-The tab opens on a profile picker. The left **PROFILES** panel lists every ExecutionProfile; the
-right **SETUP** panel previews the highlighted one before anything is sent: the `baseline ⇄
-candidate` pair, a segmented `mode` toggle (`assert` / `diff` / `both`), the `select` clause
-(tags with `✓` / `☐`), and a **plan preview** that counts the exact cells that will run
-(`will run 3 cells`).
-
-| Key      | Action |
-| -------- | ------ |
-| `enter`  | launch the highlighted profile |
-| `space`  | toggle the highlighted profile / selection |
-| `t`      | tags · `m` mode |
-| `esc` / `⌫` | close · `q` quit |
-
-### Running
-
-A first-class in-tab transition: a progress bar over the whole plan, the cell **in flight on both
-sides** (`stable ◐  candidate ◐`), and the finished cells with early verdicts. `esc` cancels —
-**nothing is written until it finishes**.
-
-### Results
-
-A stacked read-out from global to granular:
-
-- an **execution header** (the profile, `baseline ● / candidate ●`, `mode both`, the `select`
-  clause, the counted plan);
-- two **assertion roll-ups** side by side — assertions are evaluated **independently on both
-  environments**, each headed with a `N ✓ · N ✗ · N !` count;
-- a **diff panel** — full tri-state counts and a **drift index naming which request/cell** to
-  investigate (skipped `◐` fields stay visible);
-- a **gate** (`assertions ∧ diff`) that separates the two: `assertions pass on both sides … but
-  N untriaged drifts block the run`, with `exit code N — matches headless comparo exec <id>`.
-
-| Key      | Action |
-| -------- | ------ |
-| `↑ ↓`    | move through the drift sections |
-| `enter`  | drill into a drifted **cell** |
-| `d`      | open the run's scoped **diff** (in-tab) |
-| `e`      | open the run's **report** (in-tab) · `s` save · `r` re-run |
-| `esc` / `⌫` | close · `q` quit |
-
-### Cell detail
-
-`enter` on a drifted cell drills in (breadcrumb `profile › request › cell`), **within the tab**:
-the cell's baseline and candidate assertions, a plain-language verdict, and the scoped git-style
-**body diff** — reusing the Diff component verbatim. `v` flips unified ⇄ side-by-side, `i`
-silences the field, `esc` steps back.
-
-### In-flow diff
-
-`d` opens the run's **own scoped diff in place** — every drifted cell's body diff, stacked, with
-the matrix grouping made explicit (one field, two cells, one bug) — never redirecting to the
-shared Diff tab (which would lose the execution context). `v` toggles unified ⇄ side-by-side;
-`esc` returns.
-
-The run is auto-archived on launch, so it is immediately re-openable from the [Report](#report)
-tab.
+The first migrated result slice is deliberately manifest-only. Full response bodies are still
+captured and sanitized through the bounded spool/storage abstraction according to execution
+policy, but this surface does not eagerly load detached blobs. A later lazy content-lease widget
+can add body inspection without changing the result model or allowing terminal memory to scale
+with all responses.
 
 ## Report
 
-The Report tab is a **browser over saved reports** archived under `<data>/.reports/` (configurable
-via `spec.report.dir`, default `.reports`), fed by executions and by saved diffs and runs (the
-`s` key). Its key idea: a saved report doesn't just restate numbers — it **replays through the
-same live Diff and Run panels**, read-only, so re-reading a past run feels exactly like the live
-screens.
-
-### Browse
-
-- **Left** — a list of **every** saved report, each row carrying its **kind** (`◆` execution,
-  `◇` diff/run), `when`, `envs`, `gate`, and drift/error counts; gate-coloured, newest first, with
-  `/` to filter by id, envs, kind, or gate.
-- **Right** — a reading pane for the highlighted report: a gate banner, stat pills (`calls · same
-  · drift · error · skipped` — skip stays visible so green never means "full coverage"), the
-  baseline and candidate **assertion roll-ups**, and a per-request **DIFF BREAKDOWN** whose legend
-  **names the drifted field(s)**.
-
-### Analyze (in-place replay)
-
-`enter` opens the report's full analysis **inside the Report tab** — never jumping to another tab:
-
-- a saved **diff** reopens in the **Diff screen's layout** — the drift index, a **call ledger**
-  (baseline vs candidate status / latency / size, with the Δ), and the git-style **body-diff
-  well** replaying the real before/after values and the true per-field diff modes persisted with
-  the report (no requests are re-sent);
-- a saved **run / execution** reopens in the **Run screen's layout** — the request rows plus the
-  detail tree (metrics, request, response, checks), rebuilt from disk.
-
-A purple **"analyzing a saved …"** banner and a `read-only` marker make clear it is a replay.
-`esc` returns to the list.
-
-| Key       | Action |
-| --------- | ------ |
-| `↑ ↓`     | move through saved reports |
-| `enter`   | analyze the report in place (Diff/Run panels, read-only) |
-| `o`       | export a Markdown summary |
-| `d`       | delete the saved report (after confirmation — it removes a file) |
-| `r`       | reload the archive directory from disk |
-| `/`       | filter by id, envs, kind, or gate |
-| `esc` / `⌫` | back to the list · `q` quit |
-
-The gate shown here is the same one the CLI and the GitHub Action enforce, so what you read
-matches CI exactly.
+Report enumerates a caller-bounded artifact directory and authenticates each candidate's completion
+marker, manifest, result document, and declared blob metadata before listing it. Corrupt entries
+are isolated as typed failures; they neither hide valid siblings nor expose parser, path, or
+exception text. Selecting a valid entry verifies it again and opens the shared read-only result
+surface. It never resends HTTP requests. `r` refreshes the archive.
 
 ## Settings
 
-App-level settings (installed globally, so they're about comparo, not the current project). A left
-list of sections, a detail panel on the right; move with `↑ ↓`. Most sections are read-only — a few
-carry one interactive control, toggled with `enter`, and Security runs a live check on `t`.
-Preferences persist to `~/.config/comparo/config.toml` (XDG-respecting).
+Settings contains only TUI concerns:
 
-| Section | What it shows |
-| ------- | ------------- |
-| **About** | version, author, license, links |
-| **Project** | a read-only summary of the loaded project (counts, manifest, default env, concurrency) |
-| **Security & Redaction** | the never-leak guarantee, plus a live **self-check** — `t` runs a canary secret through **every sink** (TUI, saved runs/reports, JUnit/SARIF/JSON/Markdown, curl copy, crash report) and shows a ✓ per sink. Same check as `comparo doctor` |
-| **Appearance** | theme, and the default body-diff layout (`enter` flips unified ⇄ side-by-side) |
-| **Keybindings** | a read-only cheat sheet of the global keys |
-| **Updates & Privacy** | an **opt-in** check for updates — `enter` toggles it. When on, comparo fetches PyPI's public version JSON once at launch (a version string, **no telemetry**) and toasts if a newer release is out |
-| **Plugins** | a placeholder — plugins are a post-alpha extension point |
-| **Engine** | `core` is the whole engine; the two import-linter contracts, `comparo/v1`, docs |
-| **Behavior** | startup prefs — confirm-on-quit (`enter`), default tab, default diff layout |
+- system, dark, or light theme;
+- standard or dense layout;
+- mouse support (applied on the next launch when changed at runtime);
+- the preferred default workspace.
 
-The version check is **off by default** — it's the one outbound call comparo makes for itself, so
-you enable it consciously. It sends nothing about you or your projects.
+These preferences never change environment selection, execution policy, classification, limits,
+assertions, diff rules, or project files. Persistence of terminal preferences is not part of the
+initial migrated slice; settings remain active for the current process.
 
-## When a project won't load
+## Responsive and accessible semantics
 
-If the loader finds problems, the TUI (like `comparo validate`) shows every diagnostic grouped
-by file, each loader hint rendered as **the fix to apply** (`did you mean 'schema.checkout'?`).
-Press `r` to re-check after editing — fix a file, press `r`, watch the list shrink to zero.
+All components use the same terminal-cell breakpoints:
 
-## Conventions that hold everywhere
+| Width | Layout |
+| ---: | --- |
+| `< 88` | compact, with index and detail stacked |
+| `88–139` | standard, with a 36-column index rail |
+| `>= 140` | wide, with a 44-column index rail |
 
-- **`q` always quits; `esc`/`⌫` is back.** `q` is never a "back" or "close" key on any screen or
-  modal — it always exits the app. Stepping back a level is `esc` (or `⌫`), and every footer
-  reflects it.
-- **Tabs are self-contained.** A screen never redirects you to a different tab to show a result;
-  it pushes a sub-view in place.
-- **Secrets are never shown.** Any declared secret value is masked in every display and redacted
-  from every saved artifact — saved runs, `.reports/*.json`, exports, and CI reports — even when a
-  server echoes it back, and even when it appears as a JSON key or field path.
-- **The accent border marks the active panel;** `tab` cycles panels; `?` lists every key.
-- **Nothing is hidden silently.** An active filter is shown on the panel; skipped diff fields are
-  counted; a matrix value turned off still appears (as `✕ matrix off`) rather than vanishing.
+One semantic catalog owns every status glyph, label, sort rank, and CSS class. Color is always
+paired with a glyph and label. All untrusted presentation text has terminal control and bidi
+controls contained before it reaches a widget; Rich markup is disabled for data-bearing text.
+
+## Security and failure behavior
+
+- Widgets consume only safe application projections, never live value or secret objects.
+- The TUI package has no backend capability or business rule; deleting it leaves execution,
+  evaluation, sanitization, persistence, and reporting intact.
+- Blocking local compilation and artifact reads run off the event loop behind bounded services.
+- Backend and unexpected UI failures collapse to closed codes or fixed messages. Textual's default
+  value-bearing traceback renderer is replaced at the application boundary.
+- Shutdown cancels unfinished work, waits for cleanup, discards prepared handles, and closes the
+  backend idempotently.
+
+## Deferred scope
+
+Stateful Scenario execution remains Step 12. Its future placement is already stable: definitions
+appear in Explorer, active execution appears in Compare, and persisted outcomes appear in Report.
+Browser automation is outside Comparo's scope; WebSocket and gRPC transports and a public plugin
+system remain deferred.

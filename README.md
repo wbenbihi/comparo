@@ -8,9 +8,9 @@ explicit diff profiles, and can reduce those facts into a CI gate verdict.
 
 ## Status
 
-Comparo is alpha software. The production core and local CLI have been rebuilt around the
-`comparo/v1alpha1` configuration lineage; the former prototype is quarantined and is not a
-compatibility target. The TUI and dedicated CI integration have not yet been migrated.
+Comparo is alpha software. The production core, local CLI, and terminal UI have been rebuilt
+around the `comparo/v1alpha1` configuration lineage; the former prototype is quarantined and is
+not a compatibility target. Dedicated CI integration has not yet been migrated.
 
 The executable subset is deliberately fail-closed: configuration can describe more of the future
 model than the first production runtime implements, and an execution command rejects unsupported
@@ -29,6 +29,8 @@ uv run --frozen comparo --help
 uv run --frozen comparo validate --config comparo.yaml
 uv run --frozen comparo plan --config comparo.yaml --format json
 uv run --frozen comparo run --config comparo.yaml --env staging
+uv run --frozen comparo
+uv run --frozen comparo tui --config comparo.yaml
 ```
 
 Local execution defaults to the explicitly permissive trusted-local authority. A project used in
@@ -43,8 +45,9 @@ uv run --frozen comparo diff \
   --candidate staging
 ```
 
-See the [CLI reference](docs/cli.md) for commands, trust semantics, exit codes, persistence, and
-runtime limits.
+See the [CLI reference](docs/cli.md) for headless commands, trust semantics, exit codes,
+persistence, and runtime limits, and the [TUI guide](docs/tui.md) for the four-workspace terminal
+journey.
 
 ## Architecture
 
@@ -60,6 +63,7 @@ networking, persistence, CLI, and TUI concerns are adapters around that core.
 - [Production HTTP adapter](https://github.com/wbenbihi/comparo/blob/main/docs/production-http-adapter.md)
 - [Sanitized artifacts, persistence, and reporters](https://github.com/wbenbihi/comparo/blob/main/docs/artifacts-and-reporters.md)
 - [CLI reference](https://github.com/wbenbihi/comparo/blob/main/docs/cli.md)
+- [Terminal UI](https://github.com/wbenbihi/comparo/blob/main/docs/tui.md)
 - [Accepted architecture decisions](https://github.com/wbenbihi/comparo/blob/main/docs/decisions/README.md)
 
 The canonical product promise, security boundary, configuration model, HTTP semantics, assertion
