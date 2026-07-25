@@ -41,7 +41,7 @@ The manifest retains:
 
 - tool, run, invocation, configuration, sanitizer, and credential-catalog versions;
 - Project, ExecutionPolicy, ArtifactProfile, and RedactionProfile provenance where one effective
-  profile applies, together with configuration and plan fingerprints;
+  profile applies, together with credential-safe configuration and plan fingerprints;
 - terminal completion and gate outcomes without collapsing absence into success;
 - every execution, attempt, redirect exchange, comparison, assertion fact, and diff fact in
   deterministic order;
@@ -53,9 +53,17 @@ Artifact values use a closed tagged JSON vocabulary. Artifact DTOs do not reuse 
 configuration structures, accept arbitrary mappings, or contain `SensitiveValue`, body handles,
 exceptions, or adapter types. A top-level artifact is valid only when its summaries exactly
 conserve retained outcomes, all comparison sides and coverage owners refer to retained executions,
-stable resource identities are unique, every embedded definition is declared, occurrence
-identifiers are unique in their scope, and its declared blobs exactly match all body references,
+stable resource identities are unique, every embedded definition is declared, attempt, exchange,
+fact, application, and evidence occurrence identifiers are unique across the whole artifact, and
+its declared blobs exactly match all body references,
 including terminal pre-send requests.
+
+Configuration fingerprints replace declared secret containers, reusable `Value` payloads, typed
+authentication, cookies, known credential headers, and known credential query values with a fixed
+sensitive sentinel before hashing. This prevents exported fingerprints from becoming a
+confirmation oracle for those credential values while public configuration changes still affect
+identity. Authors must still classify application-specific confidential literals as secrets; no
+generic tool can infer every business-sensitive field.
 
 ## Sanitization
 
@@ -64,6 +72,17 @@ the HTTP graph before it is sealed. It masks exact UTF-8, URL-encoded, form-enco
 and Base64 representations, including matches split across arbitrary stream chunks. Mandatory
 credential fields are masked as complete values: authorization headers, cookies, `Set-Cookie`,
 and the built-in credential query-name catalog cannot be weakened by project configuration.
+The artifact DTOs enforce that fixed credential floor again during construction and decoding;
+the runtime registry and literal matcher provide the broader backstop for project-declared and
+observed sensitive values.
+
+Literal matching has four explicit caller-owned ceilings: retained pattern count, aggregate
+retained pattern bytes, bytes in one source sensitive value, and nodes in one structured sensitive
+value. Registration and JSON rendering are incremental and iterative. Exhausting any ceiling, or
+encountering any unsupported sensitive value, wipes and closes the boundary and rejects safe
+capture with a value-free failure code. Binary patterns remain available to byte-stream
+sanitization but are excluded from text matching when they are not valid UTF-8, so they cannot
+split an unrelated Unicode code point.
 
 Application-specific redaction rules are fail-closed in this initial artifact implementation. A
 custom rule causes its selected source to be omitted conservatively if fine-grained application
@@ -76,6 +95,10 @@ Body source truth and artifact persistence truth remain separate. The artifact r
 source was complete, remotely truncated, budget-exhausted, storage-failed, cancelled,
 decode-failed, policy-omitted, or explicitly truncated, independently from whether sanitized
 content was retained completely, partially, or omitted. Omitted content has no raw digest.
+If a request-source or response-body descriptor is itself sensitive, capture never opens or reads
+it: the whole source is omitted (or the artifact is rejected by policy), and neither its digest nor
+its exact byte count is retained. Policy-wide and custom body omission likewise withhold exact
+length metadata.
 
 ## Bounded blob staging
 
@@ -139,13 +162,16 @@ publication ceiling:
   than reinterpreting individual rule facts.
 - SARIF 2.1.0 emits adverse assertion/diff facts and incomplete artifact coverage. Rule identities
   include their definition identity, analyzer success is distinct from a failed Comparo gate, and
-  automation/finding fingerprints exclude per-run occurrence identifiers.
+  automation/finding fingerprints exclude per-run occurrence identifiers and whole-plan hashes.
+  Correlation uses stable project/policy identities plus subject, Environment, Matrix coordinate,
+  rule, and logical occurrence coordinates, so unrelated earlier findings do not renumber later
+  fingerprints.
 - Markdown uses fixed sections for overview, gate, coverage, executions, comparisons, findings,
   and budgets, without embedding detached blob bodies.
 
 Presentation helpers remove terminal controls and escape their target syntax. Reporter errors and
 storage errors carry only closed, value-free codes; caught parser, filesystem, and rendering error
-text is never copied into a reportable outcome.
+text is never copied into a reportable outcome or retained through exception cause/context links.
 
 The report ceiling prevents partial publication; it is not an independent allocator limit because
 each reporter constructs one complete output before the final byte-count check. Reporter memory is
@@ -159,7 +185,10 @@ configuration, planning, selection, evaluation, transport, or storage adapters.
 ## Deferred integration
 
 Step 10 will bind effective `ArtifactProfile` and `RedactionProfile` configuration to these typed
-policies, apply `persist` conditions, select destinations, and expose artifact/report commands.
+policies, including per-subject profile identity and runtime/CLI overrides, apply `persist`
+conditions, select destinations, and expose artifact/report commands. Step 9 accepts only the
+single effective profile shape it can prove; Step 10 must reject rather than publish any execution
+whose effective policy binding cannot be represented exactly.
 Retention policies, interrupted-staging discovery and cleanup commands, archives, encryption at
 rest, Windows storage, and historical artifact conversion remain explicit future capabilities;
 none is silently approximated by this module.

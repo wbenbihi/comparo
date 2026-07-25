@@ -70,8 +70,10 @@ hashes remain sensitive unless an explicit policy says their disclosure is safe.
 
 ArtifactProfile controls which sanitized request, response, body, and evidence data is persisted
 and the explicit behavior on capture limits. The default captures raw content transiently and
-persists complete sanitized content. Raw persistence is not a normal project capability and
-requires external ExecutionPolicy authority if introduced.
+persists complete sanitized content when its source descriptor can be proven safe to read. A
+sensitive descriptor is conservatively omitted without reading or retaining its exact size, or
+rejects artifact creation under a fail-closed policy. Raw persistence is not a normal project
+capability and requires external ExecutionPolicy authority if introduced.
 
 `persist` supports always, on-gate-failure, and never, with complete sanitized persistence as the
 default. Redaction and diff selection are independent: ignored comparison content is not
