@@ -69,7 +69,9 @@ from comparo.core.domain.http.url import Ipv6Host
 from comparo.core.domain.http.url import NetworkDestination
 from comparo.core.domain.http.url import ProxyResolvedRoute
 from comparo.core.domain.http.url import ResolvedRoute
+from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
@@ -96,6 +98,8 @@ _PROTOCOL_FAILED = DiagnosticCode(value="http.protocol-failed")
 _TRAILERS_UNAVAILABLE = DiagnosticCode(value="http.response-trailers-unavailable")
 _TRANSPORT_CANCELLED = DiagnosticCode(value="http.transport-cancelled")
 _TRANSPORT_FAILED = DiagnosticCode(value="http.transport-failed")
+_ATTEMPT_TOTAL_TIMEOUT = DiagnosticCode(value="http.attempt-total-timeout")
+_EXECUTION_TOTAL_TIMEOUT = DiagnosticCode(value="http.execution-total-timeout")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,11 +154,20 @@ class _PoolKey:
     proxy: ProxyPolicy
 
 
+@dataclass(frozen=True, slots=True)
+class _TotalDeadline:
+    """The earliest active aggregate deadline for one exchange occurrence."""
+
+    expires_at: float
+    code: DiagnosticCode
+
+
 class HttpcoreTransport:
     """Perform one authorized exchange with no implicit redirect, retry, or ambient state."""
 
     __slots__ = (
         "_active",
+        "_attempt_started",
         "_body_store",
         "_capture",
         "_closed",
@@ -162,6 +175,7 @@ class HttpcoreTransport:
         "_condition",
         "_config",
         "_connection_ids",
+        "_execution_started",
         "_next_connection_id",
         "_pool_lock",
         "_pools",
@@ -195,6 +209,8 @@ class HttpcoreTransport:
         )
         self._pools: dict[_PoolKey, httpcore.AsyncConnectionPool] = {}
         self._connection_ids: dict[tuple[DefinitionRef, int], str] = {}
+        self._attempt_started: dict[AttemptId, float] = {}
+        self._execution_started: dict[EnvironmentExecutionId, float] = {}
         self._next_connection_id = 1
         self._pool_lock = asyncio.Lock()
         self._condition = asyncio.Condition()
@@ -210,22 +226,18 @@ class HttpcoreTransport:
         trace = ExchangeTraceRecorder(idle_timeout=_seconds(request.request.policies.timeouts.idle))
         response_observation: ResponseObservation | None = None
         failure: TransportFailure | None = None
+        deadline = self._total_deadline(request)
         try:
-            wire = self._renderer.render(request.request)
-            pool = await self._pool(request)
-            extensions = self._extensions(request, trace)
-            async with pool.stream(
-                wire.method,
-                _routed_url(wire, request.route),
-                headers=wire.headers,
-                content=wire.content,
-                extensions=extensions,
-            ) as response:
-                response_observation, failure = await self._observe_response(
-                    request,
-                    response,
-                    trace,
-                )
+            if deadline is None:
+                response_observation, failure = await self._perform_exchange(request, trace)
+            else:
+                timeout = max(0.0, deadline.expires_at - asyncio.get_running_loop().time())
+                async with asyncio.timeout(timeout) as timeout_scope:
+                    response_observation, failure = await self._perform_exchange(request, trace)
+                if timeout_scope.expired():
+                    failure = _total_timeout(deadline.code)
+        except TimeoutError:
+            failure = _total_timeout(cast("_TotalDeadline", deadline).code)
         except asyncio.CancelledError as error:
             failure = _map_failure(error, trace)
         except (
@@ -253,6 +265,49 @@ class HttpcoreTransport:
             timings=timings,
         )
 
+    async def _perform_exchange(
+        self,
+        request: AuthorizedExchangeRequest,
+        trace: ExchangeTraceRecorder,
+    ) -> tuple[ResponseObservation | None, TransportFailure | None]:
+        """Perform one exchange so aggregate deadline cancellation can retain partial facts."""
+        wire = self._renderer.render(request.request)
+        pool = await self._pool(request)
+        extensions = self._extensions(request, trace)
+        async with pool.stream(
+            wire.method,
+            _routed_url(wire, request.route),
+            headers=wire.headers,
+            content=wire.content,
+            extensions=extensions,
+        ) as response:
+            return await self._observe_response(request, response, trace)
+
+    def _total_deadline(self, request: AuthorizedExchangeRequest) -> _TotalDeadline | None:
+        """Return the earliest absolute attempt/execution deadline for this occurrence."""
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        occurrence = request.occurrence
+        attempt_start = self._attempt_started.setdefault(occurrence.attempt_id, now)
+        execution_start = self._execution_started.setdefault(occurrence.execution_id, now)
+        timeouts = request.request.policies.timeouts
+        candidates: list[_TotalDeadline] = []
+        if type(timeouts.attempt_total) is Duration:
+            candidates.append(
+                _TotalDeadline(
+                    expires_at=attempt_start + _duration_seconds(timeouts.attempt_total),
+                    code=_ATTEMPT_TOTAL_TIMEOUT,
+                )
+            )
+        if type(timeouts.execution_total) is Duration:
+            candidates.append(
+                _TotalDeadline(
+                    expires_at=execution_start + _duration_seconds(timeouts.execution_total),
+                    code=_EXECUTION_TOTAL_TIMEOUT,
+                )
+            )
+        return min(candidates, key=lambda item: item.expires_at) if candidates else None
+
     async def close(self) -> None:
         """Reject new exchanges, await in-flight work, and close every isolated pool."""
         async with self._condition:
@@ -266,6 +321,8 @@ class HttpcoreTransport:
         async with self._pool_lock:
             pools = tuple(self._pools.values())
             self._pools.clear()
+            self._attempt_started.clear()
+            self._execution_started.clear()
         cleanup = asyncio.create_task(self._finish_close(pools))
         try:
             await asyncio.shield(cleanup)
@@ -525,6 +582,15 @@ def _response_fields(
 def _announces_trailers(fields: list[tuple[bytes, bytes]]) -> bool:
     """Fail closed when the dependency cannot expose explicitly announced trailers."""
     return any(name.lower() == b"trailer" and bool(value.strip()) for name, value in fields)
+
+
+def _total_timeout(code: DiagnosticCode) -> TransportFailure:
+    """Represent aggregate deadline expiry without inventing a synthetic HTTP status."""
+    return TransportFailure(
+        phase=FailurePhase.CANCELLATION,
+        code=code,
+        retryable=False,
+    )
 
 
 def _protocol(response: httpcore.Response) -> HttpProtocol:

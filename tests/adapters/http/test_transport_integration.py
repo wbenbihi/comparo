@@ -20,11 +20,14 @@ from comparo.adapters.http.transport import HttpcoreTransportConfig
 from comparo.adapters.http.transport import ResponseClassification
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.fields import HeaderText
+from comparo.core.domain.http.policies import UnlimitedTimeout
+from comparo.core.domain.http.response_bodies import CancelledCapture
 from comparo.core.domain.http.response_bodies import CompleteCapture
 from comparo.core.domain.http.response_bodies import ResponseEntityBody
 from comparo.core.domain.http.timings import Measured
 from comparo.core.domain.http.timings import NotPerformed
 from comparo.core.domain.http.timings import NotPerformedReason
+from comparo.core.domain.http.transport import FailurePhase
 from comparo.core.domain.http.url import DirectResolvedRoute
 from comparo.core.domain.http.url import DnsHost
 from comparo.core.domain.http.url import HttpAuthority
@@ -114,7 +117,15 @@ def _config() -> HttpcoreTransportConfig:
     )
 
 
-def _authorized(port: int, exchange: int) -> AuthorizedExchangeRequest:
+def _authorized(
+    port: int,
+    exchange: int,
+    *,
+    attempt: int = 1,
+    execution: int = 1,
+    attempt_total: int | None = 5_000_000_000,
+    execution_total: int | None = 5_000_000_000,
+) -> AuthorizedExchangeRequest:
     effective = request()
     effective = msgspec.structs.replace(
         effective,
@@ -124,6 +135,22 @@ def _authorized(port: int, exchange: int) -> AuthorizedExchangeRequest:
             authority=HttpAuthority(
                 host=DnsHost(value="service.example"),
                 port=HttpPort(value=port),
+            ),
+        ),
+        policies=msgspec.structs.replace(
+            effective.policies,
+            timeouts=msgspec.structs.replace(
+                effective.policies.timeouts,
+                attempt_total=(
+                    UnlimitedTimeout()
+                    if attempt_total is None
+                    else Duration(nanoseconds=attempt_total)
+                ),
+                execution_total=(
+                    UnlimitedTimeout()
+                    if execution_total is None
+                    else Duration(nanoseconds=execution_total)
+                ),
             ),
         ),
     )
@@ -138,10 +165,37 @@ def _authorized(port: int, exchange: int) -> AuthorizedExchangeRequest:
         effective,
         route=DirectResolvedRoute(destination=destination),
         request_occurrence=occurrence(
+            execution=execution,
+            attempt=attempt,
             exchange=exchange,
             environment=effective.environment.identity,
         ),
     )
+
+
+async def _start_slow_body_server() -> _LocalServer:
+    requests: list[bytes] = []
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+            requests.append(head)
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
+            await writer.drain()
+            await asyncio.sleep(0.05)
+            writer.write(b"def")
+            await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(handle, host="127.0.0.1", port=0)
+    sockets = server.sockets
+    assert sockets is not None
+    port = int(sockets[0].getsockname()[1])
+    return _LocalServer(server=server, requests=requests, response=b"", port_value=port)
 
 
 def test_real_transport_preserves_response_facts_decodes_gzip_and_reuses_pool(
@@ -211,6 +265,131 @@ def test_real_transport_preserves_response_facts_decodes_gzip_and_reuses_pool(
             f"GET / HTTP/1.1\r\nHost: service.example:{server.port}\r\n".encode("ascii")
         )
         assert b"Accept-Encoding: gzip\r\n" in server.requests[0]
+
+        await transport.close()
+        await store.close()
+        await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_attempt_total_deadline_preserves_cancelled_partial_response(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        server = await _start_slow_body_server()
+        store = _store(tmp_path)
+        config = _config()
+        transport = HttpcoreTransport(
+            body_store=store,
+            config=config,
+            tls=ExplicitTlsContextProvider(),
+            budgets=DefaultCaptureBudgetProvider(config.capture, default_budget_origin()),
+        )
+        result = await transport.exchange(
+            _authorized(
+                server.port,
+                701,
+                attempt_total=10_000_000,
+                execution_total=100_000_000,
+            )
+        )
+
+        assert result.response is not None
+        assert result.failure is not None
+        assert result.failure.phase is FailurePhase.CANCELLATION
+        assert result.failure.code.value == "http.attempt-total-timeout"
+        assert type(result.response.body) is ResponseEntityBody
+        assert type(result.response.body.capture) is CancelledCapture
+        assert result.response.body.handle is not None
+        captured = b"".join(
+            [chunk async for chunk in store.open_response(result.response.body.handle)]
+        )
+        assert captured == b"abc"
+
+        await asyncio.sleep(0.06)
+        await transport.close()
+        await store.close()
+        await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_attempt_and_execution_deadlines_span_hops_and_attempts(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        response_bytes = b"HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n"
+        server = await _start_server(response_bytes)
+        store = _store(tmp_path)
+        config = _config()
+        transport = HttpcoreTransport(
+            body_store=store,
+            config=config,
+            tls=ExplicitTlsContextProvider(),
+            budgets=DefaultCaptureBudgetProvider(config.capture, default_budget_origin()),
+        )
+
+        first = await transport.exchange(
+            _authorized(
+                server.port,
+                801,
+                attempt=11,
+                execution=11,
+                attempt_total=20_000_000,
+                execution_total=100_000_000,
+            )
+        )
+        assert first.failure is None
+        await asyncio.sleep(0.03)
+        expired_attempt = await transport.exchange(
+            _authorized(
+                server.port,
+                802,
+                attempt=11,
+                execution=11,
+                attempt_total=20_000_000,
+                execution_total=100_000_000,
+            )
+        )
+        assert expired_attempt.response is None
+        assert expired_attempt.failure is not None
+        assert expired_attempt.failure.code.value == "http.attempt-total-timeout"
+
+        initial = await transport.exchange(
+            _authorized(
+                server.port,
+                803,
+                attempt=12,
+                execution=12,
+                attempt_total=10_000_000,
+                execution_total=20_000_000,
+            )
+        )
+        assert initial.failure is None
+        await asyncio.sleep(0.03)
+        expired_execution = await transport.exchange(
+            _authorized(
+                server.port,
+                804,
+                attempt=13,
+                execution=12,
+                attempt_total=10_000_000,
+                execution_total=20_000_000,
+            )
+        )
+        assert expired_execution.response is None
+        assert expired_execution.failure is not None
+        assert expired_execution.failure.code.value == "http.execution-total-timeout"
+
+        unlimited = await transport.exchange(
+            _authorized(
+                server.port,
+                805,
+                attempt=14,
+                execution=14,
+                attempt_total=None,
+                execution_total=None,
+            )
+        )
+        assert unlimited.failure is None
+        assert len(server.requests) == 3
 
         await transport.close()
         await store.close()
