@@ -35,6 +35,17 @@ from comparo.application.preflight import ProjectPlanResult as ProjectPlanResult
 from comparo.application.preflight import ProjectPreparationResult as ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan as inspect_project_plan
 from comparo.application.preflight import prepare_project_plan as prepare_project_plan
+from comparo.application.render_preview import RenderedBodyOmission as RenderedBodyOmission
+from comparo.application.render_preview import RenderedCookie as RenderedCookie
+from comparo.application.render_preview import RenderedHeader as RenderedHeader
+from comparo.application.render_preview import RenderedRequestPreview as RenderedRequestPreview
+from comparo.application.render_preview import RenderPreviewRequest as RenderPreviewRequest
+from comparo.application.render_preview import RenderPreviewResult as RenderPreviewResult
+from comparo.application.render_preview import RenderPreviewSettings as RenderPreviewSettings
+from comparo.application.render_preview import (
+    RequestBodyOmissionReason as RequestBodyOmissionReason,
+)
+from comparo.application.render_preview import render_prepared_requests as render_prepared_requests
 from comparo.application.runtime_capabilities import (
     RuntimeCapabilityPreflightResult as RuntimeCapabilityPreflightResult,
 )
@@ -57,6 +68,14 @@ __all__ = (
     "ProjectPlanRequest",
     "ProjectPlanResult",
     "ProjectPreparationResult",
+    "RenderPreviewRequest",
+    "RenderPreviewResult",
+    "RenderPreviewSettings",
+    "RenderedBodyOmission",
+    "RenderedCookie",
+    "RenderedHeader",
+    "RenderedRequestPreview",
+    "RequestBodyOmissionReason",
     "RuntimeCapabilityPreflightResult",
     "SecurityCheck",
     "build_environment_snapshots",
@@ -72,6 +91,7 @@ __all__ = (
     "prepare_project_plan",
     "read_artifact_blob",
     "render_artifact_report",
+    "render_prepared_requests",
     "run_security_checks",
     "verify_artifact",
 )
