@@ -41,6 +41,7 @@ from comparo.core.domain.provenance import ResolutionStepOutcome
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.provenance import ValueProviderIdentity
 from comparo.core.domain.scopes import RunScope
+from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.value_references import SymbolPath
@@ -262,6 +263,8 @@ def test_supported_status_profiles_run_real_kernels_and_strict_gate() -> None:
     )
     assert result.gate.result.verdict is GateVerdict.PASSED
     assert evaluation.gate_profile is not None
+    assert evaluation.snapshot_requirements.body_views == ()
+    assert not evaluation.snapshot_requirements.stream
 
 
 @pytest.mark.parametrize("inline", [False, True])
@@ -276,6 +279,8 @@ def test_supported_body_and_synthesized_rule_ids_bind(inline: bool) -> None:
     assert outcome.diagnostics == ()
     assert outcome.preparation is not None
     assert outcome.preparation.gate_profile is None
+    assert outcome.preparation.snapshot_requirements.body_views == (BodyViewKind.JSON,)
+    assert not outcome.preparation.snapshot_requirements.stream
 
 
 def test_no_requested_profiles_is_a_valid_explicit_empty_preparation() -> None:
@@ -284,6 +289,8 @@ def test_no_requested_profiles_is_a_valid_explicit_empty_preparation() -> None:
     assert outcome.preparation is not None
     assert outcome.diagnostics == ()
     assert outcome.rejected == ()
+    assert outcome.preparation.snapshot_requirements.body_views == ()
+    assert not outcome.preparation.snapshot_requirements.stream
 
 
 @pytest.mark.parametrize(

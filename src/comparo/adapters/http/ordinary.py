@@ -80,11 +80,19 @@ from comparo.core.selection.snapshot import FailedBodyView
 from comparo.core.selection.snapshot import ResolvedBodyBytes
 from comparo.core.selection.snapshot import ResolvedBodyView
 from comparo.core.selection.snapshot import SelectionSnapshot
+from comparo.core.selection.snapshot import SelectionSnapshotRequirements
 
 _REGISTRY = DecoderRegistryIdentity(value="comparo/auto@1")
 _VIEW_LOCATOR_ORIGIN = TaintOriginId(value="runtime/ordinary-view-locator")
 _DIGEST_ACCESS = SensitiveValueAccess(purpose="ordinary-response-digest")
 _UTF8_BOM = b"\xef\xbb\xbf"
+_FULL_BODY_VIEWS = (
+    BodyViewKind.ENTITY_BYTES,
+    BodyViewKind.TEXT,
+    BodyViewKind.JSON,
+    BodyViewKind.AUTO,
+)
+_ORDINARY_BODY_VIEWS = frozenset(_FULL_BODY_VIEWS)
 
 
 @final
@@ -151,7 +159,7 @@ class _DecodedText:
 class StoredOrdinaryResponseSnapshotProvider:
     """Resolve response bytes plus explicit and media-selected semantic views."""
 
-    __slots__ = ("_limits", "_store", "_streams")
+    __slots__ = ("_limits", "_requirements", "_store", "_streams")
 
     def __init__(
         self,
@@ -159,6 +167,7 @@ class StoredOrdinaryResponseSnapshotProvider:
         store: TransientBodyStore,
         limits: OrdinaryResponseDecodeLimits,
         streams: StoredStreamSnapshotProvider | None = None,
+        requirements: SelectionSnapshotRequirements | None = None,
     ) -> None:
         """Compose the shared transient store, finite limits, and optional stream decoder."""
         if type(store) is not TransientBodyStore:
@@ -169,9 +178,18 @@ class StoredOrdinaryResponseSnapshotProvider:
             raise TypeError(
                 "ordinary response stream delegate must be StoredStreamSnapshotProvider"
             )
+        if requirements is not None and type(requirements) is not SelectionSnapshotRequirements:
+            raise TypeError("ordinary response requirements must be SelectionSnapshotRequirements")
+        if requirements is not None and any(
+            item not in _ORDINARY_BODY_VIEWS for item in requirements.body_views
+        ):
+            raise ValueError("ordinary response requirements contain an unsupported body view")
+        if requirements is not None and requirements.stream != (streams is not None):
+            raise ValueError("ordinary response stream requirements and delegate must agree")
         self._store = store
         self._limits = limits
         self._streams = streams
+        self._requirements = requirements
 
     async def snapshot(
         self,
@@ -180,6 +198,9 @@ class StoredOrdinaryResponseSnapshotProvider:
         """Return one closed selection snapshot without exposing store or decoder exceptions."""
         if type(observation) is not EnvironmentExecutionObservation:
             raise TypeError("ordinary response snapshot requires EnvironmentExecutionObservation")
+        requested = (
+            _FULL_BODY_VIEWS if self._requirements is None else self._requirements.body_views
+        )
         delegated = await self._delegated_snapshot(observation)
         delegated_auto = {
             view.handle.body_id
@@ -189,21 +210,27 @@ class StoredOrdinaryResponseSnapshotProvider:
         body_bytes = list(delegated.body_bytes)
         body_views = list(delegated.body_views)
         ready_handles: list[DecodedViewHandle] = []
+        if not requested:
+            return delegated
         for target in _targets(observation):
             read = await self._read(target.handle)
             if read.data is None:
                 unavailable = self._unavailable_views(
                     target,
                     delegated_auto,
+                    requested=requested,
                     budget_attempted=read.budget_attempted,
                 )
                 body_views.extend(unavailable)
                 continue
-            body_bytes.append(_resolved_bytes(target.handle, read.data))
-            explicit = self._explicit_views(target, read.data)
-            produced: list[ResolvedBodyView | FailedBodyView] = list(explicit)
-            if target.handle.body_id not in delegated_auto:
-                produced.append(self._auto_view(target, read.data, explicit=explicit))
+            if BodyViewKind.ENTITY_BYTES in requested:
+                body_bytes.append(_resolved_bytes(target.handle, read.data))
+            produced = self._requested_views(
+                target,
+                read.data,
+                requested=requested,
+                delegated_auto=target.handle.body_id in delegated_auto,
+            )
             body_views.extend(produced)
             ready_handles.extend(view.handle for view in produced if type(view) is ResolvedBodyView)
         enriched = msgspec.structs.replace(
@@ -262,16 +289,22 @@ class StoredOrdinaryResponseSnapshotProvider:
         target: _Target,
         delegated_auto: set[BodyId],
         *,
+        requested: tuple[BodyViewKind, ...],
         budget_attempted: ByteCount | None,
     ) -> tuple[FailedBodyView, ...]:
         charset = _charset(target.handle)
         text = _decoder(ViewKind.TEXT, charset=charset)
         json_decoder = _decoder(ViewKind.JSON, charset=charset)
+        decoders = {
+            BodyViewKind.TEXT: (text, None),
+            BodyViewKind.JSON: (json_decoder, None),
+        }
         failures = [
-            self._read_failure(target, BodyViewKind.TEXT, text, budget_attempted),
-            self._read_failure(target, BodyViewKind.JSON, json_decoder, budget_attempted),
+            self._read_failure(target, view, decoders[view][0], budget_attempted)
+            for view in requested
+            if view in decoders
         ]
-        if target.handle.body_id not in delegated_auto:
+        if BodyViewKind.AUTO in requested and target.handle.body_id not in delegated_auto:
             decoder, auto = _auto_decoder(target.handle)
             failures.append(
                 self._read_failure(
@@ -312,25 +345,34 @@ class StoredOrdinaryResponseSnapshotProvider:
             ),
         )
 
-    def _explicit_views(
+    def _requested_views(
         self,
         target: _Target,
         data: bytes,
-    ) -> tuple[ResolvedBodyView | FailedBodyView, ResolvedBodyView | FailedBodyView]:
-        return (
-            self._text_view(target, data, BodyViewKind.TEXT, auto=None),
-            self._json_view(target, data, BodyViewKind.JSON, auto=None),
-        )
+        *,
+        requested: tuple[BodyViewKind, ...],
+        delegated_auto: bool,
+    ) -> list[ResolvedBodyView | FailedBodyView]:
+        explicit: dict[BodyViewKind, ResolvedBodyView | FailedBodyView] = {}
+        if BodyViewKind.TEXT in requested:
+            explicit[BodyViewKind.TEXT] = self._text_view(
+                target, data, BodyViewKind.TEXT, auto=None
+            )
+        if BodyViewKind.JSON in requested:
+            explicit[BodyViewKind.JSON] = self._json_view(
+                target, data, BodyViewKind.JSON, auto=None
+            )
+        produced = list(explicit.values())
+        if BodyViewKind.AUTO in requested and not delegated_auto:
+            produced.append(self._auto_view(target, data, explicit=explicit))
+        return produced
 
     def _auto_view(
         self,
         target: _Target,
         data: bytes,
         *,
-        explicit: tuple[
-            ResolvedBodyView | FailedBodyView,
-            ResolvedBodyView | FailedBodyView,
-        ],
+        explicit: dict[BodyViewKind, ResolvedBodyView | FailedBodyView],
     ) -> ResolvedBodyView | FailedBodyView:
         decoder, auto = _auto_decoder(target.handle)
         if type(target.handle.media) is InvalidMediaType:
@@ -354,9 +396,15 @@ class StoredOrdinaryResponseSnapshotProvider:
                 ),
             )
         if decoder.view is ViewKind.JSON:
-            return _auto_from_explicit(target.handle, explicit[1], auto)
+            view = explicit.get(BodyViewKind.JSON)
+            if view is None:
+                view = self._json_view(target, data, BodyViewKind.JSON, auto=None)
+            return _auto_from_explicit(target.handle, view, auto)
         if decoder.view is ViewKind.TEXT:
-            return _auto_from_explicit(target.handle, explicit[0], auto)
+            view = explicit.get(BodyViewKind.TEXT)
+            if view is None:
+                view = self._text_view(target, data, BodyViewKind.TEXT, auto=None)
+            return _auto_from_explicit(target.handle, view, auto)
         return _ready_view(
             target.handle,
             BodyViewKind.AUTO,

@@ -110,6 +110,7 @@ from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.model import CompiledSelector
 from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.selector_semantics import derive_selector_capabilities
+from comparo.core.domain.selectors.sources import STREAM_SELECTOR_SOURCES
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
@@ -136,6 +137,7 @@ from comparo.core.runtime.ports import DiffCall
 from comparo.core.selection import SelectionBudgets
 from comparo.core.selection import SelectionCancellation
 from comparo.core.selection import SelectionControl
+from comparo.core.selection import SelectionSnapshotRequirements
 from comparo.core.selection import selection_budget_operations
 
 _PROFILE_EMPTY = DiagnosticCode(value="evaluation.profile.empty")
@@ -269,6 +271,42 @@ class _SubjectRules(msgspec.Struct, frozen=True, kw_only=True):
     diffs: tuple[CompiledDiffRule, ...]
 
 
+def _snapshot_requirements(
+    subjects: tuple[_SubjectRules, ...],
+) -> SelectionSnapshotRequirements:
+    """Derive adapter materialization needs solely from already-compiled selectors."""
+    selectors = tuple(
+        selector
+        for subject in subjects
+        for selector in (
+            *(rule.selector for rule in subject.assertions),
+            *(rule.pipeline.baseline.selector for rule in subject.diffs),
+            *(rule.pipeline.candidate.selector for rule in subject.diffs),
+        )
+    )
+    body_views = {
+        selector.body_view
+        for selector in selectors
+        if selector.source in {SelectorSource.REQUEST_BODY, SelectorSource.RESPONSE_BODY}
+        and selector.body_view not in {None, BodyViewKind.HANDLE}
+    }
+    stream_views = {
+        BodyViewKind.SSE_EVENTS,
+        BodyViewKind.NDJSON_RECORDS,
+        BodyViewKind.JSON_SEQUENCE_RECORDS,
+    }
+    requires_stream = any(
+        selector.source in STREAM_SELECTOR_SOURCES
+        or selector.body_view is BodyViewKind.AUTO
+        or selector.body_view in stream_views
+        for selector in selectors
+    )
+    return SelectionSnapshotRequirements(
+        body_views=tuple(sorted(body_views - stream_views, key=lambda item: item.value)),
+        stream=requires_stream,
+    )
+
+
 class _Problems:
     __slots__ = ("diagnostics", "rejected")
 
@@ -323,7 +361,14 @@ class _Problems:
 class ConfigurationEvaluationPreparation:
     """Production runtime adapter for already preflighted configuration evaluation."""
 
-    __slots__ = ("_context", "_gate", "_limits", "_prepared", "_subjects")
+    __slots__ = (
+        "_context",
+        "_gate",
+        "_limits",
+        "_prepared",
+        "_snapshot_requirements",
+        "_subjects",
+    )
 
     def __init__(
         self,
@@ -350,11 +395,17 @@ class ConfigurationEvaluationPreparation:
         self._limits = limits
         self._subjects = subjects
         self._gate = gate
+        self._snapshot_requirements = _snapshot_requirements(subjects)
 
     @property
     def gate_profile(self) -> CompiledGateProfile | None:
         """Return the single preflighted run gate, if requested."""
         return self._gate
+
+    @property
+    def snapshot_requirements(self) -> SelectionSnapshotRequirements:
+        """Return the minimum body semantics required by the preflighted rules."""
+        return self._snapshot_requirements
 
     async def assertions(
         self,

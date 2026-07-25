@@ -78,6 +78,7 @@ from comparo.core.domain.values import JsonString
 from comparo.core.selection.snapshot import FailedBodyView
 from comparo.core.selection.snapshot import ResolvedBodyView
 from comparo.core.selection.snapshot import SelectionSnapshot
+from comparo.core.selection.snapshot import SelectionSnapshotRequirements
 from comparo.core.selection.snapshot import body_view_for
 from tests.core.domain.http.observation_factories import attempt_timings
 from tests.core.domain.http.observation_factories import authorized_request
@@ -328,6 +329,93 @@ def test_auto_reuses_the_explicit_semantic_decode(
     asyncio.run(scenario())
 
 
+def test_empty_requirements_do_not_read_or_decode_captured_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        store = _store(tmp_path)
+        observed = await _observation(store, b'{"value":1}', _parsed_media("application", "json"))
+
+        def forbidden_read(_store: TransientBodyStore, _handle: object) -> _FakeBodyStream:
+            raise AssertionError("status-only evaluation must not read a body")
+
+        monkeypatch.setattr(TransientBodyStore, "open_response", forbidden_read)
+        snapshot = await StoredOrdinaryResponseSnapshotProvider(
+            store=store,
+            limits=_limits(),
+            requirements=SelectionSnapshotRequirements(),
+        ).snapshot(observed)
+
+        assert snapshot.observation is observed
+        assert snapshot.body_bytes == ()
+        assert snapshot.body_views == ()
+        assert snapshot.stream is None
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_json_only_requirements_materialize_no_extra_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        store = _store(tmp_path)
+        observed = await _observation(store, b'{"value":1}', _parsed_media("application", "json"))
+
+        def forbidden_text(*_arguments: object) -> object:
+            raise AssertionError("JSON-only evaluation must not decode text")
+
+        monkeypatch.setattr(ordinary, "_decode_text", forbidden_text)
+        snapshot = await StoredOrdinaryResponseSnapshotProvider(
+            store=store,
+            limits=_limits(),
+            requirements=SelectionSnapshotRequirements(body_views=(BodyViewKind.JSON,)),
+        ).snapshot(observed)
+
+        assert snapshot.body_bytes == ()
+        assert tuple(item.requested_view for item in snapshot.body_views) == (BodyViewKind.JSON,)
+        assert type(snapshot.body_views[0]) is ResolvedBodyView
+        assert len(snapshot.observation.views) == 1
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("media", "payload", "decoder"),
+    [
+        (_parsed_media("application", "json"), b"{}", ViewKind.JSON),
+        (_parsed_media("text", "plain"), b"hello", ViewKind.TEXT),
+    ],
+)
+def test_auto_only_requirements_decode_only_the_media_selected_view(
+    tmp_path: Path,
+    media: MediaTypeMetadata,
+    payload: bytes,
+    decoder: ViewKind,
+) -> None:
+    async def scenario() -> None:
+        store = _store(tmp_path)
+        observed = await _observation(store, payload, media)
+        snapshot = await StoredOrdinaryResponseSnapshotProvider(
+            store=store,
+            limits=_limits(),
+            requirements=SelectionSnapshotRequirements(body_views=(BodyViewKind.AUTO,)),
+        ).snapshot(observed)
+
+        assert snapshot.body_bytes == ()
+        assert len(snapshot.body_views) == 1
+        view = snapshot.body_views[0]
+        assert type(view) is ResolvedBodyView
+        assert view.requested_view is BodyViewKind.AUTO
+        assert view.handle.decoder.view is decoder
+        await store.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("media", "payload", "kind"),
     [
@@ -499,6 +587,32 @@ def test_contracts_require_exact_stores_limits_delegates_and_observations(
             store=store,
             limits=_limits(),
             streams=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="requirements"):
+        StoredOrdinaryResponseSnapshotProvider(
+            store=store,
+            limits=_limits(),
+            requirements=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="unsupported body view"):
+        StoredOrdinaryResponseSnapshotProvider(
+            store=store,
+            limits=_limits(),
+            requirements=SelectionSnapshotRequirements(body_views=(BodyViewKind.HANDLE,)),
+        )
+    with pytest.raises(ValueError, match="delegate must agree"):
+        StoredOrdinaryResponseSnapshotProvider(
+            store=store,
+            limits=_limits(),
+            requirements=SelectionSnapshotRequirements(stream=True),
+        )
+    streams = StoredStreamSnapshotProvider(store=store, limits=_stream_limits())
+    with pytest.raises(ValueError, match="delegate must agree"):
+        StoredOrdinaryResponseSnapshotProvider(
+            store=store,
+            limits=_limits(),
+            streams=streams,
+            requirements=SelectionSnapshotRequirements(),
         )
     provider = StoredOrdinaryResponseSnapshotProvider(store=store, limits=_limits())
     with pytest.raises(TypeError, match="EnvironmentExecutionObservation"):

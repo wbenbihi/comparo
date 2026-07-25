@@ -21,6 +21,7 @@ from comparo.core.selection.snapshot import FailedBodyView
 from comparo.core.selection.snapshot import ResolvedBodyBytes
 from comparo.core.selection.snapshot import ResolvedBodyView
 from comparo.core.selection.snapshot import SelectionSnapshot
+from comparo.core.selection.snapshot import SelectionSnapshotRequirements
 
 __all__ = (
     "DEFAULT_SELECTOR_PARSER_LIMITS",
@@ -35,6 +36,7 @@ __all__ = (
     "SelectionControl",
     "SelectionEvaluation",
     "SelectionSnapshot",
+    "SelectionSnapshotRequirements",
     "SelectorParserLimits",
     "SelectorSyntaxCode",
     "SelectorSyntaxError",

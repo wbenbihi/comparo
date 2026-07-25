@@ -54,6 +54,29 @@ _INTEGRITY_ACCESS = SensitiveValueAccess(purpose="selector.snapshot.integrity")
 
 
 @final
+class SelectionSnapshotRequirements(msgspec.Struct, frozen=True, kw_only=True):
+    """Minimum storage-backed semantic material needed by configured selectors.
+
+    Raw HTTP capture remains independent of this contract.  The requirements only control which
+    values a snapshot provider must materialize into the I/O-free selection snapshot.
+    """
+
+    body_views: tuple[BodyViewKind, ...] = ()
+    stream: bool = False
+
+    def __post_init__(self) -> None:
+        """Require a unique immutable set of materialized views and an exact stream flag."""
+        if type(self.body_views) is not tuple or any(
+            type(item) is not BodyViewKind for item in self.body_views
+        ):
+            raise TypeError("snapshot body-view requirements must be an immutable typed tuple")
+        if len(set(self.body_views)) != len(self.body_views):
+            raise ValueError("snapshot body-view requirements must be unique")
+        if type(self.stream) is not bool:
+            raise TypeError("snapshot stream requirement must be bool")
+
+
+@final
 class ResolvedBodyBytes(msgspec.Struct, frozen=True, kw_only=True):
     """Bytes already fetched from a BodyStore, bound to their opaque body identity."""
 
