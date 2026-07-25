@@ -49,6 +49,20 @@ See the [CLI reference](https://github.com/wbenbihi/comparo/blob/main/docs/cli.m
 persistence, and runtime limits, and the [TUI guide](https://github.com/wbenbihi/comparo/blob/main/docs/tui.md) for the four-workspace terminal
 journey.
 
+## Examples
+
+The repository includes three runnable local projects backed by one deterministic loopback demo
+service. They cover a passing quickstart, deliberate cross-Environment drift, Environment-local
+values, execution profiles, and a larger two-Matrix TUI showcase:
+
+```console
+uv run --frozen python examples/support/demo_server.py
+uv run --frozen comparo tui --config examples/tui-showcase/comparo.yaml
+```
+
+See the [example project guide](https://github.com/wbenbihi/comparo/blob/main/examples/README.md) for the expected outcomes and suggested
+Explorer, Compare, and Report journeys.
+
 ## Architecture
 
 The refactor is built from an immutable, framework-independent domain center. Configuration,

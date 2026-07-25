@@ -1,0 +1,50 @@
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: catalog
+  name: Matrix catalog
+  description: Expands eight cells from two reusable Matrices and exposes one candidate drift.
+  tags: [get, json, matrix]
+spec:
+  request:
+    method: GET
+    endpoint: /catalog
+    headers:
+      $use: common-headers
+    query:
+      $use: catalog-query
+  matrices:
+    - $use: audiences
+    - $use: locales
+  diffs:
+    - $use: exact-body
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: health
+  name: Health
+  description: Stable health Request useful for assertion-only runs.
+  tags: [get, smoke, passing]
+spec:
+  request:
+    method: GET
+    endpoint: /health
+    headers:
+      $use: common-headers
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: release
+  name: Release metadata
+  description: Stable contract shape with deliberately different Environment values.
+  tags: [get, json, drift]
+spec:
+  request:
+    method: GET
+    endpoint: /release
+    headers:
+      $use: common-headers
+  diffs:
+    - $use: exact-body

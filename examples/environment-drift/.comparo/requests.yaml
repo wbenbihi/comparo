@@ -1,0 +1,65 @@
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: health
+  name: Health
+  description: Stable response used to demonstrate passing assertions and status comparison.
+  tags: [get, passing, smoke]
+spec:
+  request:
+    method: GET
+    endpoint: /health
+    headers:
+      Accept: application/json
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: release
+  name: Release metadata
+  description: Returns a different version and channel in each Environment.
+  tags: [get, drift, json]
+spec:
+  request:
+    method: GET
+    endpoint: /release
+    headers:
+      Accept: application/json
+  diffs:
+    - $use: exact-body
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: whoami
+  name: Resolved Environment values
+  description: Echoes explicit $var and $env values resolved independently per Environment.
+  tags: [get, values, dotenv]
+spec:
+  request:
+    method: GET
+    endpoint: /whoami
+    query:
+      environment:
+        $var: environment
+    headers:
+      X-Demo-Label:
+        $env: DEMO_LABEL
+  diffs:
+    - $use: exact-body
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: degraded
+  name: Degraded dependency
+  description: Candidate deliberately returns HTTP 503 while the baseline returns HTTP 200.
+  tags: [get, failing, status-drift]
+spec:
+  request:
+    method: GET
+    endpoint: /degraded
+    headers:
+      Accept: application/json
+  diffs:
+    - $use: exact-body

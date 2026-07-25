@@ -1,0 +1,57 @@
+apiVersion: comparo/v1alpha1
+kind: Schema
+metadata:
+  id: catalog-response
+  name: Catalog response schema
+  description: Unbound JSON Schema resource retained for Explorer; runtime validation is deferred.
+  tags: [schema, future, unbound]
+spec:
+  type: object
+  required: [contractVersion, items]
+  properties:
+    contractVersion:
+      type: integer
+    items:
+      type: array
+---
+apiVersion: comparo/v1alpha1
+kind: Scenario
+metadata:
+  id: catalog-workflow
+  name: Catalog workflow
+  description: Future stateful journey visible in Explorer but intentionally not executable yet.
+  tags: [scenario, future, unbound]
+spec:
+  steps:
+    - id: check-health
+      request: health
+    - id: fetch-catalog
+      request: catalog
+      after: check-health
+---
+apiVersion: comparo/v1alpha1
+kind: SafetyProfile
+metadata:
+  id: local-read-only
+  name: Local read-only safety
+  description: Unbound future project restriction; external ExecutionPolicy remains authority.
+  tags: [safety, future, unbound]
+spec: {}
+---
+apiVersion: comparo/v1alpha1
+kind: RedactionProfile
+metadata:
+  id: demo-redaction
+  name: Demo redaction
+  description: Unbound future sanitization profile represented in the resource catalog.
+  tags: [redaction, future, unbound]
+spec: {}
+---
+apiVersion: comparo/v1alpha1
+kind: ArtifactProfile
+metadata:
+  id: demo-artifacts
+  name: Demo artifacts
+  description: Unbound future capture and retention profile represented in Explorer.
+  tags: [artifact, future, unbound]
+spec: {}

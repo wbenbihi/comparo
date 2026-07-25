@@ -1,0 +1,44 @@
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: matrix-release
+  name: Matrix release comparison
+  description: Compare all eight catalog cells once from baseline to candidate.
+  tags: [comparison, matrix, recommended]
+spec:
+  subjects:
+    - $use: Request/catalog
+  baseline:
+    $use: baseline
+  candidates:
+    - $use: candidate
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: repeated-matrix-release
+  name: Repeated Matrix comparison
+  description: Execute two trials for every catalog cell to exercise larger progress views.
+  tags: [comparison, matrix, trials]
+spec:
+  subjects:
+    - $use: Request/catalog
+  baseline:
+    $use: baseline
+  candidates:
+    - $use: candidate
+  trials: 2
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: candidate-smoke
+  name: Candidate smoke test
+  description: Assertion-only execution across stable health and release endpoints.
+  tags: [assertions, candidate, passing]
+spec:
+  subjects:
+    - $use: Request/health
+    - $use: Request/release
+  environments:
+    - $use: candidate

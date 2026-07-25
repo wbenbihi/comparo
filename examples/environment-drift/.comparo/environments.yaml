@@ -1,0 +1,46 @@
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: baseline
+  name: Production baseline
+  description: Stable local behavior and baseline value namespace.
+  tags: [baseline, local, stable]
+spec:
+  baseUrl: http://127.0.0.1:18080/baseline
+  env:
+    files:
+      - path: .comparo/baseline.values
+        onConflict: override
+  variables:
+    environment: blue
+---
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: candidate
+  name: Staging candidate
+  description: Candidate behavior with an intentionally degraded dependency.
+  tags: [candidate, local, prerelease]
+spec:
+  baseUrl: http://127.0.0.1:18080/candidate
+  env:
+    files:
+      - path: .comparo/candidate.values
+        onConflict: override
+  variables:
+    environment: green
+---
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: development
+  name: Development
+  description: Additional Environment available for topology overrides in Compare.
+  tags: [development, local]
+spec:
+  baseUrl: http://127.0.0.1:18080/development
+  env:
+    values:
+      DEMO_LABEL: working-tree
+  variables:
+    environment: working-tree

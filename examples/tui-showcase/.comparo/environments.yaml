@@ -1,0 +1,35 @@
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: baseline
+  name: Production baseline
+  description: Stable reference behavior served from the loopback demo service.
+  tags: [baseline, local, protected]
+spec:
+  baseUrl: http://127.0.0.1:18080/baseline
+  variables:
+    environment: baseline
+---
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: candidate
+  name: Staging candidate
+  description: Candidate behavior with drift in one catalog Matrix case.
+  tags: [candidate, local, prerelease]
+spec:
+  baseUrl: http://127.0.0.1:18080/candidate
+  variables:
+    environment: candidate
+---
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: development
+  name: Development
+  description: Optional third Environment for manual topology overrides.
+  tags: [development, local]
+spec:
+  baseUrl: http://127.0.0.1:18080/development
+  variables:
+    environment: development

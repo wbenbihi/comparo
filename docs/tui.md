@@ -32,6 +32,11 @@ comparo tui \
 terminals; in a redirected or non-interactive process it prints CLI help. Every other CLI
 subcommand remains headless.
 
+For a deterministic local walkthrough, start the repository's loopback demo service and open one
+of the [runnable example projects](../examples/README.md). The `tui-showcase` project is designed to
+exercise all four workspaces, multiple execution profiles, two Matrices on one Request, and both
+clean and drifted persisted results.
+
 ### Launch limits and artifact root
 
 One immutable launch contract owns every operational ceiling for the process. Defaults are named,

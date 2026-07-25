@@ -1,0 +1,14 @@
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: health
+  name: Health check
+  description: Read-only JSON health endpoint shared by both Environments.
+  tags: [get, json, smoke]
+spec:
+  request:
+    method: GET
+    endpoint: /health
+    headers:
+      Accept: application/json
+      X-Comparo-Demo: quickstart

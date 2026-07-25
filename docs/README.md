@@ -18,6 +18,7 @@ authoritative current documents are:
 - [CLI reference](cli.md)
 - [Terminal UI](tui.md)
 - [TUI results implementation contract](tui-results-implementation-contract.md)
+- [Runnable example projects](../examples/README.md)
 - [Architecture](architecture.md)
 - [Core refactor roadmap](core-refactor-roadmap.md)
 - [Accepted product decisions](decisions/README.md)

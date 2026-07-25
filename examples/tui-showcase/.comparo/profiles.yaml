@@ -1,0 +1,66 @@
+apiVersion: comparo/v1alpha1
+kind: AssertionProfile
+metadata:
+  id: usable-response
+  name: Usable response
+  description: Require HTTP 200 and a non-null JSON body.
+  tags: [assertion, blocking, json]
+spec:
+  rules:
+    - id: status-is-200
+      selector: response.status
+      operator:
+        name: equals
+        expected: 200
+      severity: blocking
+      quantifier: one
+      completeness: complete
+    - id: body-is-present
+      selector: response.body
+      operator:
+        name: notEquals
+        expected: null
+      severity: blocking
+      quantifier: one
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: stable-status
+  name: Stable status
+  description: Exact HTTP status comparison shared by every Request.
+  tags: [diff, status, blocking]
+spec:
+  rules:
+    - id: status-is-stable
+      selector: response.status
+      comparator:
+        name: exact
+      severity: blocking
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: exact-body
+  name: Exact body
+  description: Strict decoded JSON comparison for Requests where value drift matters.
+  tags: [diff, body, blocking]
+spec:
+  rules:
+    - id: body-is-exact
+      selector: response.body
+      comparator:
+        name: exact
+      severity: blocking
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: GateProfile
+metadata:
+  id: strict
+  name: Strict gate
+  description: Reduce blocking evaluation facts into a release verdict.
+  tags: [gate, release]
+spec: {}

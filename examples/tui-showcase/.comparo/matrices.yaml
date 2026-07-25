@@ -1,0 +1,42 @@
+apiVersion: comparo/v1alpha1
+kind: Matrix
+metadata:
+  id: audiences
+  name: Audiences
+  description: Product of region and plan, with one exclusion and one explicit case.
+  tags: [matrix, product, catalog]
+spec:
+  axes:
+    region:
+      - id: eu
+        value: eu
+      - id: us
+        value: us
+    plan:
+      - id: free
+        value: free
+      - id: pro
+        value: pro
+  combine: product
+  exclude: [us-free]
+  include:
+    - id: enterprise-apac
+      values:
+        region: apac
+        plan: enterprise
+---
+apiVersion: comparo/v1alpha1
+kind: Matrix
+metadata:
+  id: locales
+  name: Locales
+  description: Explicit locale cases combined independently with every audience case.
+  tags: [matrix, cases, localization]
+spec:
+  cases:
+    - id: english
+      values:
+        locale: en
+    - id: french
+      values:
+        locale: fr

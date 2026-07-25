@@ -1,0 +1,40 @@
+apiVersion: comparo/v1alpha1
+kind: Value
+metadata:
+  id: common-headers
+  name: Common request headers
+  description: Reusable header object expanded inside Requests through $use.
+  tags: [value, headers, reusable]
+spec:
+  value:
+    Accept: application/json
+    X-Demo-Client:
+      $var: client
+---
+apiVersion: comparo/v1alpha1
+kind: Value
+metadata:
+  id: catalog-query
+  name: Catalog Matrix query
+  description: Reusable query object resolved from two independently attached Matrices.
+  tags: [value, matrix, query]
+spec:
+  value:
+    region:
+      $matrix: region
+    plan:
+      $matrix: plan
+    locale:
+      $matrix: locale
+---
+apiVersion: comparo/v1alpha1
+kind: Value
+metadata:
+  id: optional-api-token
+  name: Optional API token source
+  description: Unbound example of an explicit Environment lookup; no credential is committed.
+  tags: [value, secret-source, unbound]
+spec:
+  value:
+    authorization:
+      $env: DEMO_API_TOKEN

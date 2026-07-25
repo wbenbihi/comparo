@@ -1,0 +1,48 @@
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: release-gate
+  name: Full release gate
+  description: Compare every example Request from baseline to candidate.
+  tags: [comparison, release, mixed-results]
+spec:
+  subjects:
+    - $use: Request/health
+    - $use: Request/release
+    - $use: Request/whoami
+    - $use: Request/degraded
+  baseline:
+    $use: baseline
+  candidates:
+    - $use: candidate
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: baseline-smoke
+  name: Baseline smoke test
+  description: Run assertions without a comparison against the stable Environment.
+  tags: [assertions, baseline, passing]
+spec:
+  subjects:
+    - $use: Request/health
+    - $use: Request/release
+    - $use: Request/whoami
+  environments:
+    - $use: baseline
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: development-vs-baseline
+  name: Development versus baseline
+  description: Demonstrate selecting a different candidate topology through a reusable profile.
+  tags: [comparison, development]
+spec:
+  subjects:
+    - $use: Request/health
+    - $use: Request/release
+  baseline:
+    $use: baseline
+  candidates:
+    - $use: development
