@@ -1,9 +1,10 @@
 # Architecture
 
 Comparo is being rebuilt from a pure, immutable domain center outward. The current public source
-tree implements **Steps 1 through 6**: the internal language, shared selector and evaluation
-kernels, versioned configuration compiler, deterministic admitted run planner, and run-scoped
-value/secrets boundary. It is not yet a runnable CLI or TUI.
+tree implements **Steps 1 through 10**: the internal language, shared selector and evaluation
+kernels, versioned configuration compiler, deterministic admitted run planner, run-scoped
+value/secrets boundary, bounded runtime, production HTTP adapter, sanitized artifacts/reporters,
+application composition, and local CLI. The TUI and dedicated CI integration remain unmigrated.
 
 The accepted destination and implementation order are recorded in the
 [core refactor roadmap](core-refactor-roadmap.md). The exact Step 1 boundary is recorded in the
@@ -21,7 +22,12 @@ the [deterministic run planner](run-planner.md), and the live value boundary in
 src/comparo/
 ├── __init__.py
 ├── py.typed
+├── adapters/               POSIX artifacts, HTTP transport, and local value providers
+├── application/            frontend-neutral preparation, inspection, render, and execution
+├── cli/                    Cyclopts/Rich command adapter over application services
 ├── configuration/          filesystem discovery and source-located YAML adapter
+├── policy/                 operator-owned ExecutionPolicy document adapter
+├── reporters/              pure RunArtifact projections
 ├── schemas/                generated public comparo/v1alpha1 JSON Schema
 └── core/
     ├── __init__.py
@@ -38,13 +44,16 @@ src/comparo/
     ├── evaluation/       shared deterministic fact identity and strict value semantics
     ├── gates/            pure value-free release-policy reducer
     ├── planning/         pure precedence binding, Matrix planning, and admission
+    ├── policy/           pure external-authority compiler and authorization contracts
     ├── resolution/       run-owned scopes, provider ports, caches, taint, and conversion
+    ├── runtime/          bounded scheduling and injected execution/evaluation ports
+    ├── artifacts/        safe capture, immutable artifact, and persistence contracts
     └── selection/        pure parser, compiler, snapshot, evaluator, and accounting kernel
 ```
 
 The previous prototype implementation, tests, and examples are quarantined under
-`deprecated.ignore.folder/`. Hatch excludes that tree from distributions. There are currently no
-`comparo.adapters`, `comparo.cli`, or `comparo.tui` packages and no executable console entry point.
+`deprecated.ignore.folder/`. Hatch excludes that tree from distributions. There is no current
+`comparo.tui` package; the executable `comparo` entry point is the migrated local CLI.
 
 ## Dependency direction
 
@@ -64,8 +73,8 @@ versioned configuration frontend
   -> CLI / TUI / CI reporters
 ```
 
-The domain, pure evaluation kernels, versioned compiler, planner, and run-scoped resolver exist
-today. Domain modules
+The domain, pure evaluation kernels, versioned compiler, planner, resolver, runtime, artifacts, and
+application composition exist today. Domain modules
 cannot import adapter frameworks, HTTP client libraries, YAML or schema libraries, CLI/TUI
 frameworks, filesystem APIs,
 networking APIs, serialization helpers, ambient environment access, clocks, randomness, or task
@@ -95,8 +104,8 @@ invocation and external authority, then emits a compact `RunPlan` with exact car
 provenance, stable identity, and a secret-free fingerprint. Resolution consumes the prepared run,
 immutable Environment/Matrix snapshots, and injected effects. It evaluates expressions without
 reinterpreting YAML or recomputing precedence, caches exact source/scope reads, and returns closed
-typed outcomes with value-free provenance. The later runtime must consume these products rather
-than rebuild them.
+typed outcomes with value-free provenance. The runtime consumes these products directly rather
+than rebuilding them.
 
 ## Domain responsibilities
 
@@ -116,8 +125,8 @@ perform work:
 Small pure protocol-grammar functions may validate or canonically derive typed HTTP metadata—for
 example media-type parameters or a multipart `Content-Type` field. They do not parse project
 configuration, decode stored response bodies, serialize an outbound request, read a byte stream,
-or render user-facing output. Those operations belong to later compiler, store, transport, and
-reporter modules behind explicit ports.
+or render user-facing output. Those operations belong to compiler, store, transport, and reporter
+modules behind explicit ports.
 
 ## Security boundary
 

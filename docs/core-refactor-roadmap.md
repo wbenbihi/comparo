@@ -355,6 +355,14 @@ Exit criteria:
 
 ## Step 10: CLI migration
 
+Status: completed on 2026-07-25. The local Cyclopts/Rich adapter now exposes the shared schema,
+validation, doctor, planning, sanitized rendering, run, diff, ExecutionProfile, artifact, report,
+and shell-completion journeys documented in [the CLI reference](cli.md). Production commands share
+one application planner/runtime composition; caller-owned load and runtime limits, invocation Value
+resource overlays, structured exit outcomes, destination-bound secret egress, and once-only HTTP
+authorization are enforced before effects at their respective boundaries. A dedicated CI wrapper
+and the TUI remain intentionally deferred.
+
 Move commands in increasing order of side effects:
 
 1. Schema generation.
@@ -371,10 +379,10 @@ selected behavior through translated fixtures and local fake transports.
 
 Exit criteria:
 
-- Command handlers contain no domain rules.
-- Exit codes come from structured outcomes.
-- All configuration and report validation occurs before network activity.
-- Every execution command uses the same planner and runtime.
+- Command handlers contain no domain rules: complete.
+- Exit codes come from structured outcomes: complete.
+- All configuration and report validation occurs before network activity: complete.
+- Every execution command uses the same planner and runtime: complete.
 
 ## Step 11: TUI migration
 

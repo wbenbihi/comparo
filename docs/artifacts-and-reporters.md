@@ -20,10 +20,11 @@ PreparedRun + RunResult
 ## Ownership and lifecycle
 
 `ArtifactCapturingDriver` decorates the runtime `ExecutionDriver`. It retains live execution
-outcomes only until scheduler cleanup, takes the final sanitizer snapshot, streams bodies through
-the sanitizer while their transient store is still open, and then closes the underlying driver.
-The compiler consumes only the resulting safe capture batch plus the terminal `PreparedRun` and
-`RunResult`. It always releases and wipes the sanitizer boundary, including rejection paths.
+outcomes through assertion and diff evaluation, takes the final sanitizer snapshot, streams bodies
+through the sanitizer while their transient store is still open, and then closes the underlying
+driver. The compiler consumes only the resulting safe capture batch plus the terminal `PreparedRun`
+and `RunResult`. It always releases and wipes the sanitizer boundary, including rejection paths;
+the production composition root also releases it during outer failure or cancellation cleanup.
 
 This lifecycle is deliberate: moving artifact construction after transport, `RunContext`, or
 transient-body cleanup would make the final secret registry and complete bodies unavailable.
@@ -182,13 +183,13 @@ Import contracts enforce the boundary in both directions: artifact DTOs cannot i
 runtime, resolution, or adapter modules, and reporters cannot import the runtime, resolution,
 configuration, planning, selection, evaluation, transport, or storage adapters.
 
-## Deferred integration
+## CLI integration and deferred profiles
 
-Step 10 will bind effective `ArtifactProfile` and `RedactionProfile` configuration to these typed
-policies, including per-subject profile identity and runtime/CLI overrides, apply `persist`
-conditions, select destinations, and expose artifact/report commands. Step 9 accepts only the
-single effective profile shape it can prove; Step 10 must reject rather than publish any execution
-whose effective policy binding cannot be represented exactly.
+Step 10 exposes opt-in persistence plus authenticated artifact inspection, verification, blob
+reading, and JSON/JUnit/SARIF/Markdown reporting. The first production runtime accepts only the
+single effective artifact/redaction shape it can prove and rejects configured `ArtifactProfile` or
+`RedactionProfile` capabilities before network activity. Binding those configuration resources and
+their per-subject overrides remains deferred; the runtime does not approximate them.
 Retention policies, interrupted-staging discovery and cleanup commands, archives, encryption at
 rest, Windows storage, and historical artifact conversion remain explicit future capabilities;
 none is silently approximated by this module.

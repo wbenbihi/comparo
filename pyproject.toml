@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "comparo"
 version = "0.2.0"
-description = "Typed core domain contracts for HTTP regression and diff testing across environments."
+description = "Validate HTTP assertions and semantic differences across environments."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"

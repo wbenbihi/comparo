@@ -71,7 +71,7 @@ ExecutionPolicy covers at least:
 
 - HTTP schemes, destinations, ports, methods, redirects, address classes, TLS, proxies, and client
   credentials;
-- ambient environment names, file roots, secret providers, logical secret names, and optional
+- ambient environment names, file roots, secret providers, logical secret names, and explicit
   destination-bound secret egress;
 - remote Schema sources and their transitive references;
 - any future external-capability identities, versions, integrity, effects, and data egress;
@@ -99,6 +99,16 @@ allowlists and pins it. A Project may request a future capability but cannot aut
 Safe parsing, secret-safe diagnostics, terminal control escaping, final-request validation, unknown
 directive rejection, and defensive handling of hostile response/decoder input remain engine
 invariants in every trust mode. They are not arbitrary project-size product limits.
+
+The initial restricted policy therefore requires a `values.secretEgress` section. Each rule names
+the exact logical secret and/or `$env` namespace sources it authorizes and binds them to allowed
+HTTP schemes, methods, hosts, and ports. The egress source `environment` covers the isolated
+snapshot after precedence, whether the winning value came from an inherited process variable, a
+declared dotenv file, or Environment inline values; `values.ambientEnvironment` separately governs
+which parent-process names may enter that snapshot. Every sensitive origin carried by a finalized
+request must be covered. Unknown origins or destination mismatches are denied before DNS. The
+trusted-local policy exposes the same capability explicitly through `allowAny`; ordinary HTTP
+destination permission never implies permission to disclose a secret.
 
 ## Consequences
 

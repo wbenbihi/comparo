@@ -8,12 +8,43 @@ explicit diff profiles, and can reduce those facts into a CI gate verdict.
 
 ## Status
 
-Comparo is undergoing a complete pre-production core refactor. The former prototype implementation,
-tests, and examples have been quarantined and are not compatibility requirements. There is no
-usable CLI or TUI on this branch until the new core is built and integrated.
+Comparo is alpha software. The production core and local CLI have been rebuilt around the
+`comparo/v1alpha1` configuration lineage; the former prototype is quarantined and is not a
+compatibility target. The TUI and dedicated CI integration have not yet been migrated.
 
-The new configuration lineage will begin at `comparo/v1alpha1`. Do not use the current package for
-production workloads.
+The executable subset is deliberately fail-closed: configuration can describe more of the future
+model than the first production runtime implements, and an execution command rejects unsupported
+capabilities before resolving values, performing DNS, or opening a network connection. Review the
+[current CLI limitations](docs/cli.md#current-executable-subset) before using Comparo for a real
+service. This remains a pre-production release.
+
+## CLI
+
+The command graph includes offline schema, validation, planning, diagnostics, and sanitized render
+journeys; shared production `run`, `diff`, and `exec` journeys; and authenticated artifact/report
+readers:
+
+```console
+uv run --frozen comparo --help
+uv run --frozen comparo validate --config comparo.yaml
+uv run --frozen comparo plan --config comparo.yaml --format json
+uv run --frozen comparo run --config comparo.yaml --env staging
+```
+
+Local execution defaults to the explicitly permissive trusted-local authority. A project used in
+CI or obtained from an untrusted source must be paired with an operator-owned policy outside that
+project:
+
+```console
+uv run --frozen comparo diff \
+  --config comparo.yaml \
+  --policy /operator/policies/comparo-ci.yaml \
+  --baseline production \
+  --candidate staging
+```
+
+See the [CLI reference](docs/cli.md) for commands, trust semantics, exit codes, persistence, and
+runtime limits.
 
 ## Architecture
 
@@ -28,6 +59,7 @@ networking, persistence, CLI, and TUI concerns are adapters around that core.
 - [Run-scoped values and secrets](https://github.com/wbenbihi/comparo/blob/main/docs/run-scoped-values.md)
 - [Production HTTP adapter](https://github.com/wbenbihi/comparo/blob/main/docs/production-http-adapter.md)
 - [Sanitized artifacts, persistence, and reporters](https://github.com/wbenbihi/comparo/blob/main/docs/artifacts-and-reporters.md)
+- [CLI reference](https://github.com/wbenbihi/comparo/blob/main/docs/cli.md)
 - [Accepted architecture decisions](https://github.com/wbenbihi/comparo/blob/main/docs/decisions/README.md)
 
 The canonical product promise, security boundary, configuration model, HTTP semantics, assertion

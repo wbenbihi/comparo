@@ -54,6 +54,12 @@ Connection pools are keyed by Environment definition, direct/proxy destination, 
 proxy policy. A connection, client identity, proxy credential, or TLS context therefore cannot be
 reused across Environment identities merely because two URLs happen to share an origin.
 
+The transport also consumes each authorized occurrence exactly once. Its run-local, bounded
+ledger retains only the effective-policy fingerprint, plan fingerprint, and public occurrence
+identity—never request or secret material. Sequential or concurrent reuse returns a typed,
+non-retryable policy failure before request rendering or network access. Redirects and retries
+must therefore carry their own freshly authorized occurrence identities.
+
 Comparo sends only explicitly finalized request cookies. It does not maintain an ambient cookie
 jar in ordinary request execution. Stateful Scenario cookie jars remain a future Scenario-owned
 capability and must be isolated by Environment execution when introduced.
@@ -82,8 +88,8 @@ whether the attempt or execution envelope expired.
 
 Request and response bytes use `TransientBodyStore`. Caller-owned limits control per-body bytes,
 run-wide transient bytes, in-memory spill threshold, I/O chunk size, encoded response bytes,
-decoded entity bytes, and decompression ratio. These values have no hidden application maximum;
-the effective SafetyProfile and runtime budgets choose them.
+decoded entity bytes, decompression ratio, and the authorization-occurrence ledger. These values
+have no hidden application maximum; the effective SafetyProfile and runtime budgets choose them.
 
 The store keeps opaque locators and sensitive digests sealed, spills to private temporary files,
 validates every descriptor on read, tracks active readers, wipes in-memory buffers on close, and

@@ -63,7 +63,9 @@ The namespaces remain independent:
 ambient/dotenv/inline/profile/invocation precedence and creates one isolated `EnvironmentSnapshot`
 for every selected Environment. An empty string is present. Missing names are unavailable. Env
 files therefore populate only the explicit `env` namespace and never mutate the Comparo process
-or implicitly configure an HTTP client.
+or implicitly configure an HTTP client. Every winning snapshot value is sealed with the canonical
+Environment-symbol origin, regardless of which input layer supplied it; changing precedence cannot
+evade destination-bound egress authorization.
 
 Multiple Matrix bindings can participate in one request. A qualified symbol such as
 `auth.identity` selects the Matrix bound as `auth`; an unqualified symbol is accepted only when
@@ -177,10 +179,13 @@ the lifetime and provider design without prematurely freezing external syntax or
 
 ## Sensitivity and sanitization
 
-Secret namespace results fail closed to `SensitiveValue`, even if a provider incorrectly returns
-a public value. Taint propagates through conversion, interpolation, arrays, objects, external
-providers, sensitive file paths, YAML decoding, and generated values. Stable taint identifiers
-derive from logical symbols, never secret content.
+Secret namespace results and every `$env` snapshot result fail closed to `SensitiveValue`, even if
+a provider incorrectly returns a public value. Taint propagates through conversion, interpolation,
+arrays, objects, external providers, sensitive file paths, YAML decoding, and generated values.
+Stable taint identifiers derive from logical symbols, never secret content. At a named secret
+boundary, an authored-secret marker is replaced by that canonical secret symbol while genuine
+provider origins are retained; outside that boundary, unknown authored-secret origins remain
+unknown and restricted egress rejects them.
 
 Tainting occurs inside the shared provider task. Concurrent callers therefore receive the same
 sealed object identity, and the registry retains it once. The registry keeps all distinct sealed
