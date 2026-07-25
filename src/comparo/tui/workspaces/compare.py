@@ -126,6 +126,8 @@ class CompareWorkspace(Vertical):
         """Keep Compare mounted while returning to its shared preparation form."""
         if type(draft) is not CompareDraft:
             raise TypeError("Compare workspace draft must be typed")
+        resources_changed = resources is not None and resources != self.resources
+        was_preparing = self.state is CompareWorkspaceState.PREPARE
         self.state = CompareWorkspaceState.PREPARE
         self.draft = draft
         self.plan = plan
@@ -134,8 +136,20 @@ class CompareWorkspace(Vertical):
         self.diagnostics = diagnostics
         if resources is not None:
             self.resources = resources
-        if self.is_mounted:
-            self.refresh(recompose=True)
+        if not self.is_mounted:
+            return
+        if was_preparing and not resources_changed and not diagnostics:
+            forms = self.query(CompareDraftForm)
+            if len(forms):
+                form = forms.first()
+                if form.current_draft() != draft:
+                    form.show_draft(draft)
+                self.query_one(PlanPreview).show_plan(plan)
+                for diagnostic_list in self.query(DiagnosticsList):
+                    diagnostic_list.display = False
+                self.query_one(StatePanel).show_state(StatePanelMode.CONTENT)
+                return
+        self.refresh(recompose=True)
 
     def show_running(self, snapshot: ExecutionProgressSnapshot) -> None:
         """Keep Compare mounted and update progress in place when already running."""
