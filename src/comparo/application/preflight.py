@@ -20,6 +20,7 @@ from comparo.application.planning import PlanningOptions
 from comparo.application.planning import plan_project
 from comparo.configuration.loader import compile_project_path
 from comparo.core.configuration.models import ConfigurationDiagnostic
+from comparo.core.planning.models import PreparedRun
 from comparo.core.policy import CompiledExecutionPolicy
 from comparo.core.policy import planning_authority
 from comparo.core.policy import trusted_local_policy
@@ -73,8 +74,56 @@ class ProjectPlanResult(msgspec.Struct, frozen=True, kw_only=True):
         raise ValueError("project plan result must contain exactly an inspection or diagnostics")
 
 
+@final
+class PreparedProjectPlan(msgspec.Struct, frozen=True, kw_only=True):
+    """Internal execution handoff retaining the admitted plan and exact policy authority."""
+
+    prepared: PreparedRun
+    policy: CompiledExecutionPolicy
+    project_root: Path
+
+    def __post_init__(self) -> None:
+        """Keep the execution composition root bound to exact typed preflight products."""
+        if type(self.prepared) is not PreparedRun:
+            raise TypeError("prepared project plan requires PreparedRun")
+        if type(self.policy) is not CompiledExecutionPolicy:
+            raise TypeError("prepared project plan requires CompiledExecutionPolicy")
+        if not isinstance(self.project_root, Path) or not self.project_root.is_absolute():
+            raise TypeError("prepared project plan root must be an absolute Path")
+        if self.prepared.authority.policy != self.policy.definition:
+            raise ValueError("prepared project plan policy differs from planning authority")
+
+
+@final
+class ProjectPreparationResult(msgspec.Struct, frozen=True, kw_only=True):
+    """Exactly one execution-ready project plan or value-free preflight diagnostics."""
+
+    project: PreparedProjectPlan | None = None
+    diagnostics: tuple[ApplicationDiagnostic, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Keep successful and rejected preparation outcomes structurally disjoint."""
+        if self.project is not None and type(self.project) is not PreparedProjectPlan:
+            raise TypeError("project preparation requires a typed prepared project")
+        if type(self.diagnostics) is not tuple or any(
+            type(item) is not ApplicationDiagnostic for item in self.diagnostics
+        ):
+            raise TypeError("project preparation diagnostics must be immutable and typed")
+        if (self.project is None) == bool(self.diagnostics):
+            return
+        raise ValueError("project preparation must contain exactly project or diagnostics")
+
+
 def inspect_project_plan(request: ProjectPlanRequest) -> ProjectPlanResult:
     """Compile and plan without resolving values, opening bodies, or using the network."""
+    outcome = prepare_project_plan(request)
+    if outcome.project is None:
+        return ProjectPlanResult(diagnostics=outcome.diagnostics)
+    return ProjectPlanResult(inspection=inspect_plan(outcome.project.prepared))
+
+
+def prepare_project_plan(request: ProjectPlanRequest) -> ProjectPreparationResult:
+    """Compile and retain one admitted plan without performing any runtime effect."""
     if type(request) is not ProjectPlanRequest:
         raise TypeError("project plan preflight requires ProjectPlanRequest")
     loaded = compile_project_path(
@@ -83,7 +132,7 @@ def inspect_project_plan(request: ProjectPlanRequest) -> ProjectPlanResult:
     )
     compilation = loaded.compilation
     if compilation.project is None:
-        return ProjectPlanResult(
+        return ProjectPreparationResult(
             diagnostics=tuple(
                 inspect_configuration_diagnostic(item) for item in compilation.diagnostics
             )
@@ -91,7 +140,7 @@ def inspect_project_plan(request: ProjectPlanRequest) -> ProjectPlanResult:
 
     policy = _load_policy(request.policy)
     if type(policy) is tuple:
-        return ProjectPlanResult(
+        return ProjectPreparationResult(
             diagnostics=tuple(inspect_policy_diagnostic(item) for item in policy)
         )
 
@@ -108,7 +157,7 @@ def inspect_project_plan(request: ProjectPlanRequest) -> ProjectPlanResult:
             run_id=request.run_id,
         )
     except InvocationBuildError as error:
-        return ProjectPlanResult(
+        return ProjectPreparationResult(
             diagnostics=(
                 ApplicationDiagnostic(
                     code=f"invocation.{error.code.value}",
@@ -118,10 +167,22 @@ def inspect_project_plan(request: ProjectPlanRequest) -> ProjectPlanResult:
             )
         )
     if planned.prepared is None:
-        return ProjectPlanResult(
+        return ProjectPreparationResult(
             diagnostics=tuple(inspect_diagnostic(item) for item in planned.diagnostics)
         )
-    return ProjectPlanResult(inspection=inspect_plan(planned.prepared))
+    return ProjectPreparationResult(
+        project=PreparedProjectPlan(
+            prepared=planned.prepared,
+            policy=cast("CompiledExecutionPolicy", policy),
+            project_root=_project_root(request.config),
+        )
+    )
+
+
+def _project_root(config: Path) -> Path:
+    """Resolve the caller-selected Project root independently from authored data paths."""
+    selected = config if config.is_dir() else config.parent
+    return selected.resolve()
 
 
 def _load_policy(
@@ -136,7 +197,10 @@ def _load_policy(
 
 
 __all__ = (
+    "PreparedProjectPlan",
     "ProjectPlanRequest",
     "ProjectPlanResult",
+    "ProjectPreparationResult",
     "inspect_project_plan",
+    "prepare_project_plan",
 )

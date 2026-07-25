@@ -23,9 +23,12 @@ from comparo.application.planning import MatrixOverride as MatrixOverride
 from comparo.application.planning import PlanningOptions as PlanningOptions
 from comparo.application.planning import build_invocation as build_invocation
 from comparo.application.planning import plan_project as plan_project
+from comparo.application.preflight import PreparedProjectPlan as PreparedProjectPlan
 from comparo.application.preflight import ProjectPlanRequest as ProjectPlanRequest
 from comparo.application.preflight import ProjectPlanResult as ProjectPlanResult
+from comparo.application.preflight import ProjectPreparationResult as ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan as inspect_project_plan
+from comparo.application.preflight import prepare_project_plan as prepare_project_plan
 
 __all__ = (
     "ApplicationDiagnostic",
@@ -37,8 +40,10 @@ __all__ = (
     "MatrixOverride",
     "PlanInspection",
     "PlanningOptions",
+    "PreparedProjectPlan",
     "ProjectPlanRequest",
     "ProjectPlanResult",
+    "ProjectPreparationResult",
     "SecurityCheck",
     "build_invocation",
     "inspect_artifact",
@@ -48,6 +53,7 @@ __all__ = (
     "inspect_policy_diagnostic",
     "inspect_project_plan",
     "plan_project",
+    "prepare_project_plan",
     "read_artifact_blob",
     "render_artifact_report",
     "run_security_checks",

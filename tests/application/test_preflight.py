@@ -12,9 +12,14 @@ import pytest
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection
 from comparo.application.planning import PlanningOptions
+from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import ProjectPlanResult
+from comparo.application.preflight import ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan
+from comparo.application.preflight import prepare_project_plan
+from comparo.core.planning.models import PreparedRun
+from comparo.core.policy import CompiledExecutionPolicy
 
 _INVOCATION_ID = UUID("10000000-0000-0000-0000-000000000001")
 _RUN_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -125,6 +130,12 @@ def test_preflight_uses_trusted_local_by_default_and_external_policy_only_when_e
     assert external.inspection.policy.resource_id == "ci"
     assert external.inspection.policy.namespace == "operator"
 
+    retained = prepare_project_plan(_request(config))
+    assert retained.project is not None
+    assert retained.project.project_root == tmp_path.resolve()
+    assert retained.project.prepared.plan.run_id.value == _RUN_ID
+    assert retained.project.policy.definition == retained.project.prepared.authority.policy
+
 
 def test_configuration_failure_precedes_policy_selection(tmp_path: Path) -> None:
     missing_config = tmp_path / "missing.yaml"
@@ -210,3 +221,57 @@ def test_preflight_result_rejects_untyped_or_contradictory_products(tmp_path: Pa
         ProjectPlanResult(inspection=inspection, diagnostics=(diagnostic,))
     with pytest.raises(TypeError, match="ProjectPlanRequest"):
         inspect_project_plan(cast("ProjectPlanRequest", object()))
+
+
+def test_execution_preflight_products_reject_untyped_or_contradictory_state(
+    tmp_path: Path,
+) -> None:
+    result = prepare_project_plan(_request(_write_project(tmp_path)))
+    project = result.project
+    assert project is not None
+    diagnostic = ApplicationDiagnostic(code="test", severity="error", stage="planning")
+    with pytest.raises(TypeError, match="PreparedRun"):
+        PreparedProjectPlan(
+            prepared=cast("PreparedRun", object()),
+            policy=project.policy,
+            project_root=project.project_root,
+        )
+    with pytest.raises(TypeError, match="CompiledExecutionPolicy"):
+        PreparedProjectPlan(
+            prepared=project.prepared,
+            policy=cast("CompiledExecutionPolicy", object()),
+            project_root=project.project_root,
+        )
+    with pytest.raises(TypeError, match="absolute"):
+        PreparedProjectPlan(
+            prepared=project.prepared,
+            policy=project.policy,
+            project_root=Path("relative"),
+        )
+    altered = msgspec.structs.replace(
+        project.policy,
+        definition=msgspec.structs.replace(
+            project.policy.definition,
+            fingerprint=msgspec.structs.replace(
+                project.policy.definition.fingerprint,
+                digest=msgspec.structs.replace(
+                    project.policy.definition.fingerprint.digest,
+                    hex_value="0" * 64,
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="differs"):
+        PreparedProjectPlan(
+            prepared=project.prepared,
+            policy=altered,
+            project_root=project.project_root,
+        )
+    with pytest.raises(TypeError, match="prepared project"):
+        ProjectPreparationResult(project=cast("PreparedProjectPlan", object()))
+    with pytest.raises(TypeError, match="diagnostics"):
+        ProjectPreparationResult(diagnostics=cast("tuple[ApplicationDiagnostic, ...]", (object(),)))
+    with pytest.raises(ValueError, match="exactly"):
+        ProjectPreparationResult()
+    with pytest.raises(ValueError, match="exactly"):
+        ProjectPreparationResult(project=project, diagnostics=(diagnostic,))
