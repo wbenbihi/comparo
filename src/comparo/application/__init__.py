@@ -7,6 +7,8 @@ from comparo.application.artifacts import inspect_artifact as inspect_artifact
 from comparo.application.artifacts import read_artifact_blob as read_artifact_blob
 from comparo.application.artifacts import render_artifact_report as render_artifact_report
 from comparo.application.artifacts import verify_artifact as verify_artifact
+from comparo.application.diagnostics import SecurityCheck as SecurityCheck
+from comparo.application.diagnostics import run_security_checks as run_security_checks
 from comparo.application.inspection import ApplicationDiagnostic as ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection as PlanInspection
 from comparo.application.inspection import (
@@ -31,6 +33,7 @@ __all__ = (
     "MatrixOverride",
     "PlanInspection",
     "PlanningOptions",
+    "SecurityCheck",
     "build_invocation",
     "inspect_artifact",
     "inspect_configuration_diagnostic",
@@ -39,5 +42,6 @@ __all__ = (
     "plan_project",
     "read_artifact_blob",
     "render_artifact_report",
+    "run_security_checks",
     "verify_artifact",
 )
