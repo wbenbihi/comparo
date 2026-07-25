@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 from typing import TypeGuard
-from typing import cast
 from urllib.parse import parse_qsl
 from urllib.parse import urlsplit
 
@@ -13,6 +12,7 @@ import msgspec
 
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticStage
+from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.http.bodies import NoBody
@@ -72,12 +72,14 @@ from comparo.core.domain.values import Blocked
 from comparo.core.domain.values import Error
 from comparo.core.domain.values import JsonNull
 from comparo.core.domain.values import JsonObject
+from comparo.core.domain.values import JsonObjectMember
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import JsonValue
 from comparo.core.domain.values import Missing
 from comparo.core.domain.values import Present
 from comparo.core.domain.values import ResolutionErrorCode
 from comparo.core.domain.values import Unavailable
+from comparo.core.domain.values import is_json_value
 from comparo.core.planning._canonical import find_resource
 from comparo.core.planning._canonical import object_member
 from comparo.core.planning._canonical import resource_spec
@@ -99,6 +101,7 @@ _RESOLUTION_ERROR = DiagnosticCode(value="runtime.request.resolution-error")
 _RESOLUTION_BLOCKED = DiagnosticCode(value="runtime.request.blocked")
 _SHAPE_INVALID = DiagnosticCode(value="runtime.request.shape-invalid")
 _BODY_UNSUPPORTED = DiagnosticCode(value="runtime.request.body-unsupported")
+_SENSITIVE_TARGET = DiagnosticCode(value="runtime.request.sensitive-target")
 
 
 class ConfigurationRequestProvider:
@@ -134,9 +137,10 @@ class ConfigurationRequestProvider:
             field="subjects",
         )
         request_expression = object_member(resource_spec(request_resource), "request")
-        if not _is_expression(request_expression):  # pragma: no cover - compiled-field invariant
+        if type(request_expression) is not ObjectExpr:  # pragma: no cover - compiler invariant
             return _unavailable(_SHAPE_INVALID)
-        result = await self._context.resolve_for_wire(
+        resolved = await _resolve_request_fields(
+            self._context,
             request_expression,
             ResolutionTarget(
                 symbol=SymbolPath(segments=("request",)),
@@ -144,26 +148,26 @@ class ConfigurationRequestProvider:
                 cell_inputs=cell_inputs(self._prepared, work.trial.cell),
             ),
         )
-        resolved = _resolved_object(result)
         if type(resolved) is RequestPreparationFailure:
             return resolved
-        payload, origins = resolved
+        payload, field_origins = resolved
         authored_body = _object_value(payload, "body")
         if authored_body is not None and type(authored_body) is not JsonNull:
             return _unavailable(_BODY_UNSUPPORTED)
-        method = _text_member(payload, "method")
-        if method is None:  # pragma: no cover - compiler requires a request method
-            return _unavailable(_SHAPE_INVALID)
-        target = _text_member(payload, "url")
-        if target is None:
-            base = await self._resolve_base_url(work, attempt)
-            if type(base) is RequestPreparationFailure:
-                return base
-            endpoint = _text_member(payload, "endpoint") or "/"
-            target = _join_url(base, endpoint)
+        routing = await self._routing(payload, field_origins, work, attempt)
+        if type(routing) is RequestPreparationFailure:
+            return routing
+        method, target = routing
+        query_origins = field_origins.get("query", ())
+        header_origins = field_origins.get("headers", ())
         try:
-            url = _absolute_url(target, payload, request_expression.provenance, origins)
-            headers = _headers(payload, request_expression.provenance, origins)
+            url = _absolute_url(
+                target,
+                payload,
+                request_expression.provenance,
+                query_origins=query_origins,
+            )
+            headers = _headers(payload, request_expression.provenance, header_origins)
             effective = EffectiveRequest(
                 environment=work.environment,
                 logical_request_fingerprint=work.subject.fingerprint,
@@ -176,7 +180,12 @@ class ConfigurationRequestProvider:
                 provenance=request_expression.provenance,
             )
             materialized_body = NoMaterializedBody()
-            fingerprint = _effective_fingerprint(payload, method, target, origins)
+            fingerprint = _effective_fingerprint(
+                payload,
+                method,
+                target,
+                _combined_origins(field_origins),
+            )
             proof = prove_request_materialization(
                 effective,
                 materialized_body,
@@ -196,6 +205,31 @@ class ConfigurationRequestProvider:
             )
         except (TypeError, ValueError, UnicodeError):
             return _unavailable(_SHAPE_INVALID)
+
+    async def _routing(
+        self,
+        payload: JsonObject,
+        field_origins: dict[str, tuple[TaintOriginId, ...]],
+        work: ExecutionWork,
+        attempt: AttemptScope,
+    ) -> tuple[str, str] | RequestPreparationFailure:
+        """Build only public method and destination components before wire rendering."""
+        method = _text_member(payload, "method")
+        if method is None:  # pragma: no cover - compiler requires a request method
+            return _unavailable(_SHAPE_INVALID)
+        if field_origins.get("method"):
+            return _unavailable(_SENSITIVE_TARGET)
+        target = _text_member(payload, "url")
+        target_field = "url"
+        if target is None:
+            base = await self._resolve_base_url(work, attempt)
+            if type(base) is RequestPreparationFailure:
+                return base
+            target = _join_url(base, _text_member(payload, "endpoint") or "/")
+            target_field = "endpoint"
+        if field_origins.get(target_field):
+            return _unavailable(_SENSITIVE_TARGET)
+        return method, target
 
     async def _resolve_base_url(
         self,
@@ -232,23 +266,54 @@ class ConfigurationRequestProvider:
         await self._context.close()
 
 
-def _is_expression(value: object) -> TypeGuard[ValueExpression]:
-    return is_value_expression(value)
+async def _resolve_request_fields(
+    context: RunContext,
+    expression: ObjectExpr,
+    target: ResolutionTarget,
+) -> tuple[JsonObject, dict[str, tuple[TaintOriginId, ...]]] | RequestPreparationFailure:
+    """Resolve top-level request fields independently so routing taint cannot be obscured."""
+    members: list[JsonObjectMember] = []
+    origins: dict[str, tuple[TaintOriginId, ...]] = {}
+    for member in expression.members:
+        result = await context.resolve_for_wire(
+            member.expression,
+            ResolutionTarget(
+                symbol=SymbolPath(segments=(*target.symbol.segments, member.name)),
+                scope=target.scope,
+                namespace=target.namespace,
+                cell_inputs=target.cell_inputs,
+            ),
+        )
+        if type(result) is Missing:
+            continue
+        resolved = _resolved_json_value(result)
+        if type(resolved) is RequestPreparationFailure:
+            return resolved
+        value, value_origins = resolved
+        members.append(JsonObjectMember(name=member.name, value=value))
+        origins[member.name] = value_origins
+    return JsonObject(members=tuple(members)), origins
 
 
-def _resolved_object(
+def _resolved_json_value(
     result: object,
-) -> tuple[JsonObject, tuple[TaintOriginId, ...]] | RequestPreparationFailure:
+) -> tuple[JsonValue, tuple[TaintOriginId, ...]] | RequestPreparationFailure:
+    """Reveal one registered wire value only into the short-lived materialization boundary."""
     if type(result) is not ResolvedForWire:
         return _resolution_failure(result) or _unavailable(_SHAPE_INVALID)
     value = result.result.value
     if is_sensitive_value(value):
-        if value.payload_type is not JsonObject:
+        revealed = value.reveal(access=_REQUEST_ACCESS)
+        if not is_json_value(revealed):
             return _unavailable(_SHAPE_INVALID)
-        return cast(JsonObject, value.reveal(access=_REQUEST_ACCESS)), value.origins
-    if type(value) is not JsonObject:
+        return revealed, value.origins
+    if not is_json_value(value):
         return _unavailable(_SHAPE_INVALID)
     return value, ()
+
+
+def _is_expression(value: object) -> TypeGuard[ValueExpression]:
+    return is_value_expression(value)
 
 
 def _resolution_failure(result: object) -> RequestPreparationFailure | None:
@@ -290,7 +355,8 @@ def _absolute_url(
     raw: str,
     request: JsonObject,
     provenance: ValueProvenance,
-    origins: tuple[TaintOriginId, ...],
+    *,
+    query_origins: tuple[TaintOriginId, ...] = (),
 ) -> AbsoluteHttpUrl:
     parsed = urlsplit(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -298,15 +364,18 @@ def _absolute_url(
     if parsed.username is not None or parsed.password is not None or parsed.fragment:
         raise ValueError("request URL cannot contain user information or a fragment")
     scheme = HttpScheme(parsed.scheme)
-    path = _path(parsed.path, origins)
-    url_query = tuple(parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True))
+    path = _path(parsed.path, ())
+    url_query: tuple[tuple[str, str, tuple[TaintOriginId, ...]], ...] = tuple(
+        (name, value, ())
+        for name, value in parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    )
     authored_query = _object_value(request, "query")
     query_items = [*url_query]
     if authored_query is not None:
         if type(authored_query) is not JsonObject:
             raise TypeError("request query must be an object")
         query_items.extend(
-            (member.name, member.value.value)
+            (member.name, member.value.value, query_origins)
             for member in authored_query.members
             if type(member.value) is JsonString
         )
@@ -323,11 +392,11 @@ def _absolute_url(
             parameters=tuple(
                 QueryParameter(
                     name=QueryName(value=name),
-                    value=_sensitive(QueryText(value=value), origins),
+                    value=_sensitive(QueryText(value=value), value_origins),
                     source=QuerySource.AUTHORED,
                     provenance=provenance,
                 )
-                for name, value in query_items
+                for name, value, value_origins in query_items
             )
         ),
     )
@@ -402,6 +471,13 @@ def _effective_fingerprint(
         digest=Sha256Digest(hex_value=hashlib.sha256(encoded).hexdigest()),
     )
     return SensitiveValue(fingerprint, origins=origins) if origins else fingerprint
+
+
+def _combined_origins(
+    fields: dict[str, tuple[TaintOriginId, ...]],
+) -> tuple[TaintOriginId, ...]:
+    """Return a stable union for the opaque effective-request fingerprint only."""
+    return tuple(dict.fromkeys(origin for origins in fields.values() for origin in origins))
 
 
 def _default_policies() -> RequestPolicies:
