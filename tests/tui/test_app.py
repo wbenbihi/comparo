@@ -54,7 +54,6 @@ from comparo.core.artifacts import ArtifactProvenance
 from comparo.core.artifacts import ArtifactSummary
 from comparo.core.artifacts import RunArtifact
 from comparo.tui.app import ComparoApp
-from comparo.tui.app import _route_result_reference
 from comparo.tui.commands import CommandId
 from comparo.tui.components import CommandFooter
 from comparo.tui.components import CompareDraftForm
@@ -81,6 +80,8 @@ from comparo.tui.controllers.coordinator import same_compare_intent
 from comparo.tui.navigation import NavigationFrame
 from comparo.tui.navigation import Route
 from comparo.tui.navigation import WorkspaceId
+from comparo.tui.selection import restore_frame
+from comparo.tui.selection import result_reference_from_route
 from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
 from comparo.tui.workspaces import CompareWorkspace
@@ -496,10 +497,10 @@ def _footer_text(app: ComparoApp) -> str:
 
 
 def test_result_route_identity_recovers_only_typed_closed_references() -> None:
-    assert _route_result_reference("execution:execution-1") == _result_reference()
-    assert _route_result_reference(None) is None
-    assert _route_result_reference("missing-separator") is None
-    assert _route_result_reference("unknown:result-1") is None
+    assert result_reference_from_route("execution:execution-1") == _result_reference()
+    assert result_reference_from_route(None) is None
+    assert result_reference_from_route("missing-separator") is None
+    assert result_reference_from_route("unknown:result-1") is None
 
 
 def test_shell_has_four_workspaces_one_switcher_and_contextual_commands() -> None:
@@ -871,11 +872,11 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             app._spawn_operation(held_project_operation(), TuiOperationSlot.PROJECT)
             release_duplicate.set()
             await pilot.pause()
-            app._restore_frame(
-                NavigationFrame(route=Route(workspace=WorkspaceId.SETTINGS, view="root"))
+            restore_frame(
+                app, NavigationFrame(route=Route(workspace=WorkspaceId.SETTINGS, view="root"))
             )
-            app._restore_frame(
-                NavigationFrame(route=Route(workspace=WorkspaceId.COMPARE, view="root"))
+            restore_frame(
+                app, NavigationFrame(route=Route(workspace=WorkspaceId.COMPARE, view="root"))
             )
             await pilot.click("#tab-report")
             await pilot.pause()

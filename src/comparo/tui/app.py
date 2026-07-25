@@ -7,14 +7,12 @@ from collections.abc import Coroutine
 from contextlib import suppress
 from pathlib import PurePath
 from typing import ClassVar
-from typing import cast
 from typing import final
 from typing import override
 
 from textual import on
 from textual.app import App
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.binding import BindingType
 from textual.events import Resize
 from textual.widgets import ContentSwitcher
@@ -27,9 +25,8 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection
 from comparo.application.project_workspace import ProjectWorkspaceResult
 from comparo.application.report_archive import ReportArchiveListing
-from comparo.application.results import ResultEntity
 from comparo.application.results import ResultProjection
-from comparo.application.results import ResultReference
+from comparo.tui.bindings import textual_bindings
 from comparo.tui.commands import COMMAND_CATALOG
 from comparo.tui.commands import CommandDescriptor
 from comparo.tui.commands import CommandId
@@ -39,7 +36,6 @@ from comparo.tui.components import CompareDraftForm
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
 from comparo.tui.components import ResultIndex
-from comparo.tui.components import ResultsWorkspaceView
 from comparo.tui.components import TuiOnlySettingsPanel
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import TuiBackend
@@ -61,29 +57,15 @@ from comparo.tui.navigation import initial_navigation
 from comparo.tui.navigation import navigate_back
 from comparo.tui.navigation import push_route
 from comparo.tui.navigation import switch_workspace
+from comparo.tui.selection import restore_frame
 from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
+from comparo.tui.workspace_views import compare_workspace_view
+from comparo.tui.workspace_views import report_workspace_view
 from comparo.tui.workspaces import CompareWorkspace
-from comparo.tui.workspaces import CompareWorkspaceState
 from comparo.tui.workspaces import ExplorerWorkspace
 from comparo.tui.workspaces import ReportWorkspace
-from comparo.tui.workspaces import ReportWorkspaceState
 from comparo.tui.workspaces import SettingsWorkspace
-
-
-def _bindings() -> list[BindingType]:
-    """Build one physical-key declaration from the central semantic catalog."""
-    keys = {key: command.label for command in COMMAND_CATALOG for key in command.keys}
-    return [
-        Binding(
-            key,
-            f"dispatch_catalog_key({key!r})",
-            label,
-            show=False,
-            priority=key in {"escape", "ctrl+k"},
-        )
-        for key, label in keys.items()
-    ]
 
 
 @final
@@ -95,7 +77,7 @@ class ComparoApp(App[int]):
     #workspace-tabs { dock: top; }
     #workspace-content { height: 1fr; width: 1fr; }
     """
-    BINDINGS: ClassVar[list[BindingType]] = _bindings()
+    BINDINGS: ClassVar[list[BindingType]] = textual_bindings()
 
     def __init__(
         self,
@@ -194,8 +176,8 @@ class ComparoApp(App[int]):
         )
         yield ContentSwitcher(
             ExplorerWorkspace(self.project_result, id="workspace-explorer"),
-            self._compare_workspace(),
-            self._report_workspace(),
+            compare_workspace_view(self._coordinator, self._interaction_limits),
+            report_workspace_view(self._coordinator),
             SettingsWorkspace(self._preferences, id="workspace-settings"),
             initial=f"workspace-{active.value}",
             id="workspace-content",
@@ -358,7 +340,7 @@ class ComparoApp(App[int]):
         tabs = self.query_one("#workspace-tabs", Tabs)
         if tabs.active != tab_id:
             tabs.active = tab_id
-        self._restore_frame(self._navigation.current)
+        restore_frame(self, self._navigation.current)
         await self._render_footer()
 
     async def go_back(self) -> None:
@@ -377,7 +359,7 @@ class ComparoApp(App[int]):
         if after.route.workspace is WorkspaceId.REPORT and after.route.view == "root":
             self._coordinator.show_report_archive()
         await self._render_workspace(after.route.workspace)
-        self._restore_frame(after)
+        restore_frame(self, after)
 
     async def reload_project(self) -> None:
         """Reload Explorer through the coordinator."""
@@ -493,30 +475,6 @@ class ComparoApp(App[int]):
         self.screen.set_class(preferences.mouse, "mouse-next-launch-enabled")
         self.screen.set_class(not preferences.mouse, "mouse-next-launch-disabled")
 
-    def _compare_workspace(self) -> CompareWorkspace:
-        state = self._coordinator
-        return CompareWorkspace(
-            mode=state.compare_draft.mode,
-            draft=state.compare_draft,
-            resources=state.project_resources,
-            state=CompareWorkspaceState(state.compare_surface.value),
-            plan=state.compare_plan,
-            progress=state.compare_progress,
-            results=state.compare_result,
-            diagnostics=state.compare_diagnostics,
-            interaction_limits=self._interaction_limits,
-            id="workspace-compare",
-        )
-
-    def _report_workspace(self) -> ReportWorkspace:
-        state = self._coordinator
-        return ReportWorkspace(
-            state=ReportWorkspaceState(state.report_surface.value),
-            listing=state.report_listing,
-            result=state.report_result,
-            id="workspace-report",
-        )
-
     def _push_route(self, workspace: WorkspaceId, view: str, entity: str) -> None:
         self._navigation = push_route(
             self._navigation,
@@ -534,43 +492,6 @@ class ComparoApp(App[int]):
         """Submit one coalesced operation and explain a duplicate request."""
         if not self._coordinator.spawn(operation, slot=slot):
             self.notify("That operation is already in progress.")
-
-    def _restore_frame(self, frame: NavigationFrame) -> None:
-        """Restore the safe entity selection retained by one local navigation frame."""
-        workspace = frame.route.workspace
-        if workspace is WorkspaceId.EXPLORER:
-            self.query_one("#workspace-explorer", ExplorerWorkspace).restore_resource(
-                frame.route.entity if frame.route.view == "resource" else None
-            )
-            return
-        if workspace not in {WorkspaceId.COMPARE, WorkspaceId.REPORT}:
-            return
-        views = self.query(f"#workspace-{workspace.value} ResultsWorkspaceView")
-        if not len(views):
-            return
-        result_view = cast("ResultsWorkspaceView", views.first())
-        reference = (
-            _route_result_reference(frame.route.entity)
-            if frame.route.view == "result-detail"
-            else None
-        )
-        if reference is None:
-            result_view.clear_reference()
-        else:
-            result_view.follow_reference(reference)
-
-
-def _route_result_reference(entity: str | None) -> ResultReference | None:
-    """Recover one typed result reference from the bounded route identity."""
-    if entity is None:
-        return None
-    raw_kind, separator, result_id = entity.partition(":")
-    if not separator:
-        return None
-    try:
-        return ResultReference(entity=ResultEntity(raw_kind), result_id=result_id)
-    except (TypeError, ValueError):
-        return None
 
 
 __all__ = ("ComparoApp",)

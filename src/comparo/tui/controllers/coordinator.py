@@ -27,6 +27,7 @@ from comparo.tui.contracts import CompareMode
 from comparo.tui.contracts import TuiBackend
 from comparo.tui.contracts import TuiBackendError
 from comparo.tui.contracts import TuiExecutionControls
+from comparo.tui.controllers.operations import TuiOperationSlot
 from comparo.tui.navigation import WorkspaceId
 
 _GENERIC_PROJECT_FAILURE = "tui.project.load-failed"
@@ -50,17 +51,6 @@ class ReportSurface(StrEnum):
 
     BROWSE = "browse"
     RESULT = "result"
-
-
-class TuiOperationSlot(StrEnum):
-    """Finite independently coalesced background-operation categories."""
-
-    STARTUP = "startup"
-    CLEANUP = "cleanup"
-    PROJECT = "project"
-    REPORT = "report"
-    COMPARE = "compare"
-    EXECUTION = "execution"
 
 
 ChangeCallback = Callable[[WorkspaceId], Awaitable[None]]
@@ -173,11 +163,9 @@ class TuiCoordinator:
         handle = self.compare_handle
         self.compare_handle = None
         self._reset_preparation()
-        if handle is None:
-            self.spawn(self._finish_invalidation(), slot=TuiOperationSlot.CLEANUP)
-        else:
+        if handle is not None:
             self._discard_queue.append(handle)
-            self.spawn(self._finish_invalidation(), slot=TuiOperationSlot.CLEANUP)
+        self.spawn(self._finish_invalidation(), slot=TuiOperationSlot.CLEANUP)
 
     async def reload_project(self) -> None:
         """Load one safe project snapshot and reject stale completion."""
@@ -497,7 +485,6 @@ __all__ = (
     "CompareSurface",
     "ReportSurface",
     "TuiCoordinator",
-    "TuiOperationSlot",
     "diagnostic",
     "failure_code",
     "failure_diagnostic",
