@@ -8,6 +8,7 @@ import errno
 import os
 import stat
 import sys
+import traceback
 from collections.abc import AsyncIterator
 from hashlib import sha256
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest
 from comparo.adapters.artifacts import local as local_module
 from comparo.adapters.artifacts.local import LocalArtifactBundleSink
 from comparo.adapters.artifacts.local import LocalArtifactStoreError
+from comparo.adapters.artifacts.local import open_local_artifact_bundle
 from comparo.adapters.artifacts.local import read_local_artifact_bundle
 from comparo.core.artifacts.codec import ArtifactCodecError
 from comparo.core.artifacts.codec import ArtifactCodecErrorCode
@@ -76,6 +78,11 @@ def _persisted(root: Path) -> tuple[RunArtifact, Path]:
     return artifact, root / artifact.metadata.artifact_id
 
 
+async def _collect(source: SanitizedBlobSource, blob: ArtifactBlob) -> bytes:
+    chunks = [chunk async for chunk in source.read(blob)]
+    return b"".join(chunks)
+
+
 def _manifest(bundle: Path) -> dict[str, object]:
     value = msgspec.json.decode((bundle / "manifest.json").read_bytes())
     assert type(value) is dict
@@ -125,6 +132,24 @@ class _ExactSource:
         return chunks()
 
 
+class _PausingSource:
+    def __init__(self, source: SanitizedBlobSource) -> None:
+        self._source = source
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def read(self, blob: ArtifactBlob) -> AsyncIterator[bytes]:
+        source = self._source
+
+        async def chunks() -> AsyncIterator[bytes]:
+            self.entered.set()
+            await self.release.wait()
+            async for chunk in source.read(blob):
+                yield chunk
+
+        return chunks()
+
+
 def test_constructor_context_manager_and_error_boundaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -165,21 +190,39 @@ def test_persist_preflight_and_transaction_free_failure_paths(
     limited = asyncio.run(sink.persist(artifact, blobs, _with_limits(blobs=1)))
     assert _failure_code(limited) is ArtifactStoreErrorCode.BUDGET_EXCEEDED
 
-    def fail_local(_root_fd: int, _bundle_id: str) -> local_module._BundleTransaction:
+    def fail_local(
+        _root_fd: int,
+        _bundle_id: str,
+        *,
+        owns_root_fd: bool,
+    ) -> local_module._BundleTransaction:
+        del owns_root_fd
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED)
 
     monkeypatch.setattr(local_module._BundleTransaction, "create", fail_local)
     local_failure = asyncio.run(sink.persist(artifact, blobs, _limits()))
     assert _failure_code(local_failure) is ArtifactStoreErrorCode.IO_FAILED
 
-    def fail_unexpected(_root_fd: int, _bundle_id: str) -> local_module._BundleTransaction:
+    def fail_unexpected(
+        _root_fd: int,
+        _bundle_id: str,
+        *,
+        owns_root_fd: bool,
+    ) -> local_module._BundleTransaction:
+        del owns_root_fd
         raise RuntimeError("private-path-secret")
 
     monkeypatch.setattr(local_module._BundleTransaction, "create", fail_unexpected)
     unexpected = asyncio.run(sink.persist(artifact, blobs, _limits()))
     assert _failure_code(unexpected) is ArtifactStoreErrorCode.IO_FAILED
 
-    def cancel(_root_fd: int, _bundle_id: str) -> local_module._BundleTransaction:
+    def cancel(
+        _root_fd: int,
+        _bundle_id: str,
+        *,
+        owns_root_fd: bool,
+    ) -> local_module._BundleTransaction:
+        del owns_root_fd
         raise asyncio.CancelledError
 
     monkeypatch.setattr(local_module._BundleTransaction, "create", cancel)
@@ -187,6 +230,106 @@ def test_persist_preflight_and_transaction_free_failure_paths(
         asyncio.run(sink.persist(artifact, blobs, _limits()))
     sink.close()
     assert not tuple(root.iterdir())
+
+
+def test_close_during_persist_cannot_invalidate_the_transaction_root(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        root = _secure_root(tmp_path / "root")
+        artifact, blobs = await _stored_artifact()
+        source = _PausingSource(blobs)
+        sink = LocalArtifactBundleSink(root)
+        task = asyncio.create_task(sink.persist(artifact, source, _limits()))
+        await source.entered.wait()
+        sink.close()
+        source.release.set()
+        outcome = await task
+
+        assert outcome.status is ArtifactPersistenceStatus.PERSISTED
+        assert read_local_artifact_bundle(root, "artifact-0", limits=_limits()) == artifact
+        assert not tuple(root.glob(".staging-*"))
+
+    asyncio.run(scenario())
+
+
+def test_public_store_errors_do_not_chain_path_bearing_causes(tmp_path: Path) -> None:
+    missing = tmp_path / "sentinel-private-root" / "missing"
+    with pytest.raises(LocalArtifactStoreError) as constructor:
+        LocalArtifactBundleSink(missing)
+    assert str(missing) not in "".join(traceback.format_exception(constructor.value))
+
+    with pytest.raises(LocalArtifactStoreError) as reader:
+        read_local_artifact_bundle(missing, "artifact-0", limits=_limits())
+    assert str(missing) not in "".join(traceback.format_exception(reader.value))
+
+
+def test_open_bundle_exposes_only_declared_verified_blobs_for_its_lifetime(
+    tmp_path: Path,
+) -> None:
+    root = _secure_root(tmp_path / "root")
+    artifact, _bundle_path = _persisted(root)
+
+    with open_local_artifact_bundle(root, "artifact-0", limits=_limits()) as bundle:
+        assert bundle.artifact == artifact
+        values = {asyncio.run(_collect(bundle, blob)) for blob in artifact.blobs}
+        assert values == {b"left", b"right"}
+        unknown = msgspec.structs.replace(artifact.blobs[0], media_type="application/json")
+        with pytest.raises(LocalArtifactStoreError) as undeclared:
+            bundle.read(unknown)
+        assert undeclared.value.code is ArtifactStoreErrorCode.INVALID_ARTIFACT
+
+    bundle.close()
+    with pytest.raises(LocalArtifactStoreError) as closed:
+        asyncio.run(_collect(bundle, artifact.blobs[0]))
+    assert closed.value.code is ArtifactStoreErrorCode.CLOSED
+    with pytest.raises(LocalArtifactStoreError) as reenter:
+        bundle.__enter__()
+    assert reenter.value.code is ArtifactStoreErrorCode.CLOSED
+
+
+def test_open_bundle_authenticates_a_blob_before_yielding_any_bytes(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "root")
+    artifact, bundle_path = _persisted(root)
+    blob = artifact.blobs[0]
+    (bundle_path / "blobs" / blob.sha256).write_bytes(b"xxxx")
+
+    with (
+        open_local_artifact_bundle(root, "artifact-0", limits=_limits()) as bundle,
+        pytest.raises(LocalArtifactStoreError) as tampered,
+    ):
+        asyncio.run(_collect(bundle, blob))
+    assert tampered.value.code is ArtifactStoreErrorCode.DIGEST_MISMATCH
+
+
+def test_open_bundle_maps_stream_io_and_detects_post_stat_growth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _secure_root(tmp_path / "root")
+    artifact, _bundle_path = _persisted(root)
+    blob = artifact.blobs[0]
+    with open_local_artifact_bundle(root, "artifact-0", limits=_limits()) as bundle:
+        monkeypatch.setattr(
+            os,
+            "lseek",
+            lambda *_args: (_ for _ in ()).throw(OSError()),
+        )
+        with pytest.raises(LocalArtifactStoreError) as stream_failure:
+            asyncio.run(_collect(bundle, blob))
+    assert stream_failure.value.code is ArtifactStoreErrorCode.IO_FAILED
+    monkeypatch.undo()
+
+    value = tmp_path / "grown"
+    value.write_bytes(b"overlong")
+    descriptor = os.open(value, os.O_RDONLY)
+    try:
+        with pytest.raises(LocalArtifactStoreError) as growth:
+            local_module._verify_blob_descriptor(
+                descriptor,
+                ArtifactBlob(sha256="0" * 64, byte_count=1),
+            )
+        assert growth.value.code is ArtifactStoreErrorCode.DIGEST_MISMATCH
+    finally:
+        os.close(descriptor)
 
 
 def test_transaction_creation_collision_and_partial_failures(
@@ -382,9 +525,11 @@ def test_blob_open_publish_and_commit_uncertain_failures(
     uncertain_root = _secure_root(tmp_path / "uncertain")
     uncertain_sink = LocalArtifactBundleSink(uncertain_root)
     original_fsync = os.fsync
+    root_metadata = os.fstat(uncertain_sink._root_fd)
 
     def fail_root_fsync(descriptor: int) -> None:
-        if descriptor == uncertain_sink._root_fd:
+        metadata = os.fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) == (root_metadata.st_dev, root_metadata.st_ino):
             raise OSError
         original_fsync(descriptor)
 
@@ -539,6 +684,14 @@ def test_low_level_file_helpers_cover_failures_and_short_io(
             local_module._read_file(directory_fd, "insecure", maximum=1)
         assert unsafe.value.code is ArtifactStoreErrorCode.ROOT_UNSAFE
 
+        linked = root / "linked"
+        linked.write_bytes(b"x")
+        linked.chmod(0o600)
+        os.link(linked, root / "linked-alias")
+        with pytest.raises(LocalArtifactStoreError) as hardlink:
+            local_module._read_file(directory_fd, "linked", maximum=1)
+        assert hardlink.value.code is ArtifactStoreErrorCode.ROOT_UNSAFE
+
         oversized = root / "oversized"
         oversized.write_bytes(b"xx")
         oversized.chmod(0o600)
@@ -584,6 +737,7 @@ def test_read_file_detects_growth_after_stat(
             return SimpleNamespace(
                 st_mode=metadata.st_mode,
                 st_uid=metadata.st_uid,
+                st_nlink=metadata.st_nlink,
                 st_size=0,
             )
         return metadata

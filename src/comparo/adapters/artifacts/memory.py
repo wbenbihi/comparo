@@ -27,7 +27,7 @@ class SanitizedBlobStoreError(RuntimeError):
 class InMemorySanitizedBlobStore:
     """Store already-sanitized blobs with exact caller-owned aggregate budgets."""
 
-    __slots__ = ("_blobs", "_closed", "_limits", "_total_bytes")
+    __slots__ = ("_blobs", "_closed", "_limits", "_total_bytes", "_writers")
 
     def __init__(self, limits: ArtifactLimits) -> None:
         """Create an empty bounded store for one artifact compilation."""
@@ -36,13 +36,16 @@ class InMemorySanitizedBlobStore:
         self._limits = limits
         self._blobs: dict[str, bytes] = {}
         self._total_bytes = 0
+        self._writers: set[_MemoryBlobWriter] = set()
         self._closed = False
 
     async def begin(self) -> _MemoryBlobWriter:
         """Create a private writer that publishes only on commit."""
         if self._closed:
             raise SanitizedBlobStoreError(ArtifactStoreErrorCode.CLOSED)
-        return _MemoryBlobWriter(self)
+        writer = _MemoryBlobWriter(self)
+        self._writers.add(writer)
+        return writer
 
     def read(self, blob: ArtifactBlob) -> AsyncIterator[bytes]:
         """Read one exact declared sanitized blob in a single in-memory chunk."""
@@ -63,6 +66,9 @@ class InMemorySanitizedBlobStore:
         """Wipe safe ephemeral buffers and reject later operations."""
         if self._closed:
             return
+        for writer in tuple(self._writers):
+            writer._close_from_store()
+        self._writers.clear()
         self._blobs.clear()
         self._total_bytes = 0
         self._closed = True
@@ -106,19 +112,27 @@ class _MemoryBlobWriter:
     async def commit(self, *, media_type: str | None) -> ArtifactBlob:
         """Publish the complete sanitized bytes exactly once."""
         self._require_active()
-        self._finished = True
         value = bytes(self._buffer)
-        self._buffer[:] = b"\x00" * len(self._buffer)
-        self._buffer.clear()
+        self._finish()
         return self._store._commit(value, media_type)
 
     async def abort(self) -> None:
         """Wipe staged bytes and make future writer calls fail closed."""
         if self._finished:
             return
+        self._finish()
+
+    def _finish(self) -> None:
+        """Wipe and unregister this writer exactly once."""
         self._buffer[:] = b"\x00" * len(self._buffer)
         self._buffer.clear()
         self._finished = True
+        self._store._writers.discard(self)
+
+    def _close_from_store(self) -> None:
+        """Wipe a pending writer while its owner is closing."""
+        if not self._finished:
+            self._finish()
 
     def _require_active(self) -> None:
         if self._finished or self._store._closed:

@@ -128,7 +128,11 @@ def test_memory_writer_abort_limits_deduplication_and_mismatch_paths() -> None:
         store.close()
         closed_writer_store = InMemorySanitizedBlobStore(_limits())
         pending = await closed_writer_store.begin()
+        await pending.write(b"wipe-me")
         closed_writer_store.close()
+        assert pending._buffer == bytearray()
+        assert not closed_writer_store._writers
+        pending._close_from_store()
         with pytest.raises(SanitizedBlobStoreError) as closed_writer:
             await pending.write(b"x")
         assert closed_writer.value.code is ArtifactStoreErrorCode.CLOSED

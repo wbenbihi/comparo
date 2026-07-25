@@ -10,10 +10,12 @@ import re
 import stat
 import sys
 from collections.abc import AsyncIterable
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from hashlib import sha256
 from pathlib import Path
 from secrets import token_hex
+from threading import Lock
 from typing import Final
 from typing import final
 
@@ -61,7 +63,7 @@ class _BundleManifest(
 class LocalArtifactBundleSink:
     """Persist complete bundles beneath one pinned user-owned POSIX directory."""
 
-    __slots__ = ("_closed", "_root_fd")
+    __slots__ = ("_closed", "_lock", "_root_fd")
 
     def __init__(self, root: Path) -> None:
         """Pin a safe absolute root without trusting that pathname again."""
@@ -71,26 +73,25 @@ class LocalArtifactBundleSink:
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.UNSUPPORTED_PLATFORM)
         try:
             root_fd = os.open(root, _DIRECTORY_FLAGS)
-        except OSError as error:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE) from error
+        except OSError:
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE) from None
         try:
             _validate_root_fd(root_fd)
         except Exception:
             os.close(root_fd)
             raise
         self._root_fd = root_fd
+        self._lock = Lock()
         self._closed = False
 
     async def persist(  # noqa: C901
         self,
-        artifact: object,
+        artifact: RunArtifact,
         blobs: SanitizedBlobSource,
-        limits: object,
+        limits: ArtifactLimits,
     ) -> ArtifactPersistenceOutcome:
         """Write, sync, and no-replace publish one complete sanitized bundle."""
-        if self._closed:
-            return _failure(ArtifactStoreErrorCode.CLOSED)
-        if type(artifact) is not RunArtifact or type(limits) is not ArtifactLimits:
+        if not _valid_persistence_inputs(artifact, limits):
             return _failure(ArtifactStoreErrorCode.INVALID_ARTIFACT)
         bundle_id = artifact.metadata.artifact_id
         if _BUNDLE_ID.fullmatch(bundle_id) is None:
@@ -98,8 +99,18 @@ class LocalArtifactBundleSink:
         if len(artifact.blobs) > limits.maximum_blobs.value:
             return _failure(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
         transaction: _BundleTransaction | None = None
+        transaction_root_fd = -1
         try:
-            transaction = _BundleTransaction.create(self._root_fd, bundle_id)
+            with self._lock:
+                if self._closed:
+                    return _failure(ArtifactStoreErrorCode.CLOSED)
+                transaction_root_fd = os.dup(self._root_fd)
+            transaction = _BundleTransaction.create(
+                transaction_root_fd,
+                bundle_id,
+                owns_root_fd=True,
+            )
+            transaction_root_fd = -1
             await transaction.write(artifact, blobs, limits)
             transaction.publish()
             return ArtifactPersistenceOutcome(
@@ -121,18 +132,24 @@ class LocalArtifactBundleSink:
         finally:
             if transaction is not None:
                 transaction.close()
+            elif transaction_root_fd >= 0:
+                with suppress(OSError):
+                    os.close(transaction_root_fd)
 
     def close(self) -> None:
         """Release the pinned root descriptor and reject later writes."""
-        if self._closed:
-            return
-        os.close(self._root_fd)
-        self._closed = True
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            with suppress(OSError):
+                os.close(self._root_fd)
 
     def __enter__(self) -> LocalArtifactBundleSink:
         """Return this pinned sink for synchronous lifetime composition."""
-        if self._closed:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.CLOSED)
+        with self._lock:
+            if self._closed:
+                raise LocalArtifactStoreError(ArtifactStoreErrorCode.CLOSED)
         return self
 
     def __exit__(self, *_error: object) -> None:
@@ -153,6 +170,81 @@ class LocalArtifactStoreError(RuntimeError):
         super().__init__(code.value)
 
 
+@final
+class LocalArtifactBundle:
+    """Authenticated bundle metadata plus a lifetime-bound sanitized blob source."""
+
+    __slots__ = ("_artifact", "_blob_fd", "_closed", "_lock")
+
+    def __init__(self, artifact: RunArtifact, blob_fd: int) -> None:
+        """Own one validated artifact and its pinned blob directory descriptor."""
+        self._artifact = artifact
+        self._blob_fd = blob_fd
+        self._lock = Lock()
+        self._closed = False
+
+    @property
+    def artifact(self) -> RunArtifact:
+        """Return the decoded safe artifact whose blobs this source may expose."""
+        return self._artifact
+
+    def read(self, blob: ArtifactBlob) -> AsyncIterable[bytes]:
+        """Verify one declared blob before streaming its sanitized bytes."""
+        if type(blob) is not ArtifactBlob or blob not in self._artifact.blobs:
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
+
+        async def chunks() -> AsyncIterator[bytes]:
+            directory_fd = -1
+            descriptor = -1
+            try:
+                with self._lock:
+                    if self._closed:
+                        raise LocalArtifactStoreError(ArtifactStoreErrorCode.CLOSED)
+                    directory_fd = os.dup(self._blob_fd)
+                descriptor = _open_read_file(
+                    directory_fd,
+                    blob.sha256,
+                    maximum=blob.byte_count,
+                )
+                _verify_blob_descriptor(descriptor, blob)
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                while chunk := os.read(descriptor, 65_536):
+                    yield chunk
+            except LocalArtifactStoreError:
+                raise
+            except OSError:
+                raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+            finally:
+                if descriptor >= 0:
+                    with suppress(OSError):
+                        os.close(descriptor)
+                if directory_fd >= 0:
+                    with suppress(OSError):
+                        os.close(directory_fd)
+
+        return chunks()
+
+    def close(self) -> None:
+        """Release the pinned blob directory and reject future reads."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            with suppress(OSError):
+                os.close(self._blob_fd)
+
+    def __enter__(self) -> LocalArtifactBundle:
+        """Return this open bundle for explicit lifetime composition."""
+        with self._lock:
+            if self._closed:
+                raise LocalArtifactStoreError(ArtifactStoreErrorCode.CLOSED)
+        return self
+
+    def __exit__(self, *_error: object) -> None:
+        """Release the pinned blob directory."""
+        self.close()
+
+
 class _BundleTransaction:
     """One private sibling staging directory and its open descriptors."""
 
@@ -162,6 +254,7 @@ class _BundleTransaction:
         "_closed",
         "_created_blob_names",
         "_created_files",
+        "_owns_root_fd",
         "_published",
         "_root_fd",
         "_staging_fd",
@@ -176,19 +269,27 @@ class _BundleTransaction:
         staging_name: str,
         staging_fd: int,
         blob_fd: int,
+        owns_root_fd: bool,
     ) -> None:
         self._root_fd = root_fd
         self._bundle_id = bundle_id
         self._staging_name = staging_name
         self._staging_fd = staging_fd
         self._blob_fd = blob_fd
+        self._owns_root_fd = owns_root_fd
         self._created_files: list[str] = []
         self._created_blob_names: list[str] = []
         self._published = False
         self._closed = False
 
     @classmethod
-    def create(cls, root_fd: int, bundle_id: str) -> _BundleTransaction:
+    def create(
+        cls,
+        root_fd: int,
+        bundle_id: str,
+        *,
+        owns_root_fd: bool = False,
+    ) -> _BundleTransaction:
         """Create a random restrictive sibling staging directory without following links."""
         for _attempt in range(_STAGING_ATTEMPTS):
             staging_name = f".staging-{bundle_id}-{token_hex(16)}"
@@ -211,6 +312,7 @@ class _BundleTransaction:
                 staging_name=staging_name,
                 staging_fd=staging_fd,
                 blob_fd=blob_fd,
+                owns_root_fd=owns_root_fd,
             )
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED)
 
@@ -328,18 +430,23 @@ class _BundleTransaction:
         """Release transaction descriptors exactly once."""
         if self._closed:
             return
-        os.close(self._blob_fd)
-        os.close(self._staging_fd)
         self._closed = True
+        with suppress(OSError):
+            os.close(self._blob_fd)
+        with suppress(OSError):
+            os.close(self._staging_fd)
+        if self._owns_root_fd:
+            with suppress(OSError):
+                os.close(self._root_fd)
 
 
-def read_local_artifact_bundle(  # noqa: C901
+def open_local_artifact_bundle(  # noqa: C901
     root: Path,
     bundle_id: str,
     *,
     limits: ArtifactLimits,
-) -> RunArtifact:
-    """Read and authenticate one complete bundle through descriptor-relative operations."""
+) -> LocalArtifactBundle:
+    """Open authenticated metadata and a pinned source for its declared sanitized blobs."""
     if (
         not isinstance(root, Path)
         or not root.is_absolute()
@@ -349,6 +456,7 @@ def read_local_artifact_bundle(  # noqa: C901
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
     root_fd = -1
     bundle_fd = -1
+    blob_fd = -1
     try:
         root_fd = os.open(root, _DIRECTORY_FLAGS)
         _validate_root_fd(root_fd)
@@ -392,32 +500,60 @@ def read_local_artifact_bundle(  # noqa: C901
         if len(artifact.blobs) > limits.maximum_blobs.value:
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
         blob_fd = os.open("blobs", _DIRECTORY_FLAGS, dir_fd=bundle_fd)
-        try:
-            _validate_bundle_fd(blob_fd)
-            total = 0
-            for blob in artifact.blobs:
-                if blob.byte_count > limits.maximum_blob_bytes.value:
-                    raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
-                total += blob.byte_count
-                if total > limits.maximum_total_blob_bytes.value:
-                    raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
-                value = _read_file(blob_fd, blob.sha256, maximum=blob.byte_count)
-                if len(value) != blob.byte_count or sha256(value).hexdigest() != blob.sha256:
-                    raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
-        finally:
-            os.close(blob_fd)
-        return artifact
+        _validate_bundle_fd(blob_fd)
+        total = 0
+        for blob in artifact.blobs:
+            if blob.byte_count > limits.maximum_blob_bytes.value:
+                raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+            total += blob.byte_count
+            if total > limits.maximum_total_blob_bytes.value:
+                raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+        opened = LocalArtifactBundle(artifact, blob_fd)
+        blob_fd = -1
+        return opened
     except LocalArtifactStoreError:
         raise
-    except ArtifactCodecError as error:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT) from error
-    except (OSError, msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError) as error:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from error
+    except ArtifactCodecError:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT) from None
+    except (OSError, msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
     finally:
+        if blob_fd >= 0:
+            with suppress(OSError):
+                os.close(blob_fd)
         if bundle_fd >= 0:
-            os.close(bundle_fd)
+            with suppress(OSError):
+                os.close(bundle_fd)
         if root_fd >= 0:
-            os.close(root_fd)
+            with suppress(OSError):
+                os.close(root_fd)
+
+
+def read_local_artifact_bundle(
+    root: Path,
+    bundle_id: str,
+    *,
+    limits: ArtifactLimits,
+) -> RunArtifact:
+    """Read and authenticate one complete bundle without retaining blob bytes in memory."""
+    try:
+        with open_local_artifact_bundle(root, bundle_id, limits=limits) as bundle:
+            for blob in bundle.artifact.blobs:
+                descriptor = _open_read_file(
+                    bundle._blob_fd,
+                    blob.sha256,
+                    maximum=blob.byte_count,
+                )
+                try:
+                    _verify_blob_descriptor(descriptor, blob)
+                finally:
+                    with suppress(OSError):
+                        os.close(descriptor)
+            return bundle.artifact
+    except LocalArtifactStoreError:
+        raise
+    except OSError:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
 
 
 def _write_file(directory_fd: int, name: str, value: bytes) -> None:
@@ -442,20 +578,8 @@ def _write_all(descriptor: int, value: bytes) -> None:
 
 
 def _read_file(directory_fd: int, name: str, *, maximum: int) -> bytes:
-    if type(maximum) is not int or maximum < 0:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
-    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    descriptor = _open_read_file(directory_fd, name, maximum=maximum)
     try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_mode & (stat.S_IRWXG | stat.S_IRWXO)
-        ):
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
-        if metadata.st_size > maximum:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
         remaining = maximum + 1
         chunks: list[bytes] = []
         while remaining:
@@ -470,6 +594,40 @@ def _read_file(directory_fd: int, name: str, *, maximum: int) -> bytes:
         return value
     finally:
         os.close(descriptor)
+
+
+def _open_read_file(directory_fd: int, name: str, *, maximum: int) -> int:
+    if type(maximum) is not int or maximum < 0:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or metadata.st_mode & (stat.S_IRWXG | stat.S_IRWXO)
+        ):
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
+        if metadata.st_size > maximum:
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _verify_blob_descriptor(descriptor: int, blob: ArtifactBlob) -> None:
+    digest = sha256()
+    size = 0
+    while chunk := os.read(descriptor, 65_536):
+        size += len(chunk)
+        if size > blob.byte_count:
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
+        digest.update(chunk)
+    if size != blob.byte_count or digest.hexdigest() != blob.sha256:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
 
 
 def _validate_root_fd(descriptor: int) -> None:
@@ -502,6 +660,11 @@ def _failure(code: ArtifactStoreErrorCode) -> ArtifactPersistenceOutcome:
         status=status,
         failure=ArtifactStoreFailure(code=code),
     )
+
+
+def _valid_persistence_inputs(artifact: object, limits: object) -> bool:
+    """Retain runtime guards without weakening the sink's static port signature."""
+    return type(artifact) is RunArtifact and type(limits) is ArtifactLimits
 
 
 def _best_effort_unlink(directory_fd: int, name: str) -> None:
