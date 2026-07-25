@@ -378,6 +378,18 @@ forbidden_modules = [
   "yaml",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Application services remain independent from terminal frontends"
+type = "forbidden"
+source_modules = ["comparo.application"]
+forbidden_modules = [
+  "comparo.cli",
+  "comparo.tui",
+  "cyclopts",
+  "rich",
+  "textual",
+]
+
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
