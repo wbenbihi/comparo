@@ -247,6 +247,18 @@ def _response_body_bytes(response: ResponseObservation | None) -> int | None:
 
 def _apply_failure_cutoff(metrics: dict[str, TimingMetric], phase: FailurePhase) -> None:
     later = {
+        FailurePhase.POLICY: (
+            "connection_acquisition",
+            "dns",
+            "connect",
+            "proxy_tunnel",
+            "tls",
+            "request_write",
+            "response_headers",
+            "server_wait",
+            "first_body_byte",
+            "body_read",
+        ),
         FailurePhase.CONNECT: (
             "proxy_tunnel",
             "tls",

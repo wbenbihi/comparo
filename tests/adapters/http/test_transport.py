@@ -44,6 +44,7 @@ from comparo.adapters.http.transport import _seconds
 from comparo.adapters.http.transport import _tls_layers
 from comparo.adapters.http.transport import _tls_observation
 from comparo.adapters.http.wire import RequestWireRenderer
+from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.http.auth import BasicAuthentication
 from comparo.core.domain.http.auth import BasicUsername
 from comparo.core.domain.http.auth import BasicWireEncoding
@@ -51,7 +52,11 @@ from comparo.core.domain.http.auth import BearerAuthentication
 from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.bodies import RepeatableByteSource
+from comparo.core.domain.http.fields import HeaderField
 from comparo.core.domain.http.fields import HeaderName
+from comparo.core.domain.http.fields import HeaderSource
+from comparo.core.domain.http.fields import HeaderText
+from comparo.core.domain.http.fields import RequestHeaders
 from comparo.core.domain.http.policies import ExplicitProxy
 from comparo.core.domain.http.policies import NoProxy
 from comparo.core.domain.http.policies import ProxyTlsDisabled
@@ -60,6 +65,7 @@ from comparo.core.domain.http.policies import UnlimitedTimeout
 from comparo.core.domain.http.response_bodies import NoBodyReason
 from comparo.core.domain.http.response_bodies import NoResponseBody
 from comparo.core.domain.http.responses import ResponseObservation
+from comparo.core.domain.http.timing_validation import validate_exchange_timing_truth
 from comparo.core.domain.http.transport import FailurePhase
 from comparo.core.domain.http.transport import HttpProtocol
 from comparo.core.domain.http.transport import TlsMetadata
@@ -67,6 +73,7 @@ from comparo.core.domain.http.transport import TlsNotPerformed
 from comparo.core.domain.http.transport import TlsUnavailable
 from comparo.core.domain.http.transport import TlsUnavailableReason
 from comparo.core.domain.http.transport import TlsVersion
+from comparo.core.domain.http.transport import TransportFailure
 from comparo.core.domain.http.url import ClientResolvedTarget
 from comparo.core.domain.http.url import DirectResolvedRoute
 from comparo.core.domain.http.url import DnsHost
@@ -82,13 +89,19 @@ from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Ratio
+from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
+from comparo.core.domain.sensitivity import TaintOriginId
 from tests.core.domain.budget_origin_factories import default_budget_origin
+from tests.core.domain.http.factories import authority
 from tests.core.domain.http.factories import bearer_secret
 from tests.core.domain.http.factories import destination
+from tests.core.domain.http.factories import fingerprint
 from tests.core.domain.http.factories import password_secret
 from tests.core.domain.http.factories import policies
+from tests.core.domain.http.factories import provenance
 from tests.core.domain.http.observation_factories import authorized_request
+from tests.core.domain.http.observation_factories import occurrence
 from tests.core.domain.http.observation_factories import request
 
 
@@ -105,6 +118,7 @@ def _config() -> HttpcoreTransportConfig:
     return HttpcoreTransportConfig(
         maximum_connections=PositiveCount(value=4),
         maximum_keepalive_connections=Count(value=2),
+        maximum_authorization_occurrences=PositiveCount(value=100),
         keepalive_expiry=Duration(nanoseconds=1_000_000_000),
         capture=limits,
         classification=ResponseClassification(body=Sensitivity.PUBLIC),
@@ -283,6 +297,7 @@ def test_transport_configuration_and_constructor_boundaries(tmp_path: Path) -> N
     invalid_values = (
         {"maximum_connections": cast("PositiveCount", object())},
         {"maximum_keepalive_connections": cast("Count", object())},
+        {"maximum_authorization_occurrences": cast("PositiveCount", object())},
         {"keepalive_expiry": cast("Duration", object())},
         {"capture": cast("ResponseCaptureLimits", object())},
         {"classification": cast("ResponseClassification", object())},
@@ -622,6 +637,175 @@ def test_exchange_contains_internal_errors_and_rejects_invalid_calls(
     asyncio.run(scenario())
 
 
+def test_authorization_occurrence_is_atomically_consumed_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        transport, store = _transport(tmp_path)
+        canary = "transport-ledger-secret-canary"
+        effective = msgspec.structs.replace(
+            request(),
+            headers=RequestHeaders(
+                fields=(
+                    HeaderField(
+                        name=HeaderName(value="x-api-key"),
+                        value=SensitiveValue(
+                            HeaderText(value=canary),
+                            origins=(TaintOriginId(value="transport-ledger-test"),),
+                        ),
+                        source=HeaderSource.AUTHORED,
+                        provenance=provenance(),
+                    ),
+                )
+            ),
+        )
+        outbound = authorized_request(effective)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def perform(
+            self: HttpcoreTransport,
+            request_value: AuthorizedExchangeRequest,
+            trace: ExchangeTraceRecorder,
+        ) -> tuple[None, TransportFailure]:
+            nonlocal calls
+            del self, request_value, trace
+            calls += 1
+            entered.set()
+            await release.wait()
+            return None, TransportFailure(
+                phase=FailurePhase.PROTOCOL,
+                code=DiagnosticCode(value="http.test-terminal"),
+                retryable=False,
+            )
+
+        monkeypatch.setattr(HttpcoreTransport, "_perform_exchange", perform)
+        first = asyncio.create_task(transport.exchange(outbound))
+        await entered.wait()
+        concurrent_reuse = await transport.exchange(outbound)
+        assert concurrent_reuse.response is None
+        assert concurrent_reuse.failure is not None
+        assert concurrent_reuse.failure.phase is FailurePhase.POLICY
+        assert concurrent_reuse.failure.code.value == (
+            "http.policy-authorization-occurrence-consumed"
+        )
+        assert not concurrent_reuse.failure.retryable
+        validate_exchange_timing_truth(
+            outbound,
+            concurrent_reuse.response,
+            concurrent_reuse.failure,
+            concurrent_reuse.timings,
+        )
+
+        release.set()
+        first_result = await first
+        assert first_result.failure is not None
+        assert first_result.failure.code.value == "http.test-terminal"
+
+        sequential_reuse = await transport.exchange(outbound)
+        assert sequential_reuse.response is None
+        assert sequential_reuse.failure == concurrent_reuse.failure
+        assert calls == 1
+        assert canary not in repr(transport._consumed_authorizations)
+
+        await transport.close()
+        assert not transport._consumed_authorizations
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_authorization_ledger_binds_policy_plan_and_occurrence_with_finite_capacity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        store = _store(tmp_path)
+        config = msgspec.structs.replace(
+            _config(),
+            maximum_authorization_occurrences=PositiveCount(value=4),
+        )
+        transport = HttpcoreTransport(
+            body_store=store,
+            config=config,
+            tls=ExplicitTlsContextProvider(),
+            budgets=DefaultCaptureBudgetProvider(config.capture, default_budget_origin()),
+        )
+        base = authorized_request(request())
+        base_intent = base.authorization.intent
+        plan_bound = AuthorizedExchangeRequest(
+            authorization=msgspec.structs.replace(
+                base.authorization,
+                intent=msgspec.structs.replace(
+                    base_intent,
+                    plan_fingerprint=fingerprint("b"),
+                ),
+            )
+        )
+        policy_authority = authority("c")
+        policy_bound = AuthorizedExchangeRequest(
+            authorization=msgspec.structs.replace(
+                base.authorization,
+                intent=msgspec.structs.replace(
+                    base_intent,
+                    effective_policy_fingerprint=fingerprint("c"),
+                ),
+                authority=policy_authority,
+            )
+        )
+        calls = 0
+
+        async def perform(
+            self: HttpcoreTransport,
+            request_value: AuthorizedExchangeRequest,
+            trace: ExchangeTraceRecorder,
+        ) -> tuple[None, TransportFailure]:
+            nonlocal calls
+            del self, request_value, trace
+            calls += 1
+            return None, TransportFailure(
+                phase=FailurePhase.PROTOCOL,
+                code=DiagnosticCode(value="http.test-terminal"),
+                retryable=False,
+            )
+
+        monkeypatch.setattr(HttpcoreTransport, "_perform_exchange", perform)
+        for outbound in (base, plan_bound, policy_bound):
+            result = await transport.exchange(outbound)
+            assert result.failure is not None
+            assert result.failure.code.value == "http.test-terminal"
+        assert calls == 3
+
+        different_occurrence = authorized_request(
+            request(),
+            request_occurrence=occurrence(exchange=2),
+        )
+        different_result = await transport.exchange(different_occurrence)
+        assert different_result.failure is not None
+        assert different_result.failure.code.value == "http.test-terminal"
+        assert calls == 4
+        assert len(transport._consumed_authorizations) == 4
+
+        beyond_capacity = authorized_request(
+            request(),
+            request_occurrence=occurrence(exchange=3),
+        )
+        exhausted = await transport.exchange(beyond_capacity)
+        assert exhausted.response is None
+        assert exhausted.failure is not None
+        assert exhausted.failure.phase is FailurePhase.RESOURCE_BUDGET
+        assert exhausted.failure.code.value == "http.authorization-ledger-capacity-exhausted"
+        assert not exhausted.failure.retryable
+        assert calls == 4
+
+        await transport.close()
+        await store.close()
+
+    asyncio.run(scenario())
+
+
 def test_exchange_converts_pre_header_cancellation_to_typed_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -653,7 +837,7 @@ def test_close_waits_for_active_work_is_idempotent_and_attempts_every_pool(
         second = _Pool(failure=True)
         transport._pools[_pool_key("one")] = cast("httpcore.AsyncConnectionPool", first)
         transport._pools[_pool_key("two")] = cast("httpcore.AsyncConnectionPool", second)
-        await transport._admit()
+        await transport._admit(authorized_request(request()))
         closing = asyncio.create_task(transport.close())
         await asyncio.sleep(0)
         assert not first.closed

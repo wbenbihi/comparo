@@ -107,6 +107,7 @@ def _config() -> HttpcoreTransportConfig:
     return HttpcoreTransportConfig(
         maximum_connections=PositiveCount(value=4),
         maximum_keepalive_connections=Count(value=2),
+        maximum_authorization_occurrences=PositiveCount(value=100),
         keepalive_expiry=Duration(nanoseconds=30_000_000_000),
         capture=ResponseCaptureLimits(
             maximum_encoded_body_bytes=ByteCount(value=4_096),
@@ -265,6 +266,73 @@ def test_real_transport_preserves_response_facts_decodes_gzip_and_reuses_pool(
             f"GET / HTTP/1.1\r\nHost: service.example:{server.port}\r\n".encode("ascii")
         )
         assert b"Accept-Encoding: gzip\r\n" in server.requests[0]
+
+        await transport.close()
+        await store.close()
+        await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_loopback_transport_rejects_sequential_authorization_reuse(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        server = await _start_server(b"HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n")
+        store = _store(tmp_path)
+        config = _config()
+        transport = HttpcoreTransport(
+            body_store=store,
+            config=config,
+            tls=ExplicitTlsContextProvider(),
+            budgets=DefaultCaptureBudgetProvider(config.capture, default_budget_origin()),
+        )
+        outbound = _authorized(server.port, 610)
+
+        sent = await transport.exchange(outbound)
+        reused = await transport.exchange(outbound)
+
+        assert sent.failure is None
+        assert sent.response is not None
+        assert reused.response is None
+        assert reused.failure is not None
+        assert reused.failure.phase is FailurePhase.POLICY
+        assert reused.failure.code.value == "http.policy-authorization-occurrence-consumed"
+        assert not reused.failure.retryable
+        assert len(server.requests) == 1
+
+        await transport.close()
+        await store.close()
+        await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_loopback_transport_atomically_rejects_concurrent_authorization_reuse(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        server = await _start_server(b"HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n")
+        store = _store(tmp_path)
+        config = _config()
+        transport = HttpcoreTransport(
+            body_store=store,
+            config=config,
+            tls=ExplicitTlsContextProvider(),
+            budgets=DefaultCaptureBudgetProvider(config.capture, default_budget_origin()),
+        )
+        outbound = _authorized(server.port, 611)
+
+        results = await asyncio.gather(
+            transport.exchange(outbound),
+            transport.exchange(outbound),
+        )
+
+        assert sum(result.response is not None for result in results) == 1
+        failures = [result.failure for result in results if result.failure is not None]
+        assert len(failures) == 1
+        assert failures[0].phase is FailurePhase.POLICY
+        assert failures[0].code.value == "http.policy-authorization-occurrence-consumed"
+        assert not failures[0].retryable
+        assert len(server.requests) == 1
 
         await transport.close()
         await store.close()

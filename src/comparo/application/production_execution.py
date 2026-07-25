@@ -134,6 +134,7 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
         transport=HttpcoreTransportConfig(
             maximum_connections=PositiveCount(value=20),
             maximum_keepalive_connections=Count(value=10),
+            maximum_authorization_occurrences=PositiveCount(value=1_000_000),
             keepalive_expiry=Duration(nanoseconds=30_000_000_000),
             capture=response_capture,
             classification=ResponseClassification(body=Sensitivity.PUBLIC),

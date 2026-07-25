@@ -31,6 +31,7 @@ from comparo.core.domain.http.auth import BasicUsername
 from comparo.core.domain.http.auth import BearerAuthentication
 from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
+from comparo.core.domain.http.authorization import HttpRequestOccurrence
 from comparo.core.domain.http.fields import HeaderName
 from comparo.core.domain.http.fields import HeaderText
 from comparo.core.domain.http.policies import ExplicitProxy
@@ -74,6 +75,7 @@ from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
+from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.sensitivity import SensitiveValue
@@ -100,6 +102,12 @@ _TRANSPORT_CANCELLED = DiagnosticCode(value="http.transport-cancelled")
 _TRANSPORT_FAILED = DiagnosticCode(value="http.transport-failed")
 _ATTEMPT_TOTAL_TIMEOUT = DiagnosticCode(value="http.attempt-total-timeout")
 _EXECUTION_TOTAL_TIMEOUT = DiagnosticCode(value="http.execution-total-timeout")
+_AUTHORIZATION_OCCURRENCE_CONSUMED = DiagnosticCode(
+    value="http.policy-authorization-occurrence-consumed"
+)
+_AUTHORIZATION_LEDGER_EXHAUSTED = DiagnosticCode(
+    value="http.authorization-ledger-capacity-exhausted"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +134,7 @@ class HttpcoreTransportConfig(msgspec.Struct, frozen=True, kw_only=True):
 
     maximum_connections: PositiveCount
     maximum_keepalive_connections: Count
+    maximum_authorization_occurrences: PositiveCount
     keepalive_expiry: Duration
     capture: ResponseCaptureLimits
     classification: ResponseClassification
@@ -136,6 +145,8 @@ class HttpcoreTransportConfig(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("HTTP maximum connections must be PositiveCount")
         if type(self.maximum_keepalive_connections) is not Count:
             raise TypeError("HTTP maximum keepalive connections must be Count")
+        if type(self.maximum_authorization_occurrences) is not PositiveCount:
+            raise TypeError("HTTP maximum authorization occurrences must be PositiveCount")
         if self.maximum_keepalive_connections.value > self.maximum_connections.value:
             raise ValueError("HTTP keepalive connections cannot exceed total connections")
         if type(self.keepalive_expiry) is not Duration:
@@ -162,6 +173,15 @@ class _TotalDeadline:
     code: DiagnosticCode
 
 
+@dataclass(frozen=True, slots=True)
+class _AuthorizationOccurrenceKey:
+    """Secret-free identity of one exact policy-authorized outbound occurrence."""
+
+    effective_policy_fingerprint: Fingerprint
+    plan_fingerprint: Fingerprint
+    occurrence: HttpRequestOccurrence
+
+
 class HttpcoreTransport:
     """Perform one authorized exchange with no implicit redirect, retry, or ambient state."""
 
@@ -175,6 +195,7 @@ class HttpcoreTransport:
         "_condition",
         "_config",
         "_connection_ids",
+        "_consumed_authorizations",
         "_execution_started",
         "_next_connection_id",
         "_pool_lock",
@@ -209,6 +230,7 @@ class HttpcoreTransport:
         )
         self._pools: dict[_PoolKey, httpcore.AsyncConnectionPool] = {}
         self._connection_ids: dict[tuple[DefinitionRef, int], str] = {}
+        self._consumed_authorizations: set[_AuthorizationOccurrenceKey] = set()
         self._attempt_started: dict[AttemptId, float] = {}
         self._execution_started: dict[EnvironmentExecutionId, float] = {}
         self._next_connection_id = 1
@@ -222,12 +244,23 @@ class HttpcoreTransport:
         """Execute exactly one route-pinned request and retain every available terminal fact."""
         if type(request) is not AuthorizedExchangeRequest:
             raise TypeError("HTTP transport accepts only AuthorizedExchangeRequest")
-        await self._admit()
         trace = ExchangeTraceRecorder(idle_timeout=_seconds(request.request.policies.timeouts.idle))
+        admission_failure = await self._admit(request)
+        if admission_failure is not None:
+            return HttpTransportResult(
+                response=None,
+                failure=admission_failure,
+                timings=trace.timings(
+                    route=request.route,
+                    response=None,
+                    failure=admission_failure,
+                ),
+            )
         response_observation: ResponseObservation | None = None
         failure: TransportFailure | None = None
-        deadline = self._total_deadline(request)
+        deadline: _TotalDeadline | None = None
         try:
+            deadline = self._total_deadline(request)
             if deadline is None:
                 response_observation, failure = await self._perform_exchange(request, trace)
             else:
@@ -318,6 +351,7 @@ class HttpcoreTransport:
                 return
             self._closing = True
             await self._condition.wait_for(lambda: self._active == 0)
+            self._consumed_authorizations.clear()
         async with self._pool_lock:
             pools = tuple(self._pools.values())
             self._pools.clear()
@@ -343,11 +377,37 @@ class HttpcoreTransport:
         if any(isinstance(result, BaseException) for result in results):
             raise RuntimeError("HTTP connection-pool cleanup failed")
 
-    async def _admit(self) -> None:
+    async def _admit(
+        self,
+        request: AuthorizedExchangeRequest,
+    ) -> TransportFailure | None:
         async with self._condition:
             if self._closing or self._closed:
                 raise RuntimeError("HTTP transport is closed")
+            intent = request.authorization.intent
+            key = _AuthorizationOccurrenceKey(
+                effective_policy_fingerprint=intent.effective_policy_fingerprint,
+                plan_fingerprint=intent.plan_fingerprint,
+                occurrence=intent.occurrence,
+            )
+            if key in self._consumed_authorizations:
+                return TransportFailure(
+                    phase=FailurePhase.POLICY,
+                    code=_AUTHORIZATION_OCCURRENCE_CONSUMED,
+                    retryable=False,
+                )
+            if (
+                len(self._consumed_authorizations)
+                >= self._config.maximum_authorization_occurrences.value
+            ):
+                return TransportFailure(
+                    phase=FailurePhase.RESOURCE_BUDGET,
+                    code=_AUTHORIZATION_LEDGER_EXHAUSTED,
+                    retryable=False,
+                )
+            self._consumed_authorizations.add(key)
             self._active += 1
+            return None
 
     async def _release(self) -> None:
         async with self._condition:
