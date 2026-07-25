@@ -13,6 +13,8 @@ from comparo.application.planning import MatrixOverride
 from comparo.application.planning import PlanningOptions
 from comparo.application.planning import ValueResourceOverride
 from comparo.application.production_execution import ProductionExecutionSettings
+from comparo.tui.contracts.launch import TuiLaunchLimits
+from comparo.tui.contracts.launch import tui_launch_limits_defaults_v1
 
 
 class CompareMode(StrEnum):
@@ -49,6 +51,7 @@ class TuiLaunchRequest(msgspec.Struct, frozen=True, kw_only=True):
     additional_sources: tuple[Path, ...] = ()
     policy: Path | None = None
     artifact_root: Path = Path(".comparo/artifacts")
+    limits: TuiLaunchLimits = msgspec.field(default_factory=tui_launch_limits_defaults_v1)
 
     def __post_init__(self) -> None:
         """Reject non-path and mutable launch inputs."""
@@ -62,6 +65,8 @@ class TuiLaunchRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("TUI policy must be a Path or None")
         if not isinstance(self.artifact_root, Path):
             raise TypeError("TUI artifact root must be a Path")
+        if type(self.limits) is not TuiLaunchLimits:
+            raise TypeError("TUI launch limits must be TuiLaunchLimits")
 
 
 @final

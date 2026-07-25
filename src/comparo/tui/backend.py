@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import final
 from uuid import uuid4
 
-from comparo.application import ArtifactReadLimits
 from comparo.application import CompareExecutionControls
 from comparo.application import CompareIntent
 from comparo.application import ComparePreparationHandle
@@ -23,6 +22,7 @@ from comparo.application import CompareServiceError
 from comparo.application import CompareServiceErrorCode
 from comparo.application import ExecutionSession
 from comparo.application import PlanningOptions
+from comparo.application import ProductionExecutionSettings
 from comparo.application import ProjectPlanRequest
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ProjectWorkspaceResult
@@ -31,11 +31,14 @@ from comparo.application import ReportArchiveErrorCode
 from comparo.application import ReportArchiveLimits
 from comparo.application import ReportArchiveListing
 from comparo.application import ResultProjection
+from comparo.application import initialize_project_artifact_root
 from comparo.application import inspect_project_workspace
 from comparo.application import list_report_archive
-from comparo.application import persisted_production_execution_defaults_v1
 from comparo.application import project_results
+from comparo.application import resolve_project_root
 from comparo.application import verify_artifact
+from comparo.tui.contracts.launch import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
+from comparo.tui.contracts.launch import tui_launch_limits_defaults_v1
 from comparo.tui.contracts.models import CompareDraft
 from comparo.tui.contracts.models import CompareMode
 from comparo.tui.contracts.models import TuiExecutionControls
@@ -43,32 +46,25 @@ from comparo.tui.contracts.models import TuiLaunchRequest
 from comparo.tui.contracts.services import TuiBackendError
 from comparo.tui.contracts.services import TuiBackendErrorCode
 
-DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS = 8
-DEFAULT_TUI_ARTIFACT_READ_LIMITS = ArtifactReadLimits(
-    maximum_blobs=4096,
-    maximum_blob_bytes=64 * 1024 * 1024,
-    maximum_total_blob_bytes=512 * 1024 * 1024,
-    maximum_manifest_bytes=64 * 1024 * 1024,
-    maximum_report_bytes=64 * 1024 * 1024,
-    maximum_redaction_patterns=4096,
-    maximum_redaction_pattern_bytes=1024 * 1024,
-    maximum_redaction_value_bytes=256 * 1024,
-    maximum_redaction_value_nodes=4096,
-)
-DEFAULT_TUI_REPORT_ARCHIVE_LIMITS = ReportArchiveLimits(
-    maximum_entries=4096,
-    artifact=DEFAULT_TUI_ARTIFACT_READ_LIMITS,
-)
+_DEFAULT_TUI_LAUNCH_LIMITS = tui_launch_limits_defaults_v1()
+DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS = DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
+DEFAULT_TUI_REPORT_ARCHIVE_LIMITS = _DEFAULT_TUI_LAUNCH_LIMITS.report_archive
+DEFAULT_TUI_ARTIFACT_READ_LIMITS = DEFAULT_TUI_REPORT_ARCHIVE_LIMITS.artifact
 
 
-def default_tui_execution_controls() -> TuiExecutionControls:
+def default_tui_execution_controls(
+    settings: ProductionExecutionSettings | None = None,
+) -> TuiExecutionControls:
     """Return safe interactive defaults whose sanitized result is retained for Report."""
     try:
         tool_version = version("comparo")
     except PackageNotFoundError:
         tool_version = "unknown"
+    selected = tui_launch_limits_defaults_v1().execution_settings if settings is None else settings
+    if type(selected) is not ProductionExecutionSettings:
+        raise TypeError("TUI execution controls require ProductionExecutionSettings")
     return TuiExecutionControls(
-        settings=persisted_production_execution_defaults_v1(),
+        settings=selected,
         approve_mutations=False,
         tool_version=tool_version,
     )
@@ -78,12 +74,13 @@ def default_tui_execution_controls() -> TuiExecutionControls:
 class ProductionTuiBackend:
     """Own one launch configuration and stateful Compare preparation service."""
 
-    _artifact_root: Path
+    _artifact_root: Path | None
     _closed: bool
     _compare: CompareService
     _compare_lock: asyncio.Lock
     _launch: TuiLaunchRequest
     _report_limits: ReportArchiveLimits
+    _root_lock: asyncio.Lock
 
     __slots__ = (
         "_artifact_root",
@@ -92,33 +89,45 @@ class ProductionTuiBackend:
         "_compare_lock",
         "_launch",
         "_report_limits",
+        "_root_lock",
     )
 
     def __init__(
         self,
         launch: TuiLaunchRequest,
         *,
-        report_limits: ReportArchiveLimits = DEFAULT_TUI_REPORT_ARCHIVE_LIMITS,
-        maximum_outstanding_preparations: int = (DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS),
+        report_limits: ReportArchiveLimits | None = None,
+        maximum_outstanding_preparations: int | None = None,
     ) -> None:
         """Create a backend with explicit bounded report and preparation limits."""
-        if type(launch) is not TuiLaunchRequest or type(report_limits) is not ReportArchiveLimits:
+        if type(launch) is not TuiLaunchRequest or (
+            report_limits is not None and type(report_limits) is not ReportArchiveLimits
+        ):
             raise TuiBackendError(TuiBackendErrorCode.INVALID_REQUEST)
         compare: CompareService | None = None
         artifact_root: Path | None = None
         failure: TuiBackendErrorCode | None = None
         try:
-            compare = CompareService(maximum_outstanding=maximum_outstanding_preparations)
-            artifact_root = launch.artifact_root.resolve()
+            maximum = (
+                launch.limits.maximum_outstanding_preparations
+                if maximum_outstanding_preparations is None
+                else maximum_outstanding_preparations
+            )
+            compare = CompareService(maximum_outstanding=maximum)
+            if launch.artifact_root.is_absolute():
+                artifact_root = launch.artifact_root.resolve(strict=True)
         except Exception:  # noqa: BLE001 - constructor errors may contain local paths
             failure = TuiBackendErrorCode.INVALID_REQUEST
-        if failure is not None or compare is None or artifact_root is None:
+        if failure is not None or compare is None:
             raise TuiBackendError(TuiBackendErrorCode.INVALID_REQUEST)
         self._launch = launch
         self._artifact_root = artifact_root
-        self._report_limits = report_limits
+        self._report_limits = (
+            launch.limits.report_archive if report_limits is None else report_limits
+        )
         self._compare = compare
         self._compare_lock = asyncio.Lock()
+        self._root_lock = asyncio.Lock()
         self._closed = False
 
     async def load_project(self) -> ProjectWorkspaceResult:
@@ -127,11 +136,15 @@ class ProductionTuiBackend:
         request = ProjectWorkspaceRequest(
             config=self._launch.config,
             additional_sources=self._launch.additional_sources,
+            load_limits=self._launch.limits.project_load,
         )
-        return await _safe_thread_call(
+        result = await _safe_thread_call(
             partial(inspect_project_workspace, request),
             _fixed_failure(TuiBackendErrorCode.PROJECT_LOAD_FAILED),
         )
+        if result.snapshot is not None:
+            await self._initialize_artifact_root()
+        return result
 
     async def prepare_compare(self, draft: CompareDraft) -> ComparePreparationResult:
         """Translate one draft and retain its admitted plan behind an opaque handle."""
@@ -156,6 +169,8 @@ class ProductionTuiBackend:
                 options=options,
                 invocation_id=uuid4(),
                 run_id=uuid4(),
+                load_limits=self._launch.limits.project_load,
+                policy_load_limits=self._launch.limits.policy_load,
             ),
         )
         return self._compare.prepare(request)
@@ -173,13 +188,14 @@ class ProductionTuiBackend:
             raise TuiBackendError(TuiBackendErrorCode.INVALID_REQUEST)
         async with self._compare_lock:
             self._require_open()
+            artifact_root = self._require_artifact_root(TuiBackendErrorCode.COMPARE_START_FAILED)
             return _safe_call(
                 partial(
                     self._compare.start,
                     handle,
                     CompareExecutionControls(
                         settings=controls.settings,
-                        artifact_root=self._artifact_root,
+                        artifact_root=artifact_root,
                         approve_mutations=controls.approve_mutations,
                         tool_version=controls.tool_version,
                     ),
@@ -201,10 +217,11 @@ class ProductionTuiBackend:
     async def list_reports(self) -> ReportArchiveListing:
         """List authenticated report summaries under explicit archive read ceilings."""
         self._require_open()
+        artifact_root = self._require_artifact_root(TuiBackendErrorCode.REPORT_LIST_UNAVAILABLE)
         return await _safe_thread_call(
             partial(
                 list_report_archive,
-                self._artifact_root,
+                artifact_root,
                 self._report_limits,
             ),
             _report_list_failure,
@@ -215,18 +232,39 @@ class ProductionTuiBackend:
         if type(bundle_id) is not str or not bundle_id or len(bundle_id) > 63:
             raise TuiBackendError(TuiBackendErrorCode.INVALID_REQUEST)
         self._require_open()
+        self._require_artifact_root(TuiBackendErrorCode.REPORT_OPEN_FAILED)
         return await _safe_thread_call(
             partial(self._open_report, bundle_id),
             _fixed_failure(TuiBackendErrorCode.REPORT_OPEN_FAILED),
         )
 
     def _open_report(self, bundle_id: str) -> ResultProjection:
+        artifact_root = self._require_artifact_root(TuiBackendErrorCode.REPORT_OPEN_FAILED)
         artifact = verify_artifact(
-            self._artifact_root,
+            artifact_root,
             bundle_id,
             self._report_limits.artifact,
         )
         return project_results(artifact)
+
+    async def _initialize_artifact_root(self) -> None:
+        if self._artifact_root is not None:
+            return
+        async with self._root_lock:
+            project_root = resolve_project_root(self._launch.config)
+            self._artifact_root = await _safe_thread_call(
+                partial(
+                    initialize_project_artifact_root,
+                    project_root,
+                    self._launch.artifact_root,
+                ),
+                _fixed_failure(TuiBackendErrorCode.PROJECT_LOAD_FAILED),
+            )
+
+    def _require_artifact_root(self, code: TuiBackendErrorCode) -> Path:
+        if self._artifact_root is None:
+            raise TuiBackendError(code)
+        return self._artifact_root
 
     async def close(self) -> None:
         """Idempotently close the retained-plan service and reject later operations."""

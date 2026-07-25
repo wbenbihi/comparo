@@ -109,9 +109,12 @@ class TuiCoordinator:
         )
 
     def begin(self) -> None:
-        """Start independent initial project and report loads."""
-        self.spawn(self.reload_project())
-        self.spawn(self.reload_reports())
+        """Load the project before opening its project-relative report archive."""
+        self.spawn(self._initial_load())
+
+    async def _initial_load(self) -> None:
+        await self.reload_project()
+        await self.reload_reports()
 
     def spawn(self, operation: Coroutine[Any, Any, None]) -> None:
         """Own one background operation and consume its safe terminal state."""

@@ -28,8 +28,10 @@ from comparo.application import CompareServiceErrorCode
 from comparo.application import ExecutionSession
 from comparo.application import MatrixOverride
 from comparo.application import PlanningOptions
+from comparo.application import ProductionExecutionSettings
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ProjectWorkspaceResult
+from comparo.application import ProjectWorkspaceSnapshot
 from comparo.application import ReportArchiveError
 from comparo.application import ReportArchiveErrorCode
 from comparo.application import ReportArchiveLimits
@@ -38,6 +40,10 @@ from comparo.application import ResultProjection
 from comparo.application import ValueResourceOverride
 from comparo.application import persisted_production_execution_defaults_v1
 from comparo.application import production_execution_defaults_v1
+from comparo.application.inspection import ResourceCoordinate
+from comparo.application.inspection import SourceCoordinate
+from comparo.application.project_workspace import ProjectResourceSummary
+from comparo.application.project_workspace import ProjectSourceSummary
 from comparo.core.domain.budget_contracts import BudgetResource
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.tui import backend as backend_module
@@ -53,6 +59,7 @@ from comparo.tui.contracts import TuiBackendError
 from comparo.tui.contracts import TuiBackendErrorCode
 from comparo.tui.contracts import TuiExecutionControls
 from comparo.tui.contracts import TuiLaunchRequest
+from comparo.tui.contracts import tui_launch_limits_defaults_v1
 
 _INVOCATION_ID = UUID("10000000-0000-0000-0000-000000000001")
 _RUN_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -72,6 +79,43 @@ def _prepare_failure() -> ComparePreparationResult:
     return ComparePreparationResult(diagnostics=(_diagnostic("prepare"),))
 
 
+def _project_success(tmp_path: Path) -> ProjectWorkspaceResult:
+    coordinate = ResourceCoordinate(
+        namespace="local",
+        kind="Project",
+        resource_id="demo",
+        fingerprint="a" * 64,
+    )
+    project = ProjectResourceSummary(
+        coordinate=coordinate,
+        name="Demo",
+        description=None,
+        tags=(),
+        source=SourceCoordinate(
+            source="project.yaml",
+            document=1,
+            line=1,
+            column=1,
+        ),
+    )
+    return ProjectWorkspaceResult(
+        snapshot=ProjectWorkspaceSnapshot(
+            api_version="comparo/v1alpha1",
+            namespace="local",
+            project=project,
+            resources=(),
+        ),
+        sources=(
+            ProjectSourceSummary(
+                source_id="project.yaml",
+                path=str((tmp_path / "project" / "comparo.yaml").resolve()),
+                entry=True,
+                resources=(coordinate,),
+            ),
+        ),
+    )
+
+
 def _unclassified_compare_service_error() -> CompareServiceError:
     error = CompareServiceError(CompareServiceErrorCode.CLOSED)
     error.code = cast("CompareServiceErrorCode", object())
@@ -87,11 +131,13 @@ def _controls() -> TuiExecutionControls:
 
 
 def _launch(tmp_path: Path) -> TuiLaunchRequest:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir(mode=0o700, exist_ok=True)
     return TuiLaunchRequest(
         config=tmp_path / "project" / "comparo.yaml",
         additional_sources=(tmp_path / "extra.yaml",),
         policy=tmp_path / "operator-policy.yaml",
-        artifact_root=tmp_path / "artifacts",
+        artifact_root=artifact_root,
     )
 
 
@@ -161,6 +207,11 @@ def test_default_execution_controls_use_safe_version_fallback(
     assert default_tui_execution_controls().tool_version == "unknown"
 
 
+def test_default_execution_controls_reject_untyped_settings() -> None:
+    with pytest.raises(TypeError, match="ProductionExecutionSettings"):
+        default_tui_execution_controls(cast("ProductionExecutionSettings", object()))
+
+
 def test_project_load_runs_off_loop_with_launch_owned_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -180,6 +231,70 @@ def test_project_load_runs_off_loop_with_launch_owned_sources(
         assert request.config == _launch(tmp_path).config
         assert request.additional_sources == _launch(tmp_path).additional_sources
         assert worker != caller
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_successful_project_load_initializes_relative_archive_under_project_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        project_root = tmp_path / "project"
+        project_root.mkdir(mode=0o700)
+        launch = TuiLaunchRequest(
+            config=project_root / "comparo.yaml",
+            artifact_root=Path(".comparo/artifacts"),
+        )
+        backend = ProductionTuiBackend(launch)
+        result = _project_success(tmp_path)
+        monkeypatch.setattr(backend_module, "inspect_project_workspace", lambda _request: result)
+        assert await backend.load_project() is result
+        archive = project_root / ".comparo" / "artifacts"
+        assert archive.is_dir()
+        assert archive.stat().st_mode & 0o077 == 0
+
+        listing = ReportArchiveListing(entries=(), failures=())
+        captured: list[Path] = []
+
+        def list_reports(root: Path, _limits: ReportArchiveLimits) -> ReportArchiveListing:
+            captured.append(root)
+            return listing
+
+        monkeypatch.setattr(backend_module, "list_report_archive", list_reports)
+        assert await backend.list_reports() is listing
+        assert captured == [archive.resolve()]
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_absolute_archive_is_already_initialized_after_successful_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        backend = _backend(tmp_path)
+        result = _project_success(tmp_path)
+        monkeypatch.setattr(backend_module, "inspect_project_workspace", lambda _request: result)
+        assert await backend.load_project() is result
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_relative_archive_is_unavailable_until_project_load(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        backend = ProductionTuiBackend(
+            TuiLaunchRequest(
+                config=tmp_path / "project" / "comparo.yaml",
+                artifact_root=Path("reports"),
+            )
+        )
+        with pytest.raises(TuiBackendError) as caught:
+            await backend.list_reports()
+        assert caught.value.code is TuiBackendErrorCode.REPORT_LIST_UNAVAILABLE
         await backend.close()
 
     asyncio.run(scenario())
@@ -473,7 +588,7 @@ def test_report_open_verifies_then_projects_off_loop(
         def verify(root: Path, bundle_id: str, limits: object) -> object:
             assert root == _launch(tmp_path).artifact_root.resolve()
             assert bundle_id == "artifact-0"
-            assert limits is DEFAULT_TUI_ARTIFACT_READ_LIMITS
+            assert limits == DEFAULT_TUI_ARTIFACT_READ_LIMITS
             calls.append(("verify", threading.get_ident()))
             return artifact
 
@@ -672,6 +787,7 @@ def test_backend_constructor_and_public_contract_validation(tmp_path: Path) -> N
         {"additional_sources": (object(),)},
         {"policy": object()},
         {"artifact_root": object()},
+        {"limits": object()},
     ],
 )
 def test_tui_launch_request_rejects_invalid_values(changes: dict[str, object]) -> None:
@@ -680,6 +796,7 @@ def test_tui_launch_request_rejects_invalid_values(changes: dict[str, object]) -
         "additional_sources": (),
         "policy": None,
         "artifact_root": Path(".comparo/artifacts"),
+        "limits": tui_launch_limits_defaults_v1(),
     }
     values.update(changes)
     with pytest.raises(TypeError):
