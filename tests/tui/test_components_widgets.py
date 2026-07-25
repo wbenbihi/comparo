@@ -1,0 +1,676 @@
+"""Headless tests for reusable Textual components."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from collections.abc import Coroutine
+from functools import wraps
+from pathlib import PurePath
+from typing import ClassVar
+from typing import cast
+from typing import override
+
+import pytest
+from textual import on
+from textual.app import App
+from textual.app import ComposeResult
+from textual.containers import Vertical
+from textual.widget import Widget
+from textual.widgets import Button
+from textual.widgets import Input
+from textual.widgets import ListItem
+from textual.widgets import ListView
+from textual.widgets import Static
+
+from comparo.application.execution_session import ExecutionProgressSnapshot
+from comparo.application.execution_session import ExecutionSessionPhase
+from comparo.application.inspection import ApplicationDiagnostic
+from comparo.application.inspection import EnvironmentPairInspection
+from comparo.application.inspection import PlanCardinalityInspection
+from comparo.application.inspection import PlanInspection
+from comparo.application.inspection import PlanSliceInspection
+from comparo.application.inspection import ResourceCoordinate
+from comparo.application.inspection import SourceCoordinate
+from comparo.application.project_workspace import ProjectResourceSummary
+from comparo.application.report_archive import ReportArchiveEntry
+from comparo.application.results import ComparisonResultRow
+from comparo.application.results import ExecutionResultRow
+from comparo.application.results import ResultEntity
+from comparo.application.results import ResultEvidence
+from comparo.application.results import ResultFact
+from comparo.application.results import ResultMetric
+from comparo.application.results import ResultProjection
+from comparo.application.results import ResultReference
+from comparo.application.results import ResultResource
+from comparo.application.results import ResultSummary
+from comparo.application.results import ResultTiming
+from comparo.application.results import ResultTimingSummary
+from comparo.tui.commands import COMMAND_CATALOG
+from comparo.tui.components import COMPONENT_STYLESHEET
+from comparo.tui.components import CommandFooter
+from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import CompareModeSelector
+from comparo.tui.components import DiagnosticsList
+from comparo.tui.components import ExecutionProgress
+from comparo.tui.components import PlanPreview
+from comparo.tui.components import ProjectResourceDetail
+from comparo.tui.components import ProjectResourceItem
+from comparo.tui.components import ProjectResourceList
+from comparo.tui.components import ReportList
+from comparo.tui.components import ReportListItem
+from comparo.tui.components import ResultDetail
+from comparo.tui.components import ResultIndex
+from comparo.tui.components import ResultIndexKind
+from comparo.tui.components import ResultsWorkspaceView
+from comparo.tui.components import StatePanel
+from comparo.tui.components import StatePanelMode
+from comparo.tui.components import StatusBadge
+from comparo.tui.components import status_for_outcome
+from comparo.tui.components.results import ResultIndexItem
+from comparo.tui.contracts import CompareDraft
+from comparo.tui.contracts import CompareMode
+from comparo.tui.contracts import ResultAccess
+from comparo.tui.design import LayoutClass
+from comparo.tui.design import SemanticStatus
+
+
+def _run_async[**P](
+    function: Callable[P, Coroutine[object, object, None]],
+) -> Callable[P, None]:
+    """Adapt one async Textual test to the repository's synchronous runner."""
+
+    @wraps(function)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> None:
+        asyncio.run(function(*args, **kwargs))
+
+    return wrapper
+
+
+class _WidgetApp(App[None]):
+    CSS_PATH: ClassVar[str | PurePath | list[str | PurePath] | None] = COMPONENT_STYLESHEET
+
+    def __init__(self, *widgets: Widget) -> None:
+        super().__init__()
+        self._widgets = widgets
+
+    @override
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield from self._widgets
+
+
+class _DraftApp(App[None]):
+    CSS_PATH: ClassVar[str | PurePath | list[str | PurePath] | None] = COMPONENT_STYLESHEET
+
+    def __init__(self, form: CompareDraftForm) -> None:
+        super().__init__()
+        self.form = form
+        self.changed: CompareDraft | None = None
+        self.submitted: CompareDraft | None = None
+
+    @override
+    def compose(self) -> ComposeResult:
+        yield self.form
+
+    @on(CompareDraftForm.CompareDraftChanged)
+    def record_change(self, message: CompareDraftForm.CompareDraftChanged) -> None:
+        self.changed = message.draft
+
+    @on(CompareDraftForm.Submitted)
+    def record_submission(self, message: CompareDraftForm.Submitted) -> None:
+        self.submitted = message.draft
+
+
+def _resource(kind: str, resource_id: str, *, name: str | None = None) -> ProjectResourceSummary:
+    return ProjectResourceSummary(
+        coordinate=ResourceCoordinate(
+            namespace="local",
+            kind=kind,
+            resource_id=resource_id,
+            fingerprint="a" * 64,
+        ),
+        name=name,
+        description=None,
+        tags=(),
+        source=SourceCoordinate(
+            source="project.yaml",
+            document=1,
+            line=1,
+            column=1,
+        ),
+    )
+
+
+def _resources() -> tuple[ProjectResourceSummary, ...]:
+    return (
+        _resource("Request", "ping"),
+        _resource("Scenario", "checkout"),
+        _resource("Environment", "staging"),
+        _resource("Environment", "prod"),
+        _resource("ExecutionProfile", "release"),
+    )
+
+
+def _projection() -> ResultProjection:
+    project = ResultResource(
+        namespace="local",
+        kind="Project",
+        resource_id="demo",
+        fingerprint="a" * 64,
+    )
+    subject = ResultResource(
+        namespace="local",
+        kind="Request",
+        resource_id="ping",
+        fingerprint="b" * 64,
+    )
+    staging = ResultResource(
+        namespace="local",
+        kind="Environment",
+        resource_id="staging",
+        fingerprint="c" * 64,
+    )
+    rule = ResultResource(
+        namespace="local",
+        kind="AssertionRule",
+        resource_id="status-ok",
+        fingerprint="d" * 64,
+    )
+    execution_reference = ResultReference(
+        entity=ResultEntity.EXECUTION,
+        result_id="execution-1",
+    )
+    assertion_reference = ResultReference(
+        entity=ResultEntity.ASSERTION,
+        result_id="assertion-1",
+    )
+    comparison_reference = ResultReference(
+        entity=ResultEntity.COMPARISON,
+        result_id="comparison-1",
+    )
+    diff_reference = ResultReference(
+        entity=ResultEntity.DIFF,
+        result_id="diff-1",
+    )
+    assertion = ResultFact(
+        reference=assertion_reference,
+        owner=execution_reference,
+        engine="assertion",
+        rule=rule,
+        rule_id="status",
+        effective_rule_id="status-ok",
+        severity="blocking",
+        outcome="satisfied",
+        counts=(),
+        coverage=(),
+        evidence=(
+            ResultEvidence(
+                fact_id="assertion-1",
+                outcome="satisfied",
+                location="response.status",
+                values=(),
+            ),
+        ),
+        evidence_omitted=0,
+        issues=(),
+    )
+    diff = ResultFact(
+        reference=diff_reference,
+        owner=comparison_reference,
+        engine="diff",
+        rule=rule,
+        rule_id="shape",
+        effective_rule_id="shape",
+        severity="advisory",
+        outcome="equivalent",
+        counts=(),
+        coverage=(),
+        evidence=(),
+        evidence_omitted=0,
+        issues=(),
+    )
+    execution = ExecutionResultRow(
+        ordinal=0,
+        reference=execution_reference,
+        subject=subject,
+        environment=staging,
+        cell_id="cell-1",
+        trial_id="trial-1",
+        coordinates=(),
+        outcome="observed",
+        failure=None,
+        timing=ResultTimingSummary(
+            measurements=(
+                ResultTiming(name="total", nanoseconds=5, reason=None),
+                ResultTiming(name="dns", nanoseconds=None, reason="not-recorded"),
+            ),
+            attempts=1,
+            exchanges=1,
+        ),
+        assertions=(assertion_reference,),
+        comparisons=(comparison_reference,),
+    )
+    comparison = ComparisonResultRow(
+        ordinal=0,
+        reference=comparison_reference,
+        subject=subject,
+        cell_id="cell-1",
+        trial_id="trial-1",
+        outcome="evaluated",
+        baseline=execution_reference,
+        candidate=execution_reference,
+        unavailable=(),
+        diffs=(diff_reference,),
+    )
+    return ResultProjection(
+        summary=ResultSummary(
+            artifact_api_version="comparo.artifact/v1alpha1",
+            artifact_id="artifact",
+            run_id="run",
+            invocation_id="invocation",
+            created_unix_nanoseconds=1,
+            project=project,
+            completion="complete",
+            completion_instant_unix_nanoseconds=2,
+            completion_reasons=(),
+            completion_stage=None,
+            completion_code=None,
+            gate_verdict="passed",
+            gate_profile=None,
+            gate_reasons=(),
+            gate_coverage=(),
+            gate_assessments=(),
+            executions=(ResultMetric(name="observed", value=1),),
+            comparisons=(),
+            assertions=(ResultMetric(name="satisfied", value=1),),
+            diffs=(),
+            coverage_issues=0,
+        ),
+        executions=(execution,),
+        assertions=(assertion,),
+        comparisons=(comparison,),
+        diffs=(diff,),
+        links=(),
+    )
+
+
+def _plan() -> PlanInspection:
+    cardinality = PlanCardinalityInspection(
+        cells=1,
+        trials=1,
+        environment_executions=2,
+        comparisons=1,
+        maximum_attempts=2,
+    )
+    return PlanInspection(
+        api_version="comparo.plan/v1alpha1",
+        run_id="run-1",
+        invocation_id="invocation-1",
+        fingerprint="e" * 64,
+        ordering="canonical",
+        policy=ResourceCoordinate(
+            namespace="local",
+            kind="ExecutionPolicy",
+            resource_id="ci",
+            fingerprint="f" * 64,
+        ),
+        cardinality=cardinality,
+        slices=(
+            PlanSliceInspection(
+                subject=_resource("Request", "ping").coordinate,
+                matrices=(),
+                trials=1,
+                environments=(
+                    _resource("Environment", "staging").coordinate,
+                    _resource("Environment", "prod").coordinate,
+                ),
+                comparisons=(
+                    EnvironmentPairInspection(
+                        baseline=_resource("Environment", "staging").coordinate,
+                        candidate=_resource("Environment", "prod").coordinate,
+                    ),
+                ),
+                maximum_attempts_per_execution=2,
+                cardinality=cardinality,
+            ),
+        ),
+        budgets=(),
+        provenance=(),
+    )
+
+
+def _progress(*, finished: int = 0) -> ExecutionProgressSnapshot:
+    return ExecutionProgressSnapshot(
+        revision=finished,
+        run_id="run-1",
+        phase=ExecutionSessionPhase.RUNNING,
+        total_executions=2,
+        total_comparisons=1,
+        queued_executions=2,
+        started_executions=finished,
+        finished_executions=finished,
+        finished_comparisons=0,
+    )
+
+
+@_run_async
+@pytest.mark.parametrize(
+    ("width", "expected"),
+    [(80, LayoutClass.COMPACT), (120, LayoutClass.STANDARD), (160, LayoutClass.WIDE)],
+)
+async def test_result_workspace_uses_shared_breakpoints(width: int, expected: LayoutClass) -> None:
+    component = ResultsWorkspaceView(
+        _projection(),
+        access=ResultAccess.LIVE,
+    )
+    app = _WidgetApp(component)
+
+    async with app.run_test(size=(width, 36)) as pilot:
+        await pilot.pause()
+        assert component.layout_class is expected
+        assert component.has_class(f"layout-{expected.value}")
+
+
+@_run_async
+@pytest.mark.parametrize(
+    ("mode", "visible", "hidden"),
+    [
+        (
+            CompareMode.ASSERTIONS,
+            ("compare-field-subject", "compare-field-environment"),
+            ("compare-field-baseline", "compare-field-candidate", "compare-field-profile"),
+        ),
+        (
+            CompareMode.DIFFERENCES,
+            ("compare-field-subject", "compare-field-baseline", "compare-field-candidate"),
+            ("compare-field-environment", "compare-field-profile"),
+        ),
+        (
+            CompareMode.EXECUTION_PROFILE,
+            ("compare-field-profile",),
+            (
+                "compare-field-subject",
+                "compare-field-environment",
+                "compare-field-baseline",
+                "compare-field-candidate",
+            ),
+        ),
+    ],
+)
+async def test_compare_draft_form_supports_all_modes(
+    mode: CompareMode,
+    visible: tuple[str, ...],
+    hidden: tuple[str, ...],
+) -> None:
+    form = CompareDraftForm(CompareDraft(mode=mode), resources=_resources())
+    app = _DraftApp(form)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        draft = form.current_draft()
+        assert draft.mode is mode
+        assert draft.subject == "ping"
+        assert draft.environment == "staging"
+        assert draft.baseline == "staging"
+        assert draft.candidate == "prod"
+        assert draft.execution_profile == "release"
+        assert all(form.query_one(f".{name}").display for name in visible)
+        assert all(not form.query_one(f".{name}").display for name in hidden)
+
+
+@_run_async
+async def test_compare_draft_form_emits_typed_changes_and_submission() -> None:
+    form = CompareDraftForm(
+        CompareDraft(mode=CompareMode.ASSERTIONS),
+        resources=_resources(),
+    )
+    app = _DraftApp(form)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        subject = form.query_one("#compare-draft-subject", Input)
+        subject.value = "checkout"
+        await pilot.pause()
+        assert app.changed is not None
+        assert app.changed.subject == "checkout"
+
+        await pilot.click("#compare-mode-differences")
+        await pilot.pause()
+        assert form.current_draft().mode is CompareMode.DIFFERENCES
+        assert form.query_one(".compare-field-baseline").display
+
+        form.query_one("#compare-draft-baseline", Input).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.submitted == form.current_draft()
+
+
+@_run_async
+async def test_untrusted_text_is_contained_across_project_and_report_components() -> None:
+    canary = "unsafe\x1b[31m\u202evalue"
+    resource = _resource("Request", "safe-id", name=canary)
+    report = ReportArchiveEntry(
+        bundle_id="bundle",
+        run_id=canary,
+        invocation_id="invocation",
+        created_unix_nanoseconds=1,
+        completion="complete",
+        gate="passed",
+        subjects=(canary,),
+        environments=("staging",),
+        executions=1,
+        comparisons=0,
+        assertions=0,
+        diffs=0,
+        blobs=0,
+        blob_bytes=0,
+        coverage_issues=0,
+    )
+    app = _WidgetApp(
+        ProjectResourceList((resource,)),
+        ProjectResourceDetail(resource),
+        ReportList((report,)),
+    )
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        screenshot = app.export_screenshot(simplify=True)
+        assert "\x1b" not in screenshot
+        assert "\u202e" not in screenshot
+        assert "unsafe" in screenshot
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ("COMPLETE", SemanticStatus.SUCCESS),
+        ("warning", SemanticStatus.ADVISORY),
+        ("drifted", SemanticStatus.FAILURE),
+        ("unavailable", SemanticStatus.ERROR),
+        ("cancelled", SemanticStatus.CANCELLED),
+        ("running", SemanticStatus.RUNNING),
+        ("preparing", SemanticStatus.QUEUED),
+        ("unknown", SemanticStatus.NEUTRAL),
+    ],
+)
+def test_status_outcomes_use_the_shared_semantic_vocabulary(
+    outcome: str,
+    expected: SemanticStatus,
+) -> None:
+    assert status_for_outcome(outcome) is expected
+
+
+def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
+    draft = CompareDraft(mode=CompareMode.ASSERTIONS, subject="ping")
+    form = CompareDraftForm(draft)
+    assert form.current_draft() == draft
+    form.show_draft(CompareDraft(mode=CompareMode.DIFFERENCES))
+    assert form.current_draft().mode is CompareMode.DIFFERENCES
+
+    selector = CompareModeSelector(CompareMode.ASSERTIONS)
+    selector.show_mode(CompareMode.DIFFERENCES)
+    assert selector.mode is CompareMode.DIFFERENCES
+    selector.select_mode(Button.Pressed(Button("Unrelated")))
+    selector.select_mode(Button.Pressed(Button("Unrelated", id="unrelated")))
+
+    progress = ExecutionProgress(_progress())
+    progress.show_snapshot(_progress(finished=1))
+    assert PlanPreview(None).render()
+    assert ProjectResourceDetail(None).render()
+
+    with pytest.raises(TypeError, match="state panel mode"):
+        StatePanel(mode=cast("StatePanelMode", object()))
+    panel = StatePanel()
+    with pytest.raises(TypeError, match="state panel mode"):
+        panel.show_state(cast("StatePanelMode", object()))
+    with pytest.raises(TypeError, match="SemanticStatus"):
+        StatusBadge(cast("SemanticStatus", object()))
+    with pytest.raises(TypeError, match="CompareMode"):
+        CompareModeSelector(cast("CompareMode", object()))
+    with pytest.raises(TypeError, match="CompareMode"):
+        selector.show_mode(cast("CompareMode", object()))
+    with pytest.raises(TypeError, match="CompareDraft"):
+        CompareDraftForm(cast("CompareDraft", object()))
+    with pytest.raises(TypeError, match="safe summaries"):
+        CompareDraftForm(draft, resources=cast("tuple[ProjectResourceSummary, ...]", []))
+    with pytest.raises(TypeError, match="safe summaries"):
+        CompareDraftForm(
+            draft,
+            resources=(cast("ProjectResourceSummary", object()),),
+        )
+    with pytest.raises(TypeError, match="CompareDraft"):
+        form.show_draft(cast("CompareDraft", object()))
+    with pytest.raises(TypeError, match="result index kind"):
+        ResultIndex(_projection(), kind=cast("ResultIndexKind", object()))
+
+
+@_run_async
+async def test_shared_state_status_diagnostics_and_footer_cover_all_presentations() -> None:
+    content = Static("stable", markup=False)
+    state = StatePanel(content, mode=StatePanelMode.LOADING, message="unsafe\x1b[31m")
+    badge = StatusBadge(SemanticStatus.NEUTRAL)
+    diagnostics = DiagnosticsList(
+        (
+            ApplicationDiagnostic(
+                code="one",
+                severity="error",
+                stage="configuration",
+                source=SourceCoordinate(source="project.yaml", document=1, line=2, column=3),
+                path=("spec", "request"),
+            ),
+            ApplicationDiagnostic(code="two", severity="warning", stage="planning"),
+            ApplicationDiagnostic(code="three", severity="info", stage="runtime"),
+        )
+    )
+    footer = CommandFooter(COMMAND_CATALOG)
+    app = _WidgetApp(state, badge, diagnostics, footer)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        identity = id(content)
+        for mode in StatePanelMode:
+            state.show_state(mode, f"state {mode.value}")
+            await pilot.pause()
+            assert state.mode is mode
+            assert id(content) == identity
+            assert state.has_class(f"state-{mode.value}")
+        badge.set_status(SemanticStatus.SUCCESS, detail="safe\x1b[31m")
+        assert badge.status is SemanticStatus.SUCCESS
+        assert len(diagnostics.query(StatusBadge)) == 3
+        assert 0 < len(footer.query(Static)) < len(COMMAND_CATALOG)
+
+
+@_run_async
+async def test_form_updates_plan_and_progress_without_replacing_shared_controls() -> None:
+    form = CompareDraftForm(CompareDraft(mode=CompareMode.ASSERTIONS), resources=())
+    preview = PlanPreview(None)
+    progress = ExecutionProgress(_progress())
+    app = _WidgetApp(form, preview, progress)
+
+    async with app.run_test(size=(120, 42)) as pilot:
+        await pilot.pause()
+        assert form.query_one("#compare-draft-subject", Input).placeholder == "Type a resource id"
+        subject = form.query_one("#compare-draft-subject", Input)
+        subject.value = "   "
+        assert form.current_draft().subject is None
+
+        replacement = CompareDraft(
+            mode=CompareMode.EXECUTION_PROFILE,
+            execution_profile="release",
+        )
+        form.show_draft(replacement)
+        await pilot.pause()
+        assert form.current_draft() == replacement
+        selector = form.query_one(CompareModeSelector)
+        selector.show_mode(CompareMode.ASSERTIONS)
+        assert selector.mode is CompareMode.ASSERTIONS
+
+        preview.show_plan(_plan())
+        assert "run-1" in str(preview.render())
+        progress.show_snapshot(_progress(finished=1))
+        await pilot.pause()
+
+
+@_run_async
+async def test_project_and_report_lists_emit_only_typed_safe_identifiers() -> None:
+    resource = _resource("Request", "ping")
+    entry = ReportArchiveEntry(
+        bundle_id="bundle",
+        run_id="run",
+        invocation_id="invocation",
+        created_unix_nanoseconds=1,
+        completion="complete",
+        gate="passed",
+        subjects=("ping",),
+        environments=(),
+        executions=1,
+        comparisons=0,
+        assertions=0,
+        diffs=0,
+        blobs=0,
+        blob_bytes=0,
+        coverage_issues=0,
+    )
+    resources = ProjectResourceList((resource,))
+    reports = ReportList((entry,))
+    app = _WidgetApp(resources, reports)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        resource_item = resources.query_one(ProjectResourceItem)
+        resources.on_list_view_selected(ListView.Selected(resources, resource_item, 0))
+        resources.on_list_view_selected(ListView.Selected(resources, ListItem(), 0))
+        report_item = reports.query_one(ReportListItem)
+        reports.on_list_view_selected(ListView.Selected(reports, report_item, 0))
+        reports.on_list_view_selected(ListView.Selected(reports, ListItem(), 0))
+        await pilot.pause()
+
+
+@_run_async
+async def test_every_result_index_and_detail_path_reuses_one_navigation_contract() -> None:
+    projection = _projection()
+    indexes = tuple(ResultIndex(projection, kind=kind) for kind in ResultIndexKind)
+    detail = ResultDetail(projection)
+    view = ResultsWorkspaceView(projection, access=ResultAccess.LIVE)
+    app = _WidgetApp(*indexes, detail, view)
+
+    async with app.run_test(size=(160, 52)) as pilot:
+        await pilot.pause()
+        for index in indexes:
+            item = index.query_one(ResultIndexItem)
+            index.on_list_view_selected(ListView.Selected(index, item, 0))
+            index.on_list_view_selected(ListView.Selected(index, ListItem(), 0))
+
+        references = (
+            projection.executions[0].reference,
+            projection.assertions[0].reference,
+            projection.diffs[0].reference,
+            projection.comparisons[0].reference,
+            ResultReference(entity=ResultEntity.EXECUTION, result_id="missing"),
+        )
+        for reference in references:
+            detail.show_reference(reference)
+        detail.show_reference(None)
+        view.show_selected_result(ResultIndex.ResultSelected(references[0]))
+        await pilot.pause()

@@ -1,0 +1,260 @@
+/* The only concrete visual-style source for shared Comparo components and workspaces. */
+
+.workspace {
+    height: 1fr;
+    width: 1fr;
+    padding: 1;
+}
+
+StatePanel {
+    height: 1fr;
+    width: 1fr;
+}
+
+.state-loading-marker {
+    height: 1fr;
+}
+
+.state-message {
+    border: round $secondary;
+    padding: 1 2;
+    width: 1fr;
+}
+
+.state-error .state-message {
+    border: round $error;
+}
+
+.state-empty .state-message {
+    border: round $warning;
+}
+
+.state-content {
+    height: 1fr;
+    width: 1fr;
+}
+
+StatusBadge {
+    width: auto;
+    min-width: 12;
+    padding: 0 1;
+    text-style: bold;
+}
+
+.status-success {
+    color: $success;
+}
+
+.status-advisory {
+    color: $warning;
+}
+
+.status-failure,
+.status-error {
+    color: $error;
+}
+
+.status-running {
+    color: $accent;
+}
+
+.status-queued,
+.status-skipped,
+.status-neutral {
+    color: $text-muted;
+}
+
+.status-cancelled {
+    color: $warning-muted;
+}
+
+.status-redacted {
+    color: $secondary;
+}
+
+DiagnosticsList,
+ProjectResourceList,
+ReportList,
+ResultIndex {
+    border: round $panel-lighten-2;
+}
+
+.diagnostic-row,
+.result-index-row,
+.report-list-row {
+    width: 1fr;
+    height: auto;
+}
+
+.diagnostic-text {
+    width: 1fr;
+}
+
+CommandFooter {
+    dock: bottom;
+    height: 1;
+    width: 1fr;
+    background: $panel;
+}
+
+.command-hint {
+    width: auto;
+    margin-right: 2;
+}
+
+.explorer-layout,
+.report-browser-layout {
+    height: 1fr;
+    width: 1fr;
+}
+
+.explorer-resource-list,
+.report-archive-list {
+    width: 2fr;
+}
+
+ProjectResourceDetail,
+.report-reading-pane {
+    width: 3fr;
+    border: round $panel-lighten-2;
+    padding: 1 2;
+}
+
+PlanPreview,
+ExecutionProgress,
+ResultSummary,
+TuiOnlySettingsPanel {
+    border: round $panel-lighten-2;
+    padding: 1 2;
+    width: 1fr;
+    height: auto;
+}
+
+.compare-mode-selector {
+    height: 3;
+    width: 1fr;
+}
+
+CompareDraftForm {
+    height: auto;
+    width: 1fr;
+    border: round $panel-lighten-2;
+    padding: 1 2;
+}
+
+.compare-draft-modes {
+    height: 3;
+    width: 1fr;
+}
+
+.compare-draft-field {
+    height: 3;
+    width: 1fr;
+}
+
+.compare-draft-label {
+    width: 20;
+    content-align: left middle;
+}
+
+.compare-draft-input {
+    width: 1fr;
+}
+
+.compare-mode-option {
+    width: 1fr;
+    content-align: center middle;
+    border-bottom: solid $panel-lighten-2;
+}
+
+.compare-mode-active {
+    border-bottom: solid $accent;
+    text-style: bold;
+}
+
+.execution-progress-heading,
+.result-summary-heading {
+    height: auto;
+    width: 1fr;
+}
+
+.execution-progress-label,
+.result-summary-heading Static {
+    width: 1fr;
+}
+
+ResultsWorkspaceView {
+    height: 1fr;
+    width: 1fr;
+}
+
+.result-layout {
+    height: 1fr;
+    width: 1fr;
+}
+
+.result-index {
+    width: 2fr;
+}
+
+.result-detail {
+    width: 3fr;
+    border: round $panel-lighten-2;
+    padding: 1 2;
+}
+
+.layout-compact .result-layout {
+    layout: vertical;
+}
+
+.layout-compact .result-index,
+.layout-compact .result-detail {
+    width: 1fr;
+    height: 1fr;
+}
+
+.layout-standard .result-index {
+    width: 36;
+}
+
+.layout-wide .result-index {
+    width: 44;
+}
+
+.settings-row {
+    height: 3;
+    width: 1fr;
+}
+
+.settings-label {
+    width: 24;
+    content-align: left middle;
+}
+
+.settings-row Select {
+    width: 1fr;
+}
+
+/* The app applies this one root class from TuiPreferences.dense. */
+.density-dense .workspace,
+.density-dense.workspace {
+    padding: 0;
+}
+
+.density-dense .state-message,
+.density-dense ProjectResourceDetail,
+.density-dense .report-reading-pane,
+.density-dense PlanPreview,
+.density-dense ExecutionProgress,
+.density-dense ResultSummary,
+.density-dense TuiOnlySettingsPanel,
+.density-dense CompareDraftForm,
+.density-dense .result-detail {
+    padding: 0 1;
+}
+
+.density-dense .diagnostic-row,
+.density-dense .result-index-row,
+.density-dense .report-list-row {
+    height: 1;
+}
