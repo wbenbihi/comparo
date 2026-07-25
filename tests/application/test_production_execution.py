@@ -456,7 +456,10 @@ async def _stop_before_network(
     _capture: object,
     _evaluation: object,
 ) -> production.ProductionExecutionResult:
-    return production._failure("test.stopped-before-network")
+    return production._failure_code(
+        production.ProductionExecutionFailureKind.INCOMPLETE,
+        "test.stopped-before-network",
+    )
 
 
 def _capture_without_driver(
@@ -639,7 +642,10 @@ def test_cleanup_failure_replaces_safe_result_with_fixed_diagnostic(
         _request_value: object,
         _resources: object,
     ) -> production.ProductionExecutionResult:
-        return production._failure("test.safe-failure")
+        return production._failure_code(
+            production.ProductionExecutionFailureKind.INCOMPLETE,
+            "test.safe-failure",
+        )
 
     async def failed_cleanup(_resources: object) -> bool:
         return True
@@ -709,27 +715,44 @@ def test_public_composition_contracts_reject_invalid_shapes(tmp_path: Path) -> N
         production.ProductionExecutionResult(artifact=cast("RunArtifact", object()))
     with pytest.raises(TypeError):
         production.ProductionExecutionResult(
-            diagnostics=production._diagnostics("x"),
+            failure=production.ProductionExecutionFailure(
+                kind=production.ProductionExecutionFailureKind.INVALID,
+                diagnostics=production._diagnostics("x"),
+            ),
             persistence=cast("ArtifactPersistenceOutcome", object()),
         )
     with pytest.raises(TypeError):
-        production.ProductionExecutionResult(
+        production.ProductionExecutionFailure(
+            kind=production.ProductionExecutionFailureKind.INVALID,
             diagnostics=cast(
                 "tuple[ApplicationDiagnostic, ...]",
                 [ApplicationDiagnostic(code="x", severity="error", stage="x")],
-            )
+            ),
         )
-    with pytest.raises(ValueError, match="exactly artifact or diagnostics"):
+    with pytest.raises(TypeError, match="failure kind"):
+        production.ProductionExecutionFailure(
+            kind=cast("production.ProductionExecutionFailureKind", object()),
+            diagnostics=production._diagnostics("x"),
+        )
+    with pytest.raises(ValueError, match="exactly artifact or failure"):
         production.ProductionExecutionResult()
-    with pytest.raises(ValueError, match="exactly artifact or diagnostics"):
+    typed_failure = production.ProductionExecutionFailure(
+        kind=production.ProductionExecutionFailureKind.INVALID,
+        diagnostics=production._diagnostics("x"),
+    )
+    with pytest.raises(ValueError, match="exactly artifact or failure"):
         production.ProductionExecutionResult(
             artifact=artifact,
-            diagnostics=production._diagnostics("x"),
+            failure=typed_failure,
         )
     with pytest.raises(ValueError, match="cannot retain persistence"):
         production.ProductionExecutionResult(
-            diagnostics=production._diagnostics("x"),
+            failure=typed_failure,
             persistence=failure,
+        )
+    with pytest.raises(TypeError, match="result failure"):
+        production.ProductionExecutionResult(
+            failure=cast("production.ProductionExecutionFailure", object()),
         )
 
 

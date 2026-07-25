@@ -15,6 +15,7 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import prepare_project_plan
+from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionSettings
 from comparo.application.production_execution import execute_production
@@ -238,9 +239,17 @@ async def execute_cli_request(
         )
     )
     if result.artifact is None:
+        failure = result.failure
+        if failure is None:  # pragma: no cover - production result invariant
+            raise RuntimeError("failed production result omitted its typed failure")
+        exit_code = {
+            ProductionExecutionFailureKind.INVALID: CliExitCode.INVALID_INVOCATION,
+            ProductionExecutionFailureKind.INCOMPLETE: CliExitCode.EXECUTION_INCOMPLETE,
+            ProductionExecutionFailureKind.INTERNAL: CliExitCode.INTERNAL_ERROR,
+        }[failure.kind]
         return CliExecutionOutcome(
-            exit_code=CliExitCode.INVALID_INVOCATION,
-            diagnostics=result.diagnostics,
+            exit_code=exit_code,
+            diagnostics=failure.diagnostics,
         )
     return CliExecutionOutcome(
         exit_code=_exit_code(result.artifact),

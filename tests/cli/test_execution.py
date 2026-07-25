@@ -12,6 +12,8 @@ import pytest
 
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.planning import PlanningOptions
+from comparo.application.production_execution import ProductionExecutionFailure
+from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
 from comparo.cli import execution as execution_module
@@ -203,9 +205,19 @@ def test_command_topology_is_rejected_before_production_execution(
     assert not called
 
 
+@pytest.mark.parametrize(
+    ("kind", "exit_code"),
+    [
+        (ProductionExecutionFailureKind.INVALID, CliExitCode.INVALID_INVOCATION),
+        (ProductionExecutionFailureKind.INCOMPLETE, CliExitCode.EXECUTION_INCOMPLETE),
+        (ProductionExecutionFailureKind.INTERNAL, CliExitCode.INTERNAL_ERROR),
+    ],
+)
 def test_preparation_and_production_diagnostics_remain_value_free(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    kind: ProductionExecutionFailureKind,
+    exit_code: CliExitCode,
 ) -> None:
     missing = asyncio.run(
         execute_cli_request(
@@ -218,13 +230,18 @@ def test_preparation_and_production_diagnostics_remain_value_free(
     assert missing.exit_code is CliExitCode.INVALID_INVOCATION
     assert missing.diagnostics
 
+    project = _write_project(tmp_path / "project")
+
     async def reject(_request: ProductionExecutionRequest) -> ProductionExecutionResult:
         return ProductionExecutionResult(
-            diagnostics=(
-                ApplicationDiagnostic(
-                    code="runtime.capability.unsupported",
-                    severity="error",
-                    stage="runtime-capability",
+            failure=ProductionExecutionFailure(
+                kind=kind,
+                diagnostics=(
+                    ApplicationDiagnostic(
+                        code="runtime.capability.unsupported",
+                        severity="error",
+                        stage="runtime-capability",
+                    ),
                 ),
             )
         )
@@ -232,13 +249,13 @@ def test_preparation_and_production_diagnostics_remain_value_free(
     monkeypatch.setattr(execution_module, "execute_production", reject)
     rejected = asyncio.run(
         execute_cli_request(
-            _request(_write_project(tmp_path / "project"), CliExecutionCommandKind.DIFF),
+            _request(project, CliExecutionCommandKind.DIFF),
             PlanningOptions(),
             invocation_id=_INVOCATION_ID,
             run_id=_RUN_ID,
         )
     )
-    assert rejected.exit_code is CliExitCode.INVALID_INVOCATION
+    assert rejected.exit_code is exit_code
     assert rejected.diagnostics[0].code == "runtime.capability.unsupported"
 
 

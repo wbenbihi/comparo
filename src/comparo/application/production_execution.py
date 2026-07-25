@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import secrets
 from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import final
 
@@ -252,12 +253,40 @@ class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ProductionExecutionFailureKind(StrEnum):
+    """Stable application-level failure classes independent from diagnostic wording."""
+
+    INVALID = "invalid"
+    INCOMPLETE = "incomplete"
+    INTERNAL = "internal"
+
+
+@final
+class ProductionExecutionFailure(msgspec.Struct, frozen=True, kw_only=True):
+    """One typed failure class plus value-free diagnostic evidence."""
+
+    kind: ProductionExecutionFailureKind
+    diagnostics: tuple[ApplicationDiagnostic, ...]
+
+    def __post_init__(self) -> None:
+        """Require a closed class and at least one immutable safe diagnostic."""
+        if type(self.kind) is not ProductionExecutionFailureKind:
+            raise TypeError("production failure kind must be typed")
+        if (
+            type(self.diagnostics) is not tuple
+            or not self.diagnostics
+            or any(type(item) is not ApplicationDiagnostic for item in self.diagnostics)
+        ):
+            raise TypeError("production failure diagnostics must be non-empty and typed")
+
+
+@final
 class ProductionExecutionResult(msgspec.Struct, frozen=True, kw_only=True):
-    """Exactly one safe artifact outcome or value-free pre-network/runtime diagnostics."""
+    """Exactly one safe artifact outcome or typed value-free failure."""
 
     artifact: RunArtifact | None = None
     persistence: ArtifactPersistenceOutcome | None = None
-    diagnostics: tuple[ApplicationDiagnostic, ...] = ()
+    failure: ProductionExecutionFailure | None = None
 
     def __post_init__(self) -> None:
         """Keep safe success and diagnostic failure structurally disjoint."""
@@ -268,14 +297,17 @@ class ProductionExecutionResult(msgspec.Struct, frozen=True, kw_only=True):
             and type(self.persistence) is not ArtifactPersistenceOutcome
         ):
             raise TypeError("production persistence outcome must be typed")
-        if type(self.diagnostics) is not tuple or any(
-            type(item) is not ApplicationDiagnostic for item in self.diagnostics
-        ):
-            raise TypeError("production execution diagnostics must be immutable and typed")
-        if (self.artifact is None) == (not self.diagnostics):
-            raise ValueError("production execution requires exactly artifact or diagnostics")
+        if self.failure is not None and type(self.failure) is not ProductionExecutionFailure:
+            raise TypeError("production result failure must be typed")
+        if (self.artifact is None) == (self.failure is None):
+            raise ValueError("production execution requires exactly artifact or failure")
         if self.artifact is None and self.persistence is not None:
             raise ValueError("failed production execution cannot retain persistence")
+
+    @property
+    def diagnostics(self) -> tuple[ApplicationDiagnostic, ...]:
+        """Expose only the safe diagnostics retained by a typed failure."""
+        return () if self.failure is None else self.failure.diagnostics
 
 
 async def execute_production(request: ProductionExecutionRequest) -> ProductionExecutionResult:
@@ -284,8 +316,9 @@ async def execute_production(request: ProductionExecutionRequest) -> ProductionE
         raise TypeError("production execution requires ProductionExecutionRequest")
     capabilities = preflight_runtime_capabilities(request.project)
     if capabilities.diagnostics:
-        return ProductionExecutionResult(
-            diagnostics=tuple(inspect_diagnostic(item) for item in capabilities.diagnostics)
+        return _failure(
+            ProductionExecutionFailureKind.INVALID,
+            tuple(inspect_diagnostic(item) for item in capabilities.diagnostics),
         )
     resources = _ExecutionResources()
     try:
@@ -294,9 +327,19 @@ async def execute_production(request: ProductionExecutionRequest) -> ProductionE
         await resources.close()
         raise
     except Exception:  # noqa: BLE001 - never expose live adapter exception details
-        result = _failure("execution.internal-failed")
+        result = _failure_code(
+            ProductionExecutionFailureKind.INTERNAL,
+            "execution.internal-failed",
+        )
     cleanup_failed = await resources.close()
-    return _failure("execution.cleanup-failed") if cleanup_failed else result
+    return (
+        _failure_code(
+            ProductionExecutionFailureKind.INTERNAL,
+            "execution.cleanup-failed",
+        )
+        if cleanup_failed
+        else result
+    )
 
 
 class _ExecutionResources:
@@ -351,7 +394,7 @@ async def _execute_with_resources(
 ) -> ProductionExecutionResult:
     context, diagnostics = await _prepare_context(request, resources)
     if diagnostics:
-        return ProductionExecutionResult(diagnostics=diagnostics)
+        return _failure(ProductionExecutionFailureKind.INVALID, diagnostics)
     if context is None:  # pragma: no cover - preparation result invariant
         raise RuntimeError("successful context preparation omitted its context")
     evaluation = bind_configuration_evaluation(
@@ -360,8 +403,9 @@ async def _execute_with_resources(
         request.settings.evaluation,
     )
     if evaluation.diagnostics:
-        return ProductionExecutionResult(
-            diagnostics=tuple(inspect_diagnostic(item) for item in evaluation.diagnostics)
+        return _failure(
+            ProductionExecutionFailureKind.INVALID,
+            tuple(inspect_diagnostic(item) for item in evaluation.diagnostics),
         )
     preparation = evaluation.preparation
     if preparation is None:  # pragma: no cover - binding result invariant
@@ -372,7 +416,7 @@ async def _execute_with_resources(
         request.settings.artifact,
     )
     if sink_failure is not None:
-        return _failure(sink_failure)
+        return _failure_code(ProductionExecutionFailureKind.INVALID, sink_failure)
     resources.sink = sink
     try:
         resources.spool = PosixSanitizedBlobSpool(
@@ -388,7 +432,10 @@ async def _execute_with_resources(
         )
         resources.capture = capture
     except (BodyStoreError, OSError, SanitizedSpoolError, ValueError):
-        return _failure("execution.runtime-setup-failed")
+        return _failure_code(
+            ProductionExecutionFailureKind.INCOMPLETE,
+            "execution.runtime-setup-failed",
+        )
     return await _run_compile_persist(request, resources, context, capture, preparation)
 
 
@@ -452,7 +499,12 @@ async def _run_compile_persist(
             if compilation.failure is None
             else f"artifact.{compilation.failure.code}"
         )
-        return _failure(code)
+        kind = (
+            ProductionExecutionFailureKind.INTERNAL
+            if compilation.failure is None
+            else ProductionExecutionFailureKind.INCOMPLETE
+        )
+        return _failure_code(kind, code)
     artifact = compilation.artifact
     if artifact is None:  # pragma: no cover - compilation result invariant
         raise RuntimeError("created artifact compilation omitted its product")
@@ -466,7 +518,10 @@ async def _run_compile_persist(
         request.settings.artifact,
     )
     if persistence is not None and persistence.status is not ArtifactPersistenceStatus.PERSISTED:
-        return _failure(_persistence_code(persistence))
+        return _failure_code(
+            ProductionExecutionFailureKind.INCOMPLETE,
+            _persistence_code(persistence),
+        )
     return ProductionExecutionResult(artifact=artifact, persistence=persistence)
 
 
@@ -627,8 +682,20 @@ def _artifact_id(prepared: PreparedRun) -> str:
     return f"run-{prepared.plan.run_id.value}"
 
 
-def _failure(code: str) -> ProductionExecutionResult:
-    return ProductionExecutionResult(diagnostics=_diagnostics(code))
+def _failure(
+    kind: ProductionExecutionFailureKind,
+    diagnostics: tuple[ApplicationDiagnostic, ...],
+) -> ProductionExecutionResult:
+    return ProductionExecutionResult(
+        failure=ProductionExecutionFailure(kind=kind, diagnostics=diagnostics)
+    )
+
+
+def _failure_code(
+    kind: ProductionExecutionFailureKind,
+    code: str,
+) -> ProductionExecutionResult:
+    return _failure(kind, _diagnostics(code))
 
 
 def _diagnostics(code: str) -> tuple[ApplicationDiagnostic, ...]:
@@ -642,6 +709,8 @@ def _diagnostics(code: str) -> tuple[ApplicationDiagnostic, ...]:
 
 
 __all__ = (
+    "ProductionExecutionFailure",
+    "ProductionExecutionFailureKind",
     "ProductionExecutionRequest",
     "ProductionExecutionResult",
     "ProductionExecutionSettings",

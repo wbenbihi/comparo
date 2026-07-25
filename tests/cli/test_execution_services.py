@@ -141,8 +141,19 @@ def test_safe_artifact_controls_human_and_json_status(
     assert _SECRET not in machine_result.payload.decode()
 
 
-def test_value_free_diagnostics_render_in_human_and_machine_modes(
+@pytest.mark.parametrize(
+    ("exit_code", "human_status", "machine_status"),
+    [
+        (CliExitCode.INVALID_INVOCATION, "Execution was rejected", "invalid"),
+        (CliExitCode.EXECUTION_INCOMPLETE, "Execution did not complete", "incomplete"),
+        (CliExitCode.INTERNAL_ERROR, "Execution failed internally", "internal-error"),
+    ],
+)
+def test_value_free_diagnostics_render_typed_failure_in_human_and_machine_modes(
     monkeypatch: pytest.MonkeyPatch,
+    exit_code: CliExitCode,
+    human_status: str,
+    machine_status: str,
 ) -> None:
     diagnostic = ApplicationDiagnostic(
         code="runtime.request.failed",
@@ -153,17 +164,19 @@ def test_value_free_diagnostics_render_in_human_and_machine_modes(
     async def execute(*args: object, **kwargs: object) -> CliExecutionOutcome:
         del args, kwargs
         return CliExecutionOutcome(
-            exit_code=CliExitCode.INVALID_INVOCATION,
+            exit_code=exit_code,
             diagnostics=(diagnostic,),
         )
 
     monkeypatch.setattr(service_module, "execute_cli_request", execute)
     human = DefaultCliServices().execute(_request())
     machine = DefaultCliServices().execute(_request(output=CliOutputMode.JSON))
-    assert human.messages[0].text == "Execution is invalid (1 issue(s))."
+    assert human.exit_code is exit_code
+    assert machine.exit_code is exit_code
+    assert human.messages[0].text == f"{human_status} (1 issue(s))."
     assert human.messages[1].text == "runtime.request.failed (runtime)"
     document = cast("dict[str, object]", json.loads(machine.payload))
-    assert document["status"] == "invalid"
+    assert document["status"] == machine_status
     diagnostics = cast("list[dict[str, object]]", document["diagnostics"])
     assert diagnostics[0]["code"] == "runtime.request.failed"
 

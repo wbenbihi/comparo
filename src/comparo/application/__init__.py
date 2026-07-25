@@ -36,6 +36,12 @@ from comparo.application.preflight import ProjectPreparationResult as ProjectPre
 from comparo.application.preflight import inspect_project_plan as inspect_project_plan
 from comparo.application.preflight import prepare_project_plan as prepare_project_plan
 from comparo.application.production_execution import (
+    ProductionExecutionFailure as ProductionExecutionFailure,
+)
+from comparo.application.production_execution import (
+    ProductionExecutionFailureKind as ProductionExecutionFailureKind,
+)
+from comparo.application.production_execution import (
     ProductionExecutionRequest as ProductionExecutionRequest,
 )
 from comparo.application.production_execution import (
@@ -78,6 +84,8 @@ __all__ = (
     "PlanInspection",
     "PlanningOptions",
     "PreparedProjectPlan",
+    "ProductionExecutionFailure",
+    "ProductionExecutionFailureKind",
     "ProductionExecutionRequest",
     "ProductionExecutionResult",
     "ProductionExecutionSettings",

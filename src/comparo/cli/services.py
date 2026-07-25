@@ -420,24 +420,37 @@ def _invalid_execution(
     request: ExecutionRequest,
     diagnostics: tuple[ApplicationDiagnostic, ...],
 ) -> CliCommandResult:
-    """Render value-free execution diagnostics without retaining live values."""
+    """Render a value-free invalid invocation before execution starts."""
+    return _failed_execution(request, CliExitCode.INVALID_INVOCATION, diagnostics)
+
+
+def _failed_execution(
+    request: ExecutionRequest,
+    exit_code: CliExitCode,
+    diagnostics: tuple[ApplicationDiagnostic, ...],
+) -> CliCommandResult:
+    """Render typed execution failure without inferring a class from diagnostic text."""
+    _level, human_status, machine_status = _execution_status(exit_code)
     if request.plan.output is CliOutputMode.HUMAN:
         messages: list[tuple[CliMessageLevel, str]] = [
-            (CliMessageLevel.ERROR, f"Execution is invalid ({len(diagnostics)} issue(s)).")
+            (
+                CliMessageLevel.ERROR,
+                f"{human_status.removesuffix('.')} ({len(diagnostics)} issue(s)).",
+            )
         ]
         messages.extend(
             (CliMessageLevel.ERROR, f"{item.code} ({item.stage})") for item in diagnostics
         )
-        return _human(CliExitCode.INVALID_INVOCATION, *messages)
+        return _human(exit_code, *messages)
     return CliCommandResult(
-        exit_code=CliExitCode.INVALID_INVOCATION,
+        exit_code=exit_code,
         payload_kind=CliPayloadKind.JSON,
         payload=_canonical_json(
             {
                 "apiVersion": _CLI_API_VERSION,
                 "command": request.command.value,
                 "diagnostics": [_application_diagnostic_record(item) for item in diagnostics],
-                "status": "invalid",
+                "status": machine_status,
             }
         ),
     )
@@ -451,7 +464,9 @@ def _execution_status(exit_code: CliExitCode) -> tuple[CliMessageLevel, str, str
         return CliMessageLevel.ERROR, "Execution completed; gate failed.", "gate-failed"
     if exit_code is CliExitCode.INVALID_INVOCATION:
         return CliMessageLevel.ERROR, "Execution was rejected.", "invalid"
-    return CliMessageLevel.ERROR, "Execution did not complete.", "incomplete"
+    if exit_code is CliExitCode.EXECUTION_INCOMPLETE:
+        return CliMessageLevel.ERROR, "Execution did not complete.", "incomplete"
+    return CliMessageLevel.ERROR, "Execution failed internally.", "internal-error"
 
 
 def _human_execution(
@@ -491,7 +506,7 @@ def _render_execution(
 ) -> CliCommandResult:
     """Render a bridge result without accepting any live execution object."""
     if outcome.summary is None:
-        return _invalid_execution(request, outcome.diagnostics)
+        return _failed_execution(request, outcome.exit_code, outcome.diagnostics)
     if request.plan.output is CliOutputMode.HUMAN:
         return _human_execution(outcome, outcome.summary)
     _, _, status = _execution_status(outcome.exit_code)
