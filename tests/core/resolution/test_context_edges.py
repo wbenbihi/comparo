@@ -62,6 +62,7 @@ from comparo.core.resolution.models import ProviderOutcome
 from comparo.core.resolution.models import ProviderPresent
 from comparo.core.resolution.models import ResolutionTarget
 from comparo.core.resolution.models import YamlDecodeRequest
+from comparo.core.resolution.registry import SensitiveValueRegistry
 from tests.core.planning.conftest import policy_definition
 from tests.core.resolution.conftest import configuration_provenance
 from tests.core.resolution.conftest import execution_scope
@@ -121,6 +122,22 @@ class ExplodingClock:
     def now(self) -> UtcInstant:
         """Raise at the adapter boundary."""
         raise RuntimeError("payload-like clock detail")
+
+
+class BlockingClose:
+    """Expose deterministic close phases for cancellation-lifetime tests."""
+
+    def __init__(self) -> None:
+        """Create a close probe blocked until the test releases it."""
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished = False
+
+    async def close(self) -> None:
+        """Publish entry, wait for release, and record terminal cleanup."""
+        self.started.set()
+        await self.release.wait()
+        self.finished = True
 
 
 def _target(prepared: PreparedRun) -> ResolutionTarget:
@@ -281,6 +298,62 @@ def test_context_constructor_and_call_boundaries_fail_closed(prepared_run: Prepa
             await context.sanitization_snapshot()
         with pytest.raises(RuntimeError, match="closed"):
             await context.__aenter__()
+
+    _run(scenario())
+
+
+def test_close_finishes_shared_cleanup_before_propagating_repeated_cancellation(
+    prepared_run: PreparedRun,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_closers = tuple(BlockingClose() for _ in range(4))
+    registry_started = asyncio.Event()
+    registry_release = asyncio.Event()
+    original_registry_close = SensitiveValueRegistry.close
+
+    async def controlled_registry_close(registry: SensitiveValueRegistry) -> None:
+        assert all(probe.finished for probe in cache_closers)
+        registry_started.set()
+        await registry_release.wait()
+        await original_registry_close(registry)
+
+    monkeypatch.setattr(SensitiveValueRegistry, "close", controlled_registry_close)
+
+    async def scenario() -> None:
+        context = _context(prepared_run)
+        generator = cast("DeterministicGenerator", context._generator)
+        context._file_cache = cast("Any", cache_closers[0])
+        context._external_cache = cast("Any", cache_closers[1])
+        context._generation_cache = cast("Any", cache_closers[2])
+        context._decode_cache = cast("Any", cache_closers[3])
+
+        closing = asyncio.create_task(context.close())
+        await asyncio.gather(*(probe.started.wait() for probe in cache_closers))
+        closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done()
+        closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done()
+
+        joining = asyncio.create_task(context.close())
+        for probe in cache_closers:
+            probe.release.set()
+        await registry_started.wait()
+        closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done()
+        registry_release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        await joining
+        assert all(probe.finished for probe in cache_closers)
+        with pytest.raises(RuntimeError, match="closed"):
+            await context._registry.snapshot()
+        assert generator._seed is None
+
+        await context.close()
 
     _run(scenario())
 

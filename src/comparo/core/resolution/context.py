@@ -83,6 +83,7 @@ class RunContext:
     __slots__ = (
         "_cancellation",
         "_clock",
+        "_close_task",
         "_closed",
         "_decode_cache",
         "_external_cache",
@@ -148,6 +149,7 @@ class RunContext:
             SingleFlightCache()
         )
         self._decode_cache: SingleFlightCache[_DecodeKey, ProviderOutcome] = SingleFlightCache()
+        self._close_task: asyncio.Task[None] | None = None
         self._closed = False
 
     @property
@@ -298,10 +300,26 @@ class RunContext:
         return await self._registry.snapshot()
 
     async def close(self) -> None:
-        """Cancel pending source work and drop every cached or registered live value."""
-        if self._closed:
-            return
-        self._closed = True
+        """Finish one shared cleanup before propagating cancellation to any caller."""
+        task = self._close_task
+        if task is None:
+            self._closed = True
+            task = asyncio.create_task(self._finish_close())
+            self._close_task = task
+
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _finish_close(self) -> None:
+        """Drop all run-owned live values in an independently scheduled cleanup task."""
         await asyncio.gather(
             self._file_cache.close(),
             self._external_cache.close(),
