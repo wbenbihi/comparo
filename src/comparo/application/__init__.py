@@ -35,6 +35,19 @@ from comparo.application.preflight import ProjectPlanResult as ProjectPlanResult
 from comparo.application.preflight import ProjectPreparationResult as ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan as inspect_project_plan
 from comparo.application.preflight import prepare_project_plan as prepare_project_plan
+from comparo.application.production_execution import (
+    ProductionExecutionRequest as ProductionExecutionRequest,
+)
+from comparo.application.production_execution import (
+    ProductionExecutionResult as ProductionExecutionResult,
+)
+from comparo.application.production_execution import (
+    ProductionExecutionSettings as ProductionExecutionSettings,
+)
+from comparo.application.production_execution import execute_production as execute_production
+from comparo.application.production_execution import (
+    production_execution_defaults_v1 as production_execution_defaults_v1,
+)
 from comparo.application.render_preview import RenderedBodyOmission as RenderedBodyOmission
 from comparo.application.render_preview import RenderedCookie as RenderedCookie
 from comparo.application.render_preview import RenderedHeader as RenderedHeader
@@ -65,6 +78,9 @@ __all__ = (
     "PlanInspection",
     "PlanningOptions",
     "PreparedProjectPlan",
+    "ProductionExecutionRequest",
+    "ProductionExecutionResult",
+    "ProductionExecutionSettings",
     "ProjectPlanRequest",
     "ProjectPlanResult",
     "ProjectPreparationResult",
@@ -80,6 +96,7 @@ __all__ = (
     "SecurityCheck",
     "build_environment_snapshots",
     "build_invocation",
+    "execute_production",
     "inspect_artifact",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",
@@ -89,6 +106,7 @@ __all__ = (
     "plan_project",
     "preflight_runtime_capabilities",
     "prepare_project_plan",
+    "production_execution_defaults_v1",
     "read_artifact_blob",
     "render_artifact_report",
     "render_prepared_requests",
