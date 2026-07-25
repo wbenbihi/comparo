@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from contextlib import suppress
 from typing import Final
+from typing import cast
 from typing import final
 
 import msgspec
@@ -39,6 +42,8 @@ def render_json_report(artifact: RunArtifact, *, maximum_bytes: int) -> Rendered
     """Render the complete artifact in one independently versioned report envelope."""
     if type(artifact) is not RunArtifact:
         raise ReportError(ReportErrorCode.INVALID_INPUT)
+    content = b""
+    failed = False
     try:
         content = msgspec.json.encode(
             _JsonReport(
@@ -50,8 +55,10 @@ def render_json_report(artifact: RunArtifact, *, maximum_bytes: int) -> Rendered
             ),
             order="deterministic",
         )
-    except Exception as error:
-        raise ReportError(ReportErrorCode.RENDER_FAILED) from error
+    except Exception:  # noqa: BLE001 - reporter boundary exposes only a closed safe code
+        failed = True
+    if failed:
+        raise ReportError(ReportErrorCode.RENDER_FAILED)
     return complete_report(
         format=ReportFormat.JSON,
         media_type="application/vnd.comparo.report+json",
@@ -61,22 +68,51 @@ def render_json_report(artifact: RunArtifact, *, maximum_bytes: int) -> Rendered
     )
 
 
-def decode_json_report(payload: bytes, *, maximum_bytes: int) -> RunArtifact:
+def decode_json_report(  # noqa: C901 - ordered preflight preserves version error precedence
+    payload: bytes,
+    *,
+    maximum_bytes: int,
+) -> RunArtifact:
     """Decode one exact supported JSON report envelope within a publication limit."""
     if type(maximum_bytes) is not int or maximum_bytes < 0 or type(payload) is not bytes:
         raise ReportError(ReportErrorCode.INVALID_INPUT)
     if len(payload) > maximum_bytes:
         raise ReportError(ReportErrorCode.BUDGET_EXCEEDED)
+    malformed = False
+    untyped: object = None
     try:
-        envelope = _DECODER.decode(payload)
-    except (msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
-        raise ReportError(ReportErrorCode.MALFORMED) from None
-    if (
-        envelope.api_version != REPORT_API_VERSION
-        or envelope.format != ReportFormat.JSON.value
-        or envelope.artifact_api_version != ARTIFACT_API_VERSION
-    ):
+        untyped = msgspec.json.decode(payload)
+    except msgspec.DecodeError:
+        malformed = True
+    if malformed:
+        raise ReportError(ReportErrorCode.MALFORMED)
+    if type(untyped) is not dict:
+        raise ReportError(ReportErrorCode.MALFORMED)
+    document = cast("Mapping[object, object]", untyped)
+    report_version = document.get("api_version")
+    if type(report_version) is not str:
+        raise ReportError(ReportErrorCode.MALFORMED)
+    if report_version != REPORT_API_VERSION:
         raise ReportError(ReportErrorCode.UNSUPPORTED_VERSION)
+    format_value = document.get("format")
+    artifact_api_version = document.get("artifact_api_version")
+    if type(format_value) is not str or type(artifact_api_version) is not str:
+        raise ReportError(ReportErrorCode.MALFORMED)
+    if format_value != ReportFormat.JSON.value or artifact_api_version != ARTIFACT_API_VERSION:
+        raise ReportError(ReportErrorCode.UNSUPPORTED_VERSION)
+    artifact = document.get("artifact")
+    if type(artifact) is not dict:
+        raise ReportError(ReportErrorCode.MALFORMED)
+    artifact_version = cast("Mapping[object, object]", artifact).get("api_version")
+    if type(artifact_version) is not str:
+        raise ReportError(ReportErrorCode.MALFORMED)
+    if artifact_version != ARTIFACT_API_VERSION:
+        raise ReportError(ReportErrorCode.UNSUPPORTED_VERSION)
+    envelope: _JsonReport | None = None
+    with suppress(msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
+        envelope = _DECODER.decode(payload)
+    if envelope is None:
+        raise ReportError(ReportErrorCode.MALFORMED)
     if (
         envelope.artifact.api_version != envelope.artifact_api_version
         or envelope.artifact.metadata.artifact_id != envelope.artifact_id

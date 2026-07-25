@@ -28,6 +28,8 @@ def render_junit_report(artifact: RunArtifact, *, maximum_bytes: int) -> Rendere
     """Render gate dimensions as JUnit testcases, never individual rule outcomes."""
     if type(artifact) is not RunArtifact:
         raise ReportError(ReportErrorCode.INVALID_INPUT)
+    content = b""
+    failed = False
     try:
         cases = _gate_cases(artifact)
         failures = sum(item.failure is not None for item in cases)
@@ -81,8 +83,10 @@ def render_junit_report(artifact: RunArtifact, *, maximum_bytes: int) -> Rendere
         )
     except ReportError:
         raise
-    except Exception as error:
-        raise ReportError(ReportErrorCode.RENDER_FAILED) from error
+    except Exception:  # noqa: BLE001 - reporter boundary exposes only a closed safe code
+        failed = True
+    if failed:
+        raise ReportError(ReportErrorCode.RENDER_FAILED)
     return complete_report(
         format=ReportFormat.JUNIT,
         media_type="application/junit+xml",

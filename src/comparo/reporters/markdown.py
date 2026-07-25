@@ -26,6 +26,8 @@ def render_markdown_report(artifact: RunArtifact, *, maximum_bytes: int) -> Rend
     """Render a stable overview without embedding detached body blob contents."""
     if type(artifact) is not RunArtifact:
         raise ReportError(ReportErrorCode.INVALID_INPUT)
+    content = b""
+    failed = False
     try:
         lines = [
             "# Comparo report",
@@ -58,8 +60,10 @@ def render_markdown_report(artifact: RunArtifact, *, maximum_bytes: int) -> Rend
         content = ("\n".join(lines) + "\n").encode("utf-8")
     except ReportError:
         raise
-    except Exception as error:
-        raise ReportError(ReportErrorCode.RENDER_FAILED) from error
+    except Exception:  # noqa: BLE001 - reporter boundary exposes only a closed safe code
+        failed = True
+    if failed:
+        raise ReportError(ReportErrorCode.RENDER_FAILED)
     return complete_report(
         format=ReportFormat.MARKDOWN,
         media_type="text/markdown; charset=utf-8",

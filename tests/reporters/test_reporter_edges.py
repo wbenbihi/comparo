@@ -15,6 +15,7 @@ from comparo.core.artifacts import ArtifactAmountUnit
 from comparo.core.artifacts import ArtifactBudget
 from comparo.core.artifacts import ArtifactCaptureExtent
 from comparo.core.artifacts import ArtifactCoverageIssue
+from comparo.core.artifacts import ArtifactExecution
 from comparo.core.artifacts import ArtifactFactOutcome
 from comparo.core.artifacts import ArtifactGate
 from comparo.core.artifacts import ArtifactGateCounts
@@ -141,7 +142,8 @@ def test_json_translates_encoder_failures_without_retaining_exception_text(
 
     assert failed.value.code is ReportErrorCode.RENDER_FAILED
     assert str(failed.value) == "render-failed"
-    assert type(failed.value.__cause__) is RuntimeError
+    assert failed.value.__cause__ is None
+    assert failed.value.__context__ is None
 
 
 def test_json_report_round_trips_and_its_checked_in_schema_is_canonical() -> None:
@@ -186,6 +188,55 @@ def test_json_report_decoder_rejects_invalid_budgets_and_payloads() -> None:
         assert failure.value.code is ReportErrorCode.MALFORMED
 
 
+def test_json_report_decoder_rejects_every_malformed_current_version_shape() -> None:
+    report = render_json_report(_artifact(), maximum_bytes=1_000_000)
+
+    def document() -> dict[str, object]:
+        decoded = msgspec.json.decode(report.content)
+        assert type(decoded) is dict
+        return cast("dict[str, object]", decoded)
+
+    malformed_payloads: list[bytes] = [b"[]"]
+
+    wrong_format_type = document()
+    wrong_format_type["format"] = 1
+    malformed_payloads.append(msgspec.json.encode(wrong_format_type))
+
+    wrong_artifact_version_type = document()
+    wrong_artifact_version_type["artifact_api_version"] = 1
+    malformed_payloads.append(msgspec.json.encode(wrong_artifact_version_type))
+
+    missing_artifact = document()
+    missing_artifact["artifact"] = None
+    malformed_payloads.append(msgspec.json.encode(missing_artifact))
+
+    missing_nested_version = document()
+    nested = missing_nested_version["artifact"]
+    assert type(nested) is dict
+    nested.pop("api_version")
+    malformed_payloads.append(msgspec.json.encode(missing_nested_version))
+
+    unsupported_nested_version = document()
+    nested = unsupported_nested_version["artifact"]
+    assert type(nested) is dict
+    nested["api_version"] = "comparo.artifact/v2"
+    with pytest.raises(ReportError) as unsupported:
+        decode_json_report(
+            msgspec.json.encode(unsupported_nested_version),
+            maximum_bytes=1_000_000,
+        )
+    assert unsupported.value.code is ReportErrorCode.UNSUPPORTED_VERSION
+
+    unknown_current_field = document()
+    unknown_current_field["future_field"] = True
+    malformed_payloads.append(msgspec.json.encode(unknown_current_field))
+
+    for payload in malformed_payloads:
+        with pytest.raises(ReportError) as malformed:
+            decode_json_report(payload, maximum_bytes=1_000_000)
+        assert malformed.value.code is ReportErrorCode.MALFORMED
+
+
 @pytest.mark.parametrize("field", ["api_version", "format", "artifact_api_version"])
 def test_json_report_decoder_rejects_unsupported_envelope_versions(field: str) -> None:
     report = render_json_report(_artifact(), maximum_bytes=1_000_000)
@@ -196,6 +247,30 @@ def test_json_report_decoder_rejects_unsupported_envelope_versions(field: str) -
     with pytest.raises(ReportError) as unsupported:
         decode_json_report(msgspec.json.encode(document), maximum_bytes=1_000_000)
     assert unsupported.value.code is ReportErrorCode.UNSUPPORTED_VERSION
+
+
+def test_json_report_decoder_classifies_versions_before_strict_shape() -> None:
+    report = render_json_report(_artifact(), maximum_bytes=1_000_000)
+    document = msgspec.json.decode(report.content)
+    assert type(document) is dict
+    document["api_version"] = "comparo.report/v2"
+    document["future_field"] = True
+
+    with pytest.raises(ReportError) as envelope_version:
+        decode_json_report(msgspec.json.encode(document), maximum_bytes=1_000_000)
+    assert envelope_version.value.code is ReportErrorCode.UNSUPPORTED_VERSION
+
+    document = msgspec.json.decode(report.content)
+    assert type(document) is dict
+    document["artifact_api_version"] = "comparo.artifact/v2"
+    artifact = document["artifact"]
+    assert type(artifact) is dict
+    artifact["api_version"] = "comparo.artifact/v2"
+    artifact["future_field"] = True
+
+    with pytest.raises(ReportError) as artifact_version:
+        decode_json_report(msgspec.json.encode(document), maximum_bytes=1_000_000)
+    assert artifact_version.value.code is ReportErrorCode.UNSUPPORTED_VERSION
 
 
 def test_json_report_decoder_rejects_artifact_identity_mismatch() -> None:
@@ -230,6 +305,7 @@ def test_structured_report_errors_pass_through_renderer_boundaries(
 
     assert failed.value.code is ReportErrorCode.BUDGET_EXCEEDED
     assert failed.value.__cause__ is None
+    assert failed.value.__context__ is None
 
 
 @pytest.mark.parametrize(
@@ -253,7 +329,8 @@ def test_unexpected_renderer_failures_are_replaced_by_safe_codes(
 
     assert failed.value.code is ReportErrorCode.RENDER_FAILED
     assert "unsafe payload" not in str(failed.value)
-    assert type(failed.value.__cause__) is RuntimeError
+    assert failed.value.__cause__ is None
+    assert failed.value.__context__ is None
 
 
 def test_junit_uses_fallback_reason_for_failed_gate_without_reason_text() -> None:
@@ -439,7 +516,7 @@ def test_sarif_correlation_ignores_occurrence_ids_and_normalizes_coverage_uuids(
             fact_id=f"assertion-{suffix}",
             application_id=f"application-{suffix}",
             evidence=tuple(
-                msgspec.structs.replace(item, fact_id=f"assertion-{suffix}")
+                msgspec.structs.replace(item, fact_id=f"assertion-evidence-{suffix}")
                 for item in assertion.evidence
             ),
         )
@@ -458,7 +535,8 @@ def test_sarif_correlation_ignores_occurrence_ids_and_normalizes_coverage_uuids(
             fact_id=f"diff-{suffix}",
             application_id=f"diff-application-{suffix}",
             evidence=tuple(
-                msgspec.structs.replace(item, fact_id=f"diff-{suffix}") for item in diff.evidence
+                msgspec.structs.replace(item, fact_id=f"diff-evidence-{suffix}")
+                for item in diff.evidence
             ),
         )
         comparison = msgspec.structs.replace(
@@ -496,6 +574,16 @@ def test_sarif_correlation_ignores_occurrence_ids_and_normalizes_coverage_uuids(
     )
     first = with_occurrences(artifact, "one", "11111111-1111-4111-8111-111111111111")
     second = with_occurrences(artifact, "two", "22222222-2222-4222-8222-222222222222")
+    earlier = ArtifactCoverageIssue(
+        source="run.capture",
+        extent=ArtifactCaptureExtent.OMITTED,
+        reason=ArtifactOmissionReason.POLICY,
+    )
+    second = msgspec.structs.replace(
+        second,
+        provenance=msgspec.structs.replace(second.provenance, plan_fingerprint="f" * 64),
+        coverage_issues=(earlier, *second.coverage_issues),
+    )
     first_run = msgspec.json.decode(render_sarif_report(first, maximum_bytes=1_000_000).content)[
         "runs"
     ][0]
@@ -504,9 +592,174 @@ def test_sarif_correlation_ignores_occurrence_ids_and_normalizes_coverage_uuids(
     ][0]
 
     assert first_run["automationDetails"] == second_run["automationDetails"]
-    assert [item["partialFingerprints"] for item in first_run["results"]] == [
-        item["partialFingerprints"] for item in second_run["results"]
+    first_fingerprints = [item["partialFingerprints"] for item in first_run["results"]]
+    second_fingerprints = [item["partialFingerprints"] for item in second_run["results"]]
+    assert first_fingerprints[0] == second_fingerprints[0]
+    assert first_fingerprints[-1] == second_fingerprints[-1]
+
+
+def test_sarif_duplicate_semantic_occurrences_have_stable_distinct_fingerprints() -> None:
+    artifact = _artifact()
+
+    def repeat_execution(ordinal: int, *, suffix: str) -> ArtifactExecution:
+        source = artifact.executions[ordinal]
+        attempts = tuple(
+            msgspec.structs.replace(
+                attempt,
+                attempt_id=f"attempt-{suffix}-{attempt_index}",
+                exchanges=tuple(
+                    msgspec.structs.replace(
+                        exchange,
+                        exchange_id=f"exchange-{suffix}-{attempt_index}-{exchange_index}",
+                    )
+                    for exchange_index, exchange in enumerate(attempt.exchanges)
+                ),
+            )
+            for attempt_index, attempt in enumerate(source.attempts)
+        )
+        return msgspec.structs.replace(
+            source,
+            ordinal=ordinal + 2,
+            execution_id=f"execution-{suffix}",
+            cell_id="cell-repeat",
+            trial_id="trial-repeat",
+            attempts=attempts,
+            assertions=(),
+        )
+
+    repeated_baseline = repeat_execution(0, suffix="repeat-baseline")
+    repeated_candidate = repeat_execution(1, suffix="repeat-candidate")
+    original_diff = msgspec.structs.replace(
+        artifact.comparisons[0].diffs[0],
+        outcome=ArtifactFactOutcome.DRIFTED,
+    )
+    repeated_diff = msgspec.structs.replace(
+        original_diff,
+        fact_id="diff-fact-repeat",
+        application_id="diff-application-repeat",
+        evidence=tuple(
+            msgspec.structs.replace(item, fact_id="diff-evidence-repeat")
+            for item in original_diff.evidence
+        ),
+    )
+    first_comparison = msgspec.structs.replace(
+        artifact.comparisons[0],
+        diffs=(original_diff,),
+    )
+    repeated_comparison = msgspec.structs.replace(
+        first_comparison,
+        ordinal=1,
+        comparison_id="comparison-repeat",
+        cell_id="cell-repeat",
+        trial_id="trial-repeat",
+        baseline_execution_id=repeated_baseline.execution_id,
+        candidate_execution_id=repeated_candidate.execution_id,
+        diffs=(repeated_diff,),
+    )
+    repeated = msgspec.structs.replace(
+        artifact,
+        summary=msgspec.structs.replace(
+            artifact.summary,
+            executions=(ArtifactMetric(name="observed", value=4),),
+            comparisons=(ArtifactMetric(name="evaluated", value=2),),
+            diffs=(ArtifactMetric(name="drifted", value=2),),
+        ),
+        executions=(*artifact.executions, repeated_baseline, repeated_candidate),
+        comparisons=(first_comparison, repeated_comparison),
+    )
+
+    run = msgspec.json.decode(render_sarif_report(repeated, maximum_bytes=1_000_000).content)[
+        "runs"
+    ][0]
+    fingerprints = [item["partialFingerprints"]["comparoFinding"] for item in run["results"]]
+
+    assert len(fingerprints) == 2
+    assert len(set(fingerprints)) == 2
+
+    reidentified_first = msgspec.structs.replace(
+        first_comparison,
+        comparison_id="comparison-reidentified-one",
+        diffs=(
+            msgspec.structs.replace(
+                original_diff,
+                fact_id="diff-reidentified-one",
+                application_id="application-reidentified-one",
+                evidence=tuple(
+                    msgspec.structs.replace(item, fact_id="evidence-reidentified-one")
+                    for item in original_diff.evidence
+                ),
+            ),
+        ),
+    )
+    reidentified_second = msgspec.structs.replace(
+        repeated_comparison,
+        comparison_id="comparison-reidentified-two",
+        baseline_execution_id="execution-reidentified-baseline",
+        candidate_execution_id="execution-reidentified-candidate",
+        diffs=(
+            msgspec.structs.replace(
+                repeated_diff,
+                fact_id="diff-reidentified-two",
+                application_id="application-reidentified-two",
+                evidence=tuple(
+                    msgspec.structs.replace(item, fact_id="evidence-reidentified-two")
+                    for item in repeated_diff.evidence
+                ),
+            ),
+        ),
+    )
+    reidentified_baseline = msgspec.structs.replace(
+        repeated_baseline,
+        execution_id="execution-reidentified-baseline",
+    )
+    reidentified_candidate = msgspec.structs.replace(
+        repeated_candidate,
+        execution_id="execution-reidentified-candidate",
+    )
+    reidentified = msgspec.structs.replace(
+        repeated,
+        executions=(
+            *artifact.executions,
+            reidentified_baseline,
+            reidentified_candidate,
+        ),
+        comparisons=(reidentified_first, reidentified_second),
+    )
+    second_run = msgspec.json.decode(
+        render_sarif_report(reidentified, maximum_bytes=1_000_000).content
+    )["runs"][0]
+    second_fingerprints = [
+        item["partialFingerprints"]["comparoFinding"] for item in second_run["results"]
     ]
+
+    assert second_fingerprints == fingerprints
+
+
+def test_sarif_duplicate_execution_coverage_occurrences_are_disambiguated() -> None:
+    artifact = _artifact()
+    issues = (
+        ArtifactCoverageIssue(
+            source="response.11111111-1111-4111-8111-111111111111.body",
+            extent=ArtifactCaptureExtent.PARTIAL,
+            reason=ArtifactOmissionReason.REDACTION_FAILED,
+            execution_id=artifact.executions[0].execution_id,
+        ),
+        ArtifactCoverageIssue(
+            source="response.22222222-2222-4222-8222-222222222222.body",
+            extent=ArtifactCaptureExtent.PARTIAL,
+            reason=ArtifactOmissionReason.REDACTION_FAILED,
+            execution_id=artifact.executions[0].execution_id,
+        ),
+    )
+    repeated = msgspec.structs.replace(artifact, coverage_issues=issues)
+
+    run = msgspec.json.decode(render_sarif_report(repeated, maximum_bytes=1_000_000).content)[
+        "runs"
+    ][0]
+    fingerprints = [item["partialFingerprints"]["coverageSource"] for item in run["results"]]
+
+    assert len(fingerprints) == 2
+    assert len(set(fingerprints)) == 2
 
 
 def test_safe_plain_and_markdown_cell_cover_all_character_classes() -> None:
