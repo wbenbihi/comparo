@@ -59,6 +59,14 @@ jobs:
           gzip --test dist/comparo-*.tar.gz
           unzip -t dist/comparo-*.whl
 
+      - name: Smoke test installed wheel
+        run: |
+          uv venv --python 3.13 .wheel-smoke
+          uv pip install --python .wheel-smoke/bin/python dist/comparo-*.whl
+          .wheel-smoke/bin/comparo --help
+          .wheel-smoke/bin/comparo schema config > /dev/null
+          .wheel-smoke/bin/comparo doctor --format json
+
   compatibility:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
