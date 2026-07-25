@@ -16,6 +16,7 @@ from comparo.tui.components.reports import ReportListItem as ReportListItem
 from comparo.tui.components.results import ResultDetail as ResultDetail
 from comparo.tui.components.results import ResultIndex as ResultIndex
 from comparo.tui.components.results import ResultIndexKind as ResultIndexKind
+from comparo.tui.components.results import ResultIndexSelector as ResultIndexSelector
 from comparo.tui.components.results import ResultSummary as ResultSummary
 from comparo.tui.components.results import ResultsWorkspaceView as ResultsWorkspaceView
 from comparo.tui.components.settings import TuiOnlySettingsPanel as TuiOnlySettingsPanel
@@ -41,6 +42,7 @@ __all__ = (
     "ResultDetail",
     "ResultIndex",
     "ResultIndexKind",
+    "ResultIndexSelector",
     "ResultSummary",
     "ResultsWorkspaceView",
     "StatePanel",

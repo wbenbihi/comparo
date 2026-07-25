@@ -11,6 +11,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.message import Message
+from textual.widgets import Button
 from textual.widgets import Label
 from textual.widgets import ListItem
 from textual.widgets import ListView
@@ -18,6 +19,7 @@ from textual.widgets import Static
 
 from comparo.application.results import ComparisonResultRow
 from comparo.application.results import ExecutionResultRow
+from comparo.application.results import ResultEntity
 from comparo.application.results import ResultFact
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
@@ -36,6 +38,74 @@ class ResultIndexKind(StrEnum):
     ASSERTIONS = "assertions"
     COMPARISONS = "comparisons"
     DIFFS = "diffs"
+
+    @classmethod
+    def for_reference(cls, reference: ResultReference) -> ResultIndexKind:
+        """Return the collection containing one typed result reference."""
+        return {
+            ResultEntity.EXECUTION: cls.EXECUTIONS,
+            ResultEntity.ASSERTION: cls.ASSERTIONS,
+            ResultEntity.COMPARISON: cls.COMPARISONS,
+            ResultEntity.DIFF: cls.DIFFS,
+        }[reference.entity]
+
+
+@final
+class ResultIndexSelector(Horizontal):
+    """Shared control exposing every result collection in live and stored runs."""
+
+    @final
+    class IndexSelected(Message):
+        """A typed result collection was selected."""
+
+        def __init__(self, kind: ResultIndexKind) -> None:
+            """Retain the selected closed index kind."""
+            super().__init__()
+            self.kind = kind
+
+    def __init__(
+        self,
+        kind: ResultIndexKind,
+        *,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        """Initialize the selector with one active result collection."""
+        if type(kind) is not ResultIndexKind:
+            raise TypeError("result index selector requires ResultIndexKind")
+        super().__init__(id=id, classes=classes)
+        self._kind = kind
+
+    @property
+    def kind(self) -> ResultIndexKind:
+        """Return the currently active result collection."""
+        return self._kind
+
+    @override
+    def compose(self) -> ComposeResult:
+        """Compose all result collections from the closed kind vocabulary."""
+        for kind in ResultIndexKind:
+            classes = "result-index-option"
+            if kind is self._kind:
+                classes += " result-index-active"
+            yield Button(
+                kind.value.title(),
+                id=f"result-index-{kind.value}",
+                classes=classes,
+            )
+
+    @on(Button.Pressed)
+    def select_index(self, event: Button.Pressed) -> None:
+        """Translate one shared control press into a typed index message."""
+        prefix = "result-index-"
+        button_id = event.button.id or ""
+        if not button_id.startswith(prefix):
+            return
+        kind = ResultIndexKind(button_id.removeprefix(prefix))
+        self._kind = kind
+        for button in self.query(Button):
+            button.set_class(button.id == button_id, "result-index-active")
+        self.post_message(self.IndexSelected(kind))
 
 
 @final
@@ -199,9 +269,15 @@ class ResultDetail(Static):
             self.update("Select a result row to inspect it.")
             return
         lines = _detail_lines(self._projection, reference)
+        relationships = tuple(
+            (f"Related {link.relation.value}: {link.target.entity.value}/{link.target.result_id}")
+            for link in self._projection.links
+            if link.source == reference
+        )
         self.update(
             "\n".join(
-                safe_terminal_text(item, maximum_characters=2048, multiline=False) for item in lines
+                safe_terminal_text(item, maximum_characters=2048, multiline=False)
+                for item in (*lines, *relationships)
             )
         )
 
@@ -279,19 +355,46 @@ class ResultsWorkspaceView(ResponsiveWidget):
         self._projection = projection
         self._access = access
         self._index = index
+        self._selected_reference: ResultReference | None = None
 
     @override
     def compose(self) -> ComposeResult:
         """Compose one summary/index/detail hierarchy for every result origin."""
         yield ResultSummary(self._projection.summary, access=self._access)
+        yield ResultIndexSelector(self._index, classes="result-index-selector")
         with Horizontal(classes="result-layout"):
             yield ResultIndex(self._projection, kind=self._index, classes="result-index")
-            yield ResultDetail(self._projection, classes="result-detail")
+            yield ResultDetail(
+                self._projection,
+                self._selected_reference,
+                classes="result-detail",
+            )
+
+    @property
+    def current_index(self) -> ResultIndexKind:
+        """Return the result collection currently visible in this workspace."""
+        return self._index
+
+    @on(ResultIndexSelector.IndexSelected)
+    def show_index(self, message: ResultIndexSelector.IndexSelected) -> None:
+        """Switch collections without discarding the inspected result context."""
+        self._index = message.kind
+        self.refresh(recompose=True)
 
     @on(ResultIndex.ResultSelected)
     def show_selected_result(self, message: ResultIndex.ResultSelected) -> None:
         """Route index selection to the one shared detail component."""
+        self._selected_reference = message.reference
         self.query_one(".result-detail", ResultDetail).show_reference(message.reference)
+
+    def follow_reference(self, reference: ResultReference) -> None:
+        """Follow a typed cross-reference to its owning collection and detail."""
+        if type(reference) is not ResultReference:
+            raise TypeError("result navigation requires ResultReference")
+        self._index = ResultIndexKind.for_reference(reference)
+        self._selected_reference = reference
+        if self.is_mounted:
+            self.refresh(recompose=True)
 
 
 __all__ = (
@@ -299,6 +402,7 @@ __all__ = (
     "ResultIndex",
     "ResultIndexItem",
     "ResultIndexKind",
+    "ResultIndexSelector",
     "ResultSummary",
     "ResultsWorkspaceView",
 )

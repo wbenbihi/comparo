@@ -135,6 +135,22 @@ TuiOnlySettingsPanel {
     width: 1fr;
 }
 
+.result-index-selector {
+    height: 3;
+    width: 1fr;
+}
+
+.result-index-option {
+    width: 1fr;
+    content-align: center middle;
+    border-bottom: solid $panel-lighten-2;
+}
+
+.result-index-active {
+    border-bottom: solid $accent;
+    text-style: bold;
+}
+
 CompareDraftForm {
     height: auto;
     width: 1fr;

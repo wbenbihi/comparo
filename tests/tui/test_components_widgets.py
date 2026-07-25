@@ -36,12 +36,14 @@ from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.report_archive import ReportArchiveEntry
 from comparo.application.results import ComparisonResultRow
 from comparo.application.results import ExecutionResultRow
+from comparo.application.results import ResultCrossLink
 from comparo.application.results import ResultEntity
 from comparo.application.results import ResultEvidence
 from comparo.application.results import ResultFact
 from comparo.application.results import ResultMetric
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
+from comparo.application.results import ResultRelation
 from comparo.application.results import ResultResource
 from comparo.application.results import ResultSummary
 from comparo.application.results import ResultTiming
@@ -62,6 +64,7 @@ from comparo.tui.components import ReportListItem
 from comparo.tui.components import ResultDetail
 from comparo.tui.components import ResultIndex
 from comparo.tui.components import ResultIndexKind
+from comparo.tui.components import ResultIndexSelector
 from comparo.tui.components import ResultsWorkspaceView
 from comparo.tui.components import StatePanel
 from comparo.tui.components import StatePanelMode
@@ -291,7 +294,23 @@ def _projection() -> ResultProjection:
         assertions=(assertion,),
         comparisons=(comparison,),
         diffs=(diff,),
-        links=(),
+        links=(
+            ResultCrossLink(
+                source=execution_reference,
+                relation=ResultRelation.ASSERTION,
+                target=assertion_reference,
+            ),
+            ResultCrossLink(
+                source=comparison_reference,
+                relation=ResultRelation.BASELINE,
+                target=execution_reference,
+            ),
+            ResultCrossLink(
+                source=comparison_reference,
+                relation=ResultRelation.DIFF,
+                target=diff_reference,
+            ),
+        ),
     )
 
 
@@ -543,6 +562,21 @@ def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
         form.show_draft(cast("CompareDraft", object()))
     with pytest.raises(TypeError, match="result index kind"):
         ResultIndex(_projection(), kind=cast("ResultIndexKind", object()))
+    with pytest.raises(TypeError, match="ResultIndexKind"):
+        ResultIndexSelector(cast("ResultIndexKind", object()))
+    result_selector = ResultIndexSelector(ResultIndexKind.EXECUTIONS)
+    assert result_selector.kind is ResultIndexKind.EXECUTIONS
+    unmounted_results = ResultsWorkspaceView(
+        _projection(),
+        access=ResultAccess.LIVE,
+    )
+    unmounted_results.follow_reference(_projection().diffs[0].reference)
+    assert unmounted_results.current_index is ResultIndexKind.DIFFS
+    with pytest.raises(TypeError, match="ResultReference"):
+        ResultsWorkspaceView(
+            _projection(),
+            access=ResultAccess.LIVE,
+        ).follow_reference(cast("ResultReference", object()))
 
 
 @_run_async
@@ -674,3 +708,38 @@ async def test_every_result_index_and_detail_path_reuses_one_navigation_contract
         detail.show_reference(None)
         view.show_selected_result(ResultIndex.ResultSelected(references[0]))
         await pilot.pause()
+
+
+@_run_async
+async def test_shared_result_view_explores_every_index_and_typed_cross_reference() -> None:
+    projection = _projection()
+    view = ResultsWorkspaceView(projection, access=ResultAccess.READ_ONLY)
+    app = _WidgetApp(view)
+
+    async with app.run_test(size=(160, 52)) as pilot:
+        await pilot.pause()
+        selector = view.query_one(ResultIndexSelector)
+        selector.select_index(Button.Pressed(Button("Unrelated")))
+        selector.select_index(Button.Pressed(Button("Unrelated", id="unrelated")))
+
+        for kind in ResultIndexKind:
+            await pilot.click(f"#result-index-{kind.value}")
+            await pilot.pause()
+            assert view.current_index is kind
+            assert view.query_one(ResultIndex).kind is kind
+
+        execution = projection.executions[0].reference
+        view.follow_reference(execution)
+        await pilot.pause()
+        assert view.current_index.value == ResultIndexKind.EXECUTIONS.value
+        assert "Related assertion: assertion/assertion-1" in str(
+            view.query_one(ResultDetail).render()
+        )
+
+        comparison = projection.comparisons[0].reference
+        view.follow_reference(comparison)
+        await pilot.pause()
+        assert view.current_index.value == ResultIndexKind.COMPARISONS.value
+        detail_text = str(view.query_one(ResultDetail).render())
+        assert "Related baseline: execution/execution-1" in detail_text
+        assert "Related diff: diff/diff-1" in detail_text
