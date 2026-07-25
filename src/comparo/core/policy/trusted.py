@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from comparo.core.domain.http.fields import HttpMethod
-from comparo.core.domain.http.url import HttpPort
 from comparo.core.domain.http.url import HttpScheme
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import NamespaceId
@@ -62,9 +61,10 @@ def trusted_local_policy() -> CompiledExecutionPolicy:
             )
         ),
         allowed_hosts=(),
-        allowed_ports=(HttpPort(value=80), HttpPort(value=443)),
+        allowed_ports=(),
         allowed_address_classes=tuple(sorted(NetworkAddressClass, key=lambda item: item.value)),
         allow_any_host=True,
+        allow_any_port=True,
         require_mutation_approval=False,
         allow_proxy_dns=True,
     )

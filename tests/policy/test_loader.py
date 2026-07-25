@@ -37,6 +37,7 @@ spec:
     allowedPorts: [443]
     allowedAddressClasses: [public]
     allowAnyHost: false
+    allowAnyPort: false
     requireMutationApproval: false
     allowProxyDns: false
   values:

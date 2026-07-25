@@ -76,6 +76,7 @@ def _text(
         "    allowedPorts: [443, 80]\n"
         "    allowedAddressClasses: [public, loopback]\n"
         "    allowAnyHost: false\n"
+        "    allowAnyPort: false\n"
         "    requireMutationApproval: true\n"
         "    allowProxyDns: false\n"
         "  values:\n"
@@ -218,6 +219,7 @@ def test_policy_accepts_canonical_cross_platform_artifact_roots(root: str) -> No
         ("[443, 80]", "[0]", "policy.http.port"),
         ("[public, loopback]", "[unknown]", "policy.http.address-class"),
         ("allowAnyHost: false", "allowAnyHost: nope", "policy.http.flag"),
+        ("allowAnyPort: false", "allowAnyPort: nope", "policy.http.flag"),
         ("[TOKEN, API_KEY]", "[BAD-NAME]", "policy.values.environment-name"),
         ("[TOKEN, API_KEY]", f"[{'A' * 256}]", "policy.values.environment-name"),
         ("allowProjectFiles: true", "allowProjectFiles: nope", "policy.values.project-files"),
@@ -353,6 +355,10 @@ def test_invalid_policy_values_are_source_located(old: str, new: str, code: str)
             "policy.http.host-conflict",
         ),
         (
+            _text().replace("    allowAnyPort: false", "    allowAnyPort: true"),
+            "policy.http.port-conflict",
+        ),
+        (
             _text().replace(
                 "ambientEnvironment: {names: [TOKEN, API_KEY], allowAny: false}",
                 "ambientEnvironment: {names: [TOKEN], allowAny: true}",
@@ -445,6 +451,9 @@ def test_core_policy_models_enforce_direct_construction_invariants() -> None:
         )
     with pytest.raises(ValueError, match="allowAnyHost"):
         msgspec.structs.replace(policy.http, allow_any_host=True)
+    with pytest.raises(ValueError, match="allowAnyPort"):
+        msgspec.structs.replace(policy.http, allow_any_port=True)
+    assert trusted_local_policy().http.allow_any_port
     with pytest.raises(ValueError, match="portable variable"):
         AmbientEnvironmentPolicy(names=("BAD-NAME",), allow_any=False)
     with pytest.raises(ValueError, match="redundant allowlist"):

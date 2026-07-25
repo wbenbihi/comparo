@@ -81,6 +81,7 @@ def generate_policy_schema() -> JsonSchema:
         "allowedPorts",
         "allowedAddressClasses",
         "allowAnyHost",
+        "allowAnyPort",
         "requireMutationApproval",
         "allowProxyDns",
     )
@@ -109,7 +110,6 @@ def generate_policy_schema() -> JsonSchema:
             "allowedPorts": {
                 "type": "array",
                 "items": {"type": "integer", "minimum": 1, "maximum": 65_535},
-                "minItems": 1,
                 "uniqueItems": True,
             },
             "allowedAddressClasses": {
@@ -119,6 +119,7 @@ def generate_policy_schema() -> JsonSchema:
                 "uniqueItems": True,
             },
             "allowAnyHost": {"type": "boolean"},
+            "allowAnyPort": {"type": "boolean"},
             "requireMutationApproval": {"type": "boolean"},
             "allowProxyDns": {"type": "boolean"},
         },

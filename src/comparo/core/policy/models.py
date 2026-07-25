@@ -123,6 +123,7 @@ class PolicyHttp(msgspec.Struct, frozen=True, kw_only=True):
     allowed_ports: tuple[HttpPort, ...]
     allowed_address_classes: tuple[NetworkAddressClass, ...]
     allow_any_host: bool
+    allow_any_port: bool
     require_mutation_approval: bool
     allow_proxy_dns: bool
 
@@ -139,6 +140,7 @@ class PolicyHttp(msgspec.Struct, frozen=True, kw_only=True):
         )
         for value in (
             self.allow_any_host,
+            self.allow_any_port,
             self.require_mutation_approval,
             self.allow_proxy_dns,
         ):
@@ -146,6 +148,10 @@ class PolicyHttp(msgspec.Struct, frozen=True, kw_only=True):
                 raise TypeError("policy HTTP authority flags must be bool values")
         if self.allow_any_host and self.allowed_hosts:
             raise ValueError("allowAnyHost cannot retain a redundant host allowlist")
+        if self.allow_any_port and self.allowed_ports:
+            raise ValueError("allowAnyPort cannot retain a redundant port allowlist")
+        if not self.allow_any_port and not self.allowed_ports:
+            raise ValueError("HTTP policy requires allowedPorts unless allowAnyPort is true")
 
 
 @final
@@ -373,8 +379,8 @@ def _validate_hosts(values: tuple[HttpHost, ...]) -> None:
 def _validate_ports(values: tuple[HttpPort, ...]) -> None:
     if type(values) is not tuple or any(type(item) is not HttpPort for item in values):
         raise TypeError("policy HTTP ports must be immutable and typed")
-    if not values or values != tuple(sorted(set(values), key=lambda item: item.value)):
-        raise ValueError("policy HTTP ports must be non-empty, unique, and canonical")
+    if values != tuple(sorted(set(values), key=lambda item: item.value)):
+        raise ValueError("policy HTTP ports must be unique and canonical")
 
 
 def _selector_sort_key(item: PolicyResourceSelector) -> tuple[str, str]:

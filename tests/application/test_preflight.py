@@ -80,6 +80,7 @@ def _write_policy(root: Path) -> Path:
         "    allowedPorts: [443]\n"
         "    allowedAddressClasses: [public]\n"
         "    allowAnyHost: false\n"
+        "    allowAnyPort: false\n"
         "    requireMutationApproval: false\n"
         "    allowProxyDns: false\n"
         "  values:\n"

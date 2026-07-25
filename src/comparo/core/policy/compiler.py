@@ -305,6 +305,7 @@ class _PolicyCompiler:
             "allowedPorts",
             "allowedAddressClasses",
             "allowAnyHost",
+            "allowAnyPort",
             "requireMutationApproval",
             "allowProxyDns",
         }
@@ -330,6 +331,7 @@ class _PolicyCompiler:
             code="policy.http.address-class",
         )
         allow_any_host = self._boolean(fields.get("allowAnyHost"), code="policy.http.flag")
+        allow_any_port = self._boolean(fields.get("allowAnyPort"), code="policy.http.flag")
         require_mutation = self._boolean(
             fields.get("requireMutationApproval"),
             code="policy.http.flag",
@@ -344,6 +346,7 @@ class _PolicyCompiler:
                 ports,
                 address_classes,
                 allow_any_host,
+                allow_any_port,
                 require_mutation,
                 allow_proxy_dns,
             )
@@ -353,12 +356,14 @@ class _PolicyCompiler:
             self._add("policy.http.scheme", fields["allowedSchemes"].span)
         if not methods:
             self._add("policy.http.method", fields["allowedMethods"].span)
-        if not ports:
+        if not ports and not allow_any_port:
             self._add("policy.http.port", fields["allowedPorts"].span)
         if not address_classes:
             self._add("policy.http.address-class", fields["allowedAddressClasses"].span)
         if allow_any_host and hosts:
             self._add("policy.http.host-conflict", fields["allowedHosts"].span)
+        if allow_any_port and ports:
+            self._add("policy.http.port-conflict", fields["allowedPorts"].span)
         if self._diagnostics:
             return None
         return PolicyHttp(
@@ -371,6 +376,7 @@ class _PolicyCompiler:
                 address_classes,
             ),
             allow_any_host=cast("bool", allow_any_host),
+            allow_any_port=cast("bool", allow_any_port),
             require_mutation_approval=cast("bool", require_mutation),
             allow_proxy_dns=cast("bool", allow_proxy_dns),
         )
@@ -705,6 +711,7 @@ def policy_fingerprint(
             "allowedPorts": [item.value for item in http.allowed_ports],
             "allowedAddressClasses": [item.value for item in http.allowed_address_classes],
             "allowAnyHost": http.allow_any_host,
+            "allowAnyPort": http.allow_any_port,
             "requireMutationApproval": http.require_mutation_approval,
             "allowProxyDns": http.allow_proxy_dns,
         },

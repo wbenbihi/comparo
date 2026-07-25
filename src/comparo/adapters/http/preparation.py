@@ -250,7 +250,7 @@ def _logical_request_allowed(
     return (
         request.url.scheme in http.allowed_schemes
         and request.method in http.allowed_methods
-        and port in http.allowed_ports
+        and (http.allow_any_port or port in http.allowed_ports)
         and (http.allow_any_host or host in http.allowed_hosts)
         and type(request.policies.proxy) is NoProxy
         and request.policies.redirects.max_hops.value == 0

@@ -72,6 +72,9 @@
             "allowAnyHost": {
               "type": "boolean"
             },
+            "allowAnyPort": {
+              "type": "boolean"
+            },
             "allowProxyDns": {
               "type": "boolean"
             },
@@ -115,7 +118,6 @@
                 "minimum": 1,
                 "type": "integer"
               },
-              "minItems": 1,
               "type": "array",
               "uniqueItems": true
             },
@@ -141,6 +143,7 @@
             "allowedPorts",
             "allowedAddressClasses",
             "allowAnyHost",
+            "allowAnyPort",
             "requireMutationApproval",
             "allowProxyDns"
           ],

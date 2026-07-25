@@ -182,12 +182,18 @@ def test_http_policy_rejects_untyped_empty_or_noncanonical_allowlists() -> None:
             ),
         ),
         (TypeError, "HTTP ports", lambda: msgspec.structs.replace(policy, allowed_ports=[])),
-        (ValueError, "HTTP ports", lambda: msgspec.structs.replace(policy, allowed_ports=())),
+        (
+            ValueError,
+            "requires allowedPorts",
+            lambda: msgspec.structs.replace(policy, allowed_ports=(), allow_any_port=False),
+        ),
         (
             ValueError,
             "HTTP ports",
             lambda: msgspec.structs.replace(
-                policy, allowed_ports=(HttpPort(value=443), HttpPort(value=80))
+                policy,
+                allowed_ports=(HttpPort(value=443), HttpPort(value=80)),
+                allow_any_port=False,
             ),
         ),
         (
