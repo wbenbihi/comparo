@@ -299,6 +299,10 @@ Exit criteria:
 
 ## Step 8: production HTTP adapter
 
+Status: completed on 2026-07-25. Request finalization, route-pinned transport, redirect/retry
+orchestration, TLS identity isolation, bounded capture and storage, aggregate deadlines, and
+record-stream projection are documented in [Production HTTP adapter](production-http-adapter.md).
+
 Implement the real adapter only after its port is stable. Add capabilities in this order:
 
 1. Ordinary request and response handling.
@@ -315,11 +319,11 @@ Implement the real adapter only after its port is stable. Add capabilities in th
 
 Exit criteria:
 
-- Fake and real adapters pass the same contract suite.
-- Wire behavior is faithful for every request representation.
-- Unsafe methods are not retried without an explicit policy.
-- Streams distinguish completion, timeout, truncation, cancellation, and failure.
-- Local integration tests cover protocol edge cases and cleanup.
+- Fake and real adapters pass the same transport and runtime contracts: complete.
+- Wire behavior is faithful for every request representation: complete.
+- Unsafe methods are not retried without an explicit policy: complete.
+- Streams distinguish completion, timeout, truncation, cancellation, and failure: complete.
+- Local integration tests cover protocol edge cases and cleanup: complete.
 
 ## Step 9: sanitization, artifacts, and persistence
 
