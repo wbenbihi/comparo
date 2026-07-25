@@ -22,6 +22,9 @@ Architecture decisions
   -> sanitization, artifacts, and persistence
   -> CLI
   -> TUI
+  -> dedicated CI integration
+  -> release qualification
+  -> safe request command export
   -> scenarios and optional extensions
 ```
 
@@ -362,7 +365,7 @@ one application planner/runtime composition; caller-owned load and runtime limit
 resource overlays, structured exit outcomes, destination-bound secret egress, and once-only HTTP
 authorization are enforced before effects at their respective boundaries. At the end of Step 10,
 a dedicated CI wrapper and the TUI remained intentionally deferred; the TUI is migrated in Step 11
-below.
+and CI integration follows in Step 12 below.
 
 Move commands in increasing order of side effects:
 
@@ -400,7 +403,93 @@ widgets contain no configuration, resolution, HTTP, evaluation, gate, or persist
 bare interactive `comparo` and explicit `comparo tui` launch through caller-owned, versioned load,
 execution, artifact, report, and preparation limits.
 
-## Step 12: scenarios and extensions
+## Step 12: dedicated CI integration
+
+Status: pending and required before the first public rebuilt release.
+
+Package the existing headless execution path as a deliberately restricted CI journey. The CI
+adapter does not receive its own planner, runtime, evaluator, reporter, or policy semantics. It
+selects the same application services and versioned machine contracts as the CLI while making the
+untrusted-automation posture difficult to misconfigure.
+
+The first adapter targets GitHub Actions without making the backend GitHub-specific. It accepts an
+operator-controlled `ExecutionPolicy`, configuration sources, execution selection and explicit
+limits; runs non-interactively; preserves cancellation and exit-code semantics; publishes bounded
+sanitized reports and artifacts; and can write a concise job summary. Secrets are supplied through
+declared value sources and never embedded in generated command lines, workflow output, annotations,
+cache keys, or artifact names.
+
+Exit criteria:
+
+- The wrapper delegates to the same execution composition used by `comparo run`, `diff`, and
+  `exec`; deleting it removes no backend behavior.
+- Restricted authority is the CI default and a project cannot grant itself additional authority.
+- GitHub annotations, summaries, reports, and uploaded bundles are projections of sanitized
+  artifacts or value-free diagnostics.
+- Success, detected drift, invalid invocation, blocked execution, runtime failure, cancellation,
+  and incomplete execution retain documented machine-stable outcomes.
+- A pinned example workflow and local contract tests cover pull-request and release-gate journeys.
+
+## Step 13: release qualification and publication
+
+Status: pending and required before the first public rebuilt release.
+
+Freeze and verify the first published new-lineage contract only after every required product
+surface is present. This step adds no domain behavior. It independently audits the assembled
+system, closes documentation and packaging gaps, and proves that the artifacts built by release
+automation are the artifacts that were reviewed.
+
+The publication boundary must explicitly identify the first released `comparo/v1alpha1`
+configuration schema, artifact schema, machine-report envelopes, CLI exit codes, supported Python
+and operating-system matrix, and executable limitations. From that point, the compatibility rules
+in ADR 0016 apply to those published contracts.
+
+Exit criteria:
+
+- A fresh architecture, code-quality, security, privacy, secret-egress, dependency, and
+  documentation audit has no unresolved release-blocking finding.
+- End-to-end tests cover CLI, TUI, and CI journeys against local controlled servers, including
+  denied effects, cancellation, malformed input, bounded large input, redaction, persistence, and
+  report reopening.
+- Schema, artifact, report, and exit-code compatibility fixtures are frozen at the documented
+  publication point.
+- The wheel and source distribution contain only reviewed members, install in clean environments,
+  and pass installed-package smoke tests on the declared support matrix.
+- Examples and the quick start exercise only implemented capabilities; every material limitation
+  and security assumption is discoverable before a user executes a request.
+- The release workflow is exercised as a non-publishing rehearsal before the first tag and PyPI
+  publication.
+
+## Step 14: safe request inspection and cURL export
+
+Status: future; not required for the first public rebuilt release.
+
+Add a reusable request-inspection capability for concrete planned or observed request occurrences.
+Its first command renderer emits a POSIX cURL representation through an application-layer safe
+projection consumed by both CLI and TUI adapters. The renderer is diagnostic convenience, not a
+second request-materialization or execution path, and it does not reproduce Comparo assertions,
+diffs, gates, retries, authorization, or other runtime semantics.
+
+The displayed and copied command must be byte-for-byte identical. Comparo never displays a
+redacted command while placing a live credential in the clipboard. Sensitive fields use explicit
+redaction markers or symbolic runtime placeholders; an incomplete command reports why it is not
+directly executable. Clipboard access is a replaceable TUI adapter with explicit unavailable and
+denied outcomes, and copied content is never written to logs, diagnostics, reports, or TUI history.
+
+Exit criteria:
+
+- Rendering consumes a sanitized request projection and cannot accept `SensitiveValue`, live run
+  context, or an authorized transport request.
+- One central serializer builds argument tokens before applying tested POSIX shell quoting; TUI
+  widgets never concatenate commands.
+- The selected environment, cell, trial, attempt, and exchange occurrence are unambiguous.
+- Credential headers, cookies, sensitive query values, bodies, control characters, binary data,
+  and caller-owned output limits have adversarial tests.
+- Omitted, truncated, redacted, or unsupported request content makes completeness explicit.
+- Normal HTTP, structured bodies, multipart/file bodies, and SSE-specific presentation are added
+  only as their safe projection contracts become representable.
+
+## Step 15: scenarios and extensions
 
 Only after the kernel and its ports are stable, consider scenario steps, captures, OAuth flows,
 external secret providers, custom operators and comparators, effectful analysis such as an LLM
@@ -422,6 +511,11 @@ called a sandbox without enforced isolation.
 3. **Offline complete engine:** compiled projects execute end-to-end through the fake transport.
 4. **Production HTTP engine:** bounded, cancellable execution with run-scoped secret snapshots.
 5. **Product integration:** sanitized artifacts, CLI cutover, and finally TUI cutover.
+6. **Public rebuilt release:** restricted CI integration followed by independent release
+   qualification and publication.
+
+Safe cURL export and Scenario/extension work are subsequent product milestones; neither is part of
+the first rebuilt release's definition of done.
 
 ## Parallel work boundaries
 

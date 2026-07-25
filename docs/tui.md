@@ -213,7 +213,9 @@ controls contained before it reaches a widget; Rich markup is disabled for data-
 
 ## Deferred scope
 
-Stateful Scenario execution remains Step 12. Its future placement is already stable: definitions
+Stateful Scenario execution remains Step 15. Its future placement is already stable: definitions
 appear in Explorer, active execution appears in Compare, and persisted outcomes appear in Report.
+Safe request inspection and cURL export are planned in Step 14. The displayed and copied command
+will use the same sanitized projection and will never place a live credential in the clipboard.
 Browser automation is outside Comparo's scope; WebSocket and gRPC transports and a public plugin
 system remain deferred.
