@@ -124,6 +124,16 @@ def test_capture_decorator_compiles_one_safe_complete_artifact() -> None:
     assert not artifact.coverage_issues
     assert artifact.executions[0].assertions
     assert artifact.comparisons[0].diffs
+    assert all(
+        profile is None or profile in artifact.resources
+        for profile in (
+            artifact.provenance.artifact_profile,
+            artifact.provenance.redaction_profile,
+        )
+    )
+    assert artifact.gate.profile in artifact.resources
+    assert all(execution.subject in artifact.resources for execution in artifact.executions)
+    assert all(comparison.subject in artifact.resources for comparison in artifact.comparisons)
     assert blobs is not None
 
 

@@ -34,6 +34,8 @@ from comparo.core.domain.http.bodies import RepeatableByteSource
 from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.http.fields import BareQueryValue
+from comparo.core.domain.http.fields import HeaderText
+from comparo.core.domain.http.fields import QueryText
 from comparo.core.domain.http.observations import EnvironmentExecutionObservation
 from comparo.core.domain.http.observations import HttpAttempt
 from comparo.core.domain.http.observations import HttpExchange
@@ -68,7 +70,6 @@ from comparo.core.domain.http.url import DecodedPathSegment
 from comparo.core.domain.http.url import EncodedPathSegment
 from comparo.core.domain.http.url import Ipv6Host
 from comparo.core.domain.selectors.sources import SelectorSource
-from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import is_sensitive_value
 from comparo.core.runtime.models import ExecutionOutcome
 from comparo.core.runtime.models import ExecutionWork
@@ -187,6 +188,9 @@ class ArtifactCapturingDriver:
         try:
             await self._capture()
         except asyncio.CancelledError:
+            if self._boundary is not None:
+                self._boundary.close()
+                self._boundary = None
             self._batch = _failed_batch("cancelled")
             raise
         except _RejectArtifactCaptureError:
@@ -383,7 +387,7 @@ async def _capture_attempt(
     omission: ArtifactOmissionReason | None = None
     failure: ArtifactFailure | None = None
     if pre_send is not None:
-        if policy.capture.requests:
+        if policy.capture.requests and not _requires_whole_request_omission(redaction):
             request = await _capture_request(
                 _pre_send_request(pre_send),
                 source=f"attempts.{attempt.attempt_id.value}.pre-send.request",
@@ -429,7 +433,7 @@ async def _capture_exchange(
     exchange_id = str(exchange.exchange_id.value)
     request: ArtifactRequest | None
     request_omission: ArtifactOmissionReason | None
-    if policy.capture.requests:
+    if policy.capture.requests and not _requires_whole_request_omission(redaction):
         request = await _capture_request(
             exchange.request.request,
             source=f"exchanges.{exchange_id}.request",
@@ -455,7 +459,7 @@ async def _capture_exchange(
     response: ArtifactResponse | None = None
     response_omission: ArtifactOmissionReason | None = None
     if exchange.response is not None:
-        if policy.capture.responses:
+        if policy.capture.responses and not _requires_whole_response_omission(redaction):
             response = await _capture_response(
                 exchange.response,
                 source=f"exchanges.{exchange_id}.response",
@@ -499,6 +503,17 @@ async def _capture_request(
     redaction: RedactionPolicy,
     issues: list[ArtifactCoverageIssue],
 ) -> ArtifactRequest:
+    _record_custom_source_omissions(
+        issues,
+        source=source,
+        execution_id=execution_id,
+        redaction=redaction,
+        sources=(
+            (SelectorSource.REQUEST_QUERY, "query"),
+            (SelectorSource.REQUEST_HEADERS, "headers"),
+            (SelectorSource.REQUEST_COOKIES, "cookies"),
+        ),
+    )
     body: ArtifactCapture | None = None
     if type(request.body) is MaterializedBody:
         body = await _capture_body(
@@ -519,7 +534,7 @@ async def _capture_request(
     elif type(request.body) is not NoMaterializedBody:  # pragma: no cover - domain invariant
         raise TypeError("captured request body has an unsupported type")
     return ArtifactRequest(
-        method=request.method.value,
+        method=boundary.sanitize_text(request.method.value).value,
         url=_sanitize_url(request.url, boundary, redaction),
         headers=_request_headers(request, boundary, redaction),
         cookies=_request_cookies(request, boundary, redaction),
@@ -539,6 +554,16 @@ async def _capture_response(
     redaction: RedactionPolicy,
     issues: list[ArtifactCoverageIssue],
 ) -> ArtifactResponse:
+    _record_custom_source_omissions(
+        issues,
+        source=source,
+        execution_id=execution_id,
+        redaction=redaction,
+        sources=(
+            (SelectorSource.RESPONSE_HEADERS, "headers"),
+            (SelectorSource.RESPONSE_TRAILERS, "trailers"),
+        ),
+    )
     body: ArtifactCapture | None = None
     if type(response.body) is ResponseEntityBody:
         body = await _capture_response_body(
@@ -722,14 +747,20 @@ def _sanitize_url(
                 query.append(encoded_name)
                 continue
             mandatory = parameter.name.value.casefold() in MANDATORY_SENSITIVE_QUERY_NAMES
+            query_value = (
+                parameter.value
+                if is_sensitive_value(parameter.value)
+                else cast(QueryText, parameter.value).value
+            )
             value = boundary.sanitize_text(
-                cast("str | SensitiveValue[object]", parameter.value),
+                query_value,
                 mandatory=mandatory,
             ).value
             encoded = quote(value, safe="-._~", encoding="utf-8", errors="strict")
             query.append(f"{encoded_name}={encoded}")
     suffix = "" if not query else "?" + "&".join(query)
-    return f"{url.scheme.value}://{authority}{path}{suffix}"
+    rendered = f"{url.scheme.value}://{authority}{path}{suffix}"
+    return boundary.sanitize_text(rendered).value
 
 
 def _sanitize_path_segment(value: object, boundary: SanitizationBoundary) -> str:
@@ -801,8 +832,9 @@ def _artifact_field(
     mandatory: bool,
 ) -> ArtifactField:
     safe_name = boundary.sanitize_text(name)
+    field_value = value if is_sensitive_value(value) else cast(HeaderText, value).value
     safe_value = boundary.sanitize_text(
-        cast("str | SensitiveValue[object]", value),
+        field_value,
         mandatory=mandatory,
     )
     return ArtifactField(
@@ -817,6 +849,42 @@ def _source_has_custom_redaction(
     source: SelectorSource,
 ) -> bool:
     return any(rule.selector.source is source for rule in redaction.rules)
+
+
+def _requires_whole_request_omission(redaction: RedactionPolicy) -> bool:
+    """Fail closed when a custom rule targets a required request scalar."""
+    return any(
+        _source_has_custom_redaction(redaction, source)
+        for source in (SelectorSource.REQUEST_METHOD, SelectorSource.REQUEST_URL)
+    )
+
+
+def _requires_whole_response_omission(redaction: RedactionPolicy) -> bool:
+    """Fail closed when a custom rule targets a required response scalar."""
+    return any(
+        _source_has_custom_redaction(redaction, source)
+        for source in (SelectorSource.RESPONSE_PROTOCOL, SelectorSource.RESPONSE_STATUS)
+    )
+
+
+def _record_custom_source_omissions(
+    issues: list[ArtifactCoverageIssue],
+    *,
+    source: str,
+    execution_id: str,
+    redaction: RedactionPolicy,
+    sources: tuple[tuple[SelectorSource, str], ...],
+) -> None:
+    """Make conservative source-wide custom redaction explicit in artifact coverage."""
+    for selector_source, suffix in sources:
+        if _source_has_custom_redaction(redaction, selector_source):
+            _coverage(
+                issues,
+                f"{source}.{suffix}",
+                execution_id,
+                ArtifactCaptureExtent.OMITTED,
+                ArtifactOmissionReason.POLICY,
+            )
 
 
 def _source_state(capture: BodyCaptureState) -> ArtifactSourceCaptureState:

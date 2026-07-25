@@ -54,11 +54,18 @@ MANDATORY_SENSITIVE_HEADER_NAMES = frozenset(
 MANDATORY_SENSITIVE_QUERY_NAMES = frozenset(
     {
         "access_token",
+        "api-key",
         "api_key",
+        "apikey",
         "auth_token",
+        "client_assertion",
         "client_secret",
+        "code",
         "id_token",
+        "key",
+        "password",
         "refresh_token",
+        "sig",
         "signature",
         "token",
         "x-amz-credential",

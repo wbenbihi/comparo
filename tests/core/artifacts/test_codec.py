@@ -111,6 +111,16 @@ def test_generated_schema_is_stable_and_checked_in() -> None:
     schema = generate_artifact_schema()
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert cast("str", schema["$id"]).endswith("comparo-artifact-v1alpha1.schema.json")
+    definitions = cast("dict[str, object]", schema["$defs"])
+    run_artifact = cast("dict[str, object]", definitions["RunArtifact"])
+    properties = cast("dict[str, object]", run_artifact["properties"])
+    api_version = cast("dict[str, object]", properties["api_version"])
+    assert api_version["const"] == "comparo.artifact/v1alpha1"
+    assert schema["x-comparo-validation"] == {
+        "scope": "structural",
+        "runtimeSemanticValidationRequired": True,
+    }
+    assert "runtime RunArtifact semantic validation is required" in cast("str", schema["$comment"])
     checked_in = (
         Path(__file__).parents[3]
         / "src"

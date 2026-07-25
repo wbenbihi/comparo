@@ -30,6 +30,7 @@ from comparo.core.artifacts import ArtifactExecutionOutcome
 from comparo.core.artifacts import ArtifactFact
 from comparo.core.artifacts import ArtifactFactEngine
 from comparo.core.artifacts import ArtifactFactOutcome
+from comparo.core.artifacts import ArtifactFailure
 from comparo.core.artifacts import ArtifactField
 from comparo.core.artifacts import ArtifactGate
 from comparo.core.artifacts import ArtifactGateVerdict
@@ -130,11 +131,16 @@ def _artifact() -> RunArtifact:
         failure=None,
         timings=(ArtifactTiming(name="total", nanoseconds=10, reason=None),),
     )
+    subject = _definition("Request", "get-items")
+    staging = _definition("Environment", "staging")
+    prod = _definition("Environment", "prod")
+    assertion = _fact(ArtifactFactEngine.ASSERTION, ArtifactFactOutcome.SATISFIED)
+    diff = _fact(ArtifactFactEngine.DIFF, ArtifactFactOutcome.EQUIVALENT)
     execution = ArtifactExecution(
         ordinal=0,
         execution_id="execution-0",
-        subject=_definition("Request", "get-items"),
-        environment=_definition("Environment", "staging"),
+        subject=subject,
+        environment=staging,
         cell_id="cell-0",
         trial_id="trial-0",
         coordinates=(ArtifactCoordinate(axis="tenant", value=ArtifactInteger(value=1)),),
@@ -142,7 +148,21 @@ def _artifact() -> RunArtifact:
         failure=None,
         timings=(ArtifactTiming(name="total", nanoseconds=10, reason=None),),
         attempts=(ArtifactAttempt(attempt_id="attempt-0", exchanges=(exchange,)),),
-        assertions=(_fact(ArtifactFactEngine.ASSERTION, ArtifactFactOutcome.SATISFIED),),
+        assertions=(assertion,),
+    )
+    candidate = ArtifactExecution(
+        ordinal=1,
+        execution_id="execution-1",
+        subject=subject,
+        environment=prod,
+        cell_id="cell-0",
+        trial_id="trial-0",
+        coordinates=(ArtifactCoordinate(axis="tenant", value=ArtifactInteger(value=1)),),
+        outcome=ArtifactExecutionOutcome.OBSERVED,
+        failure=None,
+        timings=(ArtifactTiming(name="total", nanoseconds=10, reason=None),),
+        attempts=(ArtifactAttempt(attempt_id="attempt-1", exchanges=(exchange,)),),
+        assertions=(),
     )
     comparison = ArtifactComparison(
         ordinal=0,
@@ -154,12 +174,22 @@ def _artifact() -> RunArtifact:
         candidate_execution_id="execution-1",
         outcome=ArtifactComparisonOutcome.EVALUATED,
         unavailable_execution_ids=(),
-        diffs=(_fact(ArtifactFactEngine.DIFF, ArtifactFactOutcome.EQUIVALENT),),
+        diffs=(diff,),
     )
+    project = _definition("Project", "project")
+    execution_policy = _definition("ExecutionPolicy", "ci")
     resources = tuple(
         sorted(
-            {execution.subject, execution.environment, comparison.diffs[0].rule},
-            key=lambda item: (item.namespace, item.kind, item.resource_id, item.fingerprint),
+            {
+                project,
+                execution_policy,
+                subject,
+                staging,
+                prod,
+                assertion.rule,
+                diff.rule,
+            },
+            key=lambda item: (item.namespace, item.kind, item.resource_id),
         )
     )
     return RunArtifact(
@@ -174,8 +204,8 @@ def _artifact() -> RunArtifact:
             configuration_api_version="comparo/v1alpha1",
         ),
         provenance=ArtifactProvenance(
-            project=_definition("Project", "project"),
-            execution_policy=_definition("ExecutionPolicy", "ci"),
+            project=project,
+            execution_policy=execution_policy,
             artifact_profile=None,
             redaction_profile=None,
             configuration_fingerprint="d" * 64,
@@ -194,12 +224,12 @@ def _artifact() -> RunArtifact:
             assessments=(),
         ),
         summary=ArtifactSummary(
-            executions=(_metric("observed", 1),),
+            executions=(_metric("observed", 2),),
             comparisons=(_metric("evaluated", 1),),
             assertions=(_metric("satisfied", 1),),
             diffs=(_metric("equivalent", 1),),
         ),
-        executions=(execution,),
+        executions=(execution, candidate),
         comparisons=(comparison,),
         resources=resources,
         budgets=(
@@ -313,8 +343,261 @@ def test_artifact_rejects_noncanonical_or_dangling_records() -> None:
         msgspec.structs.replace(artifact, blobs=reversed_blobs)
 
     duplicate_resources = (*artifact.resources, artifact.resources[-1])
-    with pytest.raises(ValueError, match="resources must be unique"):
+    with pytest.raises(ValueError, match="stable identities must be unique"):
         msgspec.structs.replace(artifact, resources=duplicate_resources)
+
+
+def test_artifact_result_ids_are_globally_unique() -> None:
+    artifact = _artifact()
+    duplicate_execution = msgspec.structs.replace(
+        artifact.executions[1],
+        execution_id=artifact.executions[0].execution_id,
+    )
+    with pytest.raises(ValueError, match="execution IDs must be unique"):
+        msgspec.structs.replace(
+            artifact,
+            executions=(artifact.executions[0], duplicate_execution),
+        )
+
+    duplicate_comparison = msgspec.structs.replace(artifact.comparisons[0], ordinal=1)
+    with pytest.raises(ValueError, match="comparison IDs must be unique"):
+        msgspec.structs.replace(
+            artifact,
+            comparisons=(artifact.comparisons[0], duplicate_comparison),
+        )
+
+
+def test_artifact_comparison_sides_must_be_distinct_and_declared() -> None:
+    artifact = _artifact()
+    comparison = artifact.comparisons[0]
+
+    with pytest.raises(ValueError, match="distinct executions"):
+        msgspec.structs.replace(
+            artifact,
+            comparisons=(
+                msgspec.structs.replace(
+                    comparison,
+                    candidate_execution_id=comparison.baseline_execution_id,
+                ),
+            ),
+        )
+    with pytest.raises(ValueError, match="unknown execution"):
+        msgspec.structs.replace(
+            artifact,
+            comparisons=(
+                msgspec.structs.replace(
+                    comparison,
+                    candidate_execution_id="missing-execution",
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("subject", _definition("Request", "other-request")),
+        ("cell_id", "other-cell"),
+        ("trial_id", "other-trial"),
+    ],
+)
+def test_artifact_comparison_sides_align_with_comparison_identity(
+    field: str,
+    value: object,
+) -> None:
+    artifact = _artifact()
+    candidate = msgspec.structs.replace(artifact.executions[1], **{field: value})
+
+    with pytest.raises(ValueError, match=r"contradict.*subject, cell, or trial"):
+        msgspec.structs.replace(
+            artifact,
+            executions=(artifact.executions[0], candidate),
+        )
+
+
+def test_artifact_comparison_outcome_tracks_side_availability_exactly() -> None:
+    artifact = _artifact()
+    candidate = msgspec.structs.replace(
+        artifact.executions[1],
+        outcome=ArtifactExecutionOutcome.UNAVAILABLE,
+        failure=ArtifactFailure(stage="transport", code="unavailable"),
+        attempts=(),
+    )
+    with pytest.raises(ValueError, match=r"evaluated.*observed executions"):
+        msgspec.structs.replace(
+            artifact,
+            executions=(artifact.executions[0], candidate),
+        )
+
+    incomplete = msgspec.structs.replace(
+        artifact.comparisons[0],
+        outcome=ArtifactComparisonOutcome.INCOMPLETE,
+        unavailable_execution_ids=(candidate.execution_id,),
+        diffs=(),
+    )
+    valid = msgspec.structs.replace(
+        artifact,
+        executions=(artifact.executions[0], candidate),
+        comparisons=(incomplete,),
+        summary=msgspec.structs.replace(
+            artifact.summary,
+            executions=(_metric("observed", 1), _metric("unavailable", 1)),
+            comparisons=(_metric("incomplete", 1),),
+            diffs=(),
+        ),
+    )
+    assert valid.comparisons[0].unavailable_execution_ids == (candidate.execution_id,)
+
+    wrong = msgspec.structs.replace(
+        incomplete,
+        unavailable_execution_ids=(artifact.executions[0].execution_id,),
+    )
+    with pytest.raises(ValueError, match="exactly its unavailable sides"):
+        msgspec.structs.replace(
+            artifact,
+            executions=(artifact.executions[0], candidate),
+            comparisons=(wrong,),
+        )
+
+
+def test_incomplete_comparison_uses_canonical_baseline_candidate_unavailable_order() -> None:
+    artifact = _artifact()
+    unavailable = tuple(
+        msgspec.structs.replace(
+            execution,
+            outcome=ArtifactExecutionOutcome.BLOCKED,
+            failure=ArtifactFailure(stage="policy", code="blocked"),
+            attempts=(),
+            assertions=(),
+        )
+        for execution in artifact.executions
+    )
+    comparison = msgspec.structs.replace(
+        artifact.comparisons[0],
+        outcome=ArtifactComparisonOutcome.INCOMPLETE,
+        unavailable_execution_ids=(unavailable[1].execution_id, unavailable[0].execution_id),
+        diffs=(),
+    )
+
+    with pytest.raises(ValueError, match="exactly its unavailable sides"):
+        msgspec.structs.replace(
+            artifact,
+            executions=unavailable,
+            comparisons=(comparison,),
+        )
+
+
+@pytest.mark.parametrize("dimension", ["executions", "comparisons", "assertions", "diffs"])
+def test_artifact_summary_exactly_conserves_each_result_dimension(dimension: str) -> None:
+    artifact = _artifact()
+    summary = msgspec.structs.replace(
+        artifact.summary,
+        **{dimension: (_metric("invented", 1),)},
+    )
+
+    with pytest.raises(ValueError, match="summary must exactly conserve"):
+        msgspec.structs.replace(artifact, summary=summary)
+
+
+def test_artifact_resource_identities_are_unique_and_canonically_ordered() -> None:
+    artifact = _artifact()
+    original = artifact.resources[-1]
+    conflicting = msgspec.structs.replace(original, fingerprint="f" * 64)
+    duplicated_identity = tuple(
+        sorted(
+            (*artifact.resources, conflicting),
+            key=lambda item: (item.namespace, item.kind, item.resource_id),
+        )
+    )
+    with pytest.raises(ValueError, match="stable identities must be unique"):
+        msgspec.structs.replace(artifact, resources=duplicated_identity)
+    with pytest.raises(ValueError, match="canonical stable identity order"):
+        msgspec.structs.replace(artifact, resources=tuple(reversed(artifact.resources)))
+
+
+@pytest.mark.parametrize(
+    ("kind", "resource_id"),
+    [
+        ("Project", "project"),
+        ("ExecutionPolicy", "ci"),
+        ("Request", "get-items"),
+        ("Environment", "staging"),
+        ("Environment", "prod"),
+        ("AssertionRule", "r"),
+        ("DiffRule", "r"),
+    ],
+)
+def test_artifact_resources_cover_every_required_reference(
+    kind: str,
+    resource_id: str,
+) -> None:
+    artifact = _artifact()
+    resources = tuple(
+        item for item in artifact.resources if (item.kind, item.resource_id) != (kind, resource_id)
+    )
+
+    with pytest.raises(ValueError, match="every referenced definition"):
+        msgspec.structs.replace(artifact, resources=resources)
+
+
+@pytest.mark.parametrize("reference", ["artifact_profile", "redaction_profile", "gate"])
+def test_artifact_resources_cover_optional_provenance_and_gate_references(
+    reference: str,
+) -> None:
+    artifact = _artifact()
+    artifact_profile = _definition("ArtifactProfile", "full")
+    redaction_profile = _definition("RedactionProfile", "safe")
+    gate_profile = _definition("GateProfile", "ci")
+    provenance = msgspec.structs.replace(
+        artifact.provenance,
+        artifact_profile=artifact_profile,
+        redaction_profile=redaction_profile,
+    )
+    gate = ArtifactGate(
+        verdict=ArtifactGateVerdict.PASSED,
+        profile=gate_profile,
+        reasons=(),
+        coverage=(),
+        assessments=(),
+    )
+    resources = tuple(
+        sorted(
+            (*artifact.resources, artifact_profile, redaction_profile, gate_profile),
+            key=lambda item: (item.namespace, item.kind, item.resource_id),
+        )
+    )
+    complete = msgspec.structs.replace(
+        artifact,
+        provenance=provenance,
+        gate=gate,
+        resources=resources,
+    )
+    omitted = {
+        "artifact_profile": artifact_profile,
+        "redaction_profile": redaction_profile,
+        "gate": gate_profile,
+    }[reference]
+
+    with pytest.raises(ValueError, match="every referenced definition"):
+        msgspec.structs.replace(
+            complete,
+            resources=tuple(item for item in complete.resources if item != omitted),
+        )
+
+
+def test_artifact_resources_must_contain_the_exact_referenced_definition() -> None:
+    artifact = _artifact()
+    subject = artifact.executions[0].subject
+    conflicting = msgspec.structs.replace(subject, fingerprint="f" * 64)
+    resources = tuple(
+        sorted(
+            (conflicting if item == subject else item for item in artifact.resources),
+            key=lambda item: (item.namespace, item.kind, item.resource_id),
+        )
+    )
+
+    with pytest.raises(ValueError, match="every referenced definition"):
+        msgspec.structs.replace(artifact, resources=resources)
 
 
 def test_safe_value_contract_rejects_live_non_json_payloads() -> None:

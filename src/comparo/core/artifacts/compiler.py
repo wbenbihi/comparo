@@ -169,7 +169,17 @@ def _compile(
             key=lambda item: item.sha256,
         )
     )
-    resources = _resources(prepared, executions, comparisons)
+    provenance = ArtifactProvenance(
+        project=_definition(prepared.project.project.definition),
+        execution_policy=_definition(prepared.authority.policy),
+        artifact_profile=_single_profile(prepared, artifact=True),
+        redaction_profile=_single_profile(prepared, artifact=False),
+        configuration_fingerprint=_configuration_fingerprint(prepared),
+        plan_fingerprint=prepared.plan.fingerprint.digest.hex_value,
+        ordering=prepared.plan.ordering.value,
+    )
+    gate = _gate(result.gate)
+    resources = _resources(prepared, executions, comparisons, provenance, gate)
     return RunArtifact(
         api_version=ARTIFACT_API_VERSION,
         metadata=ArtifactMetadata(
@@ -181,17 +191,9 @@ def _compile(
             tool_version=tool_version,
             configuration_api_version=prepared.project.api_version,
         ),
-        provenance=ArtifactProvenance(
-            project=_definition(prepared.project.project.definition),
-            execution_policy=_definition(prepared.authority.policy),
-            artifact_profile=_single_profile(prepared, artifact=True),
-            redaction_profile=_single_profile(prepared, artifact=False),
-            configuration_fingerprint=_configuration_fingerprint(prepared),
-            plan_fingerprint=prepared.plan.fingerprint.digest.hex_value,
-            ordering=prepared.plan.ordering.value,
-        ),
+        provenance=provenance,
         completion=_completion(result),
-        gate=_gate(result.gate),
+        gate=gate,
         summary=_summary(executions, comparisons),
         executions=executions,
         comparisons=comparisons,
@@ -484,13 +486,22 @@ def _resources(
     prepared: PreparedRun,
     executions: tuple[ArtifactExecution, ...],
     comparisons: tuple[ArtifactComparison, ...],
+    provenance: ArtifactProvenance,
+    gate: ArtifactGate,
 ) -> tuple[ArtifactDefinition, ...]:
+    optional_references = (
+        provenance.artifact_profile,
+        provenance.redaction_profile,
+        gate.profile,
+    )
     definitions = {
-        _definition(prepared.project.project.definition),
+        provenance.project,
+        provenance.execution_policy,
+        *(item for item in optional_references if item is not None),
         *(_definition(item.definition) for item in prepared.project.resources),
-        _definition(prepared.authority.policy),
         *(item.subject for item in executions),
         *(item.environment for item in executions),
+        *(item.subject for item in comparisons),
         *(fact.rule for item in executions for fact in item.assertions),
         *(fact.rule for item in comparisons for fact in item.diffs),
     }

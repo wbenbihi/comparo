@@ -74,11 +74,24 @@ def decode_run_artifact(payload: bytes, *, maximum_bytes: int) -> RunArtifact:
 
 
 def generate_artifact_schema() -> dict[str, object]:
-    """Generate the authoritative Draft 2020-12 schema from the exact artifact types."""
+    """Generate the structural schema; runtime validation enforces semantic invariants."""
     generated = msgspec.json.schema(RunArtifact)
+    definitions = cast("dict[str, object]", generated["$defs"])
+    run_artifact = cast("dict[str, object]", definitions["RunArtifact"])
+    properties = cast("dict[str, object]", run_artifact["properties"])
+    api_version = cast("dict[str, object]", properties["api_version"])
+    api_version["const"] = ARTIFACT_API_VERSION
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://comparo.dev/schemas/comparo-artifact-v1alpha1.schema.json",
+        "$comment": (
+            "This schema validates structural shape only; runtime RunArtifact semantic "
+            "validation is required."
+        ),
+        "x-comparo-validation": {
+            "scope": "structural",
+            "runtimeSemanticValidationRequired": True,
+        },
         **generated,
     }
 

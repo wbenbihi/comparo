@@ -541,6 +541,13 @@ def test_compilation_and_top_level_artifact_guards_include_pre_send_blobs() -> N
     pre_send_artifact = msgspec.structs.replace(
         artifact,
         executions=(execution,),
+        comparisons=(),
+        summary=msgspec.structs.replace(
+            artifact.summary,
+            executions=(ArtifactMetric(name="observed", value=1),),
+            comparisons=(),
+            diffs=(),
+        ),
         blobs=artifact.blobs[:1],
     )
     assert pre_send_artifact.blobs == artifact.blobs[:1]
@@ -575,6 +582,13 @@ def test_blob_closure_traverses_optional_request_and_response_body_branches() ->
     requestless_artifact = msgspec.structs.replace(
         artifact,
         executions=(requestless_execution,),
+        comparisons=(),
+        summary=msgspec.structs.replace(
+            artifact.summary,
+            executions=(ArtifactMetric(name="observed", value=1),),
+            comparisons=(),
+            diffs=(),
+        ),
         blobs=(exchange.response.body.blob,),
     )
     assert requestless_artifact.blobs == (exchange.response.body.blob,)
@@ -589,6 +603,13 @@ def test_blob_closure_traverses_optional_request_and_response_body_branches() ->
     failed_artifact = msgspec.structs.replace(
         artifact,
         executions=(failed_execution,),
+        comparisons=(),
+        summary=msgspec.structs.replace(
+            artifact.summary,
+            executions=(ArtifactMetric(name="observed", value=1),),
+            comparisons=(),
+            diffs=(),
+        ),
         blobs=(exchange.request.body.blob,),
     )
     assert failed_artifact.blobs == (exchange.request.body.blob,)

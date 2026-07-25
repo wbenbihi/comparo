@@ -1,4 +1,5 @@
 {
+  "$comment": "This schema validates structural shape only; runtime RunArtifact semantic validation is required.",
   "$defs": {
     "ArtifactAmount": {
       "additionalProperties": false,
@@ -1479,6 +1480,7 @@
       "description": "A complete safe manifest from which persistence and all reporters derive.",
       "properties": {
         "api_version": {
+          "const": "comparo.artifact/v1alpha1",
           "type": "string"
         },
         "blobs": {
@@ -1553,5 +1555,9 @@
   },
   "$id": "https://comparo.dev/schemas/comparo-artifact-v1alpha1.schema.json",
   "$ref": "#/$defs/RunArtifact",
-  "$schema": "https://json-schema.org/draft/2020-12/schema"
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-comparo-validation": {
+    "runtimeSemanticValidationRequired": true,
+    "scope": "structural"
+  }
 }
