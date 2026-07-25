@@ -52,6 +52,7 @@ from comparo.core.selection.snapshot import FailedBodyView
 from comparo.core.selection.snapshot import ResolvedBodyBytes
 from comparo.core.selection.snapshot import ResolvedBodyView
 from comparo.core.selection.snapshot import SelectionSnapshot
+from comparo.core.selection.snapshot import SelectionSnapshotRequirements
 from comparo.core.selection.snapshot import body_bytes_for
 from comparo.core.selection.snapshot import body_view_for
 from comparo.core.selection.snapshot import decoded_outcome
@@ -367,6 +368,26 @@ def test_snapshot_components_reject_untyped_and_duplicate_values() -> None:
     )
     with pytest.raises(ValueError, match="unique"):
         SelectionSnapshot(observation=observation, body_views=(resolved, resolved))
+
+
+def test_snapshot_requirements_reject_mutable_duplicate_and_untyped_fields() -> None:
+    valid = SelectionSnapshotRequirements(
+        body_views=(BodyViewKind.TEXT,),
+        stream=True,
+    )
+    assert valid.stream
+    with pytest.raises(TypeError, match="immutable typed tuple"):
+        SelectionSnapshotRequirements(body_views=cast("tuple[BodyViewKind, ...]", []))
+    with pytest.raises(TypeError, match="immutable typed tuple"):
+        SelectionSnapshotRequirements(
+            body_views=(cast("BodyViewKind", object()),),
+        )
+    with pytest.raises(ValueError, match="must be unique"):
+        SelectionSnapshotRequirements(
+            body_views=(BodyViewKind.TEXT, BodyViewKind.TEXT),
+        )
+    with pytest.raises(TypeError, match="must be bool"):
+        SelectionSnapshotRequirements(stream=cast("bool", 1))
 
 
 def test_owned_body_discovery_covers_exchange_and_pre_send_paths() -> None:
