@@ -35,6 +35,7 @@ from comparo.core.artifacts.facts import ArtifactFact as ArtifactFact
 from comparo.core.artifacts.facts import ArtifactNamedValue as ArtifactNamedValue
 from comparo.core.artifacts.facts import ArtifactSummary as ArtifactSummary
 from comparo.core.artifacts.http import ArtifactAttempt as ArtifactAttempt
+from comparo.core.artifacts.http import ArtifactCookie as ArtifactCookie
 from comparo.core.artifacts.http import ArtifactExchange as ArtifactExchange
 from comparo.core.artifacts.http import ArtifactField as ArtifactField
 from comparo.core.artifacts.http import ArtifactRequest as ArtifactRequest
@@ -72,6 +73,7 @@ __all__ = (
     "ArtifactComparisonOutcome",
     "ArtifactCompletion",
     "ArtifactCompletionKind",
+    "ArtifactCookie",
     "ArtifactCoordinate",
     "ArtifactCoverageIssue",
     "ArtifactDecimal",

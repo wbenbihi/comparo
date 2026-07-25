@@ -423,6 +423,28 @@
       ],
       "title": "ArtifactCompletionKind"
     },
+    "ArtifactCookie": {
+      "additionalProperties": false,
+      "description": "One case-preserving cookie name with an unconditionally masked value.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value",
+        "redacted"
+      ],
+      "title": "ArtifactCookie",
+      "type": "object"
+    },
     "ArtifactCoordinate": {
       "additionalProperties": false,
       "description": "One sanitized Matrix coordinate used to produce a planned cell.",
@@ -1286,7 +1308,7 @@
         },
         "cookies": {
           "items": {
-            "$ref": "#/$defs/ArtifactField"
+            "$ref": "#/$defs/ArtifactCookie"
           },
           "type": "array"
         },

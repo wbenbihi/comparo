@@ -9,6 +9,7 @@ from typing import final
 import msgspec
 
 from comparo.core.artifacts.common import require_text
+from comparo.core.artifacts.common import require_unicode_scalars
 
 
 @final
@@ -102,10 +103,7 @@ class ArtifactString(
         """Require valid bounded Unicode while allowing the empty string."""
         if type(self.value) is not str or len(self.value) > 16_777_216:
             raise ValueError("artifact string value must be bounded text")
-        try:
-            self.value.encode("utf-8")
-        except UnicodeEncodeError as error:
-            raise ValueError("artifact string value must contain Unicode scalar values") from error
+        require_unicode_scalars(self.value, label="artifact string value")
 
 
 @final
@@ -143,6 +141,7 @@ class ArtifactObjectMember(
         """Require a bounded name and exact value."""
         if type(self.name) is not str or len(self.name) > 1_048_576:
             raise ValueError("artifact object member name must be bounded text")
+        require_unicode_scalars(self.name, label="artifact object member name")
         if not is_artifact_value(self.value):
             raise TypeError("artifact object member must contain an exact value")
 

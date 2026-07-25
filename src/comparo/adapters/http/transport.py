@@ -24,13 +24,13 @@ from comparo.adapters.http.tls import TlsConfigurationError
 from comparo.adapters.http.tls import TlsContextProvider
 from comparo.adapters.http.wire import RenderedWireRequest
 from comparo.adapters.http.wire import RequestWireRenderer
+from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.http.auth import BasicAuthentication
 from comparo.core.domain.http.auth import BasicUsername
 from comparo.core.domain.http.auth import BearerAuthentication
 from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
-from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.domain.http.fields import HeaderName
 from comparo.core.domain.http.fields import HeaderText
 from comparo.core.domain.http.policies import ExplicitProxy

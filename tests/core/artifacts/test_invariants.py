@@ -13,6 +13,7 @@ from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.common import ArtifactBudget
 from comparo.core.artifacts.common import ArtifactCapture
 from comparo.core.artifacts.common import ArtifactCaptureExtent
+from comparo.core.artifacts.common import ArtifactCompletionKind
 from comparo.core.artifacts.common import ArtifactDefinition
 from comparo.core.artifacts.common import ArtifactFactEngine
 from comparo.core.artifacts.common import ArtifactFactOutcome
@@ -48,6 +49,7 @@ from comparo.core.artifacts.policy import ArtifactPolicy
 from comparo.core.artifacts.policy import RedactionAction
 from comparo.core.artifacts.policy import RedactionPolicy
 from comparo.core.artifacts.policy import RedactionRule
+from comparo.core.artifacts.policy import SanitizationLimits
 from comparo.core.artifacts.policy import UnsafeSourceBehavior
 from comparo.core.artifacts.ports import ArtifactPersistenceOutcome
 from comparo.core.artifacts.ports import ArtifactPersistenceStatus
@@ -143,6 +145,8 @@ def test_common_contracts_reject_untyped_and_incoherent_amounts() -> None:
         )
     with pytest.raises(ValueError, match="denominator one"):
         ArtifactAmount(unit=ArtifactAmountUnit.COUNT, numerator=1, denominator=2)
+    with pytest.raises(ValueError, match="reduced terms"):
+        ArtifactAmount(unit=ArtifactAmountUnit.RATIO, numerator=2, denominator=4)
     ratio = ArtifactAmount(unit=ArtifactAmountUnit.RATIO, numerator=3, denominator=2)
     assert ratio.fraction.numerator == 3
 
@@ -185,6 +189,14 @@ def test_common_metric_blob_capture_and_failure_guards() -> None:
         ArtifactBlob(sha256="f" * 64, byte_count=-1)
     with pytest.raises(ValueError, match="media type"):
         ArtifactBlob(sha256="f" * 64, byte_count=0, media_type="")
+    with pytest.raises(ValueError, match="partial artifact capture requires"):
+        ArtifactCapture(
+            source_state=ArtifactSourceCaptureState.REMOTE_TRUNCATED,
+            extent=ArtifactCaptureExtent.PARTIAL,
+            source_byte_count=1,
+            blob=None,
+            reason=ArtifactOmissionReason.SOURCE_INCOMPLETE,
+        )
     with pytest.raises(ValueError, match="requires only a blob"):
         ArtifactCapture(
             source_state=ArtifactSourceCaptureState.COMPLETE,
@@ -219,6 +231,15 @@ def test_fact_evidence_execution_and_comparison_guards() -> None:
     fact = execution.assertions[0]
     evidence = fact.evidence[0]
     named = evidence.values[0]
+
+    coverage = ArtifactCoverageIssue(
+        source="response.body",
+        extent=ArtifactCaptureExtent.OMITTED,
+        reason=ArtifactOmissionReason.POLICY,
+        execution_id=execution.execution_id,
+    )
+    with pytest.raises(ValueError, match="coverage issues must be unique"):
+        msgspec.structs.replace(artifact, coverage_issues=(coverage, coverage))
 
     with pytest.raises(TypeError, match="evidence values"):
         msgspec.structs.replace(evidence, values=cast("tuple[ArtifactNamedValue, ...]", []))
@@ -329,13 +350,23 @@ def test_http_contracts_reject_every_ambiguous_variant() -> None:
             msgspec.structs.replace(exchange, **{field: value})
     with pytest.raises(ValueError, match="request or explicit omission"):
         msgspec.structs.replace(exchange, request=None, request_omission=None)
-    with pytest.raises(ValueError, match="mutually exclusive"):
+    with pytest.raises(ValueError, match="exactly one"):
         msgspec.structs.replace(
             exchange,
             response_omission=ArtifactOmissionReason.POLICY,
         )
     with pytest.raises(ValueError, match="response, failure, or omission"):
         msgspec.structs.replace(exchange, response=None)
+    terminal_failure = ArtifactFailure(stage="transport", code="failed")
+    with pytest.raises(ValueError, match="exactly one"):
+        msgspec.structs.replace(exchange, failure=terminal_failure)
+    with pytest.raises(ValueError, match="exactly one"):
+        msgspec.structs.replace(
+            exchange,
+            response=None,
+            response_omission=ArtifactOmissionReason.POLICY,
+            failure=terminal_failure,
+        )
     duplicate_timing = ArtifactTiming(name="total", nanoseconds=1, reason=None)
     with pytest.raises(ValueError, match="timing names"):
         msgspec.structs.replace(exchange, timings=(duplicate_timing, duplicate_timing))
@@ -378,13 +409,22 @@ def test_lifecycle_policy_and_persistence_guards() -> None:
         msgspec.structs.replace(artifact.completion, reasons=cast("tuple[str, ...]", []))
     with pytest.raises(ValueError, match="unique"):
         msgspec.structs.replace(artifact.completion, reasons=("x", "x"))
-    diagnostic_completion = ArtifactCompletion(
-        kind=artifact.completion.kind,
-        instant_unix_nanoseconds=1,
-        stage="runtime",
-        code="safe-code",
+    with pytest.raises(ValueError, match="kind contradicts"):
+        ArtifactCompletion(
+            kind=artifact.completion.kind,
+            instant_unix_nanoseconds=1,
+            stage="runtime",
+            code="safe-code",
+        )
+    invalid_completion_shapes = (
+        ArtifactCompletionKind.PARTIAL,
+        ArtifactCompletionKind.CANCELLED,
+        ArtifactCompletionKind.REJECTED,
+        ArtifactCompletionKind.INTERNAL_ERROR,
     )
-    assert diagnostic_completion.stage == "runtime"
+    for kind in invalid_completion_shapes:
+        with pytest.raises(ValueError, match="kind contradicts"):
+            ArtifactCompletion(kind=kind, instant_unix_nanoseconds=1)
 
     metric = ArtifactMetric(name="violated", value=0)
     counts = ArtifactGateCounts(
@@ -414,10 +454,16 @@ def test_lifecycle_policy_and_persistence_guards() -> None:
             msgspec.structs.replace(requested_gate, **{field: value})
     with pytest.raises(ValueError, match="not-requested"):
         msgspec.structs.replace(artifact.gate, profile=_definition("GateProfile", "g"))
+    with pytest.raises(ValueError, match="requires its profile"):
+        msgspec.structs.replace(requested_gate, profile=None)
+    with pytest.raises(ValueError, match="severities must be unique"):
+        msgspec.structs.replace(requested_gate, assessments=(counts, counts))
     with pytest.raises(ValueError, match="passed artifact gate"):
         msgspec.structs.replace(requested_gate, reasons=("bad",))
     with pytest.raises(ValueError, match="failed artifact gate"):
         msgspec.structs.replace(requested_gate, verdict=ArtifactGateVerdict.FAILED)
+    with pytest.raises(ValueError, match="reasons must be unique"):
+        msgspec.structs.replace(requested_gate, reasons=("duplicate", "duplicate"))
 
     limits = ArtifactLimits(
         maximum_blobs=PositiveCount(value=1),
@@ -425,6 +471,12 @@ def test_lifecycle_policy_and_persistence_guards() -> None:
         maximum_total_blob_bytes=ByteCount(value=1),
         maximum_manifest_bytes=ByteCount(value=1),
         maximum_report_bytes=ByteCount(value=1),
+        sanitization=SanitizationLimits(
+            maximum_patterns=PositiveCount(value=1),
+            maximum_pattern_bytes=ByteCount(value=1),
+            maximum_value_bytes=ByteCount(value=1),
+            maximum_value_nodes=PositiveCount(value=1),
+        ),
     )
     with pytest.raises(TypeError, match="flags"):
         ArtifactCapturePolicy(requests=cast("bool", 1))
@@ -432,11 +484,21 @@ def test_lifecycle_policy_and_persistence_guards() -> None:
         msgspec.structs.replace(limits, maximum_blobs=CountLike())
     with pytest.raises(TypeError, match="byte limits"):
         msgspec.structs.replace(limits, maximum_blob_bytes=object())
+    with pytest.raises(TypeError, match="pattern limit"):
+        msgspec.structs.replace(limits.sanitization, maximum_patterns=object())
+    with pytest.raises(TypeError, match="pattern byte limit"):
+        msgspec.structs.replace(limits.sanitization, maximum_pattern_bytes=object())
+    with pytest.raises(TypeError, match="value byte limit"):
+        msgspec.structs.replace(limits.sanitization, maximum_value_bytes=object())
+    with pytest.raises(TypeError, match="value node limit"):
+        msgspec.structs.replace(limits.sanitization, maximum_value_nodes=object())
     with pytest.raises(ValueError, match="aggregate"):
         msgspec.structs.replace(
             limits,
             maximum_blob_bytes=ByteCount(value=2),
         )
+    with pytest.raises(TypeError, match="sanitization limits"):
+        msgspec.structs.replace(limits, sanitization=object())
     policy = ArtifactPolicy(
         persist=ArtifactPersistMode.ALWAYS,
         unsafe_source=UnsafeSourceBehavior.OMIT,
@@ -471,6 +533,8 @@ def test_lifecycle_policy_and_persistence_guards() -> None:
         RedactionPolicy(marker="x" * 65)
     with pytest.raises(ValueError, match="marker"):
         RedactionPolicy(marker=cast("str", 1))
+    with pytest.raises(ValueError, match="marker"):
+        RedactionPolicy(marker="[masked]")
     assert RedactionPolicy().marker == "<redacted>"
 
     failure = ArtifactStoreFailure(code=ArtifactStoreErrorCode.IO_FAILED)

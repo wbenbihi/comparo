@@ -11,6 +11,8 @@ import pytest
 
 from comparo.adapters.artifacts.memory import InMemorySanitizedBlobStore
 from comparo.core.artifacts import compiler
+from comparo.core.artifacts.capture import ArtifactCaptureBatch
+from comparo.core.artifacts.capture import ArtifactCaptureUnavailableError
 from comparo.core.artifacts.capture import ArtifactCapturingDriver
 from comparo.core.artifacts.common import ArtifactAmountUnit
 from comparo.core.artifacts.common import ArtifactCompletionKind
@@ -28,6 +30,9 @@ from comparo.core.domain.diagnostics import DiagnosticStage
 from comparo.core.domain.gates.model import GateEvaluation
 from comparo.core.domain.gates.model import GateResult
 from comparo.core.domain.gates.model import GateVerdict
+from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InlineDefinitionRef
+from comparo.core.domain.identity import InlineFragment
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.lifecycle import CancellationSource
@@ -62,7 +67,7 @@ from tests.core.runtime.test_vertical_runtime import _driver
 
 
 def _boundary() -> SanitizationBoundary:
-    boundary = SanitizationBoundary()
+    boundary = SanitizationBoundary(_policy().limits.sanitization)
     boundary.seal()
     return boundary
 
@@ -106,6 +111,27 @@ def _compile(
         created_unix_nanoseconds=1,
         tool_version="0.2.0",
     )
+
+
+def test_profile_definition_projects_named_and_inline_provenance() -> None:
+    owner = definition(ResourceKind.REQUEST, "request")
+    inline = InlineDefinitionRef(
+        kind=ResourceKind.ARTIFACT_PROFILE,
+        origin=InlineDefinitionOrigin(
+            owner=owner.identity,
+            fragment=InlineFragment(value="#artifacts"),
+        ),
+        fingerprint=owner.fingerprint,
+    )
+
+    assert compiler._profile_definition(None) is None
+    assert compiler._profile_definition(owner) == compiler._definition(owner)
+    projected = compiler._profile_definition(inline)
+    assert projected is not None
+    assert projected.namespace == owner.identity.namespace.value
+    assert projected.kind == ResourceKind.ARTIFACT_PROFILE.value
+    assert projected.resource_id == f"{owner.identity.resource_id.value}#artifacts"
+    assert projected.fingerprint == owner.fingerprint.digest.hex_value
 
 
 def test_public_compiler_validates_every_boundary_before_releasing_capture() -> None:
@@ -197,6 +223,63 @@ def test_compilation_result_rejects_contradictory_or_untyped_products() -> None:
         )
     with pytest.raises(ValueError, match="requires a failure"):
         compiler.ArtifactCompilationResult(status=compiler.ArtifactCompilationStatus.REJECTED)
+
+
+def test_compiler_rejects_a_policy_different_from_live_capture_and_releases_it() -> None:
+    prepared, result, capture = asyncio.run(_state())
+    different = msgspec.structs.replace(
+        _policy(),
+        capture=msgspec.structs.replace(_policy().capture, evidence=False),
+    )
+
+    with pytest.raises(ValueError, match="policy differs from capture policy"):
+        _compile(prepared, result, capture, different)
+    with pytest.raises(
+        ArtifactCaptureUnavailableError,
+        match="sanitization boundary is unavailable",
+    ):
+        _ = capture.boundary
+
+
+def test_compiler_preserves_a_value_free_capture_failure() -> None:
+    prepared, result, capture = asyncio.run(_state())
+    failure = ArtifactFailure(stage="artifact-capture", code="capture-failed")
+    capture._batch = ArtifactCaptureBatch(executions=(), coverage_issues=(), failure=failure)
+
+    compiled = _compile(prepared, result, capture, _policy())
+
+    assert compiled.status is compiler.ArtifactCompilationStatus.REJECTED
+    assert compiled.failure == failure
+    assert compiled.artifact is None
+
+
+def test_compiler_rejects_ambiguous_per_subject_profile_provenance() -> None:
+    prepared, result, capture = asyncio.run(_state())
+    subject = prepared.effective.subjects[0]
+    different = msgspec.structs.replace(
+        subject,
+        profiles=msgspec.structs.replace(
+            subject.profiles,
+            artifacts=definition(ResourceKind.ARTIFACT_PROFILE, "artifact-profile"),
+        ),
+    )
+    prepared = msgspec.structs.replace(
+        prepared,
+        effective=msgspec.structs.replace(
+            prepared.effective,
+            subjects=(subject, different),
+        ),
+    )
+
+    compiled = _compile(prepared, result, capture, _policy())
+
+    assert compiled.status is compiler.ArtifactCompilationStatus.REJECTED
+    assert compiled.failure == ArtifactFailure(
+        stage="artifact-compilation",
+        code="ambiguous-effective-profiles",
+    )
+    with pytest.raises(ArtifactCaptureUnavailableError, match="sanitization boundary"):
+        _ = capture.boundary
 
 
 def test_observed_execution_requires_a_safe_capture_and_comparisons_are_typed() -> None:
@@ -301,7 +384,7 @@ def test_not_requested_gate_has_no_profile_or_assessments() -> None:
     assert not artifact.coverage
 
 
-def test_multiple_effective_artifact_profiles_do_not_claim_one_provenance_profile() -> None:
+def test_multiple_effective_artifact_profiles_are_explicitly_ambiguous() -> None:
     prepared = _prepared()
     subject = prepared.effective.subjects[0]
     artifact_profile = definition(ResourceKind.ARTIFACT_PROFILE, "full")
@@ -315,7 +398,9 @@ def test_multiple_effective_artifact_profiles_do_not_claim_one_provenance_profil
     )
     prepared = msgspec.structs.replace(prepared, effective=effective)
 
-    assert compiler._single_profile(prepared, artifact=True) is None
+    assert not compiler._profiles_are_uniform(prepared)
+    with pytest.raises(ValueError, match="uniform effective profile"):
+        compiler._single_profile(prepared, artifact=True)
 
 
 def test_resource_collection_closes_optional_provenance_and_gate_definitions() -> None:

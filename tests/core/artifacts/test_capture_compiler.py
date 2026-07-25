@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
+import msgspec
+
 from comparo.adapters.artifacts.memory import InMemorySanitizedBlobStore
 from comparo.core.artifacts.capture import ArtifactCapturingDriver
 from comparo.core.artifacts.compiler import ArtifactCompilationResult
@@ -15,20 +17,24 @@ from comparo.core.artifacts.policy import ArtifactLimits
 from comparo.core.artifacts.policy import ArtifactPersistMode
 from comparo.core.artifacts.policy import ArtifactPolicy
 from comparo.core.artifacts.policy import RedactionPolicy
+from comparo.core.artifacts.policy import SanitizationLimits
 from comparo.core.artifacts.policy import UnsafeSourceBehavior
 from comparo.core.domain.http.bodies import RepeatableByteSource
 from comparo.core.domain.http.response_bodies import BodyHandle
+from comparo.core.domain.http.response_bodies import ResponseEntityBody
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.scopes import RunScope
+from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.planning.models import PreparedRun
 from comparo.core.planning.planner import plan_run
 from comparo.core.resolution.control import RunCancellation
 from comparo.core.resolution.models import SanitizationSnapshot
 from comparo.core.runtime import RecordingEventSink
 from comparo.core.runtime import run_prepared
+from tests.core.domain.http.factories import digest
 from tests.core.planning.conftest import authority as planning_authority
 from tests.core.planning.conftest import compile_project
 from tests.core.planning.conftest import document
@@ -62,6 +68,12 @@ def _limits() -> ArtifactLimits:
         maximum_total_blob_bytes=ByteCount(value=4096),
         maximum_manifest_bytes=ByteCount(value=1_000_000),
         maximum_report_bytes=ByteCount(value=1_000_000),
+        sanitization=SanitizationLimits(
+            maximum_patterns=PositiveCount(value=4096),
+            maximum_pattern_bytes=ByteCount(value=1_048_576),
+            maximum_value_bytes=ByteCount(value=262_144),
+            maximum_value_nodes=PositiveCount(value=4096),
+        ),
     )
 
 
@@ -144,7 +156,7 @@ def test_unsafe_body_can_be_omitted_with_explicit_coverage() -> None:
     artifact = compilation.artifact
     assert artifact is not None
     assert artifact.coverage_issues
-    assert all(item.reason.value == "storage-failed" for item in artifact.coverage_issues)
+    assert all(item.reason.value == "source-unavailable" for item in artifact.coverage_issues)
     assert not artifact.blobs
 
 
@@ -165,7 +177,26 @@ async def _run(
 ) -> tuple[ArtifactCompilationResult, InMemorySanitizedBlobStore]:
     prepared = _prepared()
     cancellation = RunCancellation()
-    inner, _transport = _driver(prepared, cancellation)
+    inner, transport = _driver(prepared, cancellation)
+    for exchange_id, action in tuple(transport._actions.items()):
+        observed = action.result.response
+        assert observed is not None
+        assert type(observed.body) is ResponseEntityBody
+        handle = observed.body.handle
+        assert handle is not None
+        public_handle = msgspec.structs.replace(
+            handle,
+            digest=digest("d"),
+            sensitivity=Sensitivity.PUBLIC,
+        )
+        public_response = msgspec.structs.replace(
+            observed,
+            body=msgspec.structs.replace(observed.body, handle=public_handle),
+        )
+        transport._actions[exchange_id] = msgspec.structs.replace(
+            action,
+            result=msgspec.structs.replace(action.result, response=public_response),
+        )
     blobs = InMemorySanitizedBlobStore(policy.limits)
     capture = ArtifactCapturingDriver(
         driver=inner,

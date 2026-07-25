@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+from math import gcd
 from typing import final
 
 import msgspec
@@ -12,12 +13,30 @@ from comparo.core.domain.enums import DomainStrEnum
 ARTIFACT_API_VERSION = "comparo.artifact/v1alpha1"
 SANITIZER_VERSION = "comparo.sanitizer/v1alpha1"
 CREDENTIAL_CATALOG_VERSION = "comparo.credentials/v1alpha1"
+ARTIFACT_REDACTION_MARKER = "<redacted>"
 
 
 def require_text(value: object, *, label: str, maximum: int = 512) -> None:
     """Require exact bounded non-empty text."""
     if type(value) is not str or not value or len(value) > maximum:
         raise ValueError(f"{label} must be bounded non-empty text")
+    require_unicode_scalars(value, label=label)
+
+
+def require_unicode_scalars(value: str, *, label: str) -> None:
+    """Reject unpaired surrogates that cannot cross a UTF-8 JSON boundary."""
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise ValueError(f"{label} must contain Unicode scalar values")
+
+
+def require_sha256(value: object, *, label: str) -> None:
+    """Require one lowercase SHA-256 digest for this artifact API version."""
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{label} must be lowercase SHA-256")
 
 
 def require_count(value: object, *, label: str) -> None:
@@ -149,9 +168,9 @@ class ArtifactDefinition(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
             (self.namespace, "definition namespace", 63),
             (self.kind, "definition kind", 63),
             (self.resource_id, "definition resource ID", 255),
-            (self.fingerprint, "definition fingerprint", 128),
         ):
             require_text(value, label=label, maximum=maximum)
+        require_sha256(self.fingerprint, label="definition fingerprint")
 
 
 @final
@@ -209,12 +228,8 @@ class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
         ):
             if profile is not None and type(profile) is not ArtifactDefinition:
                 raise TypeError(f"artifact provenance {label} must be an ArtifactDefinition")
-        require_text(
-            self.configuration_fingerprint,
-            label="configuration fingerprint",
-            maximum=128,
-        )
-        require_text(self.plan_fingerprint, label="plan fingerprint", maximum=128)
+        require_sha256(self.configuration_fingerprint, label="configuration fingerprint")
+        require_sha256(self.plan_fingerprint, label="plan fingerprint")
         require_text(self.ordering, label="plan ordering", maximum=127)
 
 
@@ -248,6 +263,8 @@ class ArtifactAmount(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_f
             raise ValueError("artifact amount denominator must be a positive integer")
         if self.unit is not ArtifactAmountUnit.RATIO and self.denominator != 1:
             raise ValueError("non-ratio artifact amounts require denominator one")
+        if self.unit is ArtifactAmountUnit.RATIO and gcd(self.numerator, self.denominator) != 1:
+            raise ValueError("ratio artifact amounts must use reduced terms")
 
     @property
     def fraction(self) -> Fraction:
@@ -298,12 +315,7 @@ class ArtifactBlob(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fie
 
     def __post_init__(self) -> None:
         """Require canonical digest, size, and optional safe media type."""
-        if (
-            type(self.sha256) is not str
-            or len(self.sha256) != 64
-            or any(character not in "0123456789abcdef" for character in self.sha256)
-        ):
-            raise ValueError("artifact blob digest must be lowercase SHA-256")
+        require_sha256(self.sha256, label="artifact blob digest")
         require_count(self.byte_count, label="artifact blob byte count")
         if self.media_type is not None:
             require_text(self.media_type, label="artifact blob media type", maximum=255)
@@ -345,6 +357,8 @@ def _validate_capture_shape(capture: ArtifactCapture) -> None:
             raise ValueError("incomplete source capture cannot become a complete artifact")
     elif capture.reason is None:
         raise ValueError("non-complete artifact capture requires an explicit reason")
+    if capture.extent is ArtifactCaptureExtent.PARTIAL and capture.blob is None:
+        raise ValueError("partial artifact capture requires a retained blob")
     if capture.extent is ArtifactCaptureExtent.OMITTED and capture.blob is not None:
         raise ValueError("omitted artifact capture cannot retain a blob or raw digest")
 

@@ -36,11 +36,48 @@ class ArtifactCompletion(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
             raise TypeError("artifact completion instant must be integer nanoseconds")
         if type(self.reasons) is not tuple or any(type(item) is not str for item in self.reasons):
             raise TypeError("artifact completion reasons must be immutable text")
+        for reason in self.reasons:
+            require_text(reason, label="artifact completion reason", maximum=127)
         if len(set(self.reasons)) != len(self.reasons):
             raise ValueError("artifact completion reasons must be unique")
         for value, label in ((self.stage, "completion stage"), (self.code, "completion code")):
             if value is not None:
                 require_text(value, label=label, maximum=127)
+        _require_completion_shape(self)
+
+
+def _require_completion_shape(completion: ArtifactCompletion) -> None:
+    has_instant = completion.instant_unix_nanoseconds is not None
+    if completion.kind is ArtifactCompletionKind.COMPLETE:
+        valid = (
+            has_instant
+            and not completion.reasons
+            and completion.stage is None
+            and completion.code is None
+        )
+    elif completion.kind is ArtifactCompletionKind.PARTIAL:
+        valid = (
+            has_instant
+            and bool(completion.reasons)
+            and completion.stage is None
+            and completion.code is None
+        )
+    elif completion.kind is ArtifactCompletionKind.CANCELLED:
+        valid = (
+            has_instant
+            and len(completion.reasons) == 1
+            and completion.stage is not None
+            and completion.code is None
+        )
+    else:
+        valid = (
+            not has_instant
+            and not completion.reasons
+            and completion.stage is not None
+            and completion.code is not None
+        )
+    if not valid:
+        raise ValueError("artifact completion kind contradicts its retained fields")
 
 
 @final
@@ -71,7 +108,7 @@ class ArtifactGate(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fie
     coverage: tuple[ArtifactMetric, ...]
     assessments: tuple[ArtifactGateCounts, ...]
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901 - closed gate-state truth table
         """Keep not-requested and requested shapes disjoint."""
         if type(self.verdict) is not ArtifactGateVerdict:
             raise TypeError("artifact gate verdict must be typed")
@@ -79,11 +116,18 @@ class ArtifactGate(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fie
             raise TypeError("artifact gate profile must be an ArtifactDefinition")
         if type(self.reasons) is not tuple or any(type(item) is not str for item in self.reasons):
             raise TypeError("artifact gate reasons must be immutable text")
+        for reason in self.reasons:
+            require_text(reason, label="artifact gate reason", maximum=127)
+        if len(set(self.reasons)) != len(self.reasons):
+            raise ValueError("artifact gate reasons must be unique")
         require_metrics(self.coverage, label="gate coverage")
         if type(self.assessments) is not tuple or any(
             type(item) is not ArtifactGateCounts for item in self.assessments
         ):
             raise TypeError("artifact gate assessments must be immutable and typed")
+        severities = tuple(item.severity for item in self.assessments)
+        if len(set(severities)) != len(severities):
+            raise ValueError("artifact gate assessment severities must be unique")
         not_requested = self.verdict is ArtifactGateVerdict.NOT_REQUESTED
         empty_requested_shape = (
             self.profile is None and not self.reasons and not self.coverage and not self.assessments
@@ -91,6 +135,8 @@ class ArtifactGate(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fie
         if not_requested != empty_requested_shape:
             raise ValueError("not-requested gate shape contradicts its retained assessments")
         if not not_requested:
+            if self.profile is None:
+                raise ValueError("requested artifact gate requires its profile")
             exceeded = any(
                 actual.value > allowed.value
                 for assessment in self.assessments

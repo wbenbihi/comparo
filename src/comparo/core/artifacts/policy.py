@@ -6,6 +6,7 @@ from typing import final
 
 import msgspec
 
+from comparo.core.artifacts.common import ARTIFACT_REDACTION_MARKER
 from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import PositiveCount
@@ -54,6 +55,27 @@ class ArtifactCapturePolicy(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class SanitizationLimits(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-owned limits for the run-scoped literal-redaction matcher."""
+
+    maximum_patterns: PositiveCount
+    maximum_pattern_bytes: ByteCount
+    maximum_value_bytes: ByteCount
+    maximum_value_nodes: PositiveCount
+
+    def __post_init__(self) -> None:
+        """Require explicit finite pattern count and aggregate byte ceilings."""
+        if type(self.maximum_patterns) is not PositiveCount:
+            raise TypeError("sanitization pattern limit must be PositiveCount")
+        if type(self.maximum_pattern_bytes) is not ByteCount:
+            raise TypeError("sanitization pattern byte limit must be ByteCount")
+        if type(self.maximum_value_bytes) is not ByteCount:
+            raise TypeError("sanitization value byte limit must be ByteCount")
+        if type(self.maximum_value_nodes) is not PositiveCount:
+            raise TypeError("sanitization value node limit must be PositiveCount")
+
+
+@final
 class ArtifactLimits(msgspec.Struct, frozen=True, kw_only=True):
     """Finite effective artifact and report budgets supplied by composition."""
 
@@ -62,6 +84,7 @@ class ArtifactLimits(msgspec.Struct, frozen=True, kw_only=True):
     maximum_total_blob_bytes: ByteCount
     maximum_manifest_bytes: ByteCount
     maximum_report_bytes: ByteCount
+    sanitization: SanitizationLimits
 
     def __post_init__(self) -> None:
         """Require typed finite dimensions without a hidden application maximum."""
@@ -77,6 +100,8 @@ class ArtifactLimits(msgspec.Struct, frozen=True, kw_only=True):
                 raise TypeError("artifact byte limits must be ByteCount values")
         if self.maximum_blob_bytes.value > self.maximum_total_blob_bytes.value:
             raise ValueError("per-blob artifact limit cannot exceed the aggregate blob limit")
+        if type(self.sanitization) is not SanitizationLimits:
+            raise TypeError("artifact sanitization limits must be SanitizationLimits")
 
 
 @final
@@ -134,5 +159,5 @@ class RedactionPolicy(msgspec.Struct, frozen=True, kw_only=True):
         identities = tuple(rule.rule_id for rule in self.rules)
         if len(set(identities)) != len(identities):
             raise ValueError("redaction rule IDs must be unique")
-        if type(self.marker) is not str or not self.marker or len(self.marker) > 64:
-            raise ValueError("redaction marker must be bounded non-empty text")
+        if self.marker != ARTIFACT_REDACTION_MARKER:
+            raise ValueError("artifact redaction marker is fixed for this API version")

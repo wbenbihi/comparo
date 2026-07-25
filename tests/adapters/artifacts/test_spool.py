@@ -20,6 +20,7 @@ from comparo.adapters.artifacts.spool import PosixSanitizedBlobSpool
 from comparo.adapters.artifacts.spool import SanitizedSpoolError
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.policy import ArtifactLimits
+from comparo.core.artifacts.policy import SanitizationLimits
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import PositiveCount
@@ -32,6 +33,12 @@ def _limits(*, blobs: int = 3, per_blob: int = 16, total: int = 32) -> ArtifactL
         maximum_total_blob_bytes=ByteCount(value=total),
         maximum_manifest_bytes=ByteCount(value=1024),
         maximum_report_bytes=ByteCount(value=1024),
+        sanitization=SanitizationLimits(
+            maximum_patterns=PositiveCount(value=16),
+            maximum_pattern_bytes=ByteCount(value=1024),
+            maximum_value_bytes=ByteCount(value=256),
+            maximum_value_nodes=PositiveCount(value=64),
+        ),
     )
 
 
@@ -66,6 +73,7 @@ def _assert_code(
     assert error.value.code is code
     assert str(error.value) == code.value
     assert error.value.__cause__ is None
+    assert error.value.__context__ is None
 
 
 def test_spool_streams_private_files_deduplicates_and_cleans_up(tmp_path: Path) -> None:
@@ -1138,7 +1146,9 @@ def test_close_reports_cleanup_failure_and_consumes_background_exceptions(
         with pytest.raises(SanitizedSpoolError) as failure:
             await spool.close()
         _assert_code(failure, ArtifactStoreErrorCode.IO_FAILED)
-        await spool.close()
+        with pytest.raises(SanitizedSpoolError) as repeated:
+            await spool.close()
+        _assert_code(repeated, ArtifactStoreErrorCode.IO_FAILED)
         monkeypatch.setattr(spool_module, "_unlink", original_unlink)
 
         async def fail() -> None:

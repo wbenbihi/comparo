@@ -17,6 +17,7 @@ from comparo.adapters.http.storage import TransientBodyStore
 from comparo.adapters.http.storage import TransientBodyStoreConfig
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.policy import ArtifactLimits
+from comparo.core.artifacts.policy import SanitizationLimits
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
 from comparo.core.domain.http.bodies import RepeatableByteSource
 from comparo.core.domain.http.response_bodies import BodyCaptureExtent
@@ -36,6 +37,12 @@ def _limits(*, blobs: int = 2, per_blob: int = 8, total: int = 12) -> ArtifactLi
         maximum_total_blob_bytes=ByteCount(value=total),
         maximum_manifest_bytes=ByteCount(value=32_768),
         maximum_report_bytes=ByteCount(value=32_768),
+        sanitization=SanitizationLimits(
+            maximum_patterns=PositiveCount(value=16),
+            maximum_pattern_bytes=ByteCount(value=1024),
+            maximum_value_bytes=ByteCount(value=256),
+            maximum_value_nodes=PositiveCount(value=64),
+        ),
     )
 
 

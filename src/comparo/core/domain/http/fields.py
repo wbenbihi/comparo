@@ -8,6 +8,8 @@ from typing import final
 
 import msgspec
 
+from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
+from comparo.core.credentials import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.sensitivity import SensitiveValue
@@ -33,45 +35,6 @@ FORBIDDEN_API_KEY_HEADER_NAMES = (
     _RESERVED_FRAMING_NAMES
     | _FORBIDDEN_CONNECTION_NAMES
     | frozenset({"cookie", "proxy-authorization"})
-)
-# Conservative protocol/common credential names. Project policy may extend this immutable minimum.
-MANDATORY_SENSITIVE_HEADER_NAMES = frozenset(
-    {
-        "api-key",
-        "authorization",
-        "ocp-apim-subscription-key",
-        "proxy-authorization",
-        "x-amz-security-token",
-        "x-access-token",
-        "x-api-key",
-        "x-auth-token",
-        "x-functions-key",
-        "x-goog-api-key",
-        "x-master-key",
-        "x-subscription-key",
-    }
-)
-MANDATORY_SENSITIVE_QUERY_NAMES = frozenset(
-    {
-        "access_token",
-        "api-key",
-        "api_key",
-        "apikey",
-        "auth_token",
-        "client_assertion",
-        "client_secret",
-        "code",
-        "id_token",
-        "key",
-        "password",
-        "refresh_token",
-        "sig",
-        "signature",
-        "token",
-        "x-amz-credential",
-        "x-amz-security-token",
-        "x-amz-signature",
-    }
 )
 
 

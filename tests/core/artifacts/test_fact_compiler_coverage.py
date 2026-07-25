@@ -89,6 +89,7 @@ from comparo.core.domain.values import JsonNull
 from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonObjectMember
 from comparo.core.domain.values import JsonString
+from tests.core.artifacts.test_capture_compiler import _policy
 from tests.core.domain.assertions._invariant_support import _compiled_rule
 from tests.core.domain.diffs._invariant_support import _compiled_rule as _compiled_diff_rule
 from tests.core.domain.diffs._invariant_support import _location as _diff_location
@@ -104,7 +105,7 @@ _ORIGIN = TaintOriginId(value="secret/test/value")
 
 
 def _boundary(*values: object) -> SanitizationBoundary:
-    boundary = SanitizationBoundary()
+    boundary = SanitizationBoundary(_policy().limits.sanitization)
     for value in values:
         boundary.register(SensitiveValue(value, origins=(_ORIGIN,)))
     boundary.seal()

@@ -7,6 +7,7 @@ import json
 import re
 from decimal import Decimal
 from typing import cast
+from urllib.parse import unquote_plus
 
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalMember
@@ -35,6 +36,8 @@ from comparo.core.configuration.v1alpha1.schema import FieldSchema
 from comparo.core.configuration.v1alpha1.schema import ResourceSchema
 from comparo.core.configuration.v1alpha1.schema import schema_for
 from comparo.core.configuration.v1alpha1.semantic_validation import validate_resource_semantics
+from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
+from comparo.core.credentials import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.expressions import ValueExpression
@@ -87,26 +90,97 @@ def _mapping_entries(node: MappingNode) -> dict[str, MappingEntry]:
     return {entry.name: entry for entry in node.entries}
 
 
-def _fingerprint_scalar(value: None | bool | int | Decimal | str) -> object:
+def _fingerprint_scalar(
+    value: None | bool | int | Decimal | str,
+    *,
+    context: str | None,
+) -> object:
     if type(value) is Decimal:
         return {"decimal": str(value.normalize())}
+    if context == "url" and type(value) is str:
+        return _redact_url_credentials(value)
     return value
 
 
-def _fingerprint_node(node: ConfigurationNode, *, redact: bool = False) -> object:
+def _fingerprint_node(
+    node: ConfigurationNode,
+    *,
+    redact: bool = False,
+    context: str | None = None,
+) -> object:
     if redact:
         return {"sensitive": True}
     if type(node) is ScalarNode:
-        return _fingerprint_scalar(node.value)
+        return _fingerprint_scalar(node.value, context=context)
     if type(node) is SequenceNode:
-        return [_fingerprint_node(item) for item in node.items]
+        return [_fingerprint_node(item, context=context) for item in node.items]
+    credential_name = _structured_credential_name(node, context=context)
     return {
         entry.name: _fingerprint_node(
             entry.value,
-            redact=entry.name == "secrets",
+            redact=_fingerprint_entry_is_sensitive(
+                entry.name,
+                context=context,
+                credential_name=credential_name,
+            ),
+            context=_fingerprint_context(entry.name),
         )
         for entry in sorted(node.entries, key=lambda item: item.name)
     }
+
+
+def _fingerprint_context(name: str) -> str | None:
+    if name in {"headers", "query", "cookies", "auth"}:
+        return name
+    if name in {"url", "endpoint", "baseUrl"}:
+        return "url"
+    return None
+
+
+def _structured_credential_name(node: MappingNode, *, context: str | None) -> str | None:
+    if context not in {"headers", "query"}:
+        return None
+    entries = {entry.name: entry.value for entry in node.entries}
+    name = entries.get("name", entries.get("key"))
+    if type(name) is not ScalarNode or type(name.value) is not str:
+        return None
+    return name.value.casefold()
+
+
+def _fingerprint_entry_is_sensitive(
+    name: str,
+    *,
+    context: str | None,
+    credential_name: str | None,
+) -> bool:
+    normalized = name.casefold()
+    if name in {"secrets", "cookies", "auth"} or context in {"cookies", "auth"}:
+        return True
+    if context == "headers":
+        return normalized in MANDATORY_SENSITIVE_HEADER_NAMES or (
+            name == "value" and credential_name in MANDATORY_SENSITIVE_HEADER_NAMES
+        )
+    if context == "query":
+        return normalized in MANDATORY_SENSITIVE_QUERY_NAMES or (
+            name == "value" and credential_name in MANDATORY_SENSITIVE_QUERY_NAMES
+        )
+    return False
+
+
+def _redact_url_credentials(value: str) -> str:
+    head, separator, remainder = value.partition("?")
+    if not separator:
+        return value
+    query, fragment_separator, fragment = remainder.partition("#")
+    redacted: list[str] = []
+    for parameter in query.split("&"):
+        encoded_name, equals, encoded_value = parameter.partition("=")
+        name = unquote_plus(encoded_name).casefold()
+        if equals and name in MANDATORY_SENSITIVE_QUERY_NAMES:
+            encoded_value = "<sensitive>"
+        redacted.append(encoded_name + equals + encoded_value)
+    suffix = fragment_separator + fragment if fragment_separator else ""
+    return head + separator + "&".join(redacted) + suffix
 
 
 def _definition(
@@ -122,7 +196,10 @@ def _definition(
             "description": resource.metadata.details.description,
             "tags": resource.metadata.details.tags,
         },
-        "spec": _fingerprint_node(resource.spec),
+        "spec": _fingerprint_node(
+            resource.spec,
+            redact=resource.kind is ResourceKind.VALUE,
+        ),
     }
     encoded = json.dumps(
         content,

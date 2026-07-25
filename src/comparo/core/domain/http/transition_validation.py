@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import cast
 
+from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
+from comparo.core.credentials import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.bodies import NoMaterializedBody
-from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_HEADER_NAMES
-from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.http.fields import HeaderSource
 from comparo.core.domain.http.fields import QuerySource
 from comparo.core.domain.http.fields import RequestHeaders

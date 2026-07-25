@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import cast
 
 import msgspec
@@ -43,7 +44,14 @@ def encode_run_artifact(artifact: RunArtifact, *, maximum_bytes: int) -> bytes:
     _require_limit(maximum_bytes)
     if type(artifact) is not RunArtifact:
         raise ArtifactCodecError(ArtifactCodecErrorCode.INVALID_INPUT)
-    payload = _ENCODER.encode(artifact)
+    failed = False
+    payload = b""
+    try:
+        payload = _ENCODER.encode(artifact)
+    except Exception:  # noqa: BLE001 - codec failures expose only a closed safe code
+        failed = True
+    if failed:
+        raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED)
     if len(payload) > maximum_bytes:
         raise ArtifactCodecError(ArtifactCodecErrorCode.BUDGET_EXCEEDED)
     return payload
@@ -56,10 +64,14 @@ def decode_run_artifact(payload: bytes, *, maximum_bytes: int) -> RunArtifact:
         raise ArtifactCodecError(ArtifactCodecErrorCode.INVALID_INPUT)
     if len(payload) > maximum_bytes:
         raise ArtifactCodecError(ArtifactCodecErrorCode.BUDGET_EXCEEDED)
+    malformed = False
+    envelope: object = None
     try:
         envelope = msgspec.json.decode(payload)
-    except msgspec.DecodeError as error:
-        raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED) from error
+    except msgspec.DecodeError:
+        malformed = True
+    if malformed:
+        raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED)
     if type(envelope) is not dict:
         raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED)
     version = cast("Mapping[object, object]", envelope).get("api_version")
@@ -67,10 +79,12 @@ def decode_run_artifact(payload: bytes, *, maximum_bytes: int) -> RunArtifact:
         raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED)
     if version != ARTIFACT_API_VERSION:
         raise ArtifactCodecError(ArtifactCodecErrorCode.UNSUPPORTED_VERSION)
-    try:
-        return _DECODER.decode(payload)
-    except (msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError) as error:
-        raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED) from error
+    artifact: RunArtifact | None = None
+    with suppress(msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
+        artifact = _DECODER.decode(payload)
+    if artifact is None:
+        raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED)
+    return artifact
 
 
 def generate_artifact_schema() -> dict[str, object]:

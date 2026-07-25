@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import cast
 from typing import final
 from urllib.parse import quote
 
 import msgspec
 
+from comparo.core.artifacts.common import ARTIFACT_REDACTION_MARKER
 from comparo.core.artifacts.common import ArtifactCapture
 from comparo.core.artifacts.common import ArtifactCaptureExtent
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactOmissionReason
 from comparo.core.artifacts.common import ArtifactSourceCaptureState
 from comparo.core.artifacts.http import ArtifactAttempt
+from comparo.core.artifacts.http import ArtifactCookie
 from comparo.core.artifacts.http import ArtifactExchange
 from comparo.core.artifacts.http import ArtifactField
 from comparo.core.artifacts.http import ArtifactRequest
@@ -25,14 +28,18 @@ from comparo.core.artifacts.policy import ArtifactPolicy
 from comparo.core.artifacts.policy import RedactionPolicy
 from comparo.core.artifacts.policy import UnsafeSourceBehavior
 from comparo.core.artifacts.ports import ArtifactBodyReader
+from comparo.core.artifacts.ports import ArtifactStoreErrorCode
 from comparo.core.artifacts.ports import SanitizationSnapshotProvider
+from comparo.core.artifacts.ports import SanitizedBlobError
 from comparo.core.artifacts.ports import SanitizedBlobTarget
+from comparo.core.artifacts.ports import SanitizedBlobWriter
 from comparo.core.artifacts.sanitization import SanitizationBoundary
+from comparo.core.artifacts.sanitization import SanitizationBudgetExceededError
+from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
+from comparo.core.credentials import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.http.bodies import MaterializedBody
 from comparo.core.domain.http.bodies import NoMaterializedBody
 from comparo.core.domain.http.bodies import RepeatableByteSource
-from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_HEADER_NAMES
-from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.http.fields import BareQueryValue
 from comparo.core.domain.http.fields import HeaderText
 from comparo.core.domain.http.fields import QueryText
@@ -70,11 +77,62 @@ from comparo.core.domain.http.url import DecodedPathSegment
 from comparo.core.domain.http.url import EncodedPathSegment
 from comparo.core.domain.http.url import Ipv6Host
 from comparo.core.domain.selectors.sources import SelectorSource
+from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import is_sensitive_value
 from comparo.core.runtime.models import ExecutionOutcome
 from comparo.core.runtime.models import ExecutionWork
 from comparo.core.runtime.models import ObservedExecution
 from comparo.core.runtime.ports import ExecutionDriver
+
+_REQUEST_WHOLE_REDACTION_SOURCES = frozenset(
+    {SelectorSource.REQUEST_METHOD, SelectorSource.REQUEST_URL}
+)
+_REQUEST_FIELD_REDACTION_SOURCES = frozenset(
+    {
+        SelectorSource.REQUEST_QUERY,
+        SelectorSource.REQUEST_HEADERS,
+        SelectorSource.REQUEST_COOKIES,
+        SelectorSource.REQUEST_BODY,
+    }
+)
+_RESPONSE_WHOLE_REDACTION_SOURCES = frozenset(
+    {
+        SelectorSource.RESPONSE_PROTOCOL,
+        SelectorSource.RESPONSE_STATUS,
+        SelectorSource.STREAM_TERMINATION,
+    }
+)
+_RESPONSE_FIELD_REDACTION_SOURCES = frozenset(
+    {SelectorSource.RESPONSE_HEADERS, SelectorSource.RESPONSE_TRAILERS}
+)
+_RESPONSE_BODY_REDACTION_SOURCES = frozenset(
+    {
+        SelectorSource.RESPONSE_BODY,
+        SelectorSource.STREAM_EVENTS,
+        SelectorSource.STREAM_EVENT_DATA_JSON,
+        SelectorSource.STREAM_RECORDS,
+        SelectorSource.STREAM_CONTROLS,
+    }
+)
+_UNREPRESENTABLE_REDACTION_SOURCES = frozenset(
+    {
+        SelectorSource.EXECUTION,
+        SelectorSource.ATTEMPT,
+        SelectorSource.EXCHANGE,
+        SelectorSource.RESPONSE_TIMINGS,
+    }
+)
+_UNRETAINED_REDACTION_SOURCES = frozenset(
+    {
+        SelectorSource.RESPONSE_INFORMATIONAL,
+        SelectorSource.RESPONSE_MEDIA,
+        SelectorSource.RESPONSE_ENCODINGS,
+        SelectorSource.RESPONSE_ENDPOINT,
+        SelectorSource.RESPONSE_TLS,
+        SelectorSource.STREAM_TIMINGS,
+        SelectorSource.SCENARIO_STEP,
+    }
+)
 
 
 @final
@@ -130,6 +188,14 @@ class ArtifactCaptureUnavailableError(RuntimeError):
 
 class _RejectArtifactCaptureError(RuntimeError):
     """Internal value-free signal for an ArtifactProfile fail-closed rejection."""
+
+
+class _BodySourceReadError(RuntimeError):
+    """Internal value-free signal for a live body read failure."""
+
+
+class _BlobDestinationWriteError(RuntimeError):
+    """Internal value-free signal for a sanitized blob write failure."""
 
 
 class ArtifactCapturingDriver:
@@ -188,24 +254,30 @@ class ArtifactCapturingDriver:
         try:
             await self._capture()
         except asyncio.CancelledError:
-            if self._boundary is not None:
-                self._boundary.close()
-                self._boundary = None
+            self._discard_boundary()
             self._batch = _failed_batch("cancelled")
             raise
         except _RejectArtifactCaptureError:
-            if self._boundary is not None:
-                self._boundary.close()
-                self._boundary = None
+            self._discard_boundary()
             self._batch = _failed_batch("unsafe-source")
+        except SanitizationBudgetExceededError:
+            self._discard_boundary()
+            self._batch = _failed_batch("sanitization-budget-exceeded")
         except Exception:  # noqa: BLE001 - retain only a fixed failure code
-            if self._boundary is not None:
-                self._boundary.close()
-                self._boundary = None
+            self._discard_boundary()
             self._batch = _failed_batch("capture-failed")
         finally:
             self._outcomes.clear()
-            await self._driver.close()
+            try:
+                await self._driver.close()
+            except asyncio.CancelledError:
+                self._discard_boundary()
+                self._batch = _failed_batch("cancelled")
+                raise
+            except Exception:
+                self._discard_boundary()
+                self._batch = _failed_batch("driver-close-failed")
+                raise
 
     @property
     def batch(self) -> ArtifactCaptureBatch:
@@ -226,18 +298,35 @@ class ArtifactCapturingDriver:
         """Return whether retained evaluation evidence needs conservative omission."""
         return bool(self._redaction.rules)
 
+    @property
+    def policy(self) -> ArtifactPolicy:
+        """Return the exact effective policy that governed live capture."""
+        return self._policy
+
     def release(self) -> None:
         """Wipe the sanitizer after artifact compilation and reject later boundary access."""
+        self._discard_boundary()
+
+    def _discard_boundary(self) -> None:
         if self._boundary is not None:
             self._boundary.close()
             self._boundary = None
 
     async def _capture(self) -> None:
+        if any(
+            rule.selector.source in _UNREPRESENTABLE_REDACTION_SOURCES
+            for rule in self._redaction.rules
+        ):
+            raise _RejectArtifactCaptureError
         snapshot = await self._snapshots.sanitization_snapshot()
-        boundary = SanitizationBoundary.from_snapshot(snapshot, marker=self._redaction.marker)
+        boundary = SanitizationBoundary.from_snapshot(
+            snapshot,
+            self._policy.limits.sanitization,
+            marker=ARTIFACT_REDACTION_MARKER,
+        )
         observations = tuple(
             outcome.observation
-            for _work, outcome in self._outcomes.values()
+            for _ordinal, (_work, outcome) in sorted(self._outcomes.items())
             if type(outcome) is ObservedExecution
         )
         for observation in observations:
@@ -387,10 +476,11 @@ async def _capture_attempt(
     omission: ArtifactOmissionReason | None = None
     failure: ArtifactFailure | None = None
     if pre_send is not None:
+        pre_send_source = f"attempts.{attempt.attempt_id.value}.pre-send.request"
         if policy.capture.requests and not _requires_whole_request_omission(redaction):
             request = await _capture_request(
                 _pre_send_request(pre_send),
-                source=f"attempts.{attempt.attempt_id.value}.pre-send.request",
+                source=pre_send_source,
                 execution_id=execution_id,
                 boundary=boundary,
                 bodies=bodies,
@@ -403,7 +493,7 @@ async def _capture_attempt(
             omission = ArtifactOmissionReason.POLICY
             _coverage(
                 issues,
-                "request",
+                pre_send_source,
                 execution_id,
                 ArtifactCaptureExtent.OMITTED,
                 omission,
@@ -431,12 +521,13 @@ async def _capture_exchange(
     issues: list[ArtifactCoverageIssue],
 ) -> ArtifactExchange:
     exchange_id = str(exchange.exchange_id.value)
+    request_source = f"exchanges.{exchange_id}.request"
     request: ArtifactRequest | None
     request_omission: ArtifactOmissionReason | None
     if policy.capture.requests and not _requires_whole_request_omission(redaction):
         request = await _capture_request(
             exchange.request.request,
-            source=f"exchanges.{exchange_id}.request",
+            source=request_source,
             execution_id=execution_id,
             boundary=boundary,
             bodies=bodies,
@@ -451,7 +542,7 @@ async def _capture_exchange(
         request_omission = ArtifactOmissionReason.POLICY
         _coverage(
             issues,
-            "request",
+            request_source,
             execution_id,
             ArtifactCaptureExtent.OMITTED,
             request_omission,
@@ -459,10 +550,11 @@ async def _capture_exchange(
     response: ArtifactResponse | None = None
     response_omission: ArtifactOmissionReason | None = None
     if exchange.response is not None:
+        response_source = f"exchanges.{exchange_id}.response"
         if policy.capture.responses and not _requires_whole_response_omission(redaction):
             response = await _capture_response(
                 exchange.response,
-                source=f"exchanges.{exchange_id}.response",
+                source=response_source,
                 execution_id=execution_id,
                 boundary=boundary,
                 bodies=bodies,
@@ -475,7 +567,7 @@ async def _capture_exchange(
             response_omission = ArtifactOmissionReason.POLICY
             _coverage(
                 issues,
-                "response",
+                response_source,
                 execution_id,
                 ArtifactCaptureExtent.OMITTED,
                 response_omission,
@@ -576,7 +668,7 @@ async def _capture_response(
             policy=policy,
             custom_redaction=_source_has_custom_redaction(
                 redaction,
-                SelectorSource.RESPONSE_BODY,
+                *_RESPONSE_BODY_REDACTION_SOURCES,
             ),
             issues=issues,
         )
@@ -646,7 +738,7 @@ async def _capture_response_body(
     )
 
 
-async def _capture_body(
+async def _capture_body(  # noqa: C901 - explicit fail-closed storage outcome mapping
     descriptor: RepeatableByteSource | BodyHandle,
     *,
     source_state: ArtifactSourceCaptureState,
@@ -672,38 +764,136 @@ async def _capture_body(
         return ArtifactCapture(
             source_state=source_state,
             extent=ArtifactCaptureExtent.OMITTED,
-            source_byte_count=byte_count,
+            source_byte_count=None,
             blob=None,
             reason=policy_reason,
         )
-    writer = None
-    try:
-        writer = await blobs.begin()
-        redactions = await boundary.sanitize_stream(bodies.read(descriptor), writer.write)
-        blob = await writer.commit(media_type=None)
-    except asyncio.CancelledError:
-        if writer is not None:
-            await writer.abort()
-        raise
-    except Exception:  # noqa: BLE001 - persistence receives no exception text
-        if writer is not None:
-            await writer.abort()
+    if descriptor.sensitivity is Sensitivity.SENSITIVE:
         if policy.unsafe_source is UnsafeSourceBehavior.REJECT_ARTIFACT:
-            raise _RejectArtifactCaptureError from None
-        failure_reason = ArtifactOmissionReason.STORAGE_FAILED
+            raise _RejectArtifactCaptureError
+        redaction_reason = ArtifactOmissionReason.REDACTION_FAILED
         _coverage(
             issues,
             source,
             execution_id,
             ArtifactCaptureExtent.OMITTED,
-            failure_reason,
+            redaction_reason,
         )
         return ArtifactCapture(
             source_state=source_state,
             extent=ArtifactCaptureExtent.OMITTED,
-            source_byte_count=byte_count,
+            source_byte_count=None,
             blob=None,
-            reason=failure_reason,
+            reason=redaction_reason,
+        )
+    writer: SanitizedBlobWriter | None = None
+    try:
+        writer = await blobs.begin()
+    except asyncio.CancelledError:
+        raise
+    except SanitizedBlobError as error:
+        reason = (
+            ArtifactOmissionReason.BUDGET_EXCEEDED
+            if error.code is ArtifactStoreErrorCode.BUDGET_EXCEEDED
+            else ArtifactOmissionReason.STORAGE_FAILED
+        )
+        return _omitted_body_capture(
+            source_state,
+            source=source,
+            execution_id=execution_id,
+            reason=reason,
+            source_byte_count=byte_count,
+            policy=policy,
+            issues=issues,
+        )
+    except Exception:  # noqa: BLE001 - blob target defects become value-free coverage
+        return _omitted_body_capture(
+            source_state,
+            source=source,
+            execution_id=execution_id,
+            reason=ArtifactOmissionReason.STORAGE_FAILED,
+            source_byte_count=byte_count,
+            policy=policy,
+            issues=issues,
+        )
+    try:
+        redactions = await boundary.sanitize_stream(
+            _body_chunks(bodies, descriptor),
+            lambda chunk: _write_blob_chunk(writer, chunk),
+        )
+    except asyncio.CancelledError:
+        await writer.abort()
+        raise
+    except _BodySourceReadError:
+        await writer.abort()
+        return _omitted_body_capture(
+            source_state,
+            source=source,
+            execution_id=execution_id,
+            reason=ArtifactOmissionReason.SOURCE_UNAVAILABLE,
+            source_byte_count=None,
+            policy=policy,
+            issues=issues,
+        )
+    except (SanitizedBlobError, _BlobDestinationWriteError) as error:
+        await writer.abort()
+        reason = (
+            ArtifactOmissionReason.BUDGET_EXCEEDED
+            if isinstance(error, SanitizedBlobError)
+            and error.code is ArtifactStoreErrorCode.BUDGET_EXCEEDED
+            else ArtifactOmissionReason.STORAGE_FAILED
+        )
+        return _omitted_body_capture(
+            source_state,
+            source=source,
+            execution_id=execution_id,
+            reason=reason,
+            source_byte_count=byte_count,
+            policy=policy,
+            issues=issues,
+        )
+    except Exception:  # noqa: BLE001 - sanitizer defects become value-free coverage
+        await writer.abort()
+        return _omitted_body_capture(
+            source_state,
+            source=source,
+            execution_id=execution_id,
+            reason=ArtifactOmissionReason.REDACTION_FAILED,
+            source_byte_count=None,
+            policy=policy,
+            issues=issues,
+        )
+    try:
+        blob = await writer.commit(media_type=None)
+    except asyncio.CancelledError:
+        await writer.abort()
+        raise
+    except SanitizedBlobError as error:
+        await writer.abort()
+        reason = (
+            ArtifactOmissionReason.BUDGET_EXCEEDED
+            if error.code is ArtifactStoreErrorCode.BUDGET_EXCEEDED
+            else ArtifactOmissionReason.STORAGE_FAILED
+        )
+        return _omitted_body_capture(
+            source_state,
+            source=source,
+            execution_id=execution_id,
+            reason=reason,
+            source_byte_count=byte_count,
+            policy=policy,
+            issues=issues,
+        )
+    except Exception:  # noqa: BLE001 - blob target defects become value-free coverage
+        await writer.abort()
+        return _omitted_body_capture(
+            source_state,
+            source=source,
+            execution_id=execution_id,
+            reason=ArtifactOmissionReason.STORAGE_FAILED,
+            source_byte_count=byte_count,
+            policy=policy,
+            issues=issues,
         )
     extent = (
         ArtifactCaptureExtent.COMPLETE
@@ -722,6 +912,58 @@ async def _capture_body(
         blob=blob,
         reason=final_reason,
         redaction_count=redactions,
+    )
+
+
+async def _body_chunks(
+    bodies: ArtifactBodyReader,
+    descriptor: RepeatableByteSource | BodyHandle,
+) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in bodies.read(descriptor):
+            if type(chunk) is not bytes:
+                raise TypeError("body source chunks must be bytes")
+            yield chunk
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - source defects become a value-free phase signal
+        raise _BodySourceReadError from None
+
+
+async def _write_blob_chunk(writer: SanitizedBlobWriter, chunk: bytes) -> None:
+    try:
+        await writer.write(chunk)
+    except (asyncio.CancelledError, SanitizedBlobError):
+        raise
+    except Exception:  # noqa: BLE001 - target defects become a value-free phase signal
+        raise _BlobDestinationWriteError from None
+
+
+def _omitted_body_capture(
+    source_state: ArtifactSourceCaptureState,
+    *,
+    source: str,
+    execution_id: str,
+    reason: ArtifactOmissionReason,
+    source_byte_count: int | None,
+    policy: ArtifactPolicy,
+    issues: list[ArtifactCoverageIssue],
+) -> ArtifactCapture:
+    if policy.unsafe_source is UnsafeSourceBehavior.REJECT_ARTIFACT:
+        raise _RejectArtifactCaptureError
+    _coverage(
+        issues,
+        source,
+        execution_id,
+        ArtifactCaptureExtent.OMITTED,
+        reason,
+    )
+    return ArtifactCapture(
+        source_state=source_state,
+        extent=ArtifactCaptureExtent.OMITTED,
+        source_byte_count=source_byte_count,
+        blob=None,
+        reason=reason,
     )
 
 
@@ -747,15 +989,15 @@ def _sanitize_url(
                 query.append(encoded_name)
                 continue
             mandatory = parameter.name.value.casefold() in MANDATORY_SENSITIVE_QUERY_NAMES
-            query_value = (
-                parameter.value
-                if is_sensitive_value(parameter.value)
-                else cast(QueryText, parameter.value).value
-            )
-            value = boundary.sanitize_text(
-                query_value,
-                mandatory=mandatory,
-            ).value
+            if mandatory:
+                value = ARTIFACT_REDACTION_MARKER
+            else:
+                query_value = (
+                    parameter.value
+                    if is_sensitive_value(parameter.value)
+                    else cast(QueryText, parameter.value).value
+                )
+                value = boundary.sanitize_text(query_value).value
             encoded = quote(value, safe="-._~", encoding="utf-8", errors="strict")
             query.append(f"{encoded_name}={encoded}")
     suffix = "" if not query else "?" + "&".join(query)
@@ -796,11 +1038,15 @@ def _request_cookies(
     request: FinalizedWireRequest,
     boundary: SanitizationBoundary,
     redaction: RedactionPolicy,
-) -> tuple[ArtifactField, ...]:
+) -> tuple[ArtifactCookie, ...]:
     if _source_has_custom_redaction(redaction, SelectorSource.REQUEST_COOKIES):
         return ()
     return tuple(
-        _artifact_field(cookie.name.value, cookie.value, boundary, mandatory=True)
+        ArtifactCookie(
+            name=boundary.sanitize_text(cookie.name.value).value,
+            value=ARTIFACT_REDACTION_MARKER,
+            redacted=True,
+        )
         for cookie in request.cookies.cookies
     )
 
@@ -832,11 +1078,14 @@ def _artifact_field(
     mandatory: bool,
 ) -> ArtifactField:
     safe_name = boundary.sanitize_text(name)
+    if mandatory:
+        return ArtifactField(
+            name=safe_name.value,
+            value=ARTIFACT_REDACTION_MARKER,
+            redacted=True,
+        )
     field_value = value if is_sensitive_value(value) else cast(HeaderText, value).value
-    safe_value = boundary.sanitize_text(
-        field_value,
-        mandatory=mandatory,
-    )
+    safe_value = boundary.sanitize_text(field_value)
     return ArtifactField(
         name=safe_name.value,
         value=safe_value.value,
@@ -846,25 +1095,19 @@ def _artifact_field(
 
 def _source_has_custom_redaction(
     redaction: RedactionPolicy,
-    source: SelectorSource,
+    *sources: SelectorSource,
 ) -> bool:
-    return any(rule.selector.source is source for rule in redaction.rules)
+    return any(rule.selector.source in sources for rule in redaction.rules)
 
 
 def _requires_whole_request_omission(redaction: RedactionPolicy) -> bool:
     """Fail closed when a custom rule targets a required request scalar."""
-    return any(
-        _source_has_custom_redaction(redaction, source)
-        for source in (SelectorSource.REQUEST_METHOD, SelectorSource.REQUEST_URL)
-    )
+    return _source_has_custom_redaction(redaction, *_REQUEST_WHOLE_REDACTION_SOURCES)
 
 
 def _requires_whole_response_omission(redaction: RedactionPolicy) -> bool:
     """Fail closed when a custom rule targets a required response scalar."""
-    return any(
-        _source_has_custom_redaction(redaction, source)
-        for source in (SelectorSource.RESPONSE_PROTOCOL, SelectorSource.RESPONSE_STATUS)
-    )
+    return _source_has_custom_redaction(redaction, *_RESPONSE_WHOLE_REDACTION_SOURCES)
 
 
 def _record_custom_source_omissions(

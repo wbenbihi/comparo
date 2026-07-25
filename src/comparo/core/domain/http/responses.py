@@ -6,8 +6,8 @@ from typing import final
 
 import msgspec
 
+from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.domain.diagnostics import Diagnostic
-from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.domain.http.fields import HeaderName
 from comparo.core.domain.http.fields import HeaderText
 from comparo.core.domain.http.fields import HeaderValue

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import cast
 
 import msgspec
 import pytest
@@ -19,6 +20,7 @@ from comparo.core.artifacts import ArtifactComparison
 from comparo.core.artifacts import ArtifactComparisonOutcome
 from comparo.core.artifacts import ArtifactCompletion
 from comparo.core.artifacts import ArtifactCompletionKind
+from comparo.core.artifacts import ArtifactCookie
 from comparo.core.artifacts import ArtifactCoordinate
 from comparo.core.artifacts import ArtifactCoverageIssue
 from comparo.core.artifacts import ArtifactDecimal
@@ -90,7 +92,7 @@ def _fact(engine: ArtifactFactEngine, outcome: ArtifactFactOutcome) -> ArtifactF
         coverage=(_metric("selected", 1),),
         evidence=(
             ArtifactEvidence(
-                fact_id=f"{engine.value}-fact",
+                fact_id=f"{engine.value}-evidence",
                 outcome=outcome.value,
                 location="response.body#/value",
                 values=(
@@ -150,6 +152,7 @@ def _artifact() -> RunArtifact:
         attempts=(ArtifactAttempt(attempt_id="attempt-0", exchanges=(exchange,)),),
         assertions=(assertion,),
     )
+    candidate_exchange = msgspec.structs.replace(exchange, exchange_id="exchange-1")
     candidate = ArtifactExecution(
         ordinal=1,
         execution_id="execution-1",
@@ -161,7 +164,7 @@ def _artifact() -> RunArtifact:
         outcome=ArtifactExecutionOutcome.OBSERVED,
         failure=None,
         timings=(ArtifactTiming(name="total", nanoseconds=10, reason=None),),
-        attempts=(ArtifactAttempt(attempt_id="attempt-1", exchanges=(exchange,)),),
+        attempts=(ArtifactAttempt(attempt_id="attempt-1", exchanges=(candidate_exchange,)),),
         assertions=(),
     )
     comparison = ArtifactComparison(
@@ -257,6 +260,78 @@ def test_run_artifact_is_self_contained_canonical_and_immutable() -> None:
     assert not is_artifact_fact(object())
     with pytest.raises(AttributeError):
         artifact.executions = ()  # type: ignore[misc]
+
+
+def test_http_artifact_dtos_enforce_the_mandatory_credential_floor() -> None:
+    with pytest.raises(ValueError, match="credential artifact fields"):
+        ArtifactRequest(
+            method="GET",
+            url="https://example.test/",
+            headers=(ArtifactField(name="authorization", value="Bearer LEAK-ME"),),
+            cookies=(),
+            body=None,
+        )
+    with pytest.raises(ValueError, match="cookie values"):
+        ArtifactRequest(
+            method="GET",
+            url="https://example.test/",
+            headers=(),
+            cookies=(ArtifactCookie(name="session", value="LEAK-ME", redacted=False),),
+            body=None,
+        )
+    with pytest.raises(ValueError, match="credential query"):
+        ArtifactRequest(
+            method="GET",
+            url="https://example.test/?api_key=LEAK-ME",
+            headers=(),
+            cookies=(),
+            body=None,
+        )
+    with pytest.raises(ValueError, match="absolute HTTP"):
+        ArtifactRequest(
+            method="GET",
+            url="https://user:LEAK-ME@example.test/",
+            headers=(),
+            cookies=(),
+            body=None,
+        )
+    with pytest.raises(ValueError, match="credential artifact fields"):
+        ArtifactResponse(
+            status=200,
+            protocol="HTTP/2",
+            headers=(ArtifactField(name="set-cookie", value="session=LEAK-ME"),),
+            trailers=(),
+            body=None,
+        )
+
+    safe = ArtifactRequest(
+        method="GET",
+        url="https://example.test/?api_key=%3Credacted%3E&token",
+        headers=(
+            ArtifactField(
+                name="authorization",
+                value="<redacted>",
+                redacted=True,
+            ),
+        ),
+        cookies=(),
+        body=None,
+    )
+    assert safe.url.endswith("token")
+    uppercase_cookie = ArtifactCookie(
+        name="SessionID",
+        value="<redacted>",
+        redacted=True,
+    )
+    assert uppercase_cookie.name == "SessionID"
+    with pytest.raises(ValueError, match="canonical lowercase HTTP token"):
+        ArtifactField(name="Authorization ", value="LEAK-ME")
+    with pytest.raises(ValueError, match="cookie name"):
+        ArtifactCookie(name="invalid cookie", value="<redacted>", redacted=True)
+    with pytest.raises(TypeError, match="request cookies"):
+        msgspec.structs.replace(safe, cookies=cast("tuple[ArtifactCookie, ...]", (object(),)))
+    with pytest.raises(ValueError, match="request URL must be valid"):
+        msgspec.structs.replace(safe, url="https://[invalid")
 
 
 @pytest.mark.parametrize(
@@ -367,6 +442,93 @@ def test_artifact_result_ids_are_globally_unique() -> None:
         )
 
 
+def test_artifact_occurrence_ids_are_globally_unique_and_unambiguous() -> None:
+    artifact = _artifact()
+    first, second = artifact.executions
+    first_attempt = first.attempts[0]
+    second_attempt = second.attempts[0]
+
+    duplicate_attempt = msgspec.structs.replace(
+        second_attempt,
+        attempt_id=first_attempt.attempt_id,
+    )
+    with pytest.raises(ValueError, match="attempt IDs must be globally unique"):
+        msgspec.structs.replace(
+            artifact,
+            executions=(
+                first,
+                msgspec.structs.replace(second, attempts=(duplicate_attempt,)),
+            ),
+        )
+
+    duplicate_exchange = msgspec.structs.replace(
+        second_attempt.exchanges[0],
+        exchange_id=first_attempt.exchanges[0].exchange_id,
+    )
+    with pytest.raises(ValueError, match="exchange IDs must be globally unique"):
+        msgspec.structs.replace(
+            artifact,
+            executions=(
+                first,
+                msgspec.structs.replace(
+                    second,
+                    attempts=(
+                        msgspec.structs.replace(
+                            second_attempt,
+                            exchanges=(duplicate_exchange,),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+    assertion = first.assertions[0]
+    diff = artifact.comparisons[0].diffs[0]
+    for field, message in (
+        ("fact_id", "aggregate fact IDs must be globally unique"),
+        ("application_id", "application IDs must be globally unique"),
+    ):
+        duplicate = msgspec.structs.replace(diff, **{field: getattr(assertion, field)})
+        comparison = msgspec.structs.replace(artifact.comparisons[0], diffs=(duplicate,))
+        with pytest.raises(ValueError, match=message):
+            msgspec.structs.replace(artifact, comparisons=(comparison,))
+
+    duplicate_evidence = msgspec.structs.replace(
+        diff.evidence[0],
+        fact_id=assertion.evidence[0].fact_id,
+    )
+    comparison = msgspec.structs.replace(
+        artifact.comparisons[0],
+        diffs=(msgspec.structs.replace(diff, evidence=(duplicate_evidence,)),),
+    )
+    with pytest.raises(ValueError, match="evidence fact IDs must be globally unique"):
+        msgspec.structs.replace(artifact, comparisons=(comparison,))
+
+    parent_collision = msgspec.structs.replace(
+        assertion.evidence[0],
+        fact_id=assertion.fact_id,
+    )
+    execution = msgspec.structs.replace(
+        first,
+        assertions=(msgspec.structs.replace(assertion, evidence=(parent_collision,)),),
+    )
+    with pytest.raises(ValueError, match="aggregate and evidence fact IDs must be distinct"):
+        msgspec.structs.replace(artifact, executions=(execution, second))
+
+
+def test_artifact_coverage_must_refer_to_a_retained_execution() -> None:
+    artifact = _artifact()
+    issue = ArtifactCoverageIssue(
+        source="response.body",
+        extent=ArtifactCaptureExtent.OMITTED,
+        reason=ArtifactOmissionReason.POLICY,
+        execution_id="missing-execution",
+    )
+
+    with pytest.raises(ValueError, match="coverage references an unknown execution"):
+        msgspec.structs.replace(artifact, coverage_issues=(issue,))
+
+
 def test_artifact_comparison_sides_must_be_distinct_and_declared() -> None:
     artifact = _artifact()
     comparison = artifact.comparisons[0]
@@ -413,6 +575,22 @@ def test_artifact_comparison_sides_align_with_comparison_identity(
             artifact,
             executions=(artifact.executions[0], candidate),
         )
+
+
+def test_artifact_comparison_requires_distinct_environments_and_equal_coordinates() -> None:
+    artifact = _artifact()
+    baseline, candidate = artifact.executions
+
+    same_environment = msgspec.structs.replace(candidate, environment=baseline.environment)
+    with pytest.raises(ValueError, match="distinct Environments"):
+        msgspec.structs.replace(artifact, executions=(baseline, same_environment))
+
+    different_coordinates = msgspec.structs.replace(
+        candidate,
+        coordinates=(ArtifactCoordinate(axis="tenant", value=ArtifactInteger(value=2)),),
+    )
+    with pytest.raises(ValueError, match="exact Matrix coordinates"):
+        msgspec.structs.replace(artifact, executions=(baseline, different_coordinates))
 
 
 def test_artifact_comparison_outcome_tracks_side_availability_exactly() -> None:

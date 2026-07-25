@@ -17,6 +17,7 @@ from comparo.core.artifacts.capture import ArtifactCaptureBatch
 from comparo.core.artifacts.capture import ArtifactCaptureUnavailableError
 from comparo.core.artifacts.capture import ArtifactCapturingDriver
 from comparo.core.artifacts.capture import CapturedExecutionHttp
+from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.common import ArtifactCaptureExtent
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactOmissionReason
@@ -30,8 +31,11 @@ from comparo.core.artifacts.policy import RedactionAction
 from comparo.core.artifacts.policy import RedactionPolicy
 from comparo.core.artifacts.policy import RedactionRule
 from comparo.core.artifacts.policy import UnsafeSourceBehavior
+from comparo.core.artifacts.ports import ArtifactStoreErrorCode
+from comparo.core.artifacts.ports import SanitizedBlobError
 from comparo.core.artifacts.ports import SanitizedBlobWriter
 from comparo.core.artifacts.sanitization import SanitizationBoundary
+from comparo.core.artifacts.sanitization import SanitizationBudgetExceededError
 from comparo.core.domain.http.bodies import BytesBody
 from comparo.core.domain.http.bodies import MaterializedBody
 from comparo.core.domain.http.bodies import RepeatableByteSource
@@ -99,6 +103,7 @@ from comparo.core.domain.selectors.paths import NoPath
 from comparo.core.domain.selectors.selector_semantics import derive_selector_capabilities
 from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.runtime.models import ExecutionOutcome
 from comparo.core.runtime.models import ExecutionWork
@@ -132,7 +137,7 @@ def _secret[ValueT](value: ValueT) -> SensitiveValue[ValueT]:
 
 
 def _boundary(*values: object) -> SanitizationBoundary:
-    boundary = SanitizationBoundary()
+    boundary = SanitizationBoundary(_policy().limits.sanitization)
     for value in values:
         boundary.register(_secret(value))
     boundary.seal()
@@ -157,6 +162,10 @@ def _selector(source: SelectorSource) -> CompiledSelector:
         SelectorSource.REQUEST_URL: ValueKind.STRING,
         SelectorSource.RESPONSE_PROTOCOL: ValueKind.STRING,
         SelectorSource.RESPONSE_STATUS: ValueKind.INTEGER,
+        SelectorSource.EXECUTION: ValueKind.STRING,
+        SelectorSource.ATTEMPT: ValueKind.STRING,
+        SelectorSource.EXCHANGE: ValueKind.STRING,
+        SelectorSource.STREAM_EVENTS: ValueKind.OBJECT,
     }.get(source, ValueKind.HTTP_FIELD_VALUE)
     return CompiledSelector(
         fingerprint=_gate_fingerprint(),
@@ -201,6 +210,19 @@ class _CancellingBodies:
         return _CancellingIterator()
 
 
+class _BytesBodies:
+    def __init__(self, value: bytes) -> None:
+        self._value = value
+
+    def read(self, source: RepeatableByteSource | BodyHandle) -> AsyncIterator[bytes]:
+        del source
+
+        async def chunks() -> AsyncIterator[bytes]:
+            yield self._value
+
+        return chunks()
+
+
 class _CancellingIterator:
     def __aiter__(self) -> _CancellingIterator:
         return self
@@ -217,6 +239,58 @@ class _FailingBeginBlobs:
 class _CancellingBeginBlobs:
     async def begin(self) -> Never:
         raise asyncio.CancelledError
+
+
+class _StructuredFailingBeginBlobs:
+    async def begin(self) -> SanitizedBlobWriter:
+        raise SanitizedBlobError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+
+
+class _FaultyWriter:
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+        self.aborted = False
+
+    async def write(self, _chunk: bytes) -> None:
+        if self.mode == "write-budget":
+            raise SanitizedBlobError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+        if self.mode == "write-storage":
+            raise SanitizedBlobError(ArtifactStoreErrorCode.IO_FAILED)
+        if self.mode == "write-error":
+            raise OSError("sensitive")
+
+    async def commit(self, *, media_type: str | None) -> ArtifactBlob:
+        del media_type
+        if self.mode == "commit-budget":
+            raise SanitizedBlobError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+        if self.mode == "commit-storage":
+            raise SanitizedBlobError(ArtifactStoreErrorCode.IO_FAILED)
+        if self.mode == "commit-error":
+            raise OSError("sensitive")
+        if self.mode == "commit-cancel":
+            raise asyncio.CancelledError
+        return ArtifactBlob(sha256="0" * 64, byte_count=0, media_type=None)
+
+    async def abort(self) -> None:
+        self.aborted = True
+
+
+class _FaultyBlobs:
+    def __init__(self, writer: _FaultyWriter) -> None:
+        self.writer = writer
+
+    async def begin(self) -> SanitizedBlobWriter:
+        return self.writer
+
+
+class _UntypedBodies:
+    def read(self, source: RepeatableByteSource | BodyHandle) -> AsyncIterator[bytes]:
+        del source
+
+        async def chunks() -> AsyncIterator[bytes]:
+            yield bytearray(b"unsafe")  # type: ignore[misc]
+
+        return chunks()
 
 
 def _driver_fixture(
@@ -313,6 +387,31 @@ def test_driver_validates_policy_and_exposes_lifecycle_fail_closed() -> None:
         _ = driver.boundary
 
 
+def test_custom_redaction_source_mapping_is_exhaustive_and_fail_closed() -> None:
+    classified = frozenset(
+        {
+            *capture._REQUEST_WHOLE_REDACTION_SOURCES,
+            *capture._REQUEST_FIELD_REDACTION_SOURCES,
+            *capture._RESPONSE_WHOLE_REDACTION_SOURCES,
+            *capture._RESPONSE_FIELD_REDACTION_SOURCES,
+            *capture._RESPONSE_BODY_REDACTION_SOURCES,
+            *capture._UNREPRESENTABLE_REDACTION_SOURCES,
+            *capture._UNRETAINED_REDACTION_SOURCES,
+        }
+    )
+    assert classified == frozenset(SelectorSource)
+
+    driver, inner = _driver_fixture(_redaction(SelectorSource.EXCHANGE))
+    asyncio.run(driver.close())
+    assert inner.close_count == 1
+    assert driver.batch.failure == ArtifactFailure(
+        stage="artifact-capture",
+        code="unsafe-source",
+    )
+    with pytest.raises(ArtifactCaptureUnavailableError, match="boundary"):
+        _ = driver.boundary
+
+
 def test_execute_after_runtime_close_is_rejected() -> None:
     _prepared_run, result, driver = asyncio.run(_state())
     try:
@@ -329,6 +428,8 @@ def test_execute_after_runtime_close_is_rejected() -> None:
         ("cancelled", True, "cancelled"),
         ("rejected", False, "unsafe-source"),
         ("rejected", True, "unsafe-source"),
+        ("sanitization-budget", False, "sanitization-budget-exceeded"),
+        ("sanitization-budget", True, "sanitization-budget-exceeded"),
         ("failed", False, "capture-failed"),
         ("failed", True, "capture-failed"),
     ],
@@ -348,6 +449,8 @@ def test_close_converts_capture_failures_to_value_free_batches(
             raise asyncio.CancelledError
         if failure_kind == "rejected":
             raise capture._RejectArtifactCaptureError
+        if failure_kind == "sanitization-budget":
+            raise SanitizationBudgetExceededError
         raise RuntimeError
 
     monkeypatch.setattr(ArtifactCapturingDriver, "_capture", fail)
@@ -364,6 +467,32 @@ def test_close_converts_capture_failures_to_value_free_batches(
             _ = driver.boundary
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [(asyncio.CancelledError, "cancelled"), (RuntimeError, "driver-close-failed")],
+)
+def test_delegate_close_failures_wipe_the_sanitization_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: type[BaseException],
+    expected_code: str,
+) -> None:
+    driver, inner = _driver_fixture()
+
+    async def fail_close() -> None:
+        inner.close_count += 1
+        raise failure
+
+    monkeypatch.setattr(inner, "close", fail_close)
+    with pytest.raises(failure):
+        asyncio.run(driver.close())
+
+    assert inner.close_count == 1
+    assert driver.batch.failure is not None
+    assert driver.batch.failure.code == expected_code
+    with pytest.raises(ArtifactCaptureUnavailableError, match="boundary"):
+        _ = driver.boundary
+
+
 def _source() -> RepeatableByteSource:
     return RepeatableByteSource(
         source_id=BodyId(value=UUID(int=50)),
@@ -373,8 +502,25 @@ def _source() -> RepeatableByteSource:
     )
 
 
+def _public_source() -> RepeatableByteSource:
+    return RepeatableByteSource(
+        source_id=BodyId(value=UUID(int=51)),
+        byte_count=ByteCount(value=0),
+        digest=digest("d"),
+        provenance=provenance(),
+    )
+
+
+def _public_body_handle(*, size: int) -> BodyHandle:
+    return msgspec.structs.replace(
+        body_handle(size=size),
+        digest=digest("d"),
+        sensitivity=Sensitivity.PUBLIC,
+    )
+
+
 def _complex_request() -> tuple[AbsoluteHttpUrl, FinalizedWireRequest]:
-    source = _source()
+    source = _public_source()
     url = AbsoluteHttpUrl(
         scheme=HttpScheme.HTTPS,
         authority=HttpAuthority(
@@ -434,7 +580,7 @@ def _complex_request() -> tuple[AbsoluteHttpUrl, FinalizedWireRequest]:
         cookies=RequestCookies(
             cookies=(
                 RequestCookie(
-                    name=CookieName(value="session"),
+                    name=CookieName(value="SessionID"),
                     value=_secret(CookieText(value="cookie-secret")),
                     source=CookieSource.SESSION,
                     provenance=provenance(),
@@ -448,7 +594,7 @@ def _complex_request() -> tuple[AbsoluteHttpUrl, FinalizedWireRequest]:
 
 def test_request_registration_url_and_fields_cover_all_typed_values() -> None:
     url, wire = _complex_request()
-    boundary = SanitizationBoundary()
+    boundary = SanitizationBoundary(_policy().limits.sanitization)
     capture._register_request_values(boundary, wire)
     boundary.seal()
 
@@ -462,6 +608,7 @@ def test_request_registration_url_and_fields_cover_all_typed_values() -> None:
     assert headers[0].value == "public"
     assert headers[1].value == "<redacted>"
     assert cookies[0].redacted
+    assert cookies[0].name == "SessionID"
     assert (
         capture._request_headers(wire, boundary, _redaction(SelectorSource.REQUEST_HEADERS)) == ()
     )
@@ -523,7 +670,7 @@ def test_response_registration_and_field_redaction_cover_all_sections() -> None:
         headers=ResponseFields(fields=(public, secret)),
         trailers=ResponseFields(fields=(secret,)),
     )
-    boundary = SanitizationBoundary()
+    boundary = SanitizationBoundary(_policy().limits.sanitization)
     capture._register_response_values(boundary, observed)
     capture._register_response_values(
         boundary,
@@ -614,7 +761,7 @@ def test_observation_registration_covers_responses_failures_and_pre_send_request
         _observation_with_exchange(with_response=False),
         _observation_with_pre_send(),
     ):
-        boundary = SanitizationBoundary()
+        boundary = SanitizationBoundary(_policy().limits.sanitization)
         capture._register_observation_values(boundary, observation)
         boundary.seal()
 
@@ -671,6 +818,19 @@ def test_exchange_capture_records_policy_and_whole_scalar_omissions() -> None:
     assert custom.request is None
     assert custom.response is None
     assert len(issues) == 2
+
+    stream, stream_issues = asyncio.run(
+        _capture_exchange_with(
+            policy=_policy(),
+            redaction=_redaction(SelectorSource.STREAM_EVENTS),
+            with_response=True,
+        )
+    )
+    assert stream.response is not None
+    assert stream.response.body is not None
+    assert stream.response.body.extent is ArtifactCaptureExtent.OMITTED
+    assert stream.response.body.reason is ArtifactOmissionReason.POLICY
+    assert any(item.source.endswith(".response.body") for item in stream_issues)
 
     failed, _issues = asyncio.run(
         _capture_exchange_with(
@@ -787,7 +947,7 @@ def test_custom_source_omissions_are_explicit_and_required_scalars_fail_closed()
 
 def test_materialized_request_capture_sanitizes_body_and_records_custom_coverage() -> None:
     _url, wire = _complex_request()
-    boundary = SanitizationBoundary()
+    boundary = SanitizationBoundary(_policy().limits.sanitization)
     capture._register_request_values(boundary, wire)
     boundary.seal()
     issues: list[ArtifactCoverageIssue] = []
@@ -897,7 +1057,7 @@ def test_response_body_without_a_handle_is_omitted_or_rejects_by_policy() -> Non
 
 
 def test_body_capture_covers_policy_partial_storage_rejection_and_cancellation() -> None:
-    descriptor = body_handle(size=0)
+    descriptor = _public_body_handle(size=0)
     policy = _policy()
     omitted_issues: list[ArtifactCoverageIssue] = []
     omitted = asyncio.run(
@@ -967,7 +1127,7 @@ def test_body_capture_covers_policy_partial_storage_rejection_and_cancellation()
     )
     assert storage_failed.reason is ArtifactOmissionReason.STORAGE_FAILED
 
-    writer_failure = asyncio.run(
+    source_failure = asyncio.run(
         capture._capture_body(
             descriptor,
             source_state=ArtifactSourceCaptureState.COMPLETE,
@@ -981,7 +1141,8 @@ def test_body_capture_covers_policy_partial_storage_rejection_and_cancellation()
             issues=[],
         )
     )
-    assert writer_failure.reason is ArtifactOmissionReason.STORAGE_FAILED
+    assert source_failure.reason is ArtifactOmissionReason.SOURCE_UNAVAILABLE
+    assert source_failure.source_byte_count is None
 
     reject = msgspec.structs.replace(
         policy,
@@ -1022,6 +1183,263 @@ def test_body_capture_covers_policy_partial_storage_rejection_and_cancellation()
                     issues=[],
                 )
             )
+
+
+def test_body_capture_preserves_per_blob_and_aggregate_budget_exhaustion() -> None:
+    descriptor = _public_body_handle(size=1)
+    policy = _policy()
+    per_blob_policy = msgspec.structs.replace(
+        policy,
+        limits=msgspec.structs.replace(
+            policy.limits,
+            maximum_blob_bytes=ByteCount(value=0),
+        ),
+    )
+    per_blob_issues: list[ArtifactCoverageIssue] = []
+    per_blob = asyncio.run(
+        capture._capture_body(
+            descriptor,
+            source_state=ArtifactSourceCaptureState.COMPLETE,
+            source="request.body",
+            execution_id="execution",
+            boundary=_boundary(),
+            bodies=_BytesBodies(b"x"),
+            blobs=_store(per_blob_policy),
+            policy=per_blob_policy,
+            custom_redaction=False,
+            issues=per_blob_issues,
+        )
+    )
+    assert per_blob.reason is ArtifactOmissionReason.BUDGET_EXCEEDED
+    assert per_blob_issues[0].reason is ArtifactOmissionReason.BUDGET_EXCEEDED
+
+    aggregate_policy = msgspec.structs.replace(
+        policy,
+        limits=msgspec.structs.replace(
+            policy.limits,
+            maximum_blob_bytes=ByteCount(value=1),
+            maximum_total_blob_bytes=ByteCount(value=1),
+        ),
+    )
+    aggregate_store = _store(aggregate_policy)
+    first = asyncio.run(
+        capture._capture_body(
+            descriptor,
+            source_state=ArtifactSourceCaptureState.COMPLETE,
+            source="request.body",
+            execution_id="execution",
+            boundary=_boundary(),
+            bodies=_BytesBodies(b"x"),
+            blobs=aggregate_store,
+            policy=aggregate_policy,
+            custom_redaction=False,
+            issues=[],
+        )
+    )
+    aggregate_issues: list[ArtifactCoverageIssue] = []
+    second = asyncio.run(
+        capture._capture_body(
+            descriptor,
+            source_state=ArtifactSourceCaptureState.COMPLETE,
+            source="response.body",
+            execution_id="execution",
+            boundary=_boundary(),
+            bodies=_BytesBodies(b"y"),
+            blobs=aggregate_store,
+            policy=aggregate_policy,
+            custom_redaction=False,
+            issues=aggregate_issues,
+        )
+    )
+    assert first.extent is ArtifactCaptureExtent.COMPLETE
+    assert second.reason is ArtifactOmissionReason.BUDGET_EXCEEDED
+    assert aggregate_issues[0].reason is ArtifactOmissionReason.BUDGET_EXCEEDED
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_reason"),
+    [
+        ("write-budget", ArtifactOmissionReason.BUDGET_EXCEEDED),
+        ("write-storage", ArtifactOmissionReason.STORAGE_FAILED),
+        ("write-error", ArtifactOmissionReason.STORAGE_FAILED),
+        ("commit-budget", ArtifactOmissionReason.BUDGET_EXCEEDED),
+        ("commit-storage", ArtifactOmissionReason.STORAGE_FAILED),
+        ("commit-error", ArtifactOmissionReason.STORAGE_FAILED),
+    ],
+)
+def test_body_capture_maps_blob_phase_failures_without_leaking_values(
+    mode: str,
+    expected_reason: ArtifactOmissionReason,
+) -> None:
+    writer = _FaultyWriter(mode)
+    issues: list[ArtifactCoverageIssue] = []
+
+    result = asyncio.run(
+        capture._capture_body(
+            _public_body_handle(size=1),
+            source_state=ArtifactSourceCaptureState.COMPLETE,
+            source="response.body",
+            execution_id="execution",
+            boundary=_boundary(),
+            bodies=_BytesBodies(b"x"),
+            blobs=_FaultyBlobs(writer),
+            policy=_policy(),
+            custom_redaction=False,
+            issues=issues,
+        )
+    )
+
+    assert result.reason is expected_reason
+    assert issues[0].reason is expected_reason
+    assert writer.aborted
+
+
+def test_body_capture_maps_begin_source_and_sanitizer_failures_by_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptor = _public_body_handle(size=1)
+    policy = _policy()
+    begin_issues: list[ArtifactCoverageIssue] = []
+    begin = asyncio.run(
+        capture._capture_body(
+            descriptor,
+            source_state=ArtifactSourceCaptureState.COMPLETE,
+            source="response.body",
+            execution_id="execution",
+            boundary=_boundary(),
+            bodies=_BytesBodies(b"x"),
+            blobs=_StructuredFailingBeginBlobs(),
+            policy=policy,
+            custom_redaction=False,
+            issues=begin_issues,
+        )
+    )
+    assert begin.reason is ArtifactOmissionReason.BUDGET_EXCEEDED
+    assert begin_issues[0].reason is ArtifactOmissionReason.BUDGET_EXCEEDED
+
+    untyped_writer = _FaultyWriter("success")
+    source = asyncio.run(
+        capture._capture_body(
+            descriptor,
+            source_state=ArtifactSourceCaptureState.COMPLETE,
+            source="response.body",
+            execution_id="execution",
+            boundary=_boundary(),
+            bodies=_UntypedBodies(),
+            blobs=_FaultyBlobs(untyped_writer),
+            policy=policy,
+            custom_redaction=False,
+            issues=[],
+        )
+    )
+    assert source.reason is ArtifactOmissionReason.SOURCE_UNAVAILABLE
+    assert source.source_byte_count is None
+    assert untyped_writer.aborted
+
+    async def fail_sanitization(
+        self: SanitizationBoundary,
+        chunks: object,
+        write: object,
+    ) -> int:
+        del self, chunks, write
+        raise RuntimeError("sensitive")
+
+    monkeypatch.setattr(SanitizationBoundary, "sanitize_stream", fail_sanitization)
+    sanitizer_writer = _FaultyWriter("success")
+    sanitized = asyncio.run(
+        capture._capture_body(
+            descriptor,
+            source_state=ArtifactSourceCaptureState.COMPLETE,
+            source="response.body",
+            execution_id="execution",
+            boundary=_boundary(),
+            bodies=_BytesBodies(b"x"),
+            blobs=_FaultyBlobs(sanitizer_writer),
+            policy=policy,
+            custom_redaction=False,
+            issues=[],
+        )
+    )
+    assert sanitized.reason is ArtifactOmissionReason.REDACTION_FAILED
+    assert sanitized.source_byte_count is None
+    assert sanitizer_writer.aborted
+
+
+def test_body_capture_aborts_a_writer_when_commit_is_cancelled() -> None:
+    writer = _FaultyWriter("commit-cancel")
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            capture._capture_body(
+                _public_body_handle(size=1),
+                source_state=ArtifactSourceCaptureState.COMPLETE,
+                source="response.body",
+                execution_id="execution",
+                boundary=_boundary(),
+                bodies=_BytesBodies(b"x"),
+                blobs=_FaultyBlobs(writer),
+                policy=_policy(),
+                custom_redaction=False,
+                issues=[],
+            )
+        )
+    assert writer.aborted
+
+
+def test_mandatory_artifact_field_is_always_fixed_redacted() -> None:
+    field = capture._artifact_field(
+        "authorization",
+        HeaderText(value="Bearer LEAK-ME"),
+        _boundary(),
+        mandatory=True,
+    )
+
+    assert field.value == "<redacted>"
+    assert field.redacted
+
+
+def test_sensitive_body_descriptors_are_never_read_or_persisted() -> None:
+    policy = _policy()
+    for descriptor in (_source(), body_handle(size=1)):
+        store = _store(policy)
+        issues: list[ArtifactCoverageIssue] = []
+        omitted = asyncio.run(
+            capture._capture_body(
+                descriptor,
+                source_state=ArtifactSourceCaptureState.COMPLETE,
+                source="response.body",
+                execution_id="execution",
+                boundary=_boundary(),
+                bodies=_BytesBodies(b"LEAK-ME"),
+                blobs=store,
+                policy=policy,
+                custom_redaction=False,
+                issues=issues,
+            )
+        )
+        assert omitted.blob is None
+        assert omitted.source_byte_count is None
+        assert omitted.reason is ArtifactOmissionReason.REDACTION_FAILED
+        assert issues[0].reason is ArtifactOmissionReason.REDACTION_FAILED
+
+    rejecting = msgspec.structs.replace(
+        policy,
+        unsafe_source=UnsafeSourceBehavior.REJECT_ARTIFACT,
+    )
+    with pytest.raises(capture._RejectArtifactCaptureError):
+        asyncio.run(
+            capture._capture_body(
+                body_handle(size=1),
+                source_state=ArtifactSourceCaptureState.COMPLETE,
+                source="response.body",
+                execution_id="execution",
+                boundary=_boundary(),
+                bodies=_BytesBodies(b"LEAK-ME"),
+                blobs=_store(rejecting),
+                policy=rejecting,
+                custom_redaction=False,
+                issues=[],
+            )
+        )
 
 
 def test_body_state_reason_failure_and_timing_projections_are_exhaustive() -> None:

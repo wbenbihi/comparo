@@ -12,12 +12,12 @@ from urllib.parse import urlsplit
 
 import msgspec
 
+from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.bodies import FinalizedBody
 from comparo.core.domain.http.bodies import NoBody
 from comparo.core.domain.http.bodies import NoMaterializedBody
-from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.domain.http.fields import BareQueryValue
 from comparo.core.domain.http.fields import HeaderSource
 from comparo.core.domain.http.fields import HeaderText

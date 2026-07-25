@@ -115,11 +115,21 @@ def compile_run_artifact(
     if type(capture) is not ArtifactCapturingDriver or type(policy) is not ArtifactPolicy:
         raise TypeError("artifact compilation requires typed capture and policy")
     try:
+        if capture.policy != policy:
+            raise ValueError("artifact compilation policy differs from capture policy")
         batch = capture.batch
         if batch.failure is not None:
             return ArtifactCompilationResult(
                 status=ArtifactCompilationStatus.REJECTED,
                 failure=batch.failure,
+            )
+        if not _profiles_are_uniform(prepared):
+            return ArtifactCompilationResult(
+                status=ArtifactCompilationStatus.REJECTED,
+                failure=ArtifactFailure(
+                    stage="artifact-compilation",
+                    code="ambiguous-effective-profiles",
+                ),
             )
         artifact = _compile(
             prepared,
@@ -447,7 +457,24 @@ def _definition(value: DefinitionRef) -> ArtifactDefinition:
 
 
 def _profile_definition(value: DefinitionHandle | None) -> ArtifactDefinition | None:
-    return _definition(value) if type(value) is DefinitionRef else None
+    if value is None:
+        return None
+    if type(value) is DefinitionRef:
+        return _definition(value)
+    inline = value
+    owner = inline.origin.owner
+    return ArtifactDefinition(
+        namespace=owner.namespace.value,
+        kind=inline.kind.value,
+        resource_id=f"{owner.resource_id.value}{inline.origin.fragment.value}",
+        fingerprint=inline.fingerprint.digest.hex_value,
+    )
+
+
+def _profiles_are_uniform(prepared: PreparedRun) -> bool:
+    artifact_profiles = {item.profiles.artifacts for item in prepared.effective.subjects}
+    redaction_profiles = {item.profiles.redaction for item in prepared.effective.subjects}
+    return len(artifact_profiles) == 1 and len(redaction_profiles) == 1
 
 
 def _single_profile(prepared: PreparedRun, *, artifact: bool) -> ArtifactDefinition | None:
@@ -456,7 +483,7 @@ def _single_profile(prepared: PreparedRun, *, artifact: bool) -> ArtifactDefinit
         for subject in prepared.effective.subjects
     }
     if len(handles) != 1:
-        return None
+        raise ValueError("artifact compilation requires one uniform effective profile")
     return _profile_definition(next(iter(handles)))
 
 

@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 
 from comparo.configuration.yaml_parser import parse_yaml_source
+from comparo.core.configuration import compiler
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalMember
 from comparo.core.configuration.canonical import CanonicalObject
@@ -16,6 +17,7 @@ from comparo.core.configuration.canonical import LinkedResource
 from comparo.core.configuration.canonical import RemoteSchema
 from comparo.core.configuration.compiler import compile_v1alpha1
 from comparo.core.configuration.models import ConfigurationDiagnostic
+from comparo.core.configuration.models import MappingNode
 from comparo.core.configuration.v1alpha1.ast import V1Alpha1FrontendResult
 from comparo.core.configuration.v1alpha1.frontend import parse_v1alpha1_documents
 from comparo.core.domain.expressions import LiteralExpr
@@ -29,6 +31,7 @@ from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import SourceId
 from comparo.core.domain.metadata import Metadata
+from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.values import JsonString
 
 _SOURCE = SourceId(value="entry-config")
@@ -542,6 +545,62 @@ def test_fingerprints_are_canonical_and_secret_values_are_redacted() -> None:
     assert (
         first.project.project.definition.fingerprint
         == second.project.project.definition.fingerprint
+    )
+
+
+def test_fingerprints_redact_contextual_credentials_but_track_public_changes() -> None:
+    def request_fingerprint(spec: str) -> Fingerprint:
+        result = _compile(_valid_project() + "---\n" + _document("Request", "secured", spec))
+        assert result.project is not None
+        request = result.project.find(ResourceKind.REQUEST, ResourceId(value="secured"))
+        assert request is not None
+        return request.definition.fingerprint
+
+    first = request_fingerprint(
+        "{request: {method: GET, endpoint: '/?api_key=first-secret', "
+        "headers: {authorization: first-secret, x-public: one}, "
+        "cookies: {SessionID: first-secret}, auth: {token: first-secret}}}"
+    )
+    second = request_fingerprint(
+        "{request: {method: GET, endpoint: '/?api_key=second-secret', "
+        "headers: {authorization: second-secret, x-public: one}, "
+        "cookies: {SessionID: second-secret}, auth: {token: second-secret}}}"
+    )
+    public_change = request_fingerprint(
+        "{request: {method: GET, endpoint: '/?api_key=second-secret', "
+        "headers: {authorization: second-secret, x-public: two}, "
+        "cookies: {SessionID: second-secret}, auth: {token: second-secret}}}"
+    )
+
+    assert first == second
+    assert second != public_change
+
+
+def test_fingerprint_redacts_structured_credential_entries() -> None:
+    parsed = parse_yaml_source(
+        source_id=_SOURCE,
+        text=(
+            "headers:\n"
+            "  - name: authorization\n"
+            "    value: Bearer LEAK-ME\n"
+            "  - name: x-public\n"
+            "    value: visible\n"
+            "query:\n"
+            "  api_key: LEAK-ME-TOO\n"
+            "  public: visible\n"
+        ),
+    )
+    root = cast("MappingNode", parsed.documents[0].root)
+
+    assert compiler._fingerprint_node(root) == {
+        "headers": [
+            {"name": "authorization", "value": {"sensitive": True}},
+            {"name": "x-public", "value": "visible"},
+        ],
+        "query": {"api_key": {"sensitive": True}, "public": "visible"},
+    }
+    assert compiler._redact_url_credentials("https://example.test/?token") == (
+        "https://example.test/?token"
     )
 
 

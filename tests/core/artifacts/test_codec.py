@@ -8,6 +8,7 @@ from typing import cast
 import msgspec
 import pytest
 
+from comparo.core.artifacts import codec as artifact_codec
 from comparo.core.artifacts.codec import ArtifactCodecError
 from comparo.core.artifacts.codec import ArtifactCodecErrorCode
 from comparo.core.artifacts.codec import decode_run_artifact
@@ -59,6 +60,23 @@ def test_encoding_honors_the_exact_byte_budget() -> None:
     assert exceeded.value.code is ArtifactCodecErrorCode.BUDGET_EXCEEDED
 
 
+def test_encoding_translates_backend_failures_without_retaining_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingEncoder:
+        def encode(self, _artifact: object) -> bytes:
+            raise RuntimeError("LEAK-ME")
+
+    monkeypatch.setattr(artifact_codec, "_ENCODER", FailingEncoder())
+
+    with pytest.raises(ArtifactCodecError) as failed:
+        encode_run_artifact(_artifact(), maximum_bytes=100_000)
+
+    assert failed.value.code is ArtifactCodecErrorCode.MALFORMED
+    assert failed.value.__cause__ is None
+    assert failed.value.__context__ is None
+
+
 def test_codec_rejects_oversize_malformed_unknown_and_newer_artifacts() -> None:
     encoded = encode_run_artifact(_artifact(), maximum_bytes=100_000)
     with pytest.raises(ArtifactCodecError) as oversize:
@@ -74,6 +92,8 @@ def test_codec_rejects_oversize_malformed_unknown_and_newer_artifacts() -> None:
     with pytest.raises(ArtifactCodecError) as unknown:
         decode_run_artifact(msgspec.json.encode(document), maximum_bytes=100_000)
     assert unknown.value.code is ArtifactCodecErrorCode.MALFORMED
+    assert unknown.value.__cause__ is None
+    assert unknown.value.__context__ is None
 
     document.pop("unknown")
     document["api_version"] = "comparo.artifact/v2"

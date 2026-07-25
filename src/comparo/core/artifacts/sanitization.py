@@ -6,6 +6,7 @@ from base64 import b64encode
 from collections.abc import AsyncIterable
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Iterator
 from typing import cast
 from urllib.parse import quote
 from urllib.parse import quote_plus
@@ -13,6 +14,7 @@ from urllib.parse import quote_plus
 import msgspec
 
 from comparo.core.artifacts.common import require_text
+from comparo.core.artifacts.policy import SanitizationLimits
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.sensitivity import SensitiveValue
@@ -42,6 +44,10 @@ class SanitizationBoundaryUnsealedError(RuntimeError):
 
 class SanitizationBoundarySealedError(RuntimeError):
     """A new live sensitive value was registered after sanitization began."""
+
+
+class SanitizationBudgetExceededError(RuntimeError):
+    """The caller-owned literal-redaction pattern budget was exhausted."""
 
 
 class SanitizedText(msgspec.Struct, frozen=True, kw_only=True):
@@ -75,13 +81,24 @@ class SanitizedBytes(msgspec.Struct, frozen=True, kw_only=True):
 class SanitizationBoundary:
     """Collect, seal, apply, and finally wipe one run's mandatory secret patterns."""
 
-    __slots__ = ("_closed", "_marker", "_patterns", "_sealed")
+    __slots__ = (
+        "_closed",
+        "_limits",
+        "_marker",
+        "_pattern_bytes",
+        "_patterns",
+        "_sealed",
+    )
 
-    def __init__(self, *, marker: str = "<redacted>") -> None:
+    def __init__(self, limits: SanitizationLimits, *, marker: str = "<redacted>") -> None:
         """Create an initially collecting boundary with a visible UTF-8 marker."""
+        if type(limits) is not SanitizationLimits:
+            raise TypeError("sanitization boundary requires SanitizationLimits")
         require_text(marker, label="sanitization marker", maximum=64)
+        self._limits = limits
         self._marker = marker.encode("utf-8")
         self._patterns: list[bytearray] = []
+        self._pattern_bytes = 0
         self._sealed = False
         self._closed = False
 
@@ -89,15 +106,20 @@ class SanitizationBoundary:
     def from_snapshot(
         cls,
         snapshot: SanitizationSnapshot,
+        limits: SanitizationLimits,
         *,
         marker: str = "<redacted>",
     ) -> SanitizationBoundary:
         """Collect every sealed resolution value in one same-run registry snapshot."""
         if type(snapshot) is not SanitizationSnapshot:
             raise TypeError("sanitization boundary requires a SanitizationSnapshot")
-        boundary = cls(marker=marker)
-        for entry in snapshot.entries:
-            boundary.register(cast("SensitiveValue[object]", entry.value))
+        boundary = cls(limits, marker=marker)
+        try:
+            for entry in snapshot.entries:
+                boundary.register(cast("SensitiveValue[object]", entry.value))
+        except BaseException:
+            boundary.close()
+            raise
         return boundary
 
     def register(self, value: SensitiveValue[object]) -> None:
@@ -108,15 +130,22 @@ class SanitizationBoundary:
         if not is_sensitive_value(value):
             raise TypeError("sanitization registration requires a SensitiveValue")
         payload = value.reveal(access=_ACCESS)
-        for exact in _sensitive_payload_bytes(payload):
-            self._add_pattern_derivatives(exact)
+        try:
+            maximum_exact_bytes = self._limits.maximum_value_bytes.value
+            for exact in _sensitive_payload_bytes(
+                payload,
+                maximum=maximum_exact_bytes,
+                maximum_nodes=self._limits.maximum_value_nodes.value,
+            ):
+                self._add_pattern_derivatives(exact)
+        except BaseException:
+            self.close()
+            raise
 
     def seal(self) -> None:
-        """Deduplicate patterns and fix longest-first deterministic matching order."""
+        """Fix incrementally deduplicated patterns in deterministic match order."""
         self._require_open()
-        unique = {bytes(pattern) for pattern in self._patterns if pattern}
-        ordered = sorted(unique, key=lambda item: (-len(item), item))
-        self._patterns = [bytearray(pattern) for pattern in ordered]
+        self._patterns.sort(key=lambda item: (-len(item), item))
         self._sealed = True
 
     def sanitize_text(
@@ -134,10 +163,16 @@ class SanitizationBoundary:
             raise TypeError("text sanitization requires text or SensitiveValue")
         if mandatory:
             return SanitizedText(value=self._marker.decode("utf-8"), redaction_count=1)
-        sanitized = self.sanitize_bytes(value.encode("utf-8"))
+        utf8_patterns = [pattern for pattern in self._patterns if _is_utf8(pattern)]
+        output, count = _replace_literals(
+            bytearray(value.encode("utf-8")),
+            utf8_patterns,
+            self._marker,
+            final=True,
+        )
         return SanitizedText(
-            value=sanitized.value.decode("utf-8"),
-            redaction_count=sanitized.redaction_count,
+            value=bytes(output).decode("utf-8"),
+            redaction_count=count,
         )
 
     def sanitize_bytes(self, value: bytes) -> SanitizedBytes:
@@ -166,18 +201,29 @@ class SanitizationBoundary:
             raise TypeError("stream sanitization requires an async write callback")
         buffer = bytearray()
         redactions = 0
-        async for chunk in chunks:
-            if type(chunk) is not bytes:
-                raise TypeError("sanitization stream chunks must be bytes")
-            buffer.extend(chunk)
-            output, count = _replace_literals(buffer, self._patterns, self._marker, final=False)
-            redactions += count
+        iterator = chunks.__aiter__()
+        try:
+            async for chunk in iterator:
+                if type(chunk) is not bytes:
+                    raise TypeError("sanitization stream chunks must be bytes")
+                buffer.extend(chunk)
+                output, count = _replace_literals(
+                    buffer,
+                    self._patterns,
+                    self._marker,
+                    final=False,
+                )
+                redactions += count
+                if output:
+                    await write(bytes(output))
+            output, count = _replace_literals(buffer, self._patterns, self._marker, final=True)
             if output:
                 await write(bytes(output))
-        output, count = _replace_literals(buffer, self._patterns, self._marker, final=True)
-        if output:
-            await write(bytes(output))
-        return redactions + count
+            return redactions + count
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
 
     def close(self) -> None:
         """Wipe retained pattern buffers and permanently close the run boundary."""
@@ -186,27 +232,37 @@ class SanitizationBoundary:
         for pattern in self._patterns:
             pattern[:] = b"\x00" * len(pattern)
         self._patterns.clear()
+        self._pattern_bytes = 0
         self._marker = b""
         self._closed = True
 
     def _add_pattern_derivatives(self, value: bytes) -> None:
         if not value:
             return
-        variants = {value, b64encode(value)}
+        if len(value) > self._limits.maximum_value_bytes.value:
+            raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+        self._add_pattern(value)
+        self._add_pattern(b64encode(value))
         try:
             text = value.decode("utf-8")
         except UnicodeDecodeError:
             text = None
         if text is not None:
-            variants.update(
-                {
-                    quote(text, safe="").encode("ascii"),
-                    quote(text, safe="-._~").encode("ascii"),
-                    quote_plus(text, safe="").encode("ascii"),
-                    _json_quote(text).encode("utf-8"),
-                }
-            )
-        self._patterns.extend(bytearray(item) for item in variants if item)
+            self._add_pattern(quote(text, safe="").encode("ascii"))
+            self._add_pattern(quote(text, safe="-._~").encode("ascii"))
+            self._add_pattern(quote_plus(text, safe="").encode("ascii"))
+            self._add_pattern(_json_quote(text).encode("utf-8"))
+
+    def _add_pattern(self, item: bytes) -> None:
+        if not item or any(pattern == item for pattern in self._patterns):
+            return
+        if (
+            len(self._patterns) >= self._limits.maximum_patterns.value
+            or self._pattern_bytes + len(item) > self._limits.maximum_pattern_bytes.value
+        ):
+            raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+        self._patterns.append(bytearray(item))
+        self._pattern_bytes += len(item)
 
     def _require_open(self) -> None:
         if self._closed:
@@ -270,26 +326,70 @@ def _earliest_match(
     return earliest
 
 
-def _sensitive_payload_bytes(payload: object) -> tuple[bytes, ...]:
-    """Flatten a closed sensitive payload into exact and component representations."""
-    scalar = _sensitive_scalar_bytes(payload)
-    if scalar is not None:
-        return (scalar,)
-    if type(payload) is JsonArray:
-        nested = tuple(
-            component for item in payload.items for component in _sensitive_payload_bytes(item)
-        )
-        return (_json_value_text(payload).encode("utf-8"), *nested)
-    if type(payload) is JsonObject:
-        nested = tuple(
-            component
-            for member in payload.members
-            for component in _sensitive_payload_bytes(member.value)
-        )
-        return (_json_value_text(payload).encode("utf-8"), *nested)
-    if type(payload) is Duration:
-        return (str(payload.nanoseconds).encode("ascii"),)
-    raise TypeError("sanitization encountered an unsupported sensitive payload")
+def _is_utf8(value: bytearray) -> bool:
+    try:
+        value.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _sensitive_payload_bytes(  # noqa: C901 - iterative closed sensitive-value dispatch
+    payload: object,
+    *,
+    maximum: int,
+    maximum_nodes: int,
+) -> Iterator[bytes]:
+    """Yield bounded exact and component representations of one sensitive payload."""
+    stack: list[tuple[bool, object]] = [(False, payload)]
+    nodes = 0
+    scheduled_nodes = 1
+    while stack:
+        is_name, current = stack.pop()
+        if is_name:
+            name = cast("str", current).encode("utf-8")
+            if len(name) > maximum:
+                raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+            yield name
+            continue
+        scheduled_nodes -= 1
+        nodes += 1
+        if nodes > maximum_nodes:
+            raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+        scalar = _sensitive_scalar_bytes(current)
+        if scalar is not None:
+            if len(scalar) > maximum:
+                raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+            yield scalar
+        elif type(current) is JsonArray:
+            yield _bounded_json_bytes(
+                current,
+                maximum=maximum,
+                maximum_nodes=maximum_nodes,
+            )
+            if nodes + scheduled_nodes + len(current.items) > maximum_nodes:
+                raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+            scheduled_nodes += len(current.items)
+            stack.extend((False, item) for item in reversed(current.items))
+        elif type(current) is JsonObject:
+            yield _bounded_json_bytes(
+                current,
+                maximum=maximum,
+                maximum_nodes=maximum_nodes,
+            )
+            if nodes + scheduled_nodes + len(current.members) > maximum_nodes:
+                raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+            scheduled_nodes += len(current.members)
+            for member in reversed(current.members):
+                stack.append((False, member.value))
+                stack.append((True, member.name))
+        elif type(current) is Duration:
+            rendered = str(current.nanoseconds).encode("ascii")
+            if len(rendered) > maximum:
+                raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+            yield rendered
+        else:
+            raise TypeError("sanitization encountered an unsupported sensitive payload")
 
 
 def _sensitive_scalar_bytes(payload: object) -> bytes | None:  # noqa: C901
@@ -318,24 +418,80 @@ def _sensitive_scalar_bytes(payload: object) -> bytes | None:  # noqa: C901
     return None
 
 
-def _json_value_text(value: ResolvedValue) -> str:
-    if type(value) is JsonNull:
-        return "null"
-    if type(value) is JsonBoolean:
-        return "true" if value.value else "false"
-    if type(value) in {JsonInteger, JsonDecimal}:
-        return str(cast("JsonInteger | JsonDecimal", value).value)
-    if type(value) is JsonString:
-        return _json_quote(value.value)
-    if type(value) is JsonArray:
-        return "[" + ",".join(_json_value_text(item) for item in value.items) + "]"
-    if type(value) is JsonObject:
-        members = (
-            f"{_json_quote(member.name)}:{_json_value_text(member.value)}"
-            for member in value.members
-        )
-        return "{" + ",".join(members) + "}"
-    raise TypeError("only exact JSON values have a JSON representation")
+def _bounded_json_bytes(  # noqa: C901 - iterative dispatch over closed JSON values
+    value: ResolvedValue,
+    *,
+    maximum: int,
+    maximum_nodes: int,
+) -> bytes:
+    """Render exact JSON while refusing allocation beyond the caller-owned bound."""
+    output = bytearray()
+
+    def append(chunk: bytes) -> None:
+        if len(output) + len(chunk) > maximum:
+            raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+        output.extend(chunk)
+
+    stack: list[ResolvedValue | bytes | tuple[str]] = [value]
+    scheduled_nodes = 1
+    rendered_nodes = 0
+    while stack:
+        item = stack.pop()
+        if type(item) is bytes:
+            append(item)
+            continue
+        if type(item) is tuple:
+            append(_bounded_json_quote(item[0], maximum=maximum - len(output)))
+            continue
+        scheduled_nodes -= 1
+        rendered_nodes += 1
+        if rendered_nodes > maximum_nodes:
+            raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+        if type(item) is JsonNull:
+            append(b"null")
+        elif type(item) is JsonBoolean:
+            append(b"true" if item.value else b"false")
+        elif type(item) in {JsonInteger, JsonDecimal}:
+            append(str(cast("JsonInteger | JsonDecimal", item).value).encode("ascii"))
+        elif type(item) is JsonString:
+            append(_bounded_json_quote(item.value, maximum=maximum - len(output)))
+        elif type(item) is JsonArray:
+            append(b"[")
+            children = item.items
+            if rendered_nodes + scheduled_nodes + len(children) > maximum_nodes:
+                raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+            scheduled_nodes += len(children)
+            stack.append(b"]")
+            for index in range(len(children) - 1, -1, -1):
+                stack.append(children[index])
+                if index:
+                    stack.append(b",")
+        elif type(item) is JsonObject:
+            append(b"{")
+            members = item.members
+            if rendered_nodes + scheduled_nodes + len(members) > maximum_nodes:
+                raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+            scheduled_nodes += len(members)
+            stack.append(b"}")
+            for index in range(len(members) - 1, -1, -1):
+                member = members[index]
+                stack.append(member.value)
+                stack.append(b":")
+                stack.append((member.name,))
+                if index:
+                    stack.append(b",")
+        else:
+            raise TypeError("only exact JSON values have a JSON representation")
+    return bytes(output)
+
+
+def _bounded_json_quote(value: str, *, maximum: int) -> bytes:
+    if len(value) > maximum:
+        raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+    rendered = msgspec.json.encode(value)
+    if len(rendered) > maximum:
+        raise SanitizationBudgetExceededError("sanitization pattern budget exceeded")
+    return rendered
 
 
 def _json_quote(value: str) -> str:

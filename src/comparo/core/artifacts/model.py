@@ -85,11 +85,15 @@ class RunArtifact(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fiel
         _require_artifact_tuple(self.budgets, ArtifactBudget, "budgets")
         _require_artifact_tuple(self.blobs, ArtifactBlob, "blobs")
         _require_artifact_tuple(self.coverage_issues, ArtifactCoverageIssue, "coverage issues")
+        if len(set(self.coverage_issues)) != len(self.coverage_issues):
+            raise ValueError("artifact coverage issues must be unique")
         if tuple(item.ordinal for item in self.executions) != tuple(range(len(self.executions))):
             raise ValueError("artifact executions must use contiguous canonical ordinals")
         if tuple(item.ordinal for item in self.comparisons) != tuple(range(len(self.comparisons))):
             raise ValueError("artifact comparisons must use contiguous canonical ordinals")
         _require_unique_result_ids(self)
+        _require_unique_occurrence_ids(self)
+        _require_coverage_ownership(self)
         _require_comparison_integrity(self)
         _require_summary_conservation(self)
         _require_resource_closure(self)
@@ -118,6 +122,38 @@ def _require_unique_result_ids(artifact: RunArtifact) -> None:
         raise ValueError("artifact comparison IDs must be unique")
 
 
+def _require_unique_occurrence_ids(artifact: RunArtifact) -> None:
+    attempts = tuple(attempt for execution in artifact.executions for attempt in execution.attempts)
+    attempt_ids = tuple(item.attempt_id for item in attempts)
+    if len(set(attempt_ids)) != len(attempt_ids):
+        raise ValueError("artifact attempt IDs must be globally unique")
+    exchanges = tuple(exchange for attempt in attempts for exchange in attempt.exchanges)
+    exchange_ids = tuple(item.exchange_id for item in exchanges)
+    if len(set(exchange_ids)) != len(exchange_ids):
+        raise ValueError("artifact exchange IDs must be globally unique")
+    facts = _artifact_facts(artifact)
+    fact_ids = tuple(item.fact_id for item in facts)
+    if len(set(fact_ids)) != len(fact_ids):
+        raise ValueError("artifact aggregate fact IDs must be globally unique")
+    application_ids = tuple(item.application_id for item in facts)
+    if len(set(application_ids)) != len(application_ids):
+        raise ValueError("artifact application IDs must be globally unique")
+    evidence_ids = tuple(item.fact_id for fact in facts for item in fact.evidence)
+    if len(set(evidence_ids)) != len(evidence_ids):
+        raise ValueError("artifact evidence fact IDs must be globally unique")
+    if set(fact_ids) & set(evidence_ids):
+        raise ValueError("artifact aggregate and evidence fact IDs must be distinct")
+
+
+def _require_coverage_ownership(artifact: RunArtifact) -> None:
+    execution_ids = {item.execution_id for item in artifact.executions}
+    if any(
+        issue.execution_id is not None and issue.execution_id not in execution_ids
+        for issue in artifact.coverage_issues
+    ):
+        raise ValueError("artifact coverage references an unknown execution")
+
+
 def _require_comparison_integrity(artifact: RunArtifact) -> None:
     executions = {item.execution_id: item for item in artifact.executions}
     for comparison in artifact.comparisons:
@@ -130,6 +166,8 @@ def _require_comparison_integrity(artifact: RunArtifact) -> None:
         if any(execution_id not in executions for execution_id in side_ids):
             raise ValueError("artifact comparison references an unknown execution")
         sides = tuple(executions[execution_id] for execution_id in side_ids)
+        if _definition_identity(sides[0].environment) == _definition_identity(sides[1].environment):
+            raise ValueError("artifact comparison requires distinct Environments")
         if any(
             side.subject != comparison.subject
             or side.cell_id != comparison.cell_id
@@ -137,6 +175,8 @@ def _require_comparison_integrity(artifact: RunArtifact) -> None:
             for side in sides
         ):
             raise ValueError("artifact comparison sides contradict its subject, cell, or trial")
+        if sides[0].coordinates != sides[1].coordinates:
+            raise ValueError("artifact comparison sides must share exact Matrix coordinates")
         unavailable = tuple(
             side.execution_id
             for side in sides
@@ -203,6 +243,13 @@ def _referenced_definitions(artifact: RunArtifact) -> set[ArtifactDefinition]:
         *(fact.rule for item in artifact.executions for fact in item.assertions),
         *(fact.rule for item in artifact.comparisons for fact in item.diffs),
     }
+
+
+def _artifact_facts(artifact: RunArtifact) -> tuple[ArtifactFact, ...]:
+    return (
+        *(fact for execution in artifact.executions for fact in execution.assertions),
+        *(fact for comparison in artifact.comparisons for fact in comparison.diffs),
+    )
 
 
 def _artifact_captures(artifact: RunArtifact) -> tuple[ArtifactCapture, ...]:

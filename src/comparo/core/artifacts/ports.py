@@ -28,8 +28,22 @@ class ArtifactStoreErrorCode(DomainStrEnum):
     IO_FAILED = "io-failed"
     COMMIT_UNCERTAIN = "commit-uncertain"
     UNSUPPORTED_PLATFORM = "unsupported-platform"
+    UNSUPPORTED_VERSION = "unsupported-version"
     INVALID_ARTIFACT = "invalid-artifact"
     CLOSED = "closed"
+
+
+class SanitizedBlobError(RuntimeError):
+    """Core-owned value-free failure contract for sanitized blob staging."""
+
+    __slots__ = ("code",)
+
+    def __init__(self, code: ArtifactStoreErrorCode) -> None:
+        """Retain only one closed storage failure category."""
+        if type(code) is not ArtifactStoreErrorCode:
+            raise TypeError("sanitized blob error code must be typed")
+        self.code = code
+        super().__init__(code.value)
 
 
 class ArtifactPersistenceStatus(DomainStrEnum):
