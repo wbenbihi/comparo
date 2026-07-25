@@ -44,7 +44,9 @@ In an interactive terminal, bare `comparo` opens the TUI with `./comparo.yaml`; 
 non-interactive bare invocation keeps the generated help behavior. `comparo tui` is the explicit
 form. It accepts `--config`, repeatable `--source`, `--policy`, and `--artifact-root`; all
 project/policy YAML, HTTP capture/decode, and artifact byte/count ceilings exposed by the execution
-commands; plus `--maximum-report-entries` and `--maximum-outstanding-preparations`. See the
+commands; plus `--maximum-report-entries`, `--maximum-outstanding-preparations`,
+`--maximum-input-characters`, `--maximum-input-items`, and
+`--maximum-navigation-frames-per-workspace`. See the
 [TUI guide](tui.md#launch-limits-and-artifact-root).
 
 ## Trust and ExecutionPolicy
