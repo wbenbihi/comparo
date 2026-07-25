@@ -6,6 +6,7 @@ import asyncio
 import ssl
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import httpcore
 import msgspec
@@ -75,6 +76,7 @@ from comparo.core.domain.http.url import HttpScheme
 from comparo.core.domain.http.url import Ipv4Host
 from comparo.core.domain.http.url import Ipv6Host
 from comparo.core.domain.http.url import ProxyResolvedRoute
+from comparo.core.domain.identity import BodyId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
@@ -607,6 +609,14 @@ def test_exchange_contains_internal_errors_and_rejects_invalid_calls(
         await transport.close()
         with pytest.raises(RuntimeError, match="closed"):
             await transport.exchange(authorized_request(request()))
+        with pytest.raises(BodyStoreError) as storage_error:
+            await store.begin(
+                BodyId(value=UUID(int=991)),
+                maximum_body_bytes=ByteCount(value=1),
+                sensitivity=Sensitivity.PUBLIC,
+                origins=(),
+            )
+        assert storage_error.value.code is BodyStoreFailureCode.CLOSED
         await store.close()
 
     asyncio.run(scenario())

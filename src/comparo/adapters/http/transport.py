@@ -331,8 +331,12 @@ class HttpcoreTransport:
             raise
 
     async def _finish_close(self, pools: tuple[httpcore.AsyncConnectionPool, ...]) -> None:
-        """Attempt every pool close before publishing the terminal lifecycle state."""
-        results = await asyncio.gather(*(pool.aclose() for pool in pools), return_exceptions=True)
+        """Attempt every pool and the owned body-store close before publishing termination."""
+        results = await asyncio.gather(
+            *(pool.aclose() for pool in pools),
+            self._body_store.close(),
+            return_exceptions=True,
+        )
         async with self._condition:
             self._closed = True
             self._condition.notify_all()

@@ -154,8 +154,8 @@ class StoredStreamSnapshotProvider:
     """Project an automatically recognized terminal stream through one body-store port.
 
     The provider reads incrementally from the transient store, never reopens the network, and
-    enriches only the immutable observation returned in its snapshot. Store lifetime remains with
-    the composition root so request materialization, transport capture, and selection may share it.
+    enriches only the immutable observation returned in its snapshot. The production transport
+    owns the shared store lifetime so materialization, capture, and selection can safely share it.
     """
 
     __slots__ = ("_limits", "_sse_json", "_store")
@@ -260,7 +260,7 @@ class StoredStreamSnapshotProvider:
         )
 
     async def close(self) -> None:
-        """Release no resources because the composition root owns the shared body store."""
+        """Release no resources because the production transport owns the shared body store."""
 
 
 @dataclass(frozen=True, slots=True)
