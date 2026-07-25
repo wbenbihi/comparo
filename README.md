@@ -26,6 +26,8 @@ networking, persistence, CLI, and TUI concerns are adapters around that core.
 - [Versioned configuration compiler](https://github.com/wbenbihi/comparo/blob/main/docs/configuration-compiler.md)
 - [Deterministic run planner](https://github.com/wbenbihi/comparo/blob/main/docs/run-planner.md)
 - [Run-scoped values and secrets](https://github.com/wbenbihi/comparo/blob/main/docs/run-scoped-values.md)
+- [Production HTTP adapter](https://github.com/wbenbihi/comparo/blob/main/docs/production-http-adapter.md)
+- [Sanitized artifacts, persistence, and reporters](https://github.com/wbenbihi/comparo/blob/main/docs/artifacts-and-reporters.md)
 - [Accepted architecture decisions](https://github.com/wbenbihi/comparo/blob/main/docs/decisions/README.md)
 
 The canonical product promise, security boundary, configuration model, HTTP semantics, assertion

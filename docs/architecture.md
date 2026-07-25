@@ -132,11 +132,12 @@ complete immutable intent, effective policy authority, plan or runtime coordinat
 separate secret-egress, mutation, or delegated-DNS approvals. Canonical resource exhaustion binds
 the exact dimension, derivation, effect, and concrete scope.
 
-The run-scoped sensitivity registry now retains every sealed resolution result, and
+The run-scoped sensitivity registry retains every sealed resolution result, and
 `resolve_for_wire` pairs a value with a sanitizer snapshot that already contains its taint. Live
-observations are still not persistence artifacts. Step 9's explicit sanitization boundary will
-compile them into a versioned `RunArtifact`; reporters must consume that safe artifact rather than
-serializing live domain graphs.
+observations are not persistence artifacts. Step 9's capture decorator consumes the final
+same-run snapshot and live body streams before runtime cleanup, then compiles an independently
+versioned `RunArtifact`. Atomic stores and reporters accept only that safe artifact and sanitized
+blob ports; architecture contracts prevent them from serializing or importing live domain graphs.
 
 ## Verification
 

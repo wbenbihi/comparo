@@ -327,6 +327,10 @@ Exit criteria:
 
 ## Step 9: sanitization, artifacts, and persistence
 
+Status: completed on 2026-07-25. The live-to-safe lifecycle, independently versioned artifact,
+atomic local persistence contract, reporter semantics, and explicit deferred integration are
+documented in [Sanitized artifacts, persistence, and reporters](artifacts-and-reporters.md).
+
 Separate live results from persistable artifacts:
 
 ```text
@@ -342,11 +346,12 @@ versioning is independent of configuration schema versioning.
 
 Exit criteria:
 
-- Artifact types cannot contain live secret types.
-- Persisted values pass through one explicit sanitization boundary.
-- Writes are atomic, containment-safe, and use restrictive permissions.
-- Omitted and truncated captures are explicit data.
-- JSON, JUnit, SARIF, and Markdown derive from the same artifact.
+- Artifact types cannot contain live secret types: complete.
+- Persisted values pass through one explicit sanitization boundary: complete.
+- Writes are atomic, containment-safe, and use restrictive permissions: complete for the initial
+  POSIX local-filesystem adapter.
+- Omitted and truncated captures are explicit data: complete.
+- JSON, JUnit, SARIF, and Markdown derive from the same artifact: complete.
 
 ## Step 10: CLI migration
 
