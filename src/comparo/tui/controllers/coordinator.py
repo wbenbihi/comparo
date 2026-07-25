@@ -83,6 +83,7 @@ class TuiCoordinator:
         self.compare_progress: ExecutionProgressSnapshot | None = None
         self.compare_result: ResultProjection | None = None
         self.compare_diagnostics: tuple[ApplicationDiagnostic, ...] = ()
+        self._prepared_approve_mutations: bool | None = None
         self.session: ExecutionSession | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._project_revision = 0
@@ -101,7 +102,11 @@ class TuiCoordinator:
     @property
     def can_execute(self) -> bool:
         """Return whether an exact admitted comparison handle can be consumed."""
-        return self.compare_handle is not None and self.compare_plan is not None
+        return (
+            self.compare_handle is not None
+            and self.compare_plan is not None
+            and self._prepared_approve_mutations is not None
+        )
 
     def begin(self) -> None:
         """Start independent initial project and report loads."""
@@ -216,6 +221,7 @@ class TuiCoordinator:
         self.compare_surface = CompareSurface.PREPARE
         self.compare_handle = None
         self.compare_plan = None
+        self._prepared_approve_mutations = None
         self.compare_progress = None
         self.compare_result = None
         self.compare_diagnostics = ()
@@ -228,13 +234,14 @@ class TuiCoordinator:
             self.compare_draft = draft
         if self.session is not None:
             return
+        submitted = self.compare_draft
         self._compare_revision += 1
         revision = self._compare_revision
         await self._discard_prepared()
         self._reset_preparation()
         await self._changed(WorkspaceId.COMPARE)
         try:
-            prepared = await self._backend.prepare_compare(self.compare_draft)
+            prepared = await self._backend.prepare_compare(submitted)
         except Exception as error:  # noqa: BLE001 - sever backend exception provenance
             if self._closing or revision != self._compare_revision:
                 return
@@ -252,21 +259,29 @@ class TuiCoordinator:
         else:
             self.compare_handle = prepared.handle
             self.compare_plan = prepared.inspection
+            self._prepared_approve_mutations = submitted.approve_mutations
         await self._changed(WorkspaceId.COMPARE)
 
     async def start_compare(self) -> None:
         """Consume the exact admitted handle and supervise one execution session."""
         handle = self.compare_handle
         plan = self.compare_plan
-        if handle is None or plan is None or self.session is not None:
+        approve_mutations = self._prepared_approve_mutations
+        if handle is None or plan is None or approve_mutations is None or self.session is not None:
             return
         self.compare_handle = None
+        self._prepared_approve_mutations = None
         self.compare_surface = CompareSurface.RUNNING
         self.compare_progress = None
         self.compare_diagnostics = ()
         await self._changed(WorkspaceId.COMPARE)
         try:
-            session = await self._backend.start_compare(handle, self._controls)
+            controls = TuiExecutionControls(
+                settings=self._controls.settings,
+                approve_mutations=approve_mutations,
+                tool_version=self._controls.tool_version,
+            )
+            session = await self._backend.start_compare(handle, controls)
         except Exception as error:  # noqa: BLE001 - sever backend exception provenance
             self.compare_surface = CompareSurface.PREPARE
             self.compare_diagnostics = (
@@ -396,6 +411,7 @@ class TuiCoordinator:
         self.compare_progress = None
         self.compare_result = None
         self.compare_diagnostics = ()
+        self._prepared_approve_mutations = None
 
     def _task_finished(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
@@ -425,15 +441,12 @@ def same_compare_intent(left: CompareDraft, right: CompareDraft) -> bool:
     """Compare only fields consumed by the selected topology."""
     if left.mode is not right.mode:
         return False
-    if left.mode is CompareMode.ASSERTIONS:
-        return (left.subject, left.environment) == (right.subject, right.environment)
-    if left.mode is CompareMode.DIFFERENCES:
-        return (left.subject, left.baseline, left.candidate) == (
-            right.subject,
-            right.baseline,
-            right.candidate,
-        )
-    return left.execution_profile == right.execution_profile
+    if left.validation_code is not None or right.validation_code is not None:
+        return left == right
+    return (
+        left.planning_options() == right.planning_options()
+        and left.approve_mutations is right.approve_mutations
+    )
 
 
 __all__ = (

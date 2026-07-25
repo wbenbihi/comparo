@@ -177,6 +177,38 @@ CompareDraftForm {
     width: 1fr;
 }
 
+CompareAdvancedOptions {
+    height: auto;
+    width: 1fr;
+    border-top: solid $panel-lighten-2;
+    padding-top: 1;
+}
+
+.compare-advanced-title {
+    height: 1;
+    text-style: bold;
+}
+
+.compare-advanced-row {
+    height: 3;
+    width: 1fr;
+}
+
+.compare-advanced-label {
+    width: 24;
+    content-align: left middle;
+}
+
+.compare-advanced-input,
+.compare-advanced-row Select {
+    width: 1fr;
+}
+
+#compare-draft-validation {
+    color: $error;
+    height: auto;
+}
+
 .compare-mode-option {
     width: 1fr;
     content-align: center middle;
@@ -265,6 +297,7 @@ ResultsWorkspaceView {
 .density-dense ResultSummary,
 .density-dense TuiOnlySettingsPanel,
 .density-dense CompareDraftForm,
+.density-dense CompareAdvancedOptions,
 .density-dense .result-detail {
     padding: 0 1;
 }

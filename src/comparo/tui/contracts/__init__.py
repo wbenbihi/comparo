@@ -1,6 +1,7 @@
 """Typed frontend inputs, intents, and injected service ports."""
 
 from comparo.tui.contracts.models import CompareDraft as CompareDraft
+from comparo.tui.contracts.models import CompareDraftValidationCode as CompareDraftValidationCode
 from comparo.tui.contracts.models import CompareMode as CompareMode
 from comparo.tui.contracts.models import ResultAccess as ResultAccess
 from comparo.tui.contracts.models import TuiExecutionControls as TuiExecutionControls
@@ -11,6 +12,7 @@ from comparo.tui.contracts.services import TuiBackendErrorCode as TuiBackendErro
 
 __all__ = (
     "CompareDraft",
+    "CompareDraftValidationCode",
     "CompareMode",
     "ResultAccess",
     "TuiBackend",

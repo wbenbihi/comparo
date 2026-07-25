@@ -21,8 +21,13 @@ from textual.widgets import Button
 from textual.widgets import Input
 from textual.widgets import ListItem
 from textual.widgets import ListView
+from textual.widgets import Select
 from textual.widgets import Static
+from textual.widgets import Switch
 
+from comparo.application import BudgetOverride
+from comparo.application import MatrixOverride
+from comparo.application import ValueResourceOverride
 from comparo.application.execution_session import ExecutionProgressSnapshot
 from comparo.application.execution_session import ExecutionSessionPhase
 from comparo.application.inspection import ApplicationDiagnostic
@@ -48,13 +53,17 @@ from comparo.application.results import ResultResource
 from comparo.application.results import ResultSummary
 from comparo.application.results import ResultTiming
 from comparo.application.results import ResultTimingSummary
+from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.domain.value_references import ValueNamespace
 from comparo.tui.commands import COMMAND_CATALOG
 from comparo.tui.components import COMPONENT_STYLESHEET
 from comparo.tui.components import CommandFooter
+from comparo.tui.components import CompareAdvancedOptions
 from comparo.tui.components import CompareDraftForm
 from comparo.tui.components import CompareModeSelector
 from comparo.tui.components import DiagnosticsList
 from comparo.tui.components import ExecutionProgress
+from comparo.tui.components import FailFastChoice
 from comparo.tui.components import PlanPreview
 from comparo.tui.components import ProjectResourceDetail
 from comparo.tui.components import ProjectResourceItem
@@ -70,8 +79,16 @@ from comparo.tui.components import StatePanel
 from comparo.tui.components import StatePanelMode
 from comparo.tui.components import StatusBadge
 from comparo.tui.components import status_for_outcome
+from comparo.tui.components.compare_input import fail_fast_choice
+from comparo.tui.components.compare_input import format_budgets
+from comparo.tui.components.compare_input import format_matrices
+from comparo.tui.components.compare_input import format_selections
+from comparo.tui.components.compare_input import format_value_resources
+from comparo.tui.components.compare_input import parse_compare_draft
+from comparo.tui.components.compare_input import validation_diagnostics
 from comparo.tui.components.results import ResultIndexItem
 from comparo.tui.contracts import CompareDraft
+from comparo.tui.contracts import CompareDraftValidationCode
 from comparo.tui.contracts import CompareMode
 from comparo.tui.contracts import ResultAccess
 from comparo.tui.design import LayoutClass
@@ -373,6 +390,45 @@ def _progress(*, finished: int = 0) -> ExecutionProgressSnapshot:
     )
 
 
+def _parse_draft(
+    *,
+    fallback: CompareDraft | None = None,
+    mode: CompareMode = CompareMode.EXECUTION_PROFILE,
+    subjects: str = "",
+    environments: str = "",
+    baseline: str = "",
+    candidates: str = "",
+    execution_profile: str = "release",
+    matrices: str = "",
+    trials: str = "",
+    maximum_attempts: str = "",
+    fail_fast: FailFastChoice = FailFastChoice.INHERIT,
+    budgets: str = "",
+    parameters: str = "",
+    variables: str = "",
+    secrets: str = "",
+    approve_mutations: bool = False,
+) -> CompareDraft:
+    return parse_compare_draft(
+        CompareDraft(mode=mode) if fallback is None else fallback,
+        mode=mode,
+        subjects=subjects,
+        environments=environments,
+        baseline=baseline,
+        candidates=candidates,
+        execution_profile=execution_profile,
+        matrices=matrices,
+        trials=trials,
+        maximum_attempts=maximum_attempts,
+        fail_fast=fail_fast,
+        budgets=budgets,
+        parameters=parameters,
+        variables=variables,
+        secrets=secrets,
+        approve_mutations=approve_mutations,
+    )
+
+
 @_run_async
 @pytest.mark.parametrize(
     ("width", "expected"),
@@ -397,23 +453,24 @@ async def test_result_workspace_uses_shared_breakpoints(width: int, expected: La
     [
         (
             CompareMode.ASSERTIONS,
-            ("compare-field-subject", "compare-field-environment"),
-            ("compare-field-baseline", "compare-field-candidate", "compare-field-profile"),
+            ("compare-field-subjects", "compare-field-environments"),
+            ("compare-field-baseline", "compare-field-candidates", "compare-field-profile"),
         ),
         (
             CompareMode.DIFFERENCES,
-            ("compare-field-subject", "compare-field-baseline", "compare-field-candidate"),
-            ("compare-field-environment", "compare-field-profile"),
+            ("compare-field-subjects", "compare-field-baseline", "compare-field-candidates"),
+            ("compare-field-environments", "compare-field-profile"),
         ),
         (
             CompareMode.EXECUTION_PROFILE,
-            ("compare-field-profile",),
             (
-                "compare-field-subject",
-                "compare-field-environment",
+                "compare-field-subjects",
+                "compare-field-environments",
                 "compare-field-baseline",
-                "compare-field-candidate",
+                "compare-field-candidates",
+                "compare-field-profile",
             ),
+            (),
         ),
     ],
 )
@@ -429,11 +486,13 @@ async def test_compare_draft_form_supports_all_modes(
         await pilot.pause()
         draft = form.current_draft()
         assert draft.mode is mode
-        assert draft.subject == "ping"
-        assert draft.environment == "staging"
-        assert draft.baseline == "staging"
-        assert draft.candidate == "prod"
-        assert draft.execution_profile == "release"
+        assert draft.subjects == (() if mode is CompareMode.EXECUTION_PROFILE else ("ping",))
+        assert draft.environments == (("staging",) if mode is CompareMode.ASSERTIONS else ())
+        assert draft.baseline == ("staging" if mode is CompareMode.DIFFERENCES else None)
+        assert draft.candidates == (("prod",) if mode is CompareMode.DIFFERENCES else ())
+        assert draft.execution_profile == (
+            "release" if mode is CompareMode.EXECUTION_PROFILE else None
+        )
         assert all(form.query_one(f".{name}").display for name in visible)
         assert all(not form.query_one(f".{name}").display for name in hidden)
 
@@ -448,11 +507,11 @@ async def test_compare_draft_form_emits_typed_changes_and_submission() -> None:
 
     async with app.run_test(size=(120, 36)) as pilot:
         await pilot.pause()
-        subject = form.query_one("#compare-draft-subject", Input)
+        subject = form.query_one("#compare-draft-subjects", Input)
         subject.value = "checkout"
         await pilot.pause()
         assert app.changed is not None
-        assert app.changed.subject == "checkout"
+        assert app.changed.subjects == ("checkout",)
 
         await pilot.click("#compare-mode-differences")
         await pilot.pause()
@@ -521,7 +580,7 @@ def test_status_outcomes_use_the_shared_semantic_vocabulary(
 
 
 def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
-    draft = CompareDraft(mode=CompareMode.ASSERTIONS, subject="ping")
+    draft = CompareDraft(mode=CompareMode.ASSERTIONS, subjects=("ping",))
     form = CompareDraftForm(draft)
     assert form.current_draft() == draft
     form.show_draft(CompareDraft(mode=CompareMode.DIFFERENCES))
@@ -624,10 +683,10 @@ async def test_form_updates_plan_and_progress_without_replacing_shared_controls(
 
     async with app.run_test(size=(120, 42)) as pilot:
         await pilot.pause()
-        assert form.query_one("#compare-draft-subject", Input).placeholder == "Type a resource id"
-        subject = form.query_one("#compare-draft-subject", Input)
+        assert form.query_one("#compare-draft-subjects", Input).placeholder == "Type a resource id"
+        subject = form.query_one("#compare-draft-subjects", Input)
         subject.value = "   "
-        assert form.current_draft().subject is None
+        assert form.current_draft().subjects == ()
 
         replacement = CompareDraft(
             mode=CompareMode.EXECUTION_PROFILE,
@@ -708,6 +767,207 @@ async def test_every_result_index_and_detail_path_reuses_one_navigation_contract
         detail.show_reference(None)
         view.show_selected_result(ResultIndex.ResultSelected(references[0]))
         await pilot.pause()
+
+
+def test_compare_input_adapter_builds_every_typed_application_override() -> None:
+    draft = _parse_draft(
+        subjects="ping, health",
+        baseline="staging",
+        candidates="prod, canary",
+        matrices="region=regions, tenant=tenants",
+        trials="3",
+        maximum_attempts="2",
+        fail_fast=FailFastChoice.DISABLED,
+        budgets="concurrency=4, attempts=10",
+        parameters="Value/params, staging=Value/staging-params",
+        variables="Value/variables",
+        secrets="prod=Value/prod-secrets",
+        approve_mutations=True,
+    )
+
+    assert draft.validation_code is None
+    assert draft.subjects == ("ping", "health")
+    assert draft.candidates == ("prod", "canary")
+    assert draft.fail_fast is False
+    assert draft.approve_mutations
+    options = draft.planning_options()
+    assert options.execution_profile == "release"
+    assert options.matrices == (
+        MatrixOverride(binding="region", matrix="regions"),
+        MatrixOverride(binding="tenant", matrix="tenants"),
+    )
+    assert options.budgets == (
+        BudgetOverride(resource=BudgetResource.CONCURRENCY, limit=4),
+        BudgetOverride(resource=BudgetResource.ATTEMPTS, limit=10),
+    )
+    assert options.value_resources == (
+        ValueResourceOverride(
+            namespace=ValueNamespace.PARAMETERS,
+            environment=None,
+            resource="Value/params",
+        ),
+        ValueResourceOverride(
+            namespace=ValueNamespace.PARAMETERS,
+            environment="staging",
+            resource="Value/staging-params",
+        ),
+        ValueResourceOverride(
+            namespace=ValueNamespace.VARIABLES,
+            environment=None,
+            resource="Value/variables",
+        ),
+        ValueResourceOverride(
+            namespace=ValueNamespace.SECRETS,
+            environment="prod",
+            resource="Value/prod-secrets",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("draft", "code"),
+    [
+        (_parse_draft(subjects="one,,two"), CompareDraftValidationCode.INVALID_SELECTION),
+        (_parse_draft(subjects="x" * 64), CompareDraftValidationCode.INVALID_SELECTION),
+        (_parse_draft(subjects="x" * 513), CompareDraftValidationCode.INVALID_SELECTION),
+        (_parse_draft(baseline="one,two"), CompareDraftValidationCode.INVALID_SELECTION),
+        (_parse_draft(matrices="region"), CompareDraftValidationCode.INVALID_MATRIX),
+        (_parse_draft(matrices="=regions"), CompareDraftValidationCode.INVALID_MATRIX),
+        (_parse_draft(trials="0"), CompareDraftValidationCode.INVALID_LIMIT),
+        (_parse_draft(trials="many"), CompareDraftValidationCode.INVALID_LIMIT),
+        (_parse_draft(budgets="unknown=1"), CompareDraftValidationCode.INVALID_BUDGET),
+        (
+            _parse_draft(parameters="private-canary==Value/params"),
+            CompareDraftValidationCode.INVALID_VALUE_RESOURCE,
+        ),
+        (
+            _parse_draft(
+                environments="staging",
+                baseline="staging",
+                candidates="prod",
+            ),
+            CompareDraftValidationCode.INVALID_COMBINATION,
+        ),
+        (
+            _parse_draft(fail_fast=cast("FailFastChoice", object())),
+            CompareDraftValidationCode.INVALID_COMBINATION,
+        ),
+        (
+            _parse_draft(approve_mutations=cast("bool", 1)),
+            CompareDraftValidationCode.INVALID_COMBINATION,
+        ),
+    ],
+)
+def test_invalid_compare_text_becomes_one_value_free_diagnostic(
+    draft: CompareDraft,
+    code: CompareDraftValidationCode,
+) -> None:
+    assert draft.validation_code is code
+    diagnostics = validation_diagnostics(draft)
+    assert diagnostics[0].code == f"tui.compare.input.{code.value}"
+    assert "private-canary" not in repr(draft)
+    assert "private-canary" not in repr(diagnostics)
+    with pytest.raises(ValueError, match=code.value):
+        draft.planning_options()
+
+
+def test_compare_input_formatters_are_exact_and_bounded() -> None:
+    matrices = (MatrixOverride(binding="region", matrix="regions"),)
+    budgets = (BudgetOverride(resource=BudgetResource.CONCURRENCY, limit=4),)
+    resources = (
+        ValueResourceOverride(
+            namespace=ValueNamespace.PARAMETERS,
+            environment=None,
+            resource="Value/params",
+        ),
+        ValueResourceOverride(
+            namespace=ValueNamespace.PARAMETERS,
+            environment="staging",
+            resource="Value/staging-params",
+        ),
+    )
+    assert format_selections(("ping", "health")) == "ping, health"
+    assert format_matrices(matrices) == "region=regions"
+    assert format_budgets(budgets) == "concurrency=4"
+    assert format_value_resources(resources, ValueNamespace.PARAMETERS) == (
+        "Value/params, staging=Value/staging-params"
+    )
+    assert fail_fast_choice(None) is FailFastChoice.INHERIT
+    assert fail_fast_choice(True) is FailFastChoice.ENABLED
+    assert fail_fast_choice(False) is FailFastChoice.DISABLED
+    with pytest.raises(TypeError, match="typed draft and mode"):
+        parse_compare_draft(
+            cast("CompareDraft", object()),
+            mode=CompareMode.ASSERTIONS,
+            subjects="",
+            environments="",
+            baseline="",
+            candidates="",
+            execution_profile="",
+            matrices="",
+            trials="",
+            maximum_attempts="",
+            fail_fast=FailFastChoice.INHERIT,
+            budgets="",
+            parameters="",
+            variables="",
+            secrets="",
+            approve_mutations=False,
+        )
+
+
+@_run_async
+async def test_advanced_compare_widget_round_trips_and_reports_safe_invalid_text() -> None:
+    draft = _parse_draft(
+        subjects="ping, health",
+        baseline="staging",
+        candidates="prod",
+        matrices="region=regions",
+        trials="3",
+        maximum_attempts="2",
+        fail_fast=FailFastChoice.ENABLED,
+        budgets="concurrency=4",
+        secrets="prod=Value/prod-secrets",
+        approve_mutations=True,
+    )
+    form = CompareDraftForm(draft)
+    app = _DraftApp(form)
+
+    async with app.run_test(size=(160, 52)) as pilot:
+        await pilot.pause()
+        assert form.current_draft() == draft
+        advanced = form.query_one(CompareAdvancedOptions)
+        assert advanced.fail_fast is FailFastChoice.ENABLED
+        assert advanced.approve_mutations
+        assert form.query_one("#compare-draft-matrices", Input).max_length == 512
+
+        form.query_one("#compare-draft-fail-fast", Select).value = FailFastChoice.DISABLED
+        form.query_one("#compare-draft-approve-mutations", Switch).value = False
+        form.query_one("#compare-draft-budgets", Input).value = "not-a-budget"
+        await pilot.pause()
+        invalid = form.current_draft()
+        assert invalid.validation_code is CompareDraftValidationCode.INVALID_BUDGET
+        assert form.validation_diagnostics[0].code == "tui.compare.input.invalid-budget"
+        screenshot = app.export_screenshot(simplify=True)
+        assert "tui.compare.input.invalid-budget" in screenshot
+
+
+def test_unmounted_advanced_options_validate_and_retain_typed_defaults() -> None:
+    draft = CompareDraft(
+        mode=CompareMode.EXECUTION_PROFILE,
+        fail_fast=False,
+        approve_mutations=True,
+    )
+    advanced = CompareAdvancedOptions(draft)
+    assert advanced.fail_fast.value == "disabled"
+    assert advanced.approve_mutations
+    advanced.show_validation_code("safe")
+    advanced.show_draft(CompareDraft(mode=CompareMode.ASSERTIONS))
+    assert advanced.fail_fast.value == "inherit"
+    with pytest.raises(TypeError, match="CompareDraft"):
+        CompareAdvancedOptions(cast("CompareDraft", object()))
+    with pytest.raises(TypeError, match="CompareDraft"):
+        advanced.show_draft(cast("CompareDraft", object()))
 
 
 @_run_async

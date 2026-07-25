@@ -8,7 +8,10 @@ from typing import final
 
 import msgspec
 
+from comparo.application.planning import BudgetOverride
+from comparo.application.planning import MatrixOverride
 from comparo.application.planning import PlanningOptions
+from comparo.application.planning import ValueResourceOverride
 from comparo.application.production_execution import ProductionExecutionSettings
 
 
@@ -25,6 +28,17 @@ class ResultAccess(StrEnum):
 
     LIVE = "live"
     READ_ONLY = "read-only"
+
+
+class CompareDraftValidationCode(StrEnum):
+    """Closed value-free errors produced by bounded Compare input parsing."""
+
+    INVALID_SELECTION = "invalid-selection"
+    INVALID_MATRIX = "invalid-matrix"
+    INVALID_LIMIT = "invalid-limit"
+    INVALID_BUDGET = "invalid-budget"
+    INVALID_VALUE_RESOURCE = "invalid-value-resource"
+    INVALID_COMBINATION = "invalid-combination"
 
 
 @final
@@ -55,40 +69,91 @@ class CompareDraft(msgspec.Struct, frozen=True, kw_only=True):
     """Primitive UI selections translated by the shared application planner."""
 
     mode: CompareMode
-    subject: str | None = None
-    environment: str | None = None
+    subjects: tuple[str, ...] = ()
+    environments: tuple[str, ...] = ()
     baseline: str | None = None
-    candidate: str | None = None
+    candidates: tuple[str, ...] = ()
     execution_profile: str | None = None
+    matrices: tuple[MatrixOverride, ...] = ()
+    trials: int | None = None
+    maximum_attempts: int | None = None
+    fail_fast: bool | None = None
+    budgets: tuple[BudgetOverride, ...] = ()
+    value_resources: tuple[ValueResourceOverride, ...] = ()
+    approve_mutations: bool = False
+    validation_code: CompareDraftValidationCode | None = None
 
     def __post_init__(self) -> None:
         """Require typed mode and bounded identifier selections."""
         if type(self.mode) is not CompareMode:
             raise TypeError("comparison draft mode must be typed")
-        for value in (
-            self.subject,
-            self.environment,
-            self.baseline,
-            self.candidate,
-            self.execution_profile,
-        ):
-            if value is not None and (type(value) is not str or not value or len(value) > 63):
+        if type(self.subjects) is not tuple or type(self.environments) is not tuple:
+            raise TypeError("comparison draft selections must be immutable tuples")
+        if type(self.candidates) is not tuple:
+            raise TypeError("comparison draft selections must be immutable tuples")
+        for selection in (*self.subjects, *self.environments, *self.candidates):
+            _validate_selection(selection)
+        for optional_selection in (self.baseline, self.execution_profile):
+            if optional_selection is not None and (
+                type(optional_selection) is not str
+                or not optional_selection
+                or len(optional_selection) > 63
+            ):
                 raise ValueError("comparison draft selections must be bounded text or absent")
+        if type(self.approve_mutations) is not bool:
+            raise TypeError("comparison draft mutation approval must be bool")
+        if self.validation_code is not None and type(self.validation_code) is not (
+            CompareDraftValidationCode
+        ):
+            raise TypeError("comparison draft validation code must be typed or absent")
+        if self.validation_code is None:
+            self.planning_options()
 
     def planning_options(self) -> PlanningOptions:
         """Translate the current mode without reconstructing planner precedence."""
-        subjects = () if self.subject is None else (self.subject,)
+        if self.validation_code is not None:
+            raise ValueError(f"comparison draft input {self.validation_code.value}")
         if self.mode is CompareMode.ASSERTIONS:
-            environments = () if self.environment is None else (self.environment,)
-            return PlanningOptions(subjects=subjects, environments=environments)
-        if self.mode is CompareMode.DIFFERENCES:
-            candidates = () if self.candidate is None else (self.candidate,)
             return PlanningOptions(
-                subjects=subjects,
-                baseline=self.baseline,
-                candidates=candidates,
+                subjects=self.subjects,
+                environments=self.environments,
+                matrices=self.matrices,
+                trials=self.trials,
+                maximum_attempts=self.maximum_attempts,
+                fail_fast=self.fail_fast,
+                budgets=self.budgets,
+                value_resources=self.value_resources,
             )
-        return PlanningOptions(execution_profile=self.execution_profile)
+        if self.mode is CompareMode.DIFFERENCES:
+            return PlanningOptions(
+                subjects=self.subjects,
+                baseline=self.baseline,
+                candidates=self.candidates,
+                matrices=self.matrices,
+                trials=self.trials,
+                maximum_attempts=self.maximum_attempts,
+                fail_fast=self.fail_fast,
+                budgets=self.budgets,
+                value_resources=self.value_resources,
+            )
+        return PlanningOptions(
+            execution_profile=self.execution_profile,
+            subjects=self.subjects,
+            environments=self.environments,
+            baseline=self.baseline,
+            candidates=self.candidates,
+            matrices=self.matrices,
+            trials=self.trials,
+            maximum_attempts=self.maximum_attempts,
+            fail_fast=self.fail_fast,
+            budgets=self.budgets,
+            value_resources=self.value_resources,
+        )
+
+
+def _validate_selection(value: object) -> None:
+    if type(value) is not str or not value or len(value) > 63:
+        raise ValueError("comparison draft selections must be bounded text")
 
 
 @final
@@ -115,6 +180,7 @@ class TuiExecutionControls(msgspec.Struct, frozen=True, kw_only=True):
 
 __all__ = (
     "CompareDraft",
+    "CompareDraftValidationCode",
     "CompareMode",
     "ResultAccess",
     "TuiExecutionControls",

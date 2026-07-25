@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+import msgspec
 import pytest
 from textual.pilot import Pilot
 from textual.widgets import ContentSwitcher
@@ -62,6 +63,7 @@ from comparo.tui.components import ResultIndex
 from comparo.tui.components import ResultsWorkspaceView
 from comparo.tui.components import TuiOnlySettingsPanel
 from comparo.tui.contracts import CompareDraft
+from comparo.tui.contracts import CompareDraftValidationCode
 from comparo.tui.contracts import CompareMode
 from comparo.tui.contracts import TuiBackend
 from comparo.tui.contracts import TuiBackendError
@@ -375,6 +377,7 @@ class _FakeBackend:
         self.hooks: dict[str, Callable[[], None]] = {}
         self.preparation: ComparePreparationResult | None = None
         self.prepared_drafts: list[CompareDraft] = []
+        self.started_controls: list[TuiExecutionControls] = []
         self.prepare_started: asyncio.Event | None = None
         self.prepare_release: asyncio.Event | None = None
 
@@ -413,7 +416,7 @@ class _FakeBackend:
         handle: ComparePreparationHandle,
         controls: TuiExecutionControls,
     ) -> ExecutionSession:
-        del controls
+        self.started_controls.append(controls)
         self.calls.append(f"start:{handle.value}")
         self._before("start")
         if self.fail_with_canary:
@@ -551,9 +554,9 @@ def test_compare_prepares_runs_projects_results_without_focus_theft() -> None:
         app = _app(backend)
         draft = CompareDraft(
             mode=CompareMode.DIFFERENCES,
-            subject="ping",
+            subjects=("ping",),
             baseline="staging",
-            candidate="prod",
+            candidates=("prod",),
         )
 
         async with app.run_test(size=(140, 44)) as pilot:
@@ -644,15 +647,15 @@ def test_compare_shortcut_text_is_editable_and_visible_defaults_are_prepared() -
             await app.select_workspace(WorkspaceId.COMPARE)
             form = app.query_one(CompareDraftForm)
             displayed = form.current_draft()
-            assert displayed.subject == "ping"
+            assert displayed.subjects == ("ping",)
             assert displayed.baseline == "staging"
-            assert displayed.candidate == "prod"
+            assert displayed.candidates == ("prod",)
 
             await app.prepare_compare()
             assert backend.prepared_drafts[-1] == displayed
 
             form = app.query_one(CompareDraftForm)
-            subject = form.query_one("#compare-draft-subject", Input)
+            subject = form.query_one("#compare-draft-subjects", Input)
             subject.value = ""
             subject.focus()
             await pilot.pause()
@@ -677,8 +680,8 @@ def test_cancel_report_read_only_and_shutdown_close_active_session() -> None:
         app = _app(backend)
         draft = CompareDraft(
             mode=CompareMode.ASSERTIONS,
-            subject="ping",
-            environment="staging",
+            subjects=("ping",),
+            environments=("staging",),
         )
 
         async with app.run_test(size=(120, 40)) as pilot:
@@ -848,8 +851,8 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
                 CompareDraftForm.Submitted(
                     CompareDraft(
                         mode=CompareMode.ASSERTIONS,
-                        subject="ping",
-                        environment="staging",
+                        subjects=("ping",),
+                        environments=("staging",),
                     )
                 )
             )
@@ -953,24 +956,34 @@ def test_coordinator_validates_drafts_helpers_and_bounded_task_lifecycle() -> No
             update_draft(_invalid_draft())
         assertion = CompareDraft(
             mode=CompareMode.ASSERTIONS,
-            subject="ping",
-            environment="staging",
+            subjects=("ping",),
+            environments=("staging",),
         )
         assert not same_compare_intent(assertion, CompareDraft(mode=CompareMode.DIFFERENCES))
         assert same_compare_intent(
             assertion,
             CompareDraft(
                 mode=CompareMode.ASSERTIONS,
-                subject="ping",
-                environment="staging",
+                subjects=("ping",),
+                environments=("staging",),
                 baseline="ignored",
+                execution_profile="hidden",
+            ),
+        )
+        assert not same_compare_intent(
+            assertion,
+            CompareDraft(
+                mode=CompareMode.ASSERTIONS,
+                subjects=("ping",),
+                environments=("staging",),
+                approve_mutations=True,
             ),
         )
         differences = CompareDraft(
             mode=CompareMode.DIFFERENCES,
-            subject="ping",
+            subjects=("ping",),
             baseline="staging",
-            candidate="prod",
+            candidates=("prod",),
         )
         assert same_compare_intent(differences, differences)
         profile = CompareDraft(
@@ -982,6 +995,20 @@ def test_coordinator_validates_drafts_helpers_and_bounded_task_lifecycle() -> No
             profile,
             CompareDraft(mode=CompareMode.EXECUTION_PROFILE, execution_profile="other"),
         )
+        assert not same_compare_intent(
+            profile,
+            CompareDraft(
+                mode=CompareMode.EXECUTION_PROFILE,
+                execution_profile="release",
+                subjects=("ping",),
+                environments=("staging",),
+            ),
+        )
+        invalid = msgspec.structs.replace(
+            profile,
+            validation_code=CompareDraftValidationCode.INVALID_MATRIX,
+        )
+        assert same_compare_intent(invalid, invalid)
         assert failure_code(RuntimeError(_CANARY), "safe.generic") == "safe.generic"
         assert (
             failure_code(
@@ -1010,8 +1037,8 @@ def test_coordinator_validates_drafts_helpers_and_bounded_task_lifecycle() -> No
             coordinator.update_draft(
                 CompareDraft(
                     mode=CompareMode.ASSERTIONS,
-                    subject=f"ping-{index}",
-                    environment="staging",
+                    subjects=(f"ping-{index}",),
+                    environments=("staging",),
                 )
             )
         await asyncio.sleep(0)
@@ -1032,6 +1059,40 @@ def test_coordinator_validates_drafts_helpers_and_bounded_task_lifecycle() -> No
         await coordinator.close()
         operation = coordinator.reload_project()
         coordinator.spawn(operation)
+
+    asyncio.run(scenario())
+
+
+def test_mutation_approval_is_snapshotted_for_only_the_exact_admitted_start() -> None:
+    async def scenario() -> None:
+        backend = _FakeBackend()
+
+        async def changed(_workspace: WorkspaceId) -> None:
+            return
+
+        coordinator = TuiCoordinator(cast("TuiBackend", backend), _controls(), changed)
+        approved = CompareDraft(
+            mode=CompareMode.DIFFERENCES,
+            subjects=("ping",),
+            baseline="staging",
+            candidates=("prod",),
+            approve_mutations=True,
+        )
+        await coordinator.prepare_compare(approved)
+        assert coordinator.can_execute
+
+        coordinator.compare_draft = msgspec.structs.replace(
+            approved,
+            approve_mutations=False,
+        )
+        await coordinator.start_compare()
+        assert backend.started_controls[-1].approve_mutations is True
+        assert coordinator.compare_handle is None
+
+        backend.session.finish()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await coordinator.close()
 
     asyncio.run(scenario())
 
@@ -1169,18 +1230,18 @@ def test_draft_edit_rejects_one_in_flight_stale_preparation() -> None:
         coordinator = TuiCoordinator(cast("TuiBackend", backend), _controls(), changed)
         original = CompareDraft(
             mode=CompareMode.DIFFERENCES,
-            subject="ping",
+            subjects=("ping",),
             baseline="staging",
-            candidate="prod",
+            candidates=("prod",),
         )
         preparation = asyncio.create_task(coordinator.prepare_compare(original))
         await backend.prepare_started.wait()
 
         edited = CompareDraft(
             mode=CompareMode.DIFFERENCES,
-            subject="ping-edited",
+            subjects=("ping-edited",),
             baseline="staging",
-            candidate="prod",
+            candidates=("prod",),
         )
         coordinator.update_draft(edited)
         backend.prepare_release.set()

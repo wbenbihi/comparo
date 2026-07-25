@@ -16,6 +16,7 @@ from uuid import UUID
 import pytest
 
 from comparo.application import ApplicationDiagnostic
+from comparo.application import BudgetOverride
 from comparo.application import CompareExecutionControls
 from comparo.application import CompareIntent
 from comparo.application import ComparePreparationHandle
@@ -25,6 +26,7 @@ from comparo.application import CompareService
 from comparo.application import CompareServiceError
 from comparo.application import CompareServiceErrorCode
 from comparo.application import ExecutionSession
+from comparo.application import MatrixOverride
 from comparo.application import PlanningOptions
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ProjectWorkspaceResult
@@ -33,8 +35,11 @@ from comparo.application import ReportArchiveErrorCode
 from comparo.application import ReportArchiveLimits
 from comparo.application import ReportArchiveListing
 from comparo.application import ResultProjection
+from comparo.application import ValueResourceOverride
 from comparo.application import persisted_production_execution_defaults_v1
 from comparo.application import production_execution_defaults_v1
+from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.domain.value_references import ValueNamespace
 from comparo.tui import backend as backend_module
 from comparo.tui.backend import DEFAULT_TUI_ARTIFACT_READ_LIMITS
 from comparo.tui.backend import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS
@@ -186,8 +191,9 @@ def test_project_load_runs_off_loop_with_launch_owned_sources(
         (
             CompareDraft(
                 mode=CompareMode.ASSERTIONS,
-                subject="ping",
-                environment="staging",
+                subjects=("ping",),
+                environments=("staging",),
+                execution_profile="hidden-profile",
             ),
             CompareIntent.ASSERTION,
             PlanningOptions(subjects=("ping",), environments=("staging",)),
@@ -195,9 +201,10 @@ def test_project_load_runs_off_loop_with_launch_owned_sources(
         (
             CompareDraft(
                 mode=CompareMode.DIFFERENCES,
-                subject="ping",
+                subjects=("ping",),
                 baseline="staging",
-                candidate="production",
+                candidates=("production",),
+                execution_profile="hidden-profile",
             ),
             CompareIntent.COMPARISON,
             PlanningOptions(
@@ -210,9 +217,41 @@ def test_project_load_runs_off_loop_with_launch_owned_sources(
             CompareDraft(
                 mode=CompareMode.EXECUTION_PROFILE,
                 execution_profile="release",
+                subjects=("ping", "health"),
+                baseline="staging",
+                candidates=("production", "canary"),
+                matrices=(MatrixOverride(binding="region", matrix="regions"),),
+                trials=3,
+                maximum_attempts=2,
+                fail_fast=False,
+                budgets=(BudgetOverride(resource=BudgetResource.CONCURRENCY, limit=4),),
+                value_resources=(
+                    ValueResourceOverride(
+                        namespace=ValueNamespace.PARAMETERS,
+                        environment=None,
+                        resource="Value/params",
+                    ),
+                ),
             ),
             CompareIntent.EXECUTION_PROFILE,
-            PlanningOptions(execution_profile="release"),
+            PlanningOptions(
+                execution_profile="release",
+                subjects=("ping", "health"),
+                baseline="staging",
+                candidates=("production", "canary"),
+                matrices=(MatrixOverride(binding="region", matrix="regions"),),
+                trials=3,
+                maximum_attempts=2,
+                fail_fast=False,
+                budgets=(BudgetOverride(resource=BudgetResource.CONCURRENCY, limit=4),),
+                value_resources=(
+                    ValueResourceOverride(
+                        namespace=ValueNamespace.PARAMETERS,
+                        environment=None,
+                        resource="Value/params",
+                    ),
+                ),
+            ),
         ),
     ],
 )
@@ -508,8 +547,8 @@ def test_backend_contains_project_and_prepare_failures(
             await backend.prepare_compare(
                 CompareDraft(
                     mode=CompareMode.ASSERTIONS,
-                    subject="ping",
-                    environment="staging",
+                    subjects=("ping",),
+                    environments=("staging",),
                 )
             )
         assert prepare.value.code is TuiBackendErrorCode.COMPARE_PREPARE_FAILED
@@ -651,9 +690,13 @@ def test_tui_launch_request_rejects_invalid_values(changes: dict[str, object]) -
     "changes",
     [
         {"mode": object()},
-        {"subject": object()},
-        {"subject": ""},
-        {"subject": "x" * 64},
+        {"subjects": object()},
+        {"candidates": object()},
+        {"subjects": ("",)},
+        {"subjects": ("x" * 64,)},
+        {"baseline": ""},
+        {"approve_mutations": 1},
+        {"validation_code": object()},
     ],
 )
 def test_compare_draft_rejects_invalid_values(changes: dict[str, object]) -> None:

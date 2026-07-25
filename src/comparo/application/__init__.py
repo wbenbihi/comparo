@@ -122,8 +122,14 @@ from comparo.application.runtime_capabilities import (
 from comparo.application.runtime_capabilities import (
     preflight_runtime_capabilities as preflight_runtime_capabilities,
 )
+from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS as DEFAULT_PROJECT_LOAD_LIMITS
+from comparo.configuration.loader import ProjectLoadLimits as ProjectLoadLimits
+from comparo.policy import DEFAULT_POLICY_LOAD_LIMITS as DEFAULT_POLICY_LOAD_LIMITS
+from comparo.policy import PolicyLoadLimits as PolicyLoadLimits
 
 __all__ = (
+    "DEFAULT_POLICY_LOAD_LIMITS",
+    "DEFAULT_PROJECT_LOAD_LIMITS",
     "ApplicationDiagnostic",
     "ArtifactInspection",
     "ArtifactOperationError",
@@ -147,12 +153,14 @@ __all__ = (
     "MatrixOverride",
     "PlanInspection",
     "PlanningOptions",
+    "PolicyLoadLimits",
     "PreparedProjectPlan",
     "ProductionExecutionFailure",
     "ProductionExecutionFailureKind",
     "ProductionExecutionRequest",
     "ProductionExecutionResult",
     "ProductionExecutionSettings",
+    "ProjectLoadLimits",
     "ProjectPlanRequest",
     "ProjectPlanResult",
     "ProjectPreparationResult",

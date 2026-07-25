@@ -15,11 +15,17 @@ from textual.widgets import Button
 from textual.widgets import Input
 from textual.widgets import Label
 from textual.widgets import ProgressBar
+from textual.widgets import Select
 from textual.widgets import Static
+from textual.widgets import Switch
 
 from comparo.application.execution_session import ExecutionProgressSnapshot
+from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection
 from comparo.application.project_workspace import ProjectResourceSummary
+from comparo.tui.components.compare_input import parse_compare_draft
+from comparo.tui.components.compare_input import validation_diagnostics
+from comparo.tui.components.compare_options import CompareAdvancedOptions
 from comparo.tui.components.status import StatusBadge
 from comparo.tui.components.status import status_for_outcome
 from comparo.tui.contracts import CompareDraft
@@ -142,40 +148,44 @@ class CompareDraftForm(Vertical):
         """Compose every bounded selector once and vary only mode visibility."""
         yield CompareModeSelector(self._draft.mode, classes="compare-draft-modes")
         yield _draft_input(
-            "Subject",
-            "compare-draft-subject",
-            self._draft.subject,
+            "Subjects",
+            "compare-draft-subjects",
+            _format_selections(self._draft.subjects),
             _resource_hint(self._resources, {"Request", "Scenario"}),
-            "compare-field-subject",
+            "compare-field-subjects",
+            maximum=512,
         )
         yield _draft_input(
-            "Environment",
-            "compare-draft-environment",
-            self._draft.environment,
+            "Environments",
+            "compare-draft-environments",
+            _format_selections(self._draft.environments),
             _resource_hint(self._resources, {"Environment"}),
-            "compare-field-environment",
+            "compare-field-environments",
+            maximum=512,
         )
         yield _draft_input(
             "Baseline",
             "compare-draft-baseline",
-            self._draft.baseline,
+            self._draft.baseline or "",
             _resource_hint(self._resources, {"Environment"}),
             "compare-field-baseline",
         )
         yield _draft_input(
-            "Candidate",
-            "compare-draft-candidate",
-            self._draft.candidate,
+            "Candidates",
+            "compare-draft-candidates",
+            _format_selections(self._draft.candidates),
             _resource_hint(self._resources, {"Environment"}),
-            "compare-field-candidate",
+            "compare-field-candidates",
+            maximum=512,
         )
         yield _draft_input(
             "Execution profile",
             "compare-draft-profile",
-            self._draft.execution_profile,
+            self._draft.execution_profile or "",
             _resource_hint(self._resources, {"ExecutionProfile"}),
             "compare-field-profile",
         )
+        yield CompareAdvancedOptions(self._draft)
 
     def on_mount(self) -> None:
         """Apply initial mode-dependent field visibility."""
@@ -185,14 +195,33 @@ class CompareDraftForm(Vertical):
         """Return the exact bounded values currently present in the shared form."""
         if not self.is_mounted:
             return self._draft
-        return CompareDraft(
+        advanced = self.query_one(CompareAdvancedOptions)
+        draft = parse_compare_draft(
+            self._draft,
             mode=self.query_one(CompareModeSelector).mode,
-            subject=_optional_input(self, "#compare-draft-subject"),
-            environment=_optional_input(self, "#compare-draft-environment"),
-            baseline=_optional_input(self, "#compare-draft-baseline"),
-            candidate=_optional_input(self, "#compare-draft-candidate"),
-            execution_profile=_optional_input(self, "#compare-draft-profile"),
+            subjects=_input_value(self, "#compare-draft-subjects"),
+            environments=_input_value(self, "#compare-draft-environments"),
+            baseline=_input_value(self, "#compare-draft-baseline"),
+            candidates=_input_value(self, "#compare-draft-candidates"),
+            execution_profile=_input_value(self, "#compare-draft-profile"),
+            matrices=_input_value(self, "#compare-draft-matrices"),
+            trials=_input_value(self, "#compare-draft-trials"),
+            maximum_attempts=_input_value(self, "#compare-draft-attempts"),
+            fail_fast=advanced.fail_fast,
+            budgets=_input_value(self, "#compare-draft-budgets"),
+            parameters=_input_value(self, "#compare-draft-parameters"),
+            variables=_input_value(self, "#compare-draft-variables"),
+            secrets=_input_value(self, "#compare-draft-secrets"),
+            approve_mutations=advanced.approve_mutations,
         )
+        diagnostics = validation_diagnostics(draft)
+        advanced.show_validation_code("" if not diagnostics else diagnostics[0].code)
+        return draft
+
+    @property
+    def validation_diagnostics(self) -> tuple[ApplicationDiagnostic, ...]:
+        """Return value-free diagnostics for the current bounded control text."""
+        return validation_diagnostics(self.current_draft())
 
     def show_draft(self, draft: CompareDraft) -> None:
         """Update existing controls from one immutable controller-owned draft."""
@@ -203,14 +232,15 @@ class CompareDraftForm(Vertical):
             return
         self.query_one(CompareModeSelector).show_mode(draft.mode)
         values = (
-            ("#compare-draft-subject", draft.subject),
-            ("#compare-draft-environment", draft.environment),
+            ("#compare-draft-subjects", _format_selections(draft.subjects)),
+            ("#compare-draft-environments", _format_selections(draft.environments)),
             ("#compare-draft-baseline", draft.baseline),
-            ("#compare-draft-candidate", draft.candidate),
+            ("#compare-draft-candidates", _format_selections(draft.candidates)),
             ("#compare-draft-profile", draft.execution_profile),
         )
         for selector, value in values:
             self.query_one(selector, Input).value = value or ""
+        self.query_one(CompareAdvancedOptions).show_draft(draft)
         self._apply_mode_visibility()
 
     @on(CompareModeSelector.ModeSelected)
@@ -221,6 +251,8 @@ class CompareDraftForm(Vertical):
         self.post_message(self.CompareDraftChanged(self._draft))
 
     @on(Input.Changed)
+    @on(Select.Changed)
+    @on(Switch.Changed)
     def change_value(self) -> None:
         """Publish one coalescible typed draft after an input edit."""
         self._draft = self.current_draft()
@@ -235,10 +267,10 @@ class CompareDraftForm(Vertical):
     def _apply_mode_visibility(self) -> None:
         mode = self.query_one(CompareModeSelector).mode
         visibility = {
-            "compare-field-subject": mode is not CompareMode.EXECUTION_PROFILE,
-            "compare-field-environment": mode is CompareMode.ASSERTIONS,
-            "compare-field-baseline": mode is CompareMode.DIFFERENCES,
-            "compare-field-candidate": mode is CompareMode.DIFFERENCES,
+            "compare-field-subjects": True,
+            "compare-field-environments": mode is not CompareMode.DIFFERENCES,
+            "compare-field-baseline": mode is not CompareMode.ASSERTIONS,
+            "compare-field-candidates": mode is not CompareMode.ASSERTIONS,
             "compare-field-profile": mode is CompareMode.EXECUTION_PROFILE,
         }
         for class_name, visible in visibility.items():
@@ -251,13 +283,15 @@ def _draft_input(
     value: str | None,
     hint: str,
     field_class: str,
+    *,
+    maximum: int = 63,
 ) -> Horizontal:
     return Horizontal(
         Label(label, classes="compare-draft-label", markup=False),
         Input(
             value=value or "",
             placeholder=hint,
-            max_length=63,
+            max_length=maximum,
             id=input_id,
             classes="compare-draft-input",
         ),
@@ -265,9 +299,12 @@ def _draft_input(
     )
 
 
-def _optional_input(form: CompareDraftForm, selector: str) -> str | None:
-    value = form.query_one(selector, Input).value.strip()
-    return value or None
+def _input_value(form: CompareDraftForm, selector: str) -> str:
+    return form.query_one(selector, Input).value
+
+
+def _format_selections(values: tuple[str, ...]) -> str:
+    return ", ".join(values)
 
 
 def _resource_hint(
@@ -302,12 +339,21 @@ def _initialize_draft(
         for item in resources
         if item.coordinate.kind == "ExecutionProfile"
     )
+    if draft.mode is CompareMode.ASSERTIONS:
+        return msgspec.structs.replace(
+            draft,
+            subjects=draft.subjects or _first_tuple(subjects),
+            environments=draft.environments or _first_tuple(environments),
+        )
+    if draft.mode is CompareMode.DIFFERENCES:
+        return msgspec.structs.replace(
+            draft,
+            subjects=draft.subjects or _first_tuple(subjects),
+            baseline=draft.baseline or _first(environments),
+            candidates=draft.candidates or _second_or_first_tuple(environments),
+        )
     return msgspec.structs.replace(
         draft,
-        subject=draft.subject or _first(subjects),
-        environment=draft.environment or _first(environments),
-        baseline=draft.baseline or _first(environments),
-        candidate=draft.candidate or _second_or_first(environments),
         execution_profile=draft.execution_profile or _first(profiles),
     )
 
@@ -316,10 +362,15 @@ def _first(values: tuple[str, ...]) -> str | None:
     return None if not values else values[0]
 
 
-def _second_or_first(values: tuple[str, ...]) -> str | None:
+def _first_tuple(values: tuple[str, ...]) -> tuple[str, ...]:
+    first = _first(values)
+    return () if first is None else (first,)
+
+
+def _second_or_first_tuple(values: tuple[str, ...]) -> tuple[str, ...]:
     if len(values) > 1:
-        return values[1]
-    return _first(values)
+        return (values[1],)
+    return _first_tuple(values)
 
 
 @final

@@ -380,10 +380,12 @@ def _topology(
 
 __all__ = (
     "BudgetOverride",
+    "BudgetResource",
     "InvocationBuildError",
     "InvocationBuildErrorCode",
     "MatrixOverride",
     "PlanningOptions",
+    "ValueNamespace",
     "ValueResourceOverride",
     "build_invocation",
     "plan_project",

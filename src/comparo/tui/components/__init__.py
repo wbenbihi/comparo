@@ -4,6 +4,8 @@ from comparo.tui.components.base import COMPONENT_STYLESHEET as COMPONENT_STYLES
 from comparo.tui.components.base import ResponsiveWidget as ResponsiveWidget
 from comparo.tui.components.base import StatePanel as StatePanel
 from comparo.tui.components.base import StatePanelMode as StatePanelMode
+from comparo.tui.components.compare_input import FailFastChoice as FailFastChoice
+from comparo.tui.components.compare_options import CompareAdvancedOptions as CompareAdvancedOptions
 from comparo.tui.components.execution import CompareDraftForm as CompareDraftForm
 from comparo.tui.components.execution import CompareModeSelector as CompareModeSelector
 from comparo.tui.components.execution import ExecutionProgress as ExecutionProgress
@@ -28,10 +30,12 @@ from comparo.tui.components.status import status_for_outcome as status_for_outco
 __all__ = (
     "COMPONENT_STYLESHEET",
     "CommandFooter",
+    "CompareAdvancedOptions",
     "CompareDraftForm",
     "CompareModeSelector",
     "DiagnosticsList",
     "ExecutionProgress",
+    "FailFastChoice",
     "PlanPreview",
     "ProjectResourceDetail",
     "ProjectResourceItem",

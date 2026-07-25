@@ -39,6 +39,7 @@ from comparo.application.results import ResultSummary
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
 from comparo.tui.components import COMPONENT_STYLESHEET
 from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import DiagnosticsList
 from comparo.tui.components import ExecutionProgress
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
@@ -280,7 +281,7 @@ async def test_compare_keeps_all_modes_and_lifecycle_states_in_one_workspace() -
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         identity = id(workspace)
-        assert workspace.current_draft().environment == "staging"
+        assert workspace.current_draft().environments == ("staging",)
         assert workspace.state is CompareWorkspaceState.PREPARE
 
         profile_draft = CompareDraft(
@@ -468,6 +469,10 @@ async def test_compare_composes_every_absent_and_diagnostic_state() -> None:
         assert starting.query_one(StatePanel).mode is StatePanelMode.LOADING
         assert missing_results.query_one(StatePanel).mode is StatePanelMode.ERROR
         assert starting.current_draft().mode is CompareMode.DIFFERENCES
+
+        preparing_error.show_prepare(CompareDraft(mode=CompareMode.ASSERTIONS))
+        await pilot.pause()
+        assert not preparing_error.query_one(DiagnosticsList).display
 
         starting.show_running(_progress())
         await pilot.pause()
