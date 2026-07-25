@@ -29,6 +29,9 @@ def _request(
     *,
     output: CliOutputMode = CliOutputMode.HUMAN,
     matrices: tuple[str, ...] = (),
+    parameters_from: tuple[str, ...] = (),
+    variables_from: tuple[str, ...] = (),
+    secrets_from: tuple[str, ...] = (),
 ) -> ExecutionRequest:
     return ExecutionRequest(
         command=CliExecutionCommandKind.DIFF,
@@ -47,6 +50,9 @@ def _request(
             fail_fast=True,
             budgets=("requests=4",),
             output=output,
+            parameters_from=parameters_from,
+            variables_from=variables_from,
+            secrets_from=secrets_from,
         ),
         approve_mutations=False,
         persist=False,
@@ -93,7 +99,13 @@ def test_service_translates_planning_options_once_and_renders_safe_human_summary
         )
 
     monkeypatch.setattr(service_module, "execute_cli_request", execute)
-    result = DefaultCliServices().execute(_request())
+    result = DefaultCliServices().execute(
+        _request(
+            parameters_from=("shared-params",),
+            variables_from=("prod=Value/prod-vars",),
+            secrets_from=("Value/shared-secrets",),
+        )
+    )
     assert result.exit_code is CliExitCode.SUCCESS
     assert result.messages[0].text == "Execution completed."
     assert "artifact-0" in result.messages[1].text
@@ -106,6 +118,13 @@ def test_service_translates_planning_options_once_and_renders_safe_human_summary
     assert options.maximum_attempts == 3
     assert options.fail_fast
     assert options.budgets[0].limit == 4
+    assert tuple(
+        (item.namespace.value, item.environment, item.resource) for item in options.value_resources
+    ) == (
+        ("parameters", None, "shared-params"),
+        ("variables", "prod", "Value/prod-vars"),
+        ("secrets", None, "Value/shared-secrets"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -197,6 +216,50 @@ def test_invalid_planning_syntax_never_reaches_execution_or_echoes_value(
     assert result.exit_code is CliExitCode.INVALID_INVOCATION
     assert result.messages[1].text == "cli.plan.matrix.invalid (invocation)"
     assert _SECRET not in "\n".join(item.text for item in result.messages)
+    assert not called
+
+
+@pytest.mark.parametrize(
+    ("changes", "code"),
+    [
+        ({"variables_from": ("dev=value=extra",)}, "invalid-value-resource"),
+        ({"variables_from": ("=missing-environment",)}, "invalid-value-resource"),
+        ({"variables_from": ("Request/not-value",)}, "value-resource-kind-invalid"),
+        (
+            {"secrets_from": ("${secrets.literal-canary}",)},
+            "invalid-value-resource",
+        ),
+        (
+            {"parameters_from": ("shared", "Value/other")},
+            "duplicate-value-resource",
+        ),
+    ],
+)
+def test_invalid_value_resource_syntax_never_reaches_execution_or_echoes_values(
+    monkeypatch: pytest.MonkeyPatch,
+    changes: dict[str, tuple[str, ...]],
+    code: str,
+) -> None:
+    called = False
+
+    async def execute(*args: object, **kwargs: object) -> CliExecutionOutcome:
+        nonlocal called
+        del args, kwargs
+        called = True
+        return CliExecutionOutcome(exit_code=CliExitCode.SUCCESS, summary=_summary())
+
+    monkeypatch.setattr(service_module, "execute_cli_request", execute)
+    result = DefaultCliServices().execute(
+        _request(
+            parameters_from=changes.get("parameters_from", ()),
+            variables_from=changes.get("variables_from", ()),
+            secrets_from=changes.get("secrets_from", ()),
+        )
+    )
+    rendered = "\n".join(item.text for item in result.messages)
+    assert result.exit_code is CliExitCode.INVALID_INVOCATION
+    assert code in rendered
+    assert all(value not in rendered for values in changes.values() for value in values)
     assert not called
 
 

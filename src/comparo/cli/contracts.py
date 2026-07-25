@@ -75,6 +75,37 @@ class CliExecutionCommandKind(StrEnum):
 
 
 @final
+class CliConfigLoadLimits(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-owned project-source and YAML admission limits for one CLI journey."""
+
+    maximum_sources: int
+    maximum_yaml_bytes: int
+    maximum_yaml_documents: int
+    maximum_yaml_depth: int
+    maximum_yaml_nodes: int
+    maximum_policy_yaml_bytes: int
+    maximum_policy_yaml_depth: int
+    maximum_policy_yaml_nodes: int
+
+    def __post_init__(self) -> None:
+        """Require exact integers while the configuration adapter validates ranges."""
+        if any(type(getattr(self, field)) is not int for field in self.__struct_fields__):
+            raise TypeError("CLI configuration load limits must be exact integers")
+
+
+DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1 = CliConfigLoadLimits(
+    maximum_sources=4096,
+    maximum_yaml_bytes=8 * 1024 * 1024,
+    maximum_yaml_documents=128,
+    maximum_yaml_depth=256,
+    maximum_yaml_nodes=1_000_000,
+    maximum_policy_yaml_bytes=1024 * 1024,
+    maximum_policy_yaml_depth=128,
+    maximum_policy_yaml_nodes=100_000,
+)
+
+
+@final
 class CliArtifactLimits(msgspec.Struct, frozen=True, kw_only=True):
     """Explicit finite artifact read limits carried by every CLI operation."""
 
@@ -128,6 +159,7 @@ class CliExecutionLimits(msgspec.Struct, frozen=True, kw_only=True):
 
     body_memory_threshold_bytes: int
     maximum_transient_body_bytes: int
+    maximum_authorization_occurrences: int
     maximum_encoded_body_bytes: int
     maximum_entity_body_bytes: int
     maximum_expansion_ratio: int
@@ -147,6 +179,7 @@ class CliExecutionLimits(msgspec.Struct, frozen=True, kw_only=True):
         values = (
             self.body_memory_threshold_bytes,
             self.maximum_transient_body_bytes,
+            self.maximum_authorization_occurrences,
             self.maximum_encoded_body_bytes,
             self.maximum_entity_body_bytes,
             self.maximum_expansion_ratio,
@@ -169,6 +202,7 @@ class CliExecutionLimits(msgspec.Struct, frozen=True, kw_only=True):
 DEFAULT_CLI_EXECUTION_LIMITS_V1 = CliExecutionLimits(
     body_memory_threshold_bytes=1024 * 1024,
     maximum_transient_body_bytes=512 * 1024 * 1024,
+    maximum_authorization_occurrences=1_000_000,
     maximum_encoded_body_bytes=64 * 1024 * 1024,
     maximum_entity_body_bytes=64 * 1024 * 1024,
     maximum_expansion_ratio=100,
@@ -283,6 +317,7 @@ class ValidateRequest(msgspec.Struct, frozen=True, kw_only=True):
     config: Path
     additional_sources: tuple[Path, ...]
     output: CliOutputMode
+    load_limits: CliConfigLoadLimits = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1
 
     def __post_init__(self) -> None:
         """Require exact local paths and a closed output mode."""
@@ -294,6 +329,8 @@ class ValidateRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("validation additional sources must be an immutable Path tuple")
         if type(self.output) is not CliOutputMode:
             raise TypeError("validation output mode must be typed")
+        if type(self.load_limits) is not CliConfigLoadLimits:
+            raise TypeError("validation load limits must be CliConfigLoadLimits")
 
 
 @final
@@ -417,6 +454,10 @@ class PlanRequest(msgspec.Struct, frozen=True, kw_only=True):
     fail_fast: bool | None
     budgets: tuple[str, ...]
     output: CliOutputMode
+    load_limits: CliConfigLoadLimits = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1
+    parameters_from: tuple[str, ...] = ()
+    variables_from: tuple[str, ...] = ()
+    secrets_from: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject adapter type drift without interpreting authored values."""
@@ -430,6 +471,9 @@ class PlanRequest(msgspec.Struct, frozen=True, kw_only=True):
                 self.candidates,
                 self.matrices,
                 self.budgets,
+                self.parameters_from,
+                self.variables_from,
+                self.secrets_from,
             ),
         )
         for value in (self.trials, self.maximum_attempts):
@@ -439,6 +483,8 @@ class PlanRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("plan fail-fast must be bool or None")
         if type(self.output) is not CliOutputMode:
             raise TypeError("plan output mode must be typed")
+        if type(self.load_limits) is not CliConfigLoadLimits:
+            raise TypeError("plan load limits must be CliConfigLoadLimits")
 
 
 @final

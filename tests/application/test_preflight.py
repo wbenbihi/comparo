@@ -18,8 +18,10 @@ from comparo.application.preflight import ProjectPlanResult
 from comparo.application.preflight import ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan
 from comparo.application.preflight import prepare_project_plan
+from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS
 from comparo.core.planning.models import PreparedRun
 from comparo.core.policy import CompiledExecutionPolicy
+from comparo.policy import DEFAULT_POLICY_LOAD_LIMITS
 
 _INVOCATION_ID = UUID("10000000-0000-0000-0000-000000000001")
 _RUN_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -148,6 +150,47 @@ def test_configuration_failure_precedes_policy_selection(tmp_path: Path) -> None
     assert {item.stage for item in outcome.diagnostics} == {"configuration"}
 
 
+def test_preflight_applies_caller_owned_project_load_limits(tmp_path: Path) -> None:
+    config = _write_project(tmp_path)
+    lowered = msgspec.structs.replace(
+        DEFAULT_PROJECT_LOAD_LIMITS,
+        yaml=msgspec.structs.replace(
+            DEFAULT_PROJECT_LOAD_LIMITS.yaml,
+            maximum_documents=1,
+        ),
+    )
+    rejected = inspect_project_plan(msgspec.structs.replace(_request(config), load_limits=lowered))
+    assert rejected.inspection is None
+    assert "configuration.yaml.limit-exceeded" in {item.code for item in rejected.diagnostics}
+
+    raised = msgspec.structs.replace(
+        DEFAULT_PROJECT_LOAD_LIMITS,
+        maximum_sources=8192,
+        yaml=msgspec.structs.replace(
+            DEFAULT_PROJECT_LOAD_LIMITS.yaml,
+            maximum_bytes=16 * 1024 * 1024,
+            maximum_documents=256,
+            maximum_depth=512,
+            maximum_nodes=2_000_000,
+        ),
+    )
+    accepted = inspect_project_plan(msgspec.structs.replace(_request(config), load_limits=raised))
+    assert accepted.inspection is not None
+
+    tiny_policy = msgspec.structs.replace(
+        DEFAULT_POLICY_LOAD_LIMITS,
+        yaml=msgspec.structs.replace(DEFAULT_POLICY_LOAD_LIMITS.yaml, maximum_bytes=1),
+    )
+    rejected_policy = inspect_project_plan(
+        msgspec.structs.replace(
+            _request(config, policy=_write_policy(tmp_path)),
+            policy_load_limits=tiny_policy,
+        )
+    )
+    assert rejected_policy.inspection is None
+    assert {item.code for item in rejected_policy.diagnostics} == {"policy.source.limit-exceeded"}
+
+
 def test_external_policy_and_planner_failures_are_normalized(tmp_path: Path) -> None:
     config = _write_project(tmp_path)
     invalid_policy = tmp_path / "invalid-policy.yaml"
@@ -187,6 +230,8 @@ def test_invalid_identifier_is_a_value_free_invocation_diagnostic(tmp_path: Path
         ({"options": object()}, "options"),
         ({"invocation_id": object()}, "identifiers"),
         ({"run_id": object()}, "identifiers"),
+        ({"load_limits": object()}, "load limits"),
+        ({"policy_load_limits": object()}, "policy load limits"),
     ],
 )
 def test_preflight_request_rejects_untyped_components(
@@ -200,6 +245,8 @@ def test_preflight_request_rejects_untyped_components(
         "options": PlanningOptions(),
         "invocation_id": _INVOCATION_ID,
         "run_id": _RUN_ID,
+        "load_limits": DEFAULT_PROJECT_LOAD_LIMITS,
+        "policy_load_limits": DEFAULT_POLICY_LOAD_LIMITS,
     }
     values.update(changes)
     with pytest.raises(TypeError, match=message):

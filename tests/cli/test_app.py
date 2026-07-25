@@ -196,6 +196,8 @@ def test_execution_help_explains_shared_controls_and_security_defaults(command: 
     assert "Approve requests classified as mutating" in help_text
     assert "Persist a sanitized artifact bundle; disabled by default." in help_text
     assert "Maximum aggregate bytes retained" in help_text
+    assert "Maximum distinct HTTP authorization" in help_text
+    assert "occurrences retained per run." in help_text
     assert "Maximum aggregate blob bytes admitted" in help_text
     assert "Shared planning, policy, persistence" not in help_text
     assert stderr == ""
@@ -309,6 +311,147 @@ def test_validate_callback_preserves_repeated_source_order_and_aliases() -> None
     )
 
 
+@pytest.mark.parametrize(
+    ("command", "request_kind"),
+    [
+        (["validate"], "validate"),
+        (["plan"], "plan"),
+        (["render"], "render"),
+        (["run"], "execution"),
+        (["diff"], "execution"),
+        (["exec", "release"], "execution"),
+    ],
+)
+def test_every_project_loading_journey_preserves_configuration_limits(
+    command: list[str],
+    request_kind: str,
+) -> None:
+    services = _StaticServices()
+    limits = [
+        "--maximum-config-sources",
+        "2",
+        "--maximum-config-yaml-bytes",
+        "3",
+        "--maximum-config-yaml-documents",
+        "5",
+        "--maximum-config-yaml-depth",
+        "7",
+        "--maximum-config-yaml-nodes",
+        "11",
+        "--maximum-policy-yaml-bytes",
+        "13",
+        "--maximum-policy-yaml-depth",
+        "17",
+        "--maximum-policy-yaml-nodes",
+        "19",
+    ]
+    assert _invoke([*command, *limits], services=services) == (0, "static result\n", "")
+    if request_kind == "validate":
+        assert services.validate_request is not None
+        load_limits = services.validate_request.load_limits
+    elif request_kind == "plan":
+        assert services.plan_request is not None
+        load_limits = services.plan_request.load_limits
+    elif request_kind == "render":
+        assert services.render_request is not None
+        load_limits = services.render_request.plan.load_limits
+    else:
+        assert services.execution_request is not None
+        load_limits = services.execution_request.plan.load_limits
+    assert tuple(getattr(load_limits, field) for field in load_limits.__struct_fields__) == (
+        2,
+        3,
+        5,
+        7,
+        11,
+        13,
+        17,
+        19,
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["validate"],
+        ["plan"],
+        ["render"],
+        ["run"],
+        ["diff"],
+        ["exec"],
+    ],
+)
+def test_every_project_loading_help_documents_configuration_limits(command: list[str]) -> None:
+    code, stdout, stderr = _invoke([*command, "--help"], services=_StaticServices())
+    assert (code, stderr) == (0, "")
+    for option in (
+        "--maximum-config-sources",
+        "--maximum-config-yaml-bytes",
+        "--maximum-config-yaml-depth",
+        "--maximum-config-yaml-nodes",
+        "--maximum-policy-yaml-bytes",
+        "--maximum-policy-yaml-depth",
+        "--maximum-policy-yaml-nodes",
+    ):
+        assert option in stdout
+    assert "--maximum-config-yaml-docume" in stdout
+    assert "Maximum project YAML sources discovered and" in stdout
+    assert "Maximum documents admitted from one project" in stdout
+
+
+@pytest.mark.parametrize(
+    ("command", "request_kind"),
+    [
+        (["plan"], "plan"),
+        (["render"], "render"),
+        (["run"], "execution"),
+        (["diff"], "execution"),
+        (["exec", "release"], "execution"),
+    ],
+)
+def test_every_planning_journey_preserves_value_resource_operands(
+    command: list[str],
+    request_kind: str,
+) -> None:
+    services = _StaticServices()
+    operands = [
+        "--parameters-from",
+        "shared-params",
+        "--parameters-from",
+        "dev=Value/dev-params",
+        "--variables-from",
+        "shared-vars",
+        "--secrets-from",
+        "prod=Value/prod-secrets",
+    ]
+    assert _invoke([*command, *operands], services=services) == (0, "static result\n", "")
+    if request_kind == "plan":
+        assert services.plan_request is not None
+        plan = services.plan_request
+    elif request_kind == "render":
+        assert services.render_request is not None
+        plan = services.render_request.plan
+    else:
+        assert services.execution_request is not None
+        plan = services.execution_request.plan
+    assert plan.parameters_from == ("shared-params", "dev=Value/dev-params")
+    assert plan.variables_from == ("shared-vars",)
+    assert plan.secrets_from == ("prod=Value/prod-secrets",)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["plan"], ["render"], ["run"], ["diff"], ["exec"]],
+)
+def test_every_planning_help_documents_value_resource_options(command: list[str]) -> None:
+    code, stdout, stderr = _invoke([*command, "--help"], services=_StaticServices())
+    assert (code, stderr) == (0, "")
+    for option in ("--parameters-from", "--variables-from", "--secrets-from"):
+        assert option in stdout
+    assert "[ENV=]VALUE" in stdout
+    assert "Value resource" in stdout
+
+
 def test_doctor_callback_builds_framework_neutral_request() -> None:
     services = _StaticServices()
     code, stdout, stderr = _invoke(["doctor", "--format", "json"], services=services)
@@ -412,6 +555,8 @@ def test_run_callback_preserves_shared_options_and_every_execution_limit() -> No
         "2",
         "--maximum-transient-body-bytes",
         "43",
+        "--maximum-authorization-occurrences",
+        "47",
         "--maximum-encoded-body-bytes",
         "41",
         "--maximum-entity-body-bytes",
@@ -479,7 +624,7 @@ def test_run_callback_preserves_shared_options_and_every_execution_limit() -> No
     runtime = request.limits
     assert tuple(
         getattr(runtime, field) for field in runtime.__struct_fields__ if field != "artifact"
-    ) == (2, 43, 41, 41, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31)
+    ) == (2, 43, 47, 41, 41, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31)
     assert tuple(
         getattr(runtime.artifact, field) for field in runtime.artifact.__struct_fields__
     ) == (7, 11, 13, 17, 19, 23, 29, 31, 37)

@@ -25,6 +25,7 @@ from rich.text import Text
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
 from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
+from comparo.cli.contracts import DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_EXECUTION_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_RENDER_LIMITS_V1
 from comparo.cli.contracts import ArtifactBlobRequest
@@ -32,6 +33,7 @@ from comparo.cli.contracts import ArtifactReadRequest
 from comparo.cli.contracts import CliArtifactLimits
 from comparo.cli.contracts import CliColorMode
 from comparo.cli.contracts import CliCommandResult
+from comparo.cli.contracts import CliConfigLoadLimits
 from comparo.cli.contracts import CliExecutionCommandKind
 from comparo.cli.contracts import CliExecutionLimits
 from comparo.cli.contracts import CliExitCode
@@ -173,6 +175,72 @@ _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS = _ArtifactLimitArguments()
 
 
 @dataclass(frozen=True, kw_only=True)
+class _ConfigLoadLimitArguments:
+    """Cyclopts-only flattened form of version-owned project-load limits."""
+
+    maximum_sources: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-sources",
+            help="Maximum project YAML sources discovered and admitted.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_sources
+    maximum_yaml_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-bytes",
+            help="Maximum bytes admitted from one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_bytes
+    maximum_yaml_documents: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-documents",
+            help="Maximum documents admitted from one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_documents
+    maximum_yaml_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-depth",
+            help="Maximum nesting depth admitted in one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_depth
+    maximum_yaml_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-nodes",
+            help="Maximum nodes admitted from one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_nodes
+    maximum_policy_yaml_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-policy-yaml-bytes",
+            help="Maximum bytes admitted from one explicit ExecutionPolicy YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_policy_yaml_bytes
+    maximum_policy_yaml_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-policy-yaml-depth",
+            help="Maximum nesting depth admitted in an ExecutionPolicy YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_policy_yaml_depth
+    maximum_policy_yaml_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-policy-yaml-nodes",
+            help="Maximum nodes admitted from one ExecutionPolicy YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_policy_yaml_nodes
+
+
+ConfigLoadLimitsOption = Annotated[_ConfigLoadLimitArguments, Parameter(name="*")]
+_DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS = _ConfigLoadLimitArguments()
+
+
+@dataclass(frozen=True, kw_only=True)
 class _ExecutionArguments:
     """Cyclopts-only flattened arguments common to every execution journey."""
 
@@ -246,6 +314,30 @@ class _ExecutionArguments:
             help="Budget override as RESOURCE=LIMIT; repeat to add resources.",
         ),
     ] = ()
+    parameters_from: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--parameters-from",
+            consume_multiple=False,
+            help="Value resource as [ENV=]VALUE supplying invocation parameters; repeatable.",
+        ),
+    ] = ()
+    variables_from: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--variables-from",
+            consume_multiple=False,
+            help="Value resource as [ENV=]VALUE supplying invocation variables; repeatable.",
+        ),
+    ] = ()
+    secrets_from: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--secrets-from",
+            consume_multiple=False,
+            help="Value resource as [ENV=]VALUE supplying invocation secrets; repeatable.",
+        ),
+    ] = ()
     approve_mutations: Annotated[
         bool,
         Parameter(
@@ -300,6 +392,13 @@ class _RuntimeLimitArguments:
             help="Maximum aggregate bytes retained in the run-local body store.",
         ),
     ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_transient_body_bytes
+    maximum_authorization_occurrences: Annotated[
+        int,
+        Parameter(
+            name="--maximum-authorization-occurrences",
+            help="Maximum distinct HTTP authorization occurrences retained per run.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_authorization_occurrences
     maximum_encoded_body_bytes: Annotated[
         int,
         Parameter(
@@ -573,6 +672,7 @@ def _execution_limits(
     return CliExecutionLimits(
         body_memory_threshold_bytes=runtime.body_memory_threshold_bytes,
         maximum_transient_body_bytes=runtime.maximum_transient_body_bytes,
+        maximum_authorization_occurrences=runtime.maximum_authorization_occurrences,
         maximum_encoded_body_bytes=runtime.maximum_encoded_body_bytes,
         maximum_entity_body_bytes=runtime.maximum_entity_body_bytes,
         maximum_expansion_ratio=runtime.maximum_expansion_ratio,
@@ -589,11 +689,26 @@ def _execution_limits(
     )
 
 
+def _config_load_limits(value: _ConfigLoadLimitArguments) -> CliConfigLoadLimits:
+    """Project every caller-visible project-load ceiling into the CLI contract."""
+    return CliConfigLoadLimits(
+        maximum_sources=value.maximum_sources,
+        maximum_yaml_bytes=value.maximum_yaml_bytes,
+        maximum_yaml_documents=value.maximum_yaml_documents,
+        maximum_yaml_depth=value.maximum_yaml_depth,
+        maximum_yaml_nodes=value.maximum_yaml_nodes,
+        maximum_policy_yaml_bytes=value.maximum_policy_yaml_bytes,
+        maximum_policy_yaml_depth=value.maximum_policy_yaml_depth,
+        maximum_policy_yaml_nodes=value.maximum_policy_yaml_nodes,
+    )
+
+
 def _execution_request(
     command: CliExecutionCommandKind,
     arguments: _ExecutionArguments,
     runtime_limits: _RuntimeLimitArguments,
     artifact_limits: _ArtifactLimitArguments,
+    config_load_limits: _ConfigLoadLimitArguments,
     *,
     execution_profile: str | None,
     environments: tuple[str, ...],
@@ -616,6 +731,10 @@ def _execution_request(
         fail_fast=arguments.fail_fast,
         budgets=arguments.budget,
         output=CliOutputMode(arguments.output_format),
+        load_limits=_config_load_limits(config_load_limits),
+        parameters_from=arguments.parameters_from,
+        variables_from=arguments.variables_from,
+        secrets_from=arguments.secrets_from,
     )
     return ExecutionRequest(
         command=command,
@@ -636,6 +755,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
         *,
         environment: EnvironmentOption = (),
         arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
         runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
         artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
     ) -> CliInvocation:
@@ -644,6 +764,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
         Args:
             environment: Environment id; repeat to override project/profile topology.
             arguments: Shared planning, policy, persistence, and output controls.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
             runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
             artifact_limits: Version-owned artifact and sanitization ceilings.
         """
@@ -652,6 +773,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
             arguments,
             runtime_limits,
             artifact_limits,
+            config_load_limits,
             execution_profile=None,
             environments=environment,
             baseline=None,
@@ -665,6 +787,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
         baseline: str | None = None,
         candidate: CandidateOption = (),
         arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
         runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
         artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
     ) -> CliInvocation:
@@ -674,6 +797,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
             baseline: Baseline Environment id overriding project/profile topology.
             candidate: Candidate Environment id; repeat to add candidates.
             arguments: Shared planning, policy, persistence, and output controls.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
             runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
             artifact_limits: Version-owned artifact and sanitization ceilings.
         """
@@ -682,6 +806,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
             arguments,
             runtime_limits,
             artifact_limits,
+            config_load_limits,
             execution_profile=None,
             environments=(),
             baseline=baseline,
@@ -698,6 +823,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
         baseline: str | None = None,
         candidate: CandidateOption = (),
         arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
         runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
         artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
     ) -> CliInvocation:
@@ -709,6 +835,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
             baseline: Baseline Environment id selecting comparison topology.
             candidate: Candidate Environment id; repeat to add candidates.
             arguments: Shared planning, policy, persistence, and output controls.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
             runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
             artifact_limits: Version-owned artifact and sanitization ceilings.
         """
@@ -717,6 +844,7 @@ def _register_execution_commands(cli: App, services: CliServices) -> None:
             arguments,
             runtime_limits,
             artifact_limits,
+            config_load_limits,
             execution_profile=profile,
             environments=environment,
             baseline=baseline,
@@ -766,6 +894,19 @@ def _register_render_command(cli: App, services: CliServices) -> None:
         maximum_attempts: int | None = None,
         fail_fast: FailFastOption = None,
         budget: BudgetOption = (),
+        parameters_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--parameters-from", consume_multiple=False),
+        ] = (),
+        variables_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--variables-from", consume_multiple=False),
+        ] = (),
+        secrets_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--secrets-from", consume_multiple=False),
+        ] = (),
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
         limits: RenderLimitsOption = _DEFAULT_RENDER_LIMIT_ARGUMENTS,
         output_format: OutputOption = "human",
         color: ColorOption = "auto",
@@ -786,6 +927,10 @@ def _register_render_command(cli: App, services: CliServices) -> None:
             maximum_attempts: Positive maximum-attempt override.
             fail_fast: Enable or disable fail-fast planning.
             budget: Budget override as RESOURCE=LIMIT; repeat to add resources.
+            parameters_from: Value resource as [ENV=]VALUE supplying invocation parameters.
+            variables_from: Value resource as [ENV=]VALUE supplying invocation variables.
+            secrets_from: Value resource as [ENV=]VALUE supplying invocation secrets.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
             limits: Version-owned local-source, sanitization, and output ceilings.
             output_format: Human text or deterministic JSON output.
             color: Terminal color behavior for failures.
@@ -806,6 +951,10 @@ def _register_render_command(cli: App, services: CliServices) -> None:
                 fail_fast=fail_fast,
                 budgets=budget,
                 output=CliOutputMode(output_format),
+                load_limits=_config_load_limits(config_load_limits),
+                parameters_from=parameters_from,
+                variables_from=variables_from,
+                secrets_from=secrets_from,
             ),
             limits=_render_limits(limits),
         )
@@ -1007,6 +1156,7 @@ def build_app(services: CliServices) -> App:
         *,
         config: ConfigOption = Path("comparo.yaml"),
         source: SourceOption = (),
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
         output_format: OutputOption = "human",
         color: ColorOption = "auto",
     ) -> CliInvocation:
@@ -1015,6 +1165,7 @@ def build_app(services: CliServices) -> App:
         Args:
             config: Project manifest or directory containing comparo.yaml.
             source: Additional local YAML source; repeat the option to add more.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
             output_format: Human or deterministic JSON output.
             color: Terminal color behavior for human messages.
         """
@@ -1022,6 +1173,7 @@ def build_app(services: CliServices) -> App:
             config=config,
             additional_sources=source,
             output=CliOutputMode(output_format),
+            load_limits=_config_load_limits(config_load_limits),
         )
         return _invocation(services.validate(request), color)
 
@@ -1056,6 +1208,19 @@ def build_app(services: CliServices) -> App:
         maximum_attempts: int | None = None,
         fail_fast: FailFastOption = None,
         budget: BudgetOption = (),
+        parameters_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--parameters-from", consume_multiple=False),
+        ] = (),
+        variables_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--variables-from", consume_multiple=False),
+        ] = (),
+        secrets_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--secrets-from", consume_multiple=False),
+        ] = (),
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
         output_format: OutputOption = "human",
         color: ColorOption = "auto",
     ) -> CliInvocation:
@@ -1076,6 +1241,10 @@ def build_app(services: CliServices) -> App:
             maximum_attempts: Positive per-execution attempt limit.
             fail_fast: Enable fail-fast; use --no-fail-fast to disable it.
             budget: Planning budget as RESOURCE=LIMIT; repeat for multiple resources.
+            parameters_from: Value resource as [ENV=]VALUE supplying invocation parameters.
+            variables_from: Value resource as [ENV=]VALUE supplying invocation variables.
+            secrets_from: Value resource as [ENV=]VALUE supplying invocation secrets.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
             output_format: Human or deterministic JSON output.
             color: Terminal color behavior for human messages.
         """
@@ -1094,6 +1263,10 @@ def build_app(services: CliServices) -> App:
             fail_fast=fail_fast,
             budgets=budget,
             output=CliOutputMode(output_format),
+            load_limits=_config_load_limits(config_load_limits),
+            parameters_from=parameters_from,
+            variables_from=variables_from,
+            secrets_from=secrets_from,
         )
         return _invocation(services.plan(request), color)
 

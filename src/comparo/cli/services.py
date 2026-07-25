@@ -24,6 +24,7 @@ from comparo.application.planning import BudgetOverride
 from comparo.application.planning import InvocationBuildError
 from comparo.application.planning import MatrixOverride
 from comparo.application.planning import PlanningOptions
+from comparo.application.planning import ValueResourceOverride
 from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import inspect_project_plan
 from comparo.application.render_preview import RenderedRequestPreview
@@ -32,6 +33,7 @@ from comparo.core.artifacts.codec import render_artifact_schema
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.schema_generation import render_v1alpha1_schema
 from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.policy import render_policy_schema
 from comparo.reporters import ReportFormat
 from comparo.reporters.json import encode_report_schema
@@ -55,6 +57,8 @@ from .contracts import ReportRequest
 from .contracts import ValidateRequest
 from .execution import CliExecutionOutcome
 from .execution import execute_cli_request
+from .loading import policy_load_limits
+from .loading import project_load_limits
 from .rendering import render_cli_request
 
 _CLI_API_VERSION = "comparo.cli/v1alpha1"
@@ -165,9 +169,15 @@ def _diagnostic_record(diagnostic: ConfigurationDiagnostic) -> dict[str, object]
 
 def _validate_project(request: ValidateRequest) -> CliCommandResult:
     """Load and compile a project without resolution, planning, or network activity."""
+    try:
+        load_limits = project_load_limits(request.load_limits)
+        policy_load_limits(request.load_limits)
+    except (TypeError, ValueError):
+        return _invalid_configuration_load_limits(request.output)
     loaded = compile_project_path(
         request.config,
         additional_sources=request.additional_sources,
+        limits=load_limits,
     )
     compilation = loaded.compilation
     machine = request.output is CliOutputMode.JSON
@@ -209,6 +219,29 @@ def _validate_project(request: ValidateRequest) -> CliCommandResult:
                 "apiVersion": _CLI_API_VERSION,
                 "command": "validate",
                 "diagnostics": [_diagnostic_record(item) for item in diagnostics],
+                "status": "invalid",
+            }
+        ),
+    )
+
+
+def _invalid_configuration_load_limits(output: CliOutputMode) -> CliCommandResult:
+    """Render one stable invocation failure without opening a project source."""
+    code = "cli.configuration-load.limits.invalid"
+    if output is CliOutputMode.HUMAN:
+        return _human(
+            CliExitCode.INVALID_INVOCATION,
+            (CliMessageLevel.ERROR, "Configuration load limits are invalid."),
+            (CliMessageLevel.ERROR, f"{code} (invocation)"),
+        )
+    return CliCommandResult(
+        exit_code=CliExitCode.INVALID_INVOCATION,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "command": "validate",
+                "diagnostics": [{"code": code, "severity": "error", "stage": "invocation"}],
                 "status": "invalid",
             }
         ),
@@ -269,6 +302,27 @@ def _assignment(value: str, *, code: str) -> tuple[str, str]:
     return name, assigned
 
 
+def _value_resource_override(
+    namespace: ValueNamespace,
+    value: str,
+) -> ValueResourceOverride:
+    """Parse one value-free ``[ENV=]VALUE`` coordinate without accepting literals."""
+    if type(value) is not str or value.count("=") > 1:
+        raise _PlanOptionError("invocation.invalid-value-resource")
+    raw_environment, separator, resource = value.partition("=")
+    environment: str | None = raw_environment
+    if not separator:
+        environment = None
+        resource = value
+    elif not environment or not resource:
+        raise _PlanOptionError("invocation.invalid-value-resource")
+    return ValueResourceOverride(
+        namespace=namespace,
+        environment=environment,
+        resource=resource,
+    )
+
+
 def _planning_options(request: PlanRequest) -> PlanningOptions:
     """Translate CLI override syntax to the shared frontend-neutral planning contract."""
     try:
@@ -299,6 +353,15 @@ def _planning_options(request: PlanRequest) -> PlanningOptions:
             maximum_attempts=request.maximum_attempts,
             fail_fast=request.fail_fast,
             budgets=tuple(budgets),
+            value_resources=tuple(
+                _value_resource_override(namespace, value)
+                for namespace, values in (
+                    (ValueNamespace.PARAMETERS, request.parameters_from),
+                    (ValueNamespace.VARIABLES, request.variables_from),
+                    (ValueNamespace.SECRETS, request.secrets_from),
+                )
+                for value in values
+            ),
         )
     except InvocationBuildError as error:
         raise _PlanOptionError(f"invocation.{error.code.value}") from error
@@ -383,6 +446,20 @@ def _human_plan(inspection: PlanInspection) -> CliCommandResult:
 def _plan(request: PlanRequest) -> CliCommandResult:
     """Run one complete offline preflight through the shared application service."""
     try:
+        load_limits = project_load_limits(request.load_limits)
+        policy_limits = policy_load_limits(request.load_limits)
+    except (TypeError, ValueError):
+        return _invalid_plan(
+            request.output,
+            (
+                ApplicationDiagnostic(
+                    code="cli.configuration-load.limits.invalid",
+                    severity="error",
+                    stage="invocation",
+                ),
+            ),
+        )
+    try:
         options = _planning_options(request)
     except _PlanOptionError as error:
         return _invalid_plan(
@@ -403,6 +480,8 @@ def _plan(request: PlanRequest) -> CliCommandResult:
             options=options,
             invocation_id=uuid4(),
             run_id=uuid4(),
+            load_limits=load_limits,
+            policy_load_limits=policy_limits,
         )
     )
     if outcome.inspection is None:
@@ -760,7 +839,14 @@ def _artifact_inspect(request: ArtifactReadRequest) -> CliCommandResult:
     return CliCommandResult(
         exit_code=CliExitCode.SUCCESS,
         payload_kind=CliPayloadKind.JSON,
-        payload=_canonical_json(msgspec.to_builtins(inspection)),
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "artifact": msgspec.to_builtins(inspection),
+                "command": "artifact inspect",
+                "status": "authenticated",
+            }
+        ),
     )
 
 

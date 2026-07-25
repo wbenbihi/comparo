@@ -8,11 +8,15 @@ from uuid import UUID
 
 import msgspec
 
+from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import CompiledProject
+from comparo.core.configuration.directives import seal_expression_literals
 from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.identity import InvocationId
 from comparo.core.domain.identity import MatrixBindingId
 from comparo.core.domain.identity import ResourceId
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.overrides import CollectionOverridePlan
 from comparo.core.domain.overrides import Inherit
@@ -22,11 +26,13 @@ from comparo.core.domain.overrides import SetValue
 from comparo.core.domain.planning_inputs import AssertionTopology
 from comparo.core.domain.planning_inputs import ComparisonTopology
 from comparo.core.domain.planning_inputs import InheritTopology
+from comparo.core.domain.planning_inputs import InvocationValueOverlay
 from comparo.core.domain.planning_inputs import MatrixSelection
 from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import PlanningBudgetValue
 from comparo.core.domain.planning_inputs import RunInvocation
 from comparo.core.domain.primitives import PositiveCount
+from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.planning.models import PlanningResult
 from comparo.core.planning.planner import plan_run
 
@@ -39,6 +45,12 @@ class InvocationBuildErrorCode(StrEnum):
     CONTRADICTORY_TOPOLOGY = "contradictory-topology"
     DUPLICATE_BUDGET = "duplicate-budget"
     INVALID_LIMIT = "invalid-limit"
+    INVALID_VALUE_NAMESPACE = "invalid-value-namespace"
+    INVALID_VALUE_RESOURCE = "invalid-value-resource"
+    VALUE_RESOURCE_KIND_INVALID = "value-resource-kind-invalid"
+    VALUE_RESOURCE_MISSING = "value-resource-missing"
+    VALUE_RESOURCE_OBJECT_REQUIRED = "value-resource-object-required"
+    DUPLICATE_VALUE_RESOURCE = "duplicate-value-resource"
 
 
 class InvocationBuildError(ValueError):
@@ -77,6 +89,43 @@ class BudgetOverride(msgspec.Struct, frozen=True, kw_only=True):
             raise InvocationBuildError(InvocationBuildErrorCode.INVALID_LIMIT)
 
 
+_INVOCATION_VALUE_NAMESPACES = frozenset(
+    {
+        ValueNamespace.PARAMETERS,
+        ValueNamespace.VARIABLES,
+        ValueNamespace.SECRETS,
+    }
+)
+
+
+@final
+class ValueResourceOverride(msgspec.Struct, frozen=True, kw_only=True):
+    """One invocation namespace supplied by a compiled Value resource."""
+
+    namespace: ValueNamespace
+    environment: str | None
+    resource: str
+
+    def __post_init__(self) -> None:
+        """Admit only bounded Value references and optional Environment scopes."""
+        if type(self.namespace) is not ValueNamespace:
+            raise TypeError("value resource override namespace must be typed")
+        if self.namespace not in _INVOCATION_VALUE_NAMESPACES:
+            raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_NAMESPACE)
+        if self.environment is not None:
+            if type(self.environment) is not str:
+                raise TypeError("value resource override Environment must be text or None")
+            try:
+                ResourceId(value=self.environment)
+            except ValueError as error:
+                raise InvocationBuildError(
+                    InvocationBuildErrorCode.INVALID_VALUE_RESOURCE
+                ) from error
+        if type(self.resource) is not str:
+            raise TypeError("value resource override resource must be text")
+        _value_resource_id(self.resource)
+
+
 @final
 class PlanningOptions(msgspec.Struct, frozen=True, kw_only=True):
     """Primitive planning overrides shared by CLI, TUI, and CI adapters."""
@@ -91,12 +140,14 @@ class PlanningOptions(msgspec.Struct, frozen=True, kw_only=True):
     maximum_attempts: int | None = None
     fail_fast: bool | None = None
     budgets: tuple[BudgetOverride, ...] = ()
+    value_resources: tuple[ValueResourceOverride, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject ambiguous primitive collections before constructing domain values."""
         _validate_selections(self.subjects, self.environments, self.candidates)
         _validate_matrices(self.matrices)
         _validate_budgets(self.budgets)
+        _validate_value_resources(self.value_resources)
         for value in (self.trials, self.maximum_attempts):
             if value is not None and (type(value) is not int or value < 1):
                 raise InvocationBuildError(InvocationBuildErrorCode.INVALID_LIMIT)
@@ -116,7 +167,12 @@ def plan_project(
     """Construct and run the one shared deterministic planner."""
     return plan_run(
         project,
-        build_invocation(options, invocation_id=invocation_id, run_id=run_id),
+        build_invocation(
+            options,
+            invocation_id=invocation_id,
+            run_id=run_id,
+            project=project,
+        ),
         authority,
     )
 
@@ -126,12 +182,17 @@ def build_invocation(
     *,
     invocation_id: UUID,
     run_id: UUID,
+    project: CompiledProject | None = None,
 ) -> RunInvocation:
     """Translate primitive frontend choices to the closed planner override model."""
     if type(options) is not PlanningOptions:
         raise TypeError("invocation construction requires PlanningOptions")
     if type(invocation_id) is not UUID or type(run_id) is not UUID:
         raise TypeError("invocation construction requires exact UUID values")
+    if project is not None and type(project) is not CompiledProject:
+        raise TypeError("invocation construction project must be CompiledProject or None")
+    if options.value_resources and project is None:
+        raise InvocationBuildError(InvocationBuildErrorCode.VALUE_RESOURCE_MISSING)
     try:
         return RunInvocation(
             invocation_id=InvocationId(value=invocation_id),
@@ -150,7 +211,14 @@ def build_invocation(
                 )
                 for item in options.budgets
             ),
+            values=(
+                ()
+                if project is None
+                else _value_resource_overlays(project, options.value_resources)
+            ),
         )
+    except InvocationBuildError:
+        raise
     except (TypeError, ValueError) as error:
         raise InvocationBuildError(InvocationBuildErrorCode.INVALID_IDENTIFIER) from error
 
@@ -185,6 +253,82 @@ def _validate_budgets(values: tuple[BudgetOverride, ...]) -> None:
     resources = tuple(item.resource for item in values)
     if len(resources) != len(set(resources)):
         raise InvocationBuildError(InvocationBuildErrorCode.DUPLICATE_BUDGET)
+
+
+def _validate_value_resources(values: tuple[ValueResourceOverride, ...]) -> None:
+    if type(values) is not tuple or any(type(item) is not ValueResourceOverride for item in values):
+        raise TypeError("planning Value resource overrides must be immutable and typed")
+    scopes = tuple((item.namespace, item.environment) for item in values)
+    if len(scopes) != len(set(scopes)):
+        raise InvocationBuildError(InvocationBuildErrorCode.DUPLICATE_VALUE_RESOURCE)
+
+
+def _value_resource_id(reference: str) -> ResourceId:
+    if not reference or reference.count("/") > 1:
+        raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_RESOURCE)
+    kind, separator, raw_id = reference.partition("/")
+    if separator:
+        if kind != ResourceKind.VALUE.value:
+            raise InvocationBuildError(InvocationBuildErrorCode.VALUE_RESOURCE_KIND_INVALID)
+    else:
+        raw_id = kind
+    try:
+        return ResourceId(value=raw_id)
+    except ValueError as error:
+        raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_RESOURCE) from error
+
+
+def _value_resource_expression(
+    project: CompiledProject,
+    override: ValueResourceOverride,
+) -> ObjectExpr:
+    resource = project.find(ResourceKind.VALUE, _value_resource_id(override.resource))
+    if resource is None:
+        raise InvocationBuildError(InvocationBuildErrorCode.VALUE_RESOURCE_MISSING)
+    if type(resource.spec) is not CanonicalObject:
+        raise InvocationBuildError(InvocationBuildErrorCode.VALUE_RESOURCE_OBJECT_REQUIRED)
+    expression = next(
+        (member.value for member in resource.spec.members if member.name == "value"),
+        None,
+    )
+    if type(expression) is not ObjectExpr:
+        raise InvocationBuildError(InvocationBuildErrorCode.VALUE_RESOURCE_OBJECT_REQUIRED)
+    if override.namespace is not ValueNamespace.SECRETS:
+        return expression
+    sealed = seal_expression_literals(expression)
+    if type(sealed) is not ObjectExpr:  # pragma: no cover - recursive shape invariant
+        raise TypeError("secret Value object sealing changed the expression root")
+    return sealed
+
+
+def _value_resource_overlays(
+    project: CompiledProject,
+    values: tuple[ValueResourceOverride, ...],
+) -> tuple[InvocationValueOverlay, ...]:
+    grouped: dict[ResourceId | None, dict[ValueNamespace, ObjectExpr]] = {}
+    for override in values:
+        environment = (
+            None if override.environment is None else ResourceId(value=override.environment)
+        )
+        grouped.setdefault(environment, {})[override.namespace] = _value_resource_expression(
+            project, override
+        )
+    scopes = sorted(
+        grouped,
+        key=lambda environment: (
+            environment is not None,
+            "" if environment is None else environment.value,
+        ),
+    )
+    return tuple(
+        InvocationValueOverlay(
+            environment=environment,
+            parameters=grouped[environment].get(ValueNamespace.PARAMETERS),
+            variables=grouped[environment].get(ValueNamespace.VARIABLES),
+            secrets=grouped[environment].get(ValueNamespace.SECRETS),
+        )
+        for environment in scopes
+    )
 
 
 def _optional_id(value: str | None) -> ResourceId | None:
@@ -240,6 +384,7 @@ __all__ = (
     "InvocationBuildErrorCode",
     "MatrixOverride",
     "PlanningOptions",
+    "ValueResourceOverride",
     "build_invocation",
     "plan_project",
 )

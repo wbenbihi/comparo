@@ -8,6 +8,7 @@ import pytest
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
 from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
+from comparo.cli.contracts import DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_EXECUTION_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_RENDER_LIMITS_V1
 from comparo.cli.contracts import ArtifactBlobRequest
@@ -15,6 +16,7 @@ from comparo.cli.contracts import ArtifactReadRequest
 from comparo.cli.contracts import CliArtifactLimits
 from comparo.cli.contracts import CliColorMode
 from comparo.cli.contracts import CliCommandResult
+from comparo.cli.contracts import CliConfigLoadLimits
 from comparo.cli.contracts import CliExecutionCommandKind
 from comparo.cli.contracts import CliExecutionLimits
 from comparo.cli.contracts import CliExitCode
@@ -62,6 +64,10 @@ def _plan_request(**changes: object) -> PlanRequest:
         "fail_fast": None,
         "budgets": (),
         "output": CliOutputMode.HUMAN,
+        "load_limits": DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1,
+        "parameters_from": (),
+        "variables_from": (),
+        "secrets_from": (),
     }
     values.update(changes)
     return PlanRequest(**values)  # type: ignore[arg-type]
@@ -79,6 +85,7 @@ def test_exit_codes_and_valid_contracts_are_stable() -> None:
         config=Path("comparo.yaml"),
         additional_sources=(Path("extra.yaml"),),
         output=CliOutputMode.JSON,
+        load_limits=DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1,
     )
     doctor = DoctorRequest(output=CliOutputMode.HUMAN)
     invocation = CliInvocation(result=human, color=CliColorMode.AUTO)
@@ -91,6 +98,19 @@ def test_exit_codes_and_valid_contracts_are_stable() -> None:
     assert DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blobs == 4096
     assert DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1 == 64 * 1024 * 1024
     assert DEFAULT_CLI_EXECUTION_LIMITS_V1.artifact is DEFAULT_CLI_ARTIFACT_LIMITS_V1
+    assert tuple(
+        getattr(DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1, field)
+        for field in DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.__struct_fields__
+    ) == (
+        4096,
+        8 * 1024 * 1024,
+        128,
+        256,
+        1_000_000,
+        1024 * 1024,
+        128,
+        100_000,
+    )
     assert DEFAULT_CLI_RENDER_LIMITS_V1.maximum_output_bytes == 64 * 1024 * 1024
     assert tuple(item.value for item in CliExecutionCommandKind) == ("run", "diff", "exec")
     assert tuple(item.value for item in CliReportFormat) == (
@@ -181,6 +201,23 @@ def test_validate_request_rejects_untyped_fields() -> None:
             additional_sources=(),
             output=cast("CliOutputMode", object()),
         )
+    with pytest.raises(TypeError, match="load limits"):
+        ValidateRequest(
+            config=Path("config.yaml"),
+            additional_sources=(),
+            output=CliOutputMode.HUMAN,
+            load_limits=cast("CliConfigLoadLimits", object()),
+        )
+
+
+def test_configuration_load_limits_reject_non_integer_syntax() -> None:
+    values = {
+        field: getattr(DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1, field)
+        for field in DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.__struct_fields__
+    }
+    values["maximum_sources"] = True
+    with pytest.raises(TypeError, match="exact integers"):
+        CliConfigLoadLimits(**values)
 
 
 def test_doctor_and_invocation_reject_untyped_fields() -> None:
@@ -210,6 +247,9 @@ def test_doctor_and_invocation_reject_untyped_fields() -> None:
         ({"maximum_attempts": "2"}, "numeric"),
         ({"fail_fast": 1}, "fail-fast"),
         ({"output": object()}, "output"),
+        ({"load_limits": object()}, "load limits"),
+        ({"parameters_from": []}, "repeated"),
+        ({"variables_from": (object(),)}, "repeated"),
     ],
 )
 def test_plan_request_rejects_untyped_fields(

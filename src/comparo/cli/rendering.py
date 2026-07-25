@@ -21,6 +21,8 @@ from comparo.core.domain.primitives import PositiveCount
 
 from .contracts import CliRenderLimits
 from .contracts import RenderRequest
+from .loading import policy_load_limits
+from .loading import project_load_limits
 
 
 def _failure(code: str) -> RenderPreviewResult:
@@ -85,6 +87,11 @@ async def render_cli_request(
         settings = _settings(request.limits)
     except (TypeError, ValueError):
         return _failure("cli.render.limits.invalid")
+    try:
+        load_limits = project_load_limits(request.plan.load_limits)
+        policy_limits = policy_load_limits(request.plan.load_limits)
+    except (TypeError, ValueError):
+        return _failure("cli.configuration-load.limits.invalid")
     prepared = prepare_project_plan(
         ProjectPlanRequest(
             config=request.plan.config,
@@ -93,6 +100,8 @@ async def render_cli_request(
             options=options,
             invocation_id=invocation_id,
             run_id=run_id,
+            load_limits=load_limits,
+            policy_load_limits=policy_limits,
         )
     )
     if prepared.project is None:

@@ -18,12 +18,16 @@ from comparo.application.inspection import inspect_policy_diagnostic
 from comparo.application.planning import InvocationBuildError
 from comparo.application.planning import PlanningOptions
 from comparo.application.planning import plan_project
+from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS
+from comparo.configuration.loader import ProjectLoadLimits
 from comparo.configuration.loader import compile_project_path
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.planning.models import PreparedRun
 from comparo.core.policy import CompiledExecutionPolicy
 from comparo.core.policy import planning_authority
 from comparo.core.policy import trusted_local_policy
+from comparo.policy import DEFAULT_POLICY_LOAD_LIMITS
+from comparo.policy import PolicyLoadLimits
 from comparo.policy import compile_policy_path
 
 
@@ -37,6 +41,8 @@ class ProjectPlanRequest(msgspec.Struct, frozen=True, kw_only=True):
     options: PlanningOptions
     invocation_id: UUID
     run_id: UUID
+    load_limits: ProjectLoadLimits = DEFAULT_PROJECT_LOAD_LIMITS
+    policy_load_limits: PolicyLoadLimits = DEFAULT_POLICY_LOAD_LIMITS
 
     def __post_init__(self) -> None:
         """Require exact, immutable adapter inputs before opening any source."""
@@ -52,6 +58,10 @@ class ProjectPlanRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("project plan options must be PlanningOptions")
         if type(self.invocation_id) is not UUID or type(self.run_id) is not UUID:
             raise TypeError("project plan identifiers must be exact UUID values")
+        if type(self.load_limits) is not ProjectLoadLimits:
+            raise TypeError("project plan load limits must be ProjectLoadLimits")
+        if type(self.policy_load_limits) is not PolicyLoadLimits:
+            raise TypeError("project plan policy load limits must be PolicyLoadLimits")
 
 
 @final
@@ -129,6 +139,7 @@ def prepare_project_plan(request: ProjectPlanRequest) -> ProjectPreparationResul
     loaded = compile_project_path(
         request.config,
         additional_sources=request.additional_sources,
+        limits=request.load_limits,
     )
     compilation = loaded.compilation
     if compilation.project is None:
@@ -138,7 +149,7 @@ def prepare_project_plan(request: ProjectPlanRequest) -> ProjectPreparationResul
             )
         )
 
-    policy = _load_policy(request.policy)
+    policy = _load_policy(request.policy, request.policy_load_limits)
     if type(policy) is tuple:
         return ProjectPreparationResult(
             diagnostics=tuple(inspect_policy_diagnostic(item) for item in policy)
@@ -187,10 +198,11 @@ def _project_root(config: Path) -> Path:
 
 def _load_policy(
     path: Path | None,
+    limits: PolicyLoadLimits,
 ) -> CompiledExecutionPolicy | tuple[ConfigurationDiagnostic, ...]:
     if path is None:
         return trusted_local_policy()
-    compilation = compile_policy_path(path).compilation
+    compilation = compile_policy_path(path, limits=limits).compilation
     if compilation.policy is not None:
         return compilation.policy
     return compilation.diagnostics

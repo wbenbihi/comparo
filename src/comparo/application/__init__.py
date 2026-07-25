@@ -27,6 +27,7 @@ from comparo.application.planning import BudgetOverride as BudgetOverride
 from comparo.application.planning import InvocationBuildError as InvocationBuildError
 from comparo.application.planning import MatrixOverride as MatrixOverride
 from comparo.application.planning import PlanningOptions as PlanningOptions
+from comparo.application.planning import ValueResourceOverride as ValueResourceOverride
 from comparo.application.planning import build_invocation as build_invocation
 from comparo.application.planning import plan_project as plan_project
 from comparo.application.preflight import PreparedProjectPlan as PreparedProjectPlan
@@ -102,6 +103,7 @@ __all__ = (
     "RequestBodyOmissionReason",
     "RuntimeCapabilityPreflightResult",
     "SecurityCheck",
+    "ValueResourceOverride",
     "build_environment_snapshots",
     "build_invocation",
     "execute_production",

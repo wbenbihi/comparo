@@ -38,6 +38,8 @@ from .contracts import CliExecutionLimits
 from .contracts import CliExitCode
 from .contracts import ExecutionArtifactSummary
 from .contracts import ExecutionRequest
+from .loading import policy_load_limits
+from .loading import project_load_limits
 
 
 @final
@@ -114,7 +116,13 @@ def _settings(limits: CliExecutionLimits, *, persist: bool) -> ProductionExecuti
     )
     if type(artifact) is not ArtifactPolicy:  # pragma: no cover - msgspec typing invariant
         raise TypeError("production artifact policy replacement returned an invalid type")
-    transport = msgspec.structs.replace(defaults.transport, capture=capture)
+    transport = msgspec.structs.replace(
+        defaults.transport,
+        capture=capture,
+        maximum_authorization_occurrences=PositiveCount(
+            value=limits.maximum_authorization_occurrences
+        ),
+    )
     return ProductionExecutionSettings(
         files=defaults.files,
         environment=defaults.environment,
@@ -191,6 +199,33 @@ async def execute_cli_request(
         raise TypeError("CLI execution requires PlanningOptions")
     if type(invocation_id) is not UUID or type(run_id) is not UUID:
         raise TypeError("CLI execution identifiers must be exact UUID values")
+    try:
+        load_limits = project_load_limits(request.plan.load_limits)
+        policy_limits = policy_load_limits(request.plan.load_limits)
+    except (TypeError, ValueError):
+        return CliExecutionOutcome(
+            exit_code=CliExitCode.INVALID_INVOCATION,
+            diagnostics=(
+                ApplicationDiagnostic(
+                    code="cli.configuration-load.limits.invalid",
+                    severity="error",
+                    stage="invocation",
+                ),
+            ),
+        )
+    try:
+        settings = _settings(request.limits, persist=request.persist)
+    except (TypeError, ValueError):
+        return CliExecutionOutcome(
+            exit_code=CliExitCode.INVALID_INVOCATION,
+            diagnostics=(
+                ApplicationDiagnostic(
+                    code="cli.execution.limits.invalid",
+                    severity="error",
+                    stage="invocation",
+                ),
+            ),
+        )
     prepared = prepare_project_plan(
         ProjectPlanRequest(
             config=request.plan.config,
@@ -199,6 +234,8 @@ async def execute_cli_request(
             options=options,
             invocation_id=invocation_id,
             run_id=run_id,
+            load_limits=load_limits,
+            policy_load_limits=policy_limits,
         )
     )
     if prepared.project is None:
@@ -214,19 +251,6 @@ async def execute_cli_request(
         return CliExecutionOutcome(
             exit_code=CliExitCode.INVALID_INVOCATION,
             diagnostics=(topology,),
-        )
-    try:
-        settings = _settings(request.limits, persist=request.persist)
-    except (TypeError, ValueError):
-        return CliExecutionOutcome(
-            exit_code=CliExitCode.INVALID_INVOCATION,
-            diagnostics=(
-                ApplicationDiagnostic(
-                    code="cli.execution.limits.invalid",
-                    severity="error",
-                    stage="invocation",
-                ),
-            ),
         )
     result = await execute_production(
         ProductionExecutionRequest(

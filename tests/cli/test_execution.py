@@ -18,6 +18,7 @@ from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
 from comparo.cli import execution as execution_module
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
+from comparo.cli.contracts import DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_EXECUTION_LIMITS_V1
 from comparo.cli.contracts import CliExecutionCommandKind
 from comparo.cli.contracts import CliExitCode
@@ -112,6 +113,37 @@ def _request(
 
 async def _complete_result(_request: ProductionExecutionRequest) -> ProductionExecutionResult:
     return ProductionExecutionResult(artifact=_artifact())
+
+
+def test_invalid_configuration_limits_precede_preflight_and_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("project preflight was reached")
+
+    monkeypatch.setattr(execution_module, "prepare_project_plan", unexpected)
+    request = _request(Path("must-not-open.yaml"), CliExecutionCommandKind.RUN)
+    request = msgspec.structs.replace(
+        request,
+        plan=msgspec.structs.replace(
+            request.plan,
+            load_limits=msgspec.structs.replace(
+                DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1,
+                maximum_yaml_nodes=0,
+            ),
+        ),
+    )
+    outcome = asyncio.run(
+        execute_cli_request(
+            request,
+            PlanningOptions(),
+            invocation_id=_INVOCATION_ID,
+            run_id=_RUN_ID,
+        )
+    )
+    assert outcome.exit_code is CliExitCode.INVALID_INVOCATION
+    assert outcome.diagnostics[0].code == "cli.configuration-load.limits.invalid"
 
 
 @pytest.mark.parametrize("command", [CliExecutionCommandKind.DIFF, CliExecutionCommandKind.EXEC])
@@ -259,11 +291,14 @@ def test_preparation_and_production_diagnostics_remain_value_free(
     assert rejected.diagnostics[0].code == "runtime.capability.unsupported"
 
 
-def test_invalid_limits_are_rejected_before_production_execution(
-    tmp_path: Path,
+def test_invalid_limits_are_rejected_before_project_or_production_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     called = False
+
+    def prepare(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("project preflight was reached")
 
     async def execute(_request: ProductionExecutionRequest) -> ProductionExecutionResult:
         nonlocal called
@@ -271,12 +306,13 @@ def test_invalid_limits_are_rejected_before_production_execution(
         return ProductionExecutionResult(artifact=_artifact())
 
     monkeypatch.setattr(execution_module, "execute_production", execute)
+    monkeypatch.setattr(execution_module, "prepare_project_plan", prepare)
     limits = msgspec.structs.replace(
         DEFAULT_CLI_EXECUTION_LIMITS_V1,
-        maximum_stream_records=0,
+        maximum_authorization_occurrences=0,
     )
     request = msgspec.structs.replace(
-        _request(_write_project(tmp_path), CliExecutionCommandKind.DIFF),
+        _request(Path("must-not-open.yaml"), CliExecutionCommandKind.DIFF),
         limits=limits,
     )
     result = asyncio.run(
@@ -320,6 +356,7 @@ def test_settings_apply_every_caller_limit_and_explicit_persistence(
         original,
         body_memory_threshold_bytes=2,
         maximum_transient_body_bytes=43,
+        maximum_authorization_occurrences=47,
         maximum_encoded_body_bytes=41,
         maximum_entity_body_bytes=41,
         maximum_expansion_ratio=3,
@@ -354,6 +391,7 @@ def test_settings_apply_every_caller_limit_and_explicit_persistence(
     assert settings.artifact.persist is ArtifactPersistMode.ALWAYS
     assert settings.body_store.memory_threshold.value == 2
     assert settings.body_store.maximum_transient_bytes.value == 43
+    assert settings.transport.maximum_authorization_occurrences.value == 47
     assert settings.transport.capture.maximum_encoded_body_bytes.value == 41
     assert settings.transport.capture.maximum_entity_body_bytes.value == 41
     assert settings.transport.capture.maximum_expansion_ratio.numerator == 3

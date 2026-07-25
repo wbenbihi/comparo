@@ -19,6 +19,7 @@ from comparo.application.render_preview import RenderPreviewRequest
 from comparo.application.render_preview import RenderPreviewResult
 from comparo.application.render_preview import RequestBodyOmissionReason
 from comparo.cli import rendering as rendering_module
+from comparo.cli.contracts import DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_RENDER_LIMITS_V1
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import PlanRequest
@@ -108,6 +109,37 @@ def _preview() -> RenderedRequestPreview:
             byte_count=None,
         ),
     )
+
+
+def test_invalid_configuration_limits_precede_preflight_and_value_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("project preflight was reached")
+
+    monkeypatch.setattr(rendering_module, "prepare_project_plan", unexpected)
+    request = _request(Path("must-not-open.yaml"))
+    request = msgspec.structs.replace(
+        request,
+        plan=msgspec.structs.replace(
+            request.plan,
+            load_limits=msgspec.structs.replace(
+                DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1,
+                maximum_yaml_bytes=0,
+            ),
+        ),
+    )
+    outcome = asyncio.run(
+        render_cli_request(
+            request,
+            PlanningOptions(),
+            invocation_id=_INVOCATION_ID,
+            run_id=_RUN_ID,
+        )
+    )
+    assert outcome.previews == ()
+    assert outcome.diagnostics[0].code == "cli.configuration-load.limits.invalid"
 
 
 def test_bridge_applies_every_caller_limit_and_stays_offline(
