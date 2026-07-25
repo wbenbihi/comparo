@@ -1,11 +1,5 @@
-"""Safe versioned artifacts, sanitization, and persistence-port contracts."""
+"""Lightweight public exports for independently safe, persistable artifact DTOs."""
 
-from comparo.core.artifacts.capture import ArtifactCaptureBatch as ArtifactCaptureBatch
-from comparo.core.artifacts.capture import (
-    ArtifactCaptureUnavailableError as ArtifactCaptureUnavailableError,
-)
-from comparo.core.artifacts.capture import ArtifactCapturingDriver as ArtifactCapturingDriver
-from comparo.core.artifacts.capture import CapturedExecutionHttp as CapturedExecutionHttp
 from comparo.core.artifacts.codec import ArtifactCodecError as ArtifactCodecError
 from comparo.core.artifacts.codec import ArtifactCodecErrorCode as ArtifactCodecErrorCode
 from comparo.core.artifacts.codec import decode_run_artifact as decode_run_artifact
@@ -51,32 +45,6 @@ from comparo.core.artifacts.lifecycle import ArtifactGate as ArtifactGate
 from comparo.core.artifacts.lifecycle import ArtifactGateCounts as ArtifactGateCounts
 from comparo.core.artifacts.model import ArtifactCoverageIssue as ArtifactCoverageIssue
 from comparo.core.artifacts.model import RunArtifact as RunArtifact
-from comparo.core.artifacts.policy import ArtifactCapturePolicy as ArtifactCapturePolicy
-from comparo.core.artifacts.policy import ArtifactLimits as ArtifactLimits
-from comparo.core.artifacts.policy import ArtifactPersistMode as ArtifactPersistMode
-from comparo.core.artifacts.policy import ArtifactPolicy as ArtifactPolicy
-from comparo.core.artifacts.policy import RedactionAction as RedactionAction
-from comparo.core.artifacts.policy import RedactionPolicy as RedactionPolicy
-from comparo.core.artifacts.policy import RedactionRule as RedactionRule
-from comparo.core.artifacts.policy import UnsafeSourceBehavior as UnsafeSourceBehavior
-from comparo.core.artifacts.ports import ArtifactBodyReader as ArtifactBodyReader
-from comparo.core.artifacts.ports import ArtifactPersistenceOutcome as ArtifactPersistenceOutcome
-from comparo.core.artifacts.ports import ArtifactPersistenceStatus as ArtifactPersistenceStatus
-from comparo.core.artifacts.ports import SanitizedArtifactSink as SanitizedArtifactSink
-from comparo.core.artifacts.ports import SanitizedBlobSource as SanitizedBlobSource
-from comparo.core.artifacts.ports import SanitizedBlobTarget as SanitizedBlobTarget
-from comparo.core.artifacts.sanitization import SanitizationBoundary as SanitizationBoundary
-from comparo.core.artifacts.sanitization import (
-    SanitizationBoundaryClosedError as SanitizationBoundaryClosedError,
-)
-from comparo.core.artifacts.sanitization import (
-    SanitizationBoundarySealedError as SanitizationBoundarySealedError,
-)
-from comparo.core.artifacts.sanitization import (
-    SanitizationBoundaryUnsealedError as SanitizationBoundaryUnsealedError,
-)
-from comparo.core.artifacts.sanitization import SanitizedBytes as SanitizedBytes
-from comparo.core.artifacts.sanitization import SanitizedText as SanitizedText
 from comparo.core.artifacts.values import ArtifactArray as ArtifactArray
 from comparo.core.artifacts.values import ArtifactBoolean as ArtifactBoolean
 from comparo.core.artifacts.values import ArtifactDecimal as ArtifactDecimal
@@ -94,15 +62,10 @@ __all__ = (
     "ArtifactArray",
     "ArtifactAttempt",
     "ArtifactBlob",
-    "ArtifactBodyReader",
     "ArtifactBoolean",
     "ArtifactBudget",
     "ArtifactCapture",
-    "ArtifactCaptureBatch",
     "ArtifactCaptureExtent",
-    "ArtifactCapturePolicy",
-    "ArtifactCaptureUnavailableError",
-    "ArtifactCapturingDriver",
     "ArtifactCodecError",
     "ArtifactCodecErrorCode",
     "ArtifactComparison",
@@ -126,7 +89,6 @@ __all__ = (
     "ArtifactGateCounts",
     "ArtifactGateVerdict",
     "ArtifactInteger",
-    "ArtifactLimits",
     "ArtifactMetadata",
     "ArtifactMetric",
     "ArtifactNamedValue",
@@ -134,10 +96,6 @@ __all__ = (
     "ArtifactObject",
     "ArtifactObjectMember",
     "ArtifactOmissionReason",
-    "ArtifactPersistMode",
-    "ArtifactPersistenceOutcome",
-    "ArtifactPersistenceStatus",
-    "ArtifactPolicy",
     "ArtifactProvenance",
     "ArtifactRequest",
     "ArtifactResponse",
@@ -147,21 +105,7 @@ __all__ = (
     "ArtifactSummary",
     "ArtifactTiming",
     "ArtifactValue",
-    "CapturedExecutionHttp",
-    "RedactionAction",
-    "RedactionPolicy",
-    "RedactionRule",
     "RunArtifact",
-    "SanitizationBoundary",
-    "SanitizationBoundaryClosedError",
-    "SanitizationBoundarySealedError",
-    "SanitizationBoundaryUnsealedError",
-    "SanitizedArtifactSink",
-    "SanitizedBlobSource",
-    "SanitizedBlobTarget",
-    "SanitizedBytes",
-    "SanitizedText",
-    "UnsafeSourceBehavior",
     "decode_run_artifact",
     "encode_run_artifact",
     "generate_artifact_schema",

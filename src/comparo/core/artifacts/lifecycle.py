@@ -90,3 +90,17 @@ class ArtifactGate(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fie
         )
         if not_requested != empty_requested_shape:
             raise ValueError("not-requested gate shape contradicts its retained assessments")
+        if not not_requested:
+            exceeded = any(
+                actual.value > allowed.value
+                for assessment in self.assessments
+                for actual, allowed in zip(
+                    assessment.actual,
+                    assessment.allowed,
+                    strict=True,
+                )
+            )
+            if self.verdict is ArtifactGateVerdict.PASSED and (self.reasons or exceeded):
+                raise ValueError("passed artifact gate contradicts its retained assessments")
+            if self.verdict is ArtifactGateVerdict.FAILED and not (self.reasons or exceeded):
+                raise ValueError("failed artifact gate requires an adverse assessment or reason")

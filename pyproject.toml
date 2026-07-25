@@ -315,6 +315,50 @@ forbidden_modules = [
   "yaml",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Persistable artifact DTOs must not depend on live run or secret domains"
+type = "forbidden"
+source_modules = [
+  "comparo.core.artifacts.codec",
+  "comparo.core.artifacts.common",
+  "comparo.core.artifacts.facts",
+  "comparo.core.artifacts.http",
+  "comparo.core.artifacts.lifecycle",
+  "comparo.core.artifacts.model",
+  "comparo.core.artifacts.values",
+]
+forbidden_modules = [
+  "comparo.adapters",
+  "comparo.core.domain.http",
+  "comparo.core.domain.sensitivity",
+  "comparo.core.planning",
+  "comparo.core.resolution",
+  "comparo.core.runtime",
+]
+
+[[tool.importlinter.contracts]]
+name = "Reporters consume only safe artifacts and have no runtime or adapter effects"
+type = "forbidden"
+source_modules = ["comparo.reporters"]
+forbidden_modules = [
+  "comparo.adapters",
+  "comparo.configuration",
+  "comparo.core.domain.http",
+  "comparo.core.domain.sensitivity",
+  "comparo.core.planning",
+  "comparo.core.resolution",
+  "comparo.core.runtime",
+  "asyncio",
+  "httpcore",
+  "os",
+  "pathlib",
+  "requests",
+  "textual",
+  "typer",
+  "urllib3",
+  "yaml",
+]
+
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
