@@ -25,19 +25,26 @@ from rich.text import Text
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
 from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
+from comparo.cli.contracts import DEFAULT_CLI_EXECUTION_LIMITS_V1
+from comparo.cli.contracts import DEFAULT_CLI_RENDER_LIMITS_V1
 from comparo.cli.contracts import ArtifactBlobRequest
 from comparo.cli.contracts import ArtifactReadRequest
 from comparo.cli.contracts import CliArtifactLimits
 from comparo.cli.contracts import CliColorMode
 from comparo.cli.contracts import CliCommandResult
+from comparo.cli.contracts import CliExecutionCommandKind
+from comparo.cli.contracts import CliExecutionLimits
 from comparo.cli.contracts import CliExitCode
 from comparo.cli.contracts import CliInvocation
 from comparo.cli.contracts import CliMessageLevel
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
+from comparo.cli.contracts import CliRenderLimits
 from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
+from comparo.cli.contracts import ExecutionRequest
 from comparo.cli.contracts import PlanRequest
+from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import CliServices
@@ -56,7 +63,16 @@ SourceOption = Annotated[
     tuple[Path, ...],
     Parameter(name="--source", alias="-S", consume_multiple=False),
 ]
-PolicyOption = Annotated[Path | None, Parameter(name="--policy")]
+PolicyOption = Annotated[
+    Path | None,
+    Parameter(
+        name="--policy",
+        help=(
+            "External ExecutionPolicy path; omit to use the permissive built-in "
+            "trusted-local authority."
+        ),
+    ),
+]
 SubjectOption = Annotated[
     tuple[str, ...],
     Parameter(name="--subject", consume_multiple=False),
@@ -83,48 +99,417 @@ FailFastOption = Annotated[
 ]
 ArtifactRootOption = Annotated[Path, Parameter(name="--root")]
 BlobOutputLimitOption = Annotated[int, Parameter(name="--maximum-output-bytes")]
+ExecutionArtifactRootOption = Annotated[Path, Parameter(name="--artifact-root")]
 
 
 @dataclass(frozen=True, kw_only=True)
 class _ArtifactLimitArguments:
     """Cyclopts-only flattened form of the version-owned artifact limit contract."""
 
-    maximum_blobs: Annotated[int, Parameter(name="--maximum-blobs")] = (
-        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blobs
-    )
-    maximum_blob_bytes: Annotated[int, Parameter(name="--maximum-blob-bytes")] = (
-        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blob_bytes
-    )
+    maximum_blobs: Annotated[
+        int,
+        Parameter(name="--maximum-blobs", help="Maximum blobs admitted in one artifact bundle."),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blobs
+    maximum_blob_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-blob-bytes",
+            help="Maximum bytes admitted for one artifact blob.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blob_bytes
     maximum_total_blob_bytes: Annotated[
         int,
-        Parameter(name="--maximum-total-blob-bytes"),
+        Parameter(
+            name="--maximum-total-blob-bytes",
+            help="Maximum aggregate blob bytes admitted per artifact bundle.",
+        ),
     ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_total_blob_bytes
-    maximum_manifest_bytes: Annotated[int, Parameter(name="--maximum-manifest-bytes")] = (
-        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_manifest_bytes
-    )
-    maximum_report_bytes: Annotated[int, Parameter(name="--maximum-report-bytes")] = (
-        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_report_bytes
-    )
+    maximum_manifest_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-manifest-bytes",
+            help="Maximum artifact manifest bytes admitted.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_manifest_bytes
+    maximum_report_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-report-bytes",
+            help="Maximum bytes produced by one artifact report.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_report_bytes
     maximum_redaction_patterns: Annotated[
         int,
-        Parameter(name="--maximum-redaction-patterns"),
+        Parameter(
+            name="--maximum-redaction-patterns",
+            help="Maximum sensitive literal patterns admitted for redaction.",
+        ),
     ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_patterns
     maximum_redaction_pattern_bytes: Annotated[
         int,
-        Parameter(name="--maximum-redaction-pattern-bytes"),
+        Parameter(
+            name="--maximum-redaction-pattern-bytes",
+            help="Maximum aggregate bytes admitted for redaction patterns.",
+        ),
     ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_pattern_bytes
     maximum_redaction_value_bytes: Annotated[
         int,
-        Parameter(name="--maximum-redaction-value-bytes"),
+        Parameter(
+            name="--maximum-redaction-value-bytes",
+            help="Maximum bytes inspected in one value during redaction.",
+        ),
     ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_value_bytes
     maximum_redaction_value_nodes: Annotated[
         int,
-        Parameter(name="--maximum-redaction-value-nodes"),
+        Parameter(
+            name="--maximum-redaction-value-nodes",
+            help="Maximum structured nodes inspected in one value during redaction.",
+        ),
     ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_value_nodes
 
 
 ArtifactLimitsOption = Annotated[_ArtifactLimitArguments, Parameter(name="*")]
 _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS = _ArtifactLimitArguments()
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ExecutionArguments:
+    """Cyclopts-only flattened arguments common to every execution journey."""
+
+    config: Annotated[
+        Path,
+        Parameter(
+            name="--config",
+            alias="-C",
+            help="Project manifest or directory containing comparo.yaml.",
+        ),
+    ] = Path("comparo.yaml")
+    source: Annotated[
+        tuple[Path, ...],
+        Parameter(
+            name="--source",
+            alias="-S",
+            consume_multiple=False,
+            help="Additional local YAML source; repeat to add more.",
+        ),
+    ] = ()
+    policy: Annotated[
+        Path | None,
+        Parameter(
+            name="--policy",
+            help=(
+                "External ExecutionPolicy path; omit to use the permissive built-in "
+                "trusted-local authority."
+            ),
+        ),
+    ] = None
+    subject: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--subject",
+            consume_multiple=False,
+            help="Request id; repeat to select multiple executable subjects.",
+        ),
+    ] = ()
+    matrix: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--matrix",
+            consume_multiple=False,
+            help="Matrix override as BINDING=MATRIX; repeat to add bindings.",
+        ),
+    ] = ()
+    trials: Annotated[
+        int | None,
+        Parameter(name="--trials", help="Positive trial-count override."),
+    ] = None
+    maximum_attempts: Annotated[
+        int | None,
+        Parameter(
+            name="--maximum-attempts",
+            help="Positive maximum-attempt override.",
+        ),
+    ] = None
+    fail_fast: Annotated[
+        bool | None,
+        Parameter(
+            name="--fail-fast",
+            negative="--no-fail-fast",
+            help="Enable or disable fail-fast execution.",
+        ),
+    ] = None
+    budget: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--budget",
+            consume_multiple=False,
+            help="Budget override as RESOURCE=LIMIT; repeat to add resources.",
+        ),
+    ] = ()
+    approve_mutations: Annotated[
+        bool,
+        Parameter(
+            name="--approve-mutations",
+            help="Approve requests classified as mutating by the effective policy.",
+        ),
+    ] = False
+    persist: Annotated[
+        bool,
+        Parameter(
+            name="--persist",
+            negative="--no-persist",
+            help="Persist a sanitized artifact bundle; disabled by default.",
+        ),
+    ] = False
+    artifact_root: Annotated[
+        Path,
+        Parameter(
+            name="--artifact-root",
+            help=("Existing local directory for explicitly persisted artifact bundles."),
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_ROOT_V1
+    output_format: Annotated[
+        OutputName,
+        Parameter(name="--format", help="Human or deterministic JSON output."),
+    ] = "human"
+    color: Annotated[
+        ColorName,
+        Parameter(name="--color", help="Terminal color behavior for human messages."),
+    ] = "auto"
+
+
+ExecutionArgumentsOption = Annotated[_ExecutionArguments, Parameter(name="*")]
+_DEFAULT_EXECUTION_ARGUMENTS = _ExecutionArguments()
+
+
+@dataclass(frozen=True, kw_only=True)
+class _RuntimeLimitArguments:
+    """Cyclopts-only flattened version-owned runtime execution limits."""
+
+    body_memory_threshold_bytes: Annotated[
+        int,
+        Parameter(
+            name="--body-memory-threshold-bytes",
+            help="Per-body byte threshold before transient storage spills to disk.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.body_memory_threshold_bytes
+    maximum_transient_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-transient-body-bytes",
+            help="Maximum aggregate bytes retained in the run-local body store.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_transient_body_bytes
+    maximum_encoded_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-encoded-body-bytes",
+            help="Maximum encoded response bytes captured per exchange.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_encoded_body_bytes
+    maximum_entity_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-entity-body-bytes",
+            help="Maximum decoded entity bytes captured per exchange.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_entity_body_bytes
+    maximum_expansion_ratio: Annotated[
+        int,
+        Parameter(
+            name="--maximum-expansion-ratio",
+            help="Maximum decoded-to-encoded response expansion ratio.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_expansion_ratio
+    maximum_stream_records: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-records",
+            help="Maximum data records retained from one streaming response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_records
+    maximum_stream_controls: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-controls",
+            help="Maximum control records retained from one streaming response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_controls
+    maximum_stream_errors: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-errors",
+            help="Maximum decoding errors retained from one streaming response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_errors
+    maximum_stream_item_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-item-bytes",
+            help="Maximum bytes admitted for one decoded stream item.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_item_bytes
+    maximum_decoded_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-decoded-body-bytes",
+            help="Maximum ordinary response bytes admitted for semantic decoding.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_decoded_body_bytes
+    maximum_text_characters: Annotated[
+        int,
+        Parameter(
+            name="--maximum-text-characters",
+            help="Maximum text characters decoded from one ordinary response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_text_characters
+    maximum_json_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-json-depth",
+            help="Maximum nesting depth for an ordinary JSON response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_json_depth
+    maximum_json_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-json-nodes",
+            help="Maximum nodes decoded from one ordinary JSON response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_json_nodes
+    maximum_json_tokens: Annotated[
+        int,
+        Parameter(
+            name="--maximum-json-tokens",
+            help="Maximum tokens parsed from one ordinary JSON response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_json_tokens
+
+
+RuntimeLimitsOption = Annotated[_RuntimeLimitArguments, Parameter(name="*")]
+_DEFAULT_RUNTIME_LIMIT_ARGUMENTS = _RuntimeLimitArguments()
+
+
+@dataclass(frozen=True, kw_only=True)
+class _RenderLimitArguments:
+    """Cyclopts-only flattened version-owned offline render limits."""
+
+    maximum_file_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-file-bytes",
+            help="Maximum bytes read from one project file value.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_file_bytes
+    maximum_file_path_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-file-path-bytes",
+            help="Maximum encoded bytes admitted in one project-relative file path.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_file_path_bytes
+    maximum_file_segments: Annotated[
+        int,
+        Parameter(
+            name="--maximum-file-segments",
+            help="Maximum segments admitted in one project-relative file path.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_file_segments
+    maximum_environment_files: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-files",
+            help="Maximum dotenv files admitted for one Environment.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_files
+    maximum_environment_file_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-file-bytes",
+            help="Maximum bytes read from one Environment dotenv file.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_file_bytes
+    maximum_environment_total_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-total-bytes",
+            help="Maximum aggregate dotenv bytes admitted for one Environment.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_total_bytes
+    maximum_environment_entries: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-entries",
+            help="Maximum dotenv entries admitted for one Environment.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_entries
+    maximum_environment_line_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-line-bytes",
+            help="Maximum bytes admitted in one dotenv line.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_line_bytes
+    maximum_yaml_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-yaml-bytes",
+            help="Maximum bytes admitted for one explicit YAML value conversion.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_yaml_bytes
+    maximum_yaml_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-yaml-depth",
+            help="Maximum nesting depth for one explicit YAML value conversion.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_yaml_depth
+    maximum_yaml_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-yaml-nodes",
+            help="Maximum nodes decoded by one explicit YAML value conversion.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_yaml_nodes
+    maximum_redaction_patterns: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-patterns",
+            help="Maximum sensitive literal patterns admitted for preview redaction.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_patterns
+    maximum_redaction_pattern_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-pattern-bytes",
+            help="Maximum aggregate bytes admitted for preview redaction patterns.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_pattern_bytes
+    maximum_redaction_value_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-value-bytes",
+            help="Maximum bytes inspected in one preview value during redaction.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_value_bytes
+    maximum_redaction_value_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-value-nodes",
+            help="Maximum structured nodes inspected in one preview value.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_value_nodes
+    maximum_output_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-output-bytes",
+            help="Maximum bytes emitted by the complete rendered preview.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_output_bytes
+
+
+RenderLimitsOption = Annotated[_RenderLimitArguments, Parameter(name="*")]
+_DEFAULT_RENDER_LIMIT_ARGUMENTS = _RenderLimitArguments()
 
 _LEVEL_STYLES: dict[CliMessageLevel, str] = {
     CliMessageLevel.SUCCESS: "green",
@@ -178,6 +563,253 @@ def _artifact_limits(value: _ArtifactLimitArguments) -> CliArtifactLimits:
         maximum_redaction_value_bytes=value.maximum_redaction_value_bytes,
         maximum_redaction_value_nodes=value.maximum_redaction_value_nodes,
     )
+
+
+def _execution_limits(
+    runtime: _RuntimeLimitArguments,
+    artifact: _ArtifactLimitArguments,
+) -> CliExecutionLimits:
+    """Project all caller-visible runtime ceilings into one immutable contract."""
+    return CliExecutionLimits(
+        body_memory_threshold_bytes=runtime.body_memory_threshold_bytes,
+        maximum_transient_body_bytes=runtime.maximum_transient_body_bytes,
+        maximum_encoded_body_bytes=runtime.maximum_encoded_body_bytes,
+        maximum_entity_body_bytes=runtime.maximum_entity_body_bytes,
+        maximum_expansion_ratio=runtime.maximum_expansion_ratio,
+        maximum_stream_records=runtime.maximum_stream_records,
+        maximum_stream_controls=runtime.maximum_stream_controls,
+        maximum_stream_errors=runtime.maximum_stream_errors,
+        maximum_stream_item_bytes=runtime.maximum_stream_item_bytes,
+        maximum_decoded_body_bytes=runtime.maximum_decoded_body_bytes,
+        maximum_text_characters=runtime.maximum_text_characters,
+        maximum_json_depth=runtime.maximum_json_depth,
+        maximum_json_nodes=runtime.maximum_json_nodes,
+        maximum_json_tokens=runtime.maximum_json_tokens,
+        artifact=_artifact_limits(artifact),
+    )
+
+
+def _execution_request(
+    command: CliExecutionCommandKind,
+    arguments: _ExecutionArguments,
+    runtime_limits: _RuntimeLimitArguments,
+    artifact_limits: _ArtifactLimitArguments,
+    *,
+    execution_profile: str | None,
+    environments: tuple[str, ...],
+    baseline: str | None,
+    candidates: tuple[str, ...],
+) -> ExecutionRequest:
+    """Build the one shared service request without interpreting topology in the adapter."""
+    plan = PlanRequest(
+        config=arguments.config,
+        additional_sources=arguments.source,
+        policy=arguments.policy,
+        execution_profile=execution_profile,
+        subjects=arguments.subject,
+        environments=environments,
+        baseline=baseline,
+        candidates=candidates,
+        matrices=arguments.matrix,
+        trials=arguments.trials,
+        maximum_attempts=arguments.maximum_attempts,
+        fail_fast=arguments.fail_fast,
+        budgets=arguments.budget,
+        output=CliOutputMode(arguments.output_format),
+    )
+    return ExecutionRequest(
+        command=command,
+        plan=plan,
+        approve_mutations=arguments.approve_mutations,
+        persist=arguments.persist,
+        artifact_root=arguments.artifact_root,
+        limits=_execution_limits(runtime_limits, artifact_limits),
+        tool_version=_package_version(),
+    )
+
+
+def _register_execution_commands(cli: App, services: CliServices) -> None:
+    """Attach all effectful journeys as thin adapters over one service operation."""
+
+    @cli.command(name="run")
+    def run(
+        *,
+        environment: EnvironmentOption = (),
+        arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+    ) -> CliInvocation:
+        """Execute assertions against one or more Environments.
+
+        Args:
+            environment: Environment id; repeat to override project/profile topology.
+            arguments: Shared planning, policy, persistence, and output controls.
+            runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
+            artifact_limits: Version-owned artifact and sanitization ceilings.
+        """
+        request = _execution_request(
+            CliExecutionCommandKind.RUN,
+            arguments,
+            runtime_limits,
+            artifact_limits,
+            execution_profile=None,
+            environments=environment,
+            baseline=None,
+            candidates=(),
+        )
+        return _invocation(services.execute(request), arguments.color)
+
+    @cli.command(name="diff")
+    def diff(
+        *,
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+    ) -> CliInvocation:
+        """Execute and compare a baseline Environment with one or more candidates.
+
+        Args:
+            baseline: Baseline Environment id overriding project/profile topology.
+            candidate: Candidate Environment id; repeat to add candidates.
+            arguments: Shared planning, policy, persistence, and output controls.
+            runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
+            artifact_limits: Version-owned artifact and sanitization ceilings.
+        """
+        request = _execution_request(
+            CliExecutionCommandKind.DIFF,
+            arguments,
+            runtime_limits,
+            artifact_limits,
+            execution_profile=None,
+            environments=(),
+            baseline=baseline,
+            candidates=candidate,
+        )
+        return _invocation(services.execute(request), arguments.color)
+
+    @cli.command(name="exec")
+    def execute_profile(
+        profile: str,
+        /,
+        *,
+        environment: EnvironmentOption = (),
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+    ) -> CliInvocation:
+        """Execute an ExecutionProfile with optional assertion or comparison overrides.
+
+        Args:
+            profile: ExecutionProfile id selected from project configuration.
+            environment: Environment id; repeat to select assertion topology.
+            baseline: Baseline Environment id selecting comparison topology.
+            candidate: Candidate Environment id; repeat to add candidates.
+            arguments: Shared planning, policy, persistence, and output controls.
+            runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
+            artifact_limits: Version-owned artifact and sanitization ceilings.
+        """
+        request = _execution_request(
+            CliExecutionCommandKind.EXEC,
+            arguments,
+            runtime_limits,
+            artifact_limits,
+            execution_profile=profile,
+            environments=environment,
+            baseline=baseline,
+            candidates=candidate,
+        )
+        return _invocation(services.execute(request), arguments.color)
+
+
+def _render_limits(value: _RenderLimitArguments) -> CliRenderLimits:
+    """Project every caller-visible render ceiling into one immutable contract."""
+    return CliRenderLimits(
+        maximum_file_bytes=value.maximum_file_bytes,
+        maximum_file_path_bytes=value.maximum_file_path_bytes,
+        maximum_file_segments=value.maximum_file_segments,
+        maximum_environment_files=value.maximum_environment_files,
+        maximum_environment_file_bytes=value.maximum_environment_file_bytes,
+        maximum_environment_total_bytes=value.maximum_environment_total_bytes,
+        maximum_environment_entries=value.maximum_environment_entries,
+        maximum_environment_line_bytes=value.maximum_environment_line_bytes,
+        maximum_yaml_bytes=value.maximum_yaml_bytes,
+        maximum_yaml_depth=value.maximum_yaml_depth,
+        maximum_yaml_nodes=value.maximum_yaml_nodes,
+        maximum_redaction_patterns=value.maximum_redaction_patterns,
+        maximum_redaction_pattern_bytes=value.maximum_redaction_pattern_bytes,
+        maximum_redaction_value_bytes=value.maximum_redaction_value_bytes,
+        maximum_redaction_value_nodes=value.maximum_redaction_value_nodes,
+        maximum_output_bytes=value.maximum_output_bytes,
+    )
+
+
+def _register_render_command(cli: App, services: CliServices) -> None:
+    """Attach the offline request-preview journey to the command graph."""
+
+    @cli.command(name="render")
+    def render(
+        *,
+        config: ConfigOption = Path("comparo.yaml"),
+        source: SourceOption = (),
+        policy: PolicyOption = None,
+        profile: str | None = None,
+        subject: SubjectOption = (),
+        environment: EnvironmentOption = (),
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        matrix: MatrixOption = (),
+        trials: int | None = None,
+        maximum_attempts: int | None = None,
+        fail_fast: FailFastOption = None,
+        budget: BudgetOption = (),
+        limits: RenderLimitsOption = _DEFAULT_RENDER_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Resolve and sanitize planned requests without DNS or network activity.
+
+        Args:
+            config: Project manifest or directory containing comparo.yaml.
+            source: Additional local YAML source; repeat the option to add more.
+            policy: External ExecutionPolicy path; omission uses permissive trusted-local authority.
+            profile: ExecutionProfile id overriding project defaults.
+            subject: Request id; repeat to select multiple executable subjects.
+            environment: Environment id; repeat to select assertion topology.
+            baseline: Baseline Environment id selecting comparison topology.
+            candidate: Candidate Environment id; repeat to add candidates.
+            matrix: Matrix override as BINDING=MATRIX; repeat to add bindings.
+            trials: Positive trial-count override.
+            maximum_attempts: Positive maximum-attempt override.
+            fail_fast: Enable or disable fail-fast planning.
+            budget: Budget override as RESOURCE=LIMIT; repeat to add resources.
+            limits: Version-owned local-source, sanitization, and output ceilings.
+            output_format: Human text or deterministic JSON output.
+            color: Terminal color behavior for failures.
+        """
+        request = RenderRequest(
+            plan=PlanRequest(
+                config=config,
+                additional_sources=source,
+                policy=policy,
+                execution_profile=profile,
+                subjects=subject,
+                environments=environment,
+                baseline=baseline,
+                candidates=candidate,
+                matrices=matrix,
+                trials=trials,
+                maximum_attempts=maximum_attempts,
+                fail_fast=fail_fast,
+                budgets=budget,
+                output=CliOutputMode(output_format),
+            ),
+            limits=_render_limits(limits),
+        )
+        return _invocation(services.render(request), color)
 
 
 def _register_artifact_commands(cli: App, services: CliServices) -> None:
@@ -312,6 +944,8 @@ def build_app(services: CliServices) -> App:
     schema = App(name="schema", help="Print versioned public schemas and CLI documentation.")
     cli.command(schema)
     _register_artifact_commands(cli, services)
+    _register_execution_commands(cli, services)
+    _register_render_command(cli, services)
 
     @schema.command(name="config")
     def schema_config(*, color: ColorOption = "auto") -> CliInvocation:
@@ -430,9 +1064,10 @@ def build_app(services: CliServices) -> App:
         Args:
             config: Project manifest or directory containing comparo.yaml.
             source: Additional local YAML source; repeat the option to add more.
-            policy: Explicit operator-owned ExecutionPolicy file; defaults to trusted-local.
+            policy: Explicit operator-owned policy; omission uses permissive
+                trusted-local authority.
             profile: ExecutionProfile id to apply.
-            subject: Request or Scenario id; repeat to select more than one.
+            subject: Request id; repeat to select more than one executable subject.
             environment: Environment id for an assertion run; repeat to select more than one.
             baseline: Baseline Environment id for a comparison run.
             candidate: Candidate Environment id; repeat to select more than one.

@@ -8,20 +8,28 @@ import pytest
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
 from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
+from comparo.cli.contracts import DEFAULT_CLI_EXECUTION_LIMITS_V1
+from comparo.cli.contracts import DEFAULT_CLI_RENDER_LIMITS_V1
 from comparo.cli.contracts import ArtifactBlobRequest
 from comparo.cli.contracts import ArtifactReadRequest
 from comparo.cli.contracts import CliArtifactLimits
 from comparo.cli.contracts import CliColorMode
 from comparo.cli.contracts import CliCommandResult
+from comparo.cli.contracts import CliExecutionCommandKind
+from comparo.cli.contracts import CliExecutionLimits
 from comparo.cli.contracts import CliExitCode
 from comparo.cli.contracts import CliInvocation
 from comparo.cli.contracts import CliMessage
 from comparo.cli.contracts import CliMessageLevel
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
+from comparo.cli.contracts import CliRenderLimits
 from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
+from comparo.cli.contracts import ExecutionArtifactSummary
+from comparo.cli.contracts import ExecutionRequest
 from comparo.cli.contracts import PlanRequest
+from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
 
@@ -82,6 +90,9 @@ def test_exit_codes_and_valid_contracts_are_stable() -> None:
     assert Path(".comparo/artifacts") == DEFAULT_CLI_ARTIFACT_ROOT_V1
     assert DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blobs == 4096
     assert DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1 == 64 * 1024 * 1024
+    assert DEFAULT_CLI_EXECUTION_LIMITS_V1.artifact is DEFAULT_CLI_ARTIFACT_LIMITS_V1
+    assert DEFAULT_CLI_RENDER_LIMITS_V1.maximum_output_bytes == 64 * 1024 * 1024
+    assert tuple(item.value for item in CliExecutionCommandKind) == ("run", "diff", "exec")
     assert tuple(item.value for item in CliReportFormat) == (
         "json",
         "junit",
@@ -295,3 +306,110 @@ def test_cli_artifact_limits_require_exact_integers() -> None:
     values["maximum_blobs"] = True
     with pytest.raises(TypeError, match="exact integers"):
         CliArtifactLimits(**values)
+
+
+def _execution_request(**changes: object) -> ExecutionRequest:
+    values: dict[str, object] = {
+        "command": CliExecutionCommandKind.RUN,
+        "plan": _plan_request(),
+        "approve_mutations": False,
+        "persist": False,
+        "artifact_root": Path(".comparo/artifacts"),
+        "limits": DEFAULT_CLI_EXECUTION_LIMITS_V1,
+        "tool_version": "test",
+    }
+    values.update(changes)
+    return ExecutionRequest(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("changes", "error", "message"),
+    [
+        ({"command": object()}, TypeError, "command kind"),
+        ({"plan": object()}, TypeError, "planning request"),
+        ({"approve_mutations": 1}, TypeError, "mutation approval"),
+        ({"persist": 1}, TypeError, "persistence selection"),
+        ({"artifact_root": object()}, TypeError, "artifact root"),
+        ({"limits": object()}, TypeError, "execution limits"),
+        ({"tool_version": object()}, TypeError, "tool version"),
+        ({"tool_version": ""}, ValueError, "bounded"),
+        ({"tool_version": "x" * 65}, ValueError, "bounded"),
+    ],
+)
+def test_execution_request_rejects_untyped_or_unbounded_fields(
+    changes: dict[str, object],
+    error: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(error, match=message):
+        _execution_request(**changes)
+
+
+def test_cli_execution_limits_require_exact_types() -> None:
+    values = {
+        field: getattr(DEFAULT_CLI_EXECUTION_LIMITS_V1, field)
+        for field in DEFAULT_CLI_EXECUTION_LIMITS_V1.__struct_fields__
+    }
+    values["maximum_json_nodes"] = True
+    with pytest.raises(TypeError, match="exact integers"):
+        CliExecutionLimits(**values)
+    values["maximum_json_nodes"] = 1
+    values["artifact"] = object()
+    with pytest.raises(TypeError, match="artifact limits"):
+        CliExecutionLimits(**values)
+
+
+def _execution_summary(**changes: object) -> ExecutionArtifactSummary:
+    values: dict[str, object] = {
+        "api_version": "comparo.artifact/v1alpha1",
+        "artifact_id": "artifact-0",
+        "run_id": "run-0",
+        "invocation_id": "invocation-0",
+        "completion": "complete",
+        "gate": "not-requested",
+        "executions": 1,
+        "comparisons": 0,
+        "assertions": 1,
+        "diffs": 0,
+        "coverage_issues": 0,
+        "persistence": "not-persisted",
+        "bundle_id": None,
+    }
+    values.update(changes)
+    return ExecutionArtifactSummary(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"artifact_id": ""},
+        {"completion": object()},
+        {"executions": -1},
+        {"comparisons": True},
+        {"bundle_id": ""},
+        {"bundle_id": object()},
+    ],
+)
+def test_execution_summary_rejects_unsafe_primitive_shapes(changes: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="execution artifact"):
+        _execution_summary(**changes)
+
+
+def test_render_limits_and_request_require_exact_contracts() -> None:
+    values = {
+        field: getattr(DEFAULT_CLI_RENDER_LIMITS_V1, field)
+        for field in DEFAULT_CLI_RENDER_LIMITS_V1.__struct_fields__
+    }
+    values["maximum_yaml_nodes"] = True
+    with pytest.raises(TypeError, match="exact integers"):
+        CliRenderLimits(**values)
+    with pytest.raises(TypeError, match="planning request"):
+        RenderRequest(
+            plan=cast("PlanRequest", object()),
+            limits=DEFAULT_CLI_RENDER_LIMITS_V1,
+        )
+    with pytest.raises(TypeError, match="render limits"):
+        RenderRequest(
+            plan=_plan_request(),
+            limits=cast("CliRenderLimits", object()),
+        )

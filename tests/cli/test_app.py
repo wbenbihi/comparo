@@ -29,7 +29,9 @@ from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
 from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
+from comparo.cli.contracts import ExecutionRequest
 from comparo.cli.contracts import PlanRequest
+from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import CliServices
@@ -54,10 +56,12 @@ class _StaticServices:
         self.validate_request: ValidateRequest | None = None
         self.doctor_request: DoctorRequest | None = None
         self.plan_request: PlanRequest | None = None
+        self.execution_request: ExecutionRequest | None = None
         self.artifact_inspect_request: ArtifactReadRequest | None = None
         self.artifact_verify_request: ArtifactReadRequest | None = None
         self.artifact_blob_request: ArtifactBlobRequest | None = None
         self.report_request: ReportRequest | None = None
+        self.render_request: RenderRequest | None = None
 
     def configuration_schema(self) -> CliCommandResult:
         return self.result
@@ -81,6 +85,14 @@ class _StaticServices:
 
     def plan(self, request: PlanRequest) -> CliCommandResult:
         self.plan_request = request
+        return self.result
+
+    def execute(self, request: ExecutionRequest) -> CliCommandResult:
+        self.execution_request = request
+        return self.result
+
+    def render(self, request: RenderRequest) -> CliCommandResult:
+        self.render_request = request
         return self.result
 
     def artifact_inspect(self, request: ArtifactReadRequest) -> CliCommandResult:
@@ -167,7 +179,40 @@ def test_root_help_is_generated_without_running_services(arguments: list[str]) -
     assert "validate" in stdout
     assert "artifact" in stdout
     assert "report" in stdout
+    assert "run" in stdout
+    assert "diff" in stdout
+    assert "exec" in stdout
+    assert "render" in stdout
     assert stderr == ""
+
+
+@pytest.mark.parametrize("command", ["run", "diff", "exec"])
+def test_execution_help_explains_shared_controls_and_security_defaults(command: str) -> None:
+    code, stdout, stderr = _invoke([command, "--help"], services=_StaticServices())
+    help_text = " ".join(stdout.replace("│", " ").split())
+    assert code == 0
+    assert "Project manifest or directory containing comparo.yaml." in help_text
+    assert "permissive built-in trusted-local authority" in help_text
+    assert "Approve requests classified as mutating" in help_text
+    assert "Persist a sanitized artifact bundle; disabled by default." in help_text
+    assert "Maximum aggregate bytes retained" in help_text
+    assert "Maximum aggregate blob bytes admitted" in help_text
+    assert "Shared planning, policy, persistence" not in help_text
+    assert stderr == ""
+
+
+def test_plan_and_render_help_disclose_authority_and_specific_render_limits() -> None:
+    plan = _invoke(["plan", "--help"], services=_StaticServices())
+    render = _invoke(["render", "--help"], services=_StaticServices())
+    plan_help = " ".join(plan[1].replace("│", " ").split())
+    render_help = " ".join(render[1].replace("│", " ").split())
+    assert plan[0] == render[0] == 0
+    assert "permissive built-in trusted-local authority" in plan_help
+    assert "permissive built-in trusted-local authority" in render_help
+    assert "Maximum bytes read from one project file value." in render_help
+    assert "Maximum bytes emitted by the complete rendered preview." in render_help
+    assert "Version-owned local-source" not in render_help
+    assert plan[2] == render[2] == ""
 
 
 def test_version_comes_from_installed_distribution() -> None:
@@ -328,6 +373,257 @@ def test_plan_callback_preserves_all_frontend_inputs_without_interpreting_them()
     assert request.fail_fast is False
     assert request.budgets == ("requests=4",)
     assert request.output is CliOutputMode.JSON
+
+
+def test_run_callback_preserves_shared_options_and_every_execution_limit() -> None:
+    services = _StaticServices()
+    arguments = [
+        "run",
+        "-C",
+        "project.yaml",
+        "-S",
+        "extra.yaml",
+        "--policy",
+        "operator.yaml",
+        "--subject",
+        "ping",
+        "--env",
+        "staging",
+        "--environment",
+        "prod",
+        "--matrix",
+        "region=regions",
+        "--trials",
+        "2",
+        "--maximum-attempts",
+        "3",
+        "--no-fail-fast",
+        "--budget",
+        "requests=4",
+        "--approve-mutations",
+        "--persist",
+        "--artifact-root",
+        "artifacts",
+        "--format",
+        "json",
+        "--color",
+        "never",
+        "--body-memory-threshold-bytes",
+        "2",
+        "--maximum-transient-body-bytes",
+        "43",
+        "--maximum-encoded-body-bytes",
+        "41",
+        "--maximum-entity-body-bytes",
+        "41",
+        "--maximum-expansion-ratio",
+        "3",
+        "--maximum-stream-records",
+        "5",
+        "--maximum-stream-controls",
+        "7",
+        "--maximum-stream-errors",
+        "11",
+        "--maximum-stream-item-bytes",
+        "13",
+        "--maximum-decoded-body-bytes",
+        "17",
+        "--maximum-text-characters",
+        "19",
+        "--maximum-json-depth",
+        "23",
+        "--maximum-json-nodes",
+        "29",
+        "--maximum-json-tokens",
+        "31",
+        "--maximum-blobs",
+        "7",
+        "--maximum-blob-bytes",
+        "11",
+        "--maximum-total-blob-bytes",
+        "13",
+        "--maximum-manifest-bytes",
+        "17",
+        "--maximum-report-bytes",
+        "19",
+        "--maximum-redaction-patterns",
+        "23",
+        "--maximum-redaction-pattern-bytes",
+        "29",
+        "--maximum-redaction-value-bytes",
+        "31",
+        "--maximum-redaction-value-nodes",
+        "37",
+    ]
+    assert _invoke(arguments, services=services) == (0, "static result\n", "")
+    request = services.execution_request
+    assert request is not None
+    assert request.command.value == "run"
+    assert request.plan.config == Path("project.yaml")
+    assert request.plan.additional_sources == (Path("extra.yaml"),)
+    assert request.plan.policy == Path("operator.yaml")
+    assert request.plan.subjects == ("ping",)
+    assert request.plan.environments == ("staging", "prod")
+    assert request.plan.baseline is None
+    assert request.plan.candidates == ()
+    assert request.plan.matrices == ("region=regions",)
+    assert request.plan.trials == 2
+    assert request.plan.maximum_attempts == 3
+    assert request.plan.fail_fast is False
+    assert request.plan.budgets == ("requests=4",)
+    assert request.plan.output is CliOutputMode.JSON
+    assert request.approve_mutations
+    assert request.persist
+    assert request.artifact_root == Path("artifacts")
+    assert request.tool_version == "0.2.0"
+    runtime = request.limits
+    assert tuple(
+        getattr(runtime, field) for field in runtime.__struct_fields__ if field != "artifact"
+    ) == (2, 43, 41, 41, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31)
+    assert tuple(
+        getattr(runtime.artifact, field) for field in runtime.artifact.__struct_fields__
+    ) == (7, 11, 13, 17, 19, 23, 29, 31, 37)
+
+
+def test_diff_and_exec_callbacks_select_topology_without_interpreting_it() -> None:
+    services = _StaticServices()
+    assert _invoke(
+        ["diff", "--baseline", "staging", "--candidate", "prod"],
+        services=services,
+    ) == (0, "static result\n", "")
+    diff = services.execution_request
+    assert diff is not None
+    assert diff.command.value == "diff"
+    assert diff.plan.baseline == "staging"
+    assert diff.plan.candidates == ("prod",)
+    assert not diff.persist
+
+    assert _invoke(
+        [
+            "exec",
+            "release",
+            "--env",
+            "dev",
+            "--baseline",
+            "staging",
+            "--candidate",
+            "prod",
+            "--no-persist",
+        ],
+        services=services,
+    ) == (0, "static result\n", "")
+    profile = services.execution_request
+    assert profile is not None
+    assert profile.command.value == "exec"
+    assert profile.plan.execution_profile == "release"
+    assert profile.plan.environments == ("dev",)
+    assert profile.plan.baseline == "staging"
+    assert profile.plan.candidates == ("prod",)
+    assert not profile.persist
+
+
+def test_render_callback_preserves_planning_and_every_offline_limit() -> None:
+    services = _StaticServices()
+    arguments = [
+        "render",
+        "-C",
+        "project.yaml",
+        "-S",
+        "extra.yaml",
+        "--policy",
+        "operator.yaml",
+        "--profile",
+        "release",
+        "--subject",
+        "ping",
+        "--env",
+        "dev",
+        "--baseline",
+        "staging",
+        "--candidate",
+        "prod",
+        "--matrix",
+        "region=regions",
+        "--trials",
+        "2",
+        "--maximum-attempts",
+        "3",
+        "--no-fail-fast",
+        "--budget",
+        "requests=4",
+        "--format",
+        "json",
+        "--color",
+        "never",
+        "--maximum-file-bytes",
+        "2",
+        "--maximum-file-path-bytes",
+        "3",
+        "--maximum-file-segments",
+        "5",
+        "--maximum-environment-files",
+        "7",
+        "--maximum-environment-file-bytes",
+        "11",
+        "--maximum-environment-total-bytes",
+        "13",
+        "--maximum-environment-entries",
+        "17",
+        "--maximum-environment-line-bytes",
+        "19",
+        "--maximum-yaml-bytes",
+        "23",
+        "--maximum-yaml-depth",
+        "29",
+        "--maximum-yaml-nodes",
+        "31",
+        "--maximum-redaction-patterns",
+        "37",
+        "--maximum-redaction-pattern-bytes",
+        "41",
+        "--maximum-redaction-value-bytes",
+        "43",
+        "--maximum-redaction-value-nodes",
+        "47",
+        "--maximum-output-bytes",
+        "53",
+    ]
+    assert _invoke(arguments, services=services) == (0, "static result\n", "")
+    request = services.render_request
+    assert request is not None
+    plan = request.plan
+    assert plan.config == Path("project.yaml")
+    assert plan.additional_sources == (Path("extra.yaml"),)
+    assert plan.policy == Path("operator.yaml")
+    assert plan.execution_profile == "release"
+    assert plan.subjects == ("ping",)
+    assert plan.environments == ("dev",)
+    assert plan.baseline == "staging"
+    assert plan.candidates == ("prod",)
+    assert plan.matrices == ("region=regions",)
+    assert plan.trials == 2
+    assert plan.maximum_attempts == 3
+    assert plan.fail_fast is False
+    assert plan.budgets == ("requests=4",)
+    assert plan.output is CliOutputMode.JSON
+    assert tuple(getattr(request.limits, field) for field in request.limits.__struct_fields__) == (
+        2,
+        3,
+        5,
+        7,
+        11,
+        13,
+        17,
+        19,
+        23,
+        29,
+        31,
+        37,
+        41,
+        43,
+        47,
+        53,
+    )
 
 
 def test_artifact_callbacks_preserve_limits_coordinates_and_output_modes() -> None:

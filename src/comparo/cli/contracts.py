@@ -66,6 +66,14 @@ class CliReportFormat(StrEnum):
     MARKDOWN = "markdown"
 
 
+class CliExecutionCommandKind(StrEnum):
+    """Closed user journeys sharing the production execution service."""
+
+    RUN = "run"
+    DIFF = "diff"
+    EXEC = "exec"
+
+
 @final
 class CliArtifactLimits(msgspec.Struct, frozen=True, kw_only=True):
     """Explicit finite artifact read limits carried by every CLI operation."""
@@ -112,6 +120,116 @@ DEFAULT_CLI_ARTIFACT_LIMITS_V1 = CliArtifactLimits(
     maximum_redaction_value_nodes=4096,
 )
 DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1 = 64 * 1024 * 1024
+
+
+@final
+class CliExecutionLimits(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-owned storage, capture, decode, and artifact limits for one execution."""
+
+    body_memory_threshold_bytes: int
+    maximum_transient_body_bytes: int
+    maximum_encoded_body_bytes: int
+    maximum_entity_body_bytes: int
+    maximum_expansion_ratio: int
+    maximum_stream_records: int
+    maximum_stream_controls: int
+    maximum_stream_errors: int
+    maximum_stream_item_bytes: int
+    maximum_decoded_body_bytes: int
+    maximum_text_characters: int
+    maximum_json_depth: int
+    maximum_json_nodes: int
+    maximum_json_tokens: int
+    artifact: CliArtifactLimits
+
+    def __post_init__(self) -> None:
+        """Require exact primitives while application composition validates relationships."""
+        values = (
+            self.body_memory_threshold_bytes,
+            self.maximum_transient_body_bytes,
+            self.maximum_encoded_body_bytes,
+            self.maximum_entity_body_bytes,
+            self.maximum_expansion_ratio,
+            self.maximum_stream_records,
+            self.maximum_stream_controls,
+            self.maximum_stream_errors,
+            self.maximum_stream_item_bytes,
+            self.maximum_decoded_body_bytes,
+            self.maximum_text_characters,
+            self.maximum_json_depth,
+            self.maximum_json_nodes,
+            self.maximum_json_tokens,
+        )
+        if any(type(value) is not int for value in values):
+            raise TypeError("CLI execution limits must be exact integers")
+        if type(self.artifact) is not CliArtifactLimits:
+            raise TypeError("CLI execution artifact limits must be CliArtifactLimits")
+
+
+DEFAULT_CLI_EXECUTION_LIMITS_V1 = CliExecutionLimits(
+    body_memory_threshold_bytes=1024 * 1024,
+    maximum_transient_body_bytes=512 * 1024 * 1024,
+    maximum_encoded_body_bytes=64 * 1024 * 1024,
+    maximum_entity_body_bytes=64 * 1024 * 1024,
+    maximum_expansion_ratio=100,
+    maximum_stream_records=100_000,
+    maximum_stream_controls=10_000,
+    maximum_stream_errors=10_000,
+    maximum_stream_item_bytes=1024 * 1024,
+    maximum_decoded_body_bytes=8 * 1024 * 1024,
+    maximum_text_characters=8 * 1024 * 1024,
+    maximum_json_depth=256,
+    maximum_json_nodes=1_000_000,
+    maximum_json_tokens=2_000_000,
+    artifact=DEFAULT_CLI_ARTIFACT_LIMITS_V1,
+)
+
+
+@final
+class CliRenderLimits(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-owned local-source, sanitization, and output limits for offline rendering."""
+
+    maximum_file_bytes: int
+    maximum_file_path_bytes: int
+    maximum_file_segments: int
+    maximum_environment_files: int
+    maximum_environment_file_bytes: int
+    maximum_environment_total_bytes: int
+    maximum_environment_entries: int
+    maximum_environment_line_bytes: int
+    maximum_yaml_bytes: int
+    maximum_yaml_depth: int
+    maximum_yaml_nodes: int
+    maximum_redaction_patterns: int
+    maximum_redaction_pattern_bytes: int
+    maximum_redaction_value_bytes: int
+    maximum_redaction_value_nodes: int
+    maximum_output_bytes: int
+
+    def __post_init__(self) -> None:
+        """Require exact integer syntax while the application adapters validate ranges."""
+        if any(type(getattr(self, field)) is not int for field in self.__struct_fields__):
+            raise TypeError("CLI render limits must be exact integers")
+
+
+DEFAULT_CLI_RENDER_LIMITS_V1 = CliRenderLimits(
+    maximum_file_bytes=8 * 1024 * 1024,
+    maximum_file_path_bytes=4096,
+    maximum_file_segments=128,
+    maximum_environment_files=32,
+    maximum_environment_file_bytes=1024 * 1024,
+    maximum_environment_total_bytes=8 * 1024 * 1024,
+    maximum_environment_entries=10_000,
+    maximum_environment_line_bytes=65_536,
+    maximum_yaml_bytes=8 * 1024 * 1024,
+    maximum_yaml_depth=256,
+    maximum_yaml_nodes=1_000_000,
+    maximum_redaction_patterns=4096,
+    maximum_redaction_pattern_bytes=1024 * 1024,
+    maximum_redaction_value_bytes=256 * 1024,
+    maximum_redaction_value_nodes=4096,
+    maximum_output_bytes=64 * 1024 * 1024,
+)
 
 
 @final
@@ -321,6 +439,97 @@ class PlanRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("plan fail-fast must be bool or None")
         if type(self.output) is not CliOutputMode:
             raise TypeError("plan output mode must be typed")
+
+
+@final
+class ExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """One framework-neutral request shared by run, diff, and ExecutionProfile execution."""
+
+    command: CliExecutionCommandKind
+    plan: PlanRequest
+    approve_mutations: bool
+    persist: bool
+    artifact_root: Path
+    limits: CliExecutionLimits
+    tool_version: str
+
+    def __post_init__(self) -> None:
+        """Require typed execution controls before any project source is opened."""
+        if type(self.command) is not CliExecutionCommandKind:
+            raise TypeError("execution command kind must be typed")
+        if type(self.plan) is not PlanRequest:
+            raise TypeError("execution planning request must be PlanRequest")
+        if type(self.approve_mutations) is not bool:
+            raise TypeError("execution mutation approval must be bool")
+        if type(self.persist) is not bool:
+            raise TypeError("execution persistence selection must be bool")
+        if not isinstance(self.artifact_root, Path):
+            raise TypeError("execution artifact root must be a Path")
+        if type(self.limits) is not CliExecutionLimits:
+            raise TypeError("execution limits must be CliExecutionLimits")
+        if type(self.tool_version) is not str:
+            raise TypeError("execution tool version must be text")
+        if not self.tool_version or len(self.tool_version) > 64:
+            raise ValueError("execution tool version must be bounded non-empty text")
+
+
+@final
+class ExecutionArtifactSummary(msgspec.Struct, frozen=True, kw_only=True):
+    """Small safe projection of one sanitized RunArtifact and persistence outcome."""
+
+    api_version: str
+    artifact_id: str
+    run_id: str
+    invocation_id: str
+    completion: str
+    gate: str
+    executions: int
+    comparisons: int
+    assertions: int
+    diffs: int
+    coverage_issues: int
+    persistence: str
+    bundle_id: str | None
+
+    def __post_init__(self) -> None:
+        """Require exact safe primitives at the live-result containment boundary."""
+        text = (
+            self.api_version,
+            self.artifact_id,
+            self.run_id,
+            self.invocation_id,
+            self.completion,
+            self.gate,
+            self.persistence,
+        )
+        if any(type(value) is not str or not value for value in text):
+            raise ValueError("execution artifact summary text must be non-empty")
+        counts = (
+            self.executions,
+            self.comparisons,
+            self.assertions,
+            self.diffs,
+            self.coverage_issues,
+        )
+        if any(type(value) is not int or value < 0 for value in counts):
+            raise ValueError("execution artifact summary counts must be non-negative integers")
+        if self.bundle_id is not None and (type(self.bundle_id) is not str or not self.bundle_id):
+            raise ValueError("execution artifact bundle id must be non-empty text or None")
+
+
+@final
+class RenderRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """One framework-neutral offline request-rendering invocation."""
+
+    plan: PlanRequest
+    limits: CliRenderLimits
+
+    def __post_init__(self) -> None:
+        """Require exact planning and finite-limit contracts before opening local sources."""
+        if type(self.plan) is not PlanRequest:
+            raise TypeError("render planning request must be PlanRequest")
+        if type(self.limits) is not CliRenderLimits:
+            raise TypeError("render limits must be CliRenderLimits")
 
 
 @final

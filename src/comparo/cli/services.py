@@ -1,4 +1,4 @@
-"""Framework-free implementations of Comparo's read-only CLI operations."""
+"""Framework-free implementations of Comparo's command-line operations."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from comparo.application.planning import MatrixOverride
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import inspect_project_plan
+from comparo.application.render_preview import RenderedRequestPreview
 from comparo.configuration.loader import compile_project_path
 from comparo.core.artifacts.codec import render_artifact_schema
 from comparo.core.configuration.models import ConfigurationDiagnostic
@@ -46,9 +47,15 @@ from .contracts import CliOutputMode
 from .contracts import CliPayloadKind
 from .contracts import CliReportFormat
 from .contracts import DoctorRequest
+from .contracts import ExecutionArtifactSummary
+from .contracts import ExecutionRequest
 from .contracts import PlanRequest
+from .contracts import RenderRequest
 from .contracts import ReportRequest
 from .contracts import ValidateRequest
+from .execution import CliExecutionOutcome
+from .execution import execute_cli_request
+from .rendering import render_cli_request
 
 _CLI_API_VERSION = "comparo.cli/v1alpha1"
 
@@ -76,6 +83,12 @@ class CliServices(Protocol):
 
     def plan(self, request: PlanRequest) -> CliCommandResult:
         """Compile and inspect one deterministic plan without runtime effects."""
+
+    def execute(self, request: ExecutionRequest) -> CliCommandResult:
+        """Execute run, diff, and profile commands through one production path."""
+
+    def render(self, request: RenderRequest) -> CliCommandResult:
+        """Resolve and sanitize planned requests without network activity."""
 
     def artifact_inspect(self, request: ArtifactReadRequest) -> CliCommandResult:
         """Authenticate and summarize one artifact bundle."""
@@ -403,6 +416,256 @@ def _plan(request: PlanRequest) -> CliCommandResult:
     )
 
 
+def _invalid_execution(
+    request: ExecutionRequest,
+    diagnostics: tuple[ApplicationDiagnostic, ...],
+) -> CliCommandResult:
+    """Render value-free execution diagnostics without retaining live values."""
+    if request.plan.output is CliOutputMode.HUMAN:
+        messages: list[tuple[CliMessageLevel, str]] = [
+            (CliMessageLevel.ERROR, f"Execution is invalid ({len(diagnostics)} issue(s)).")
+        ]
+        messages.extend(
+            (CliMessageLevel.ERROR, f"{item.code} ({item.stage})") for item in diagnostics
+        )
+        return _human(CliExitCode.INVALID_INVOCATION, *messages)
+    return CliCommandResult(
+        exit_code=CliExitCode.INVALID_INVOCATION,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "command": request.command.value,
+                "diagnostics": [_application_diagnostic_record(item) for item in diagnostics],
+                "status": "invalid",
+            }
+        ),
+    )
+
+
+def _execution_status(exit_code: CliExitCode) -> tuple[CliMessageLevel, str, str]:
+    """Map safe artifact status to human severity and stable machine status."""
+    if exit_code is CliExitCode.SUCCESS:
+        return CliMessageLevel.SUCCESS, "Execution completed.", "complete"
+    if exit_code is CliExitCode.GATE_FAILED:
+        return CliMessageLevel.ERROR, "Execution completed; gate failed.", "gate-failed"
+    if exit_code is CliExitCode.INVALID_INVOCATION:
+        return CliMessageLevel.ERROR, "Execution was rejected.", "invalid"
+    return CliMessageLevel.ERROR, "Execution did not complete.", "incomplete"
+
+
+def _human_execution(
+    outcome: CliExecutionOutcome,
+    summary: ExecutionArtifactSummary,
+) -> CliCommandResult:
+    """Render only identifiers and aggregate counts from one sanitized artifact."""
+    level, status, _ = _execution_status(outcome.exit_code)
+    storage = f"Persistence: {summary.persistence}."
+    if summary.bundle_id is not None:
+        storage = f"Persistence: {summary.persistence}; bundle {summary.bundle_id}."
+    return _human(
+        outcome.exit_code,
+        (level, status),
+        (
+            CliMessageLevel.INFO,
+            f"Artifact {summary.artifact_id}; run {summary.run_id}; "
+            f"invocation {summary.invocation_id}.",
+        ),
+        (
+            CliMessageLevel.INFO,
+            f"Completion: {summary.completion}; gate: {summary.gate}.",
+        ),
+        (
+            CliMessageLevel.INFO,
+            f"Results: {summary.executions} execution(s), "
+            f"{summary.comparisons} comparison(s), {summary.assertions} assertion(s), "
+            f"{summary.diffs} diff(s), {summary.coverage_issues} coverage issue(s).",
+        ),
+        (CliMessageLevel.INFO, storage),
+    )
+
+
+def _render_execution(
+    request: ExecutionRequest,
+    outcome: CliExecutionOutcome,
+) -> CliCommandResult:
+    """Render a bridge result without accepting any live execution object."""
+    if outcome.summary is None:
+        return _invalid_execution(request, outcome.diagnostics)
+    if request.plan.output is CliOutputMode.HUMAN:
+        return _human_execution(outcome, outcome.summary)
+    _, _, status = _execution_status(outcome.exit_code)
+    return CliCommandResult(
+        exit_code=outcome.exit_code,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "artifact": msgspec.to_builtins(outcome.summary),
+                "command": request.command.value,
+                "status": status,
+            }
+        ),
+    )
+
+
+def _execute(request: ExecutionRequest) -> CliCommandResult:
+    """Translate planning syntax once and invoke the shared asynchronous execution bridge."""
+    try:
+        options = _planning_options(request.plan)
+    except _PlanOptionError as error:
+        return _invalid_execution(
+            request,
+            (
+                ApplicationDiagnostic(
+                    code=error.code,
+                    severity="error",
+                    stage="invocation",
+                ),
+            ),
+        )
+    outcome = asyncio.run(
+        execute_cli_request(
+            request,
+            options,
+            invocation_id=uuid4(),
+            run_id=uuid4(),
+        )
+    )
+    return _render_execution(request, outcome)
+
+
+def _invalid_render(
+    request: RenderRequest,
+    diagnostics: tuple[ApplicationDiagnostic, ...],
+) -> CliCommandResult:
+    """Render one all-or-nothing offline-preview failure without source values."""
+    if request.plan.output is CliOutputMode.HUMAN:
+        messages: list[tuple[CliMessageLevel, str]] = [
+            (CliMessageLevel.ERROR, f"Request rendering is invalid ({len(diagnostics)} issue(s)).")
+        ]
+        messages.extend(
+            (CliMessageLevel.ERROR, f"{item.code} ({item.stage})") for item in diagnostics
+        )
+        return _human(CliExitCode.INVALID_INVOCATION, *messages)
+    return CliCommandResult(
+        exit_code=CliExitCode.INVALID_INVOCATION,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "command": "render",
+                "diagnostics": [_application_diagnostic_record(item) for item in diagnostics],
+                "status": "invalid",
+            }
+        ),
+    )
+
+
+def _quoted(value: str) -> str:
+    """Escape terminal control characters using JSON string syntax."""
+    return json.dumps(value, ensure_ascii=True)
+
+
+def _human_preview(preview: RenderedRequestPreview) -> tuple[str, ...]:
+    """Render one sanitized request as terminal-safe, body-free text lines."""
+    lines = [
+        f"[{preview.ordinal}] {_quoted(preview.method)} {_quoted(preview.url)}",
+        f"  execution: {_quoted(preview.execution_id)}",
+        f"  trial: {_quoted(preview.trial_id)}; cell: {_quoted(preview.cell_id)}",
+        (
+            "  subject: "
+            f"{_quoted(preview.subject.namespace)}/"
+            f"{_quoted(preview.subject.kind)}/"
+            f"{_quoted(preview.subject.resource_id)}"
+        ),
+        (
+            "  environment: "
+            f"{_quoted(preview.environment.namespace)}/"
+            f"{_quoted(preview.environment.kind)}/"
+            f"{_quoted(preview.environment.resource_id)}"
+        ),
+    ]
+    lines.extend(
+        f"  header: {_quoted(item.name)}: {_quoted(item.value)}; "
+        f"redacted={str(item.redacted).lower()}"
+        for item in preview.headers
+    )
+    lines.extend(
+        f"  cookie: {_quoted(item.name)}={_quoted(item.value)}; redacted=true"
+        for item in preview.cookies
+    )
+    lines.append(f"  body: omitted ({preview.body.reason.value})")
+    return tuple(lines)
+
+
+def _render_previews(
+    request: RenderRequest,
+    previews: tuple[RenderedRequestPreview, ...],
+) -> CliCommandResult:
+    """Encode the complete sanitized preview collection within the caller's output cap."""
+    if request.plan.output is CliOutputMode.JSON:
+        kind = CliPayloadKind.JSON
+        payload = _canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "command": "render",
+                "requests": msgspec.to_builtins(previews),
+                "status": "rendered",
+            }
+        )
+    else:
+        kind = CliPayloadKind.TEXT
+        lines = [f"Rendered {len(previews)} request(s)."]
+        for preview in previews:
+            lines.extend(_human_preview(preview))
+        payload = ("\n".join(lines) + "\n").encode()
+    if len(payload) > request.limits.maximum_output_bytes:
+        return _invalid_render(
+            request,
+            (
+                ApplicationDiagnostic(
+                    code="cli.render.output-limit-exceeded",
+                    severity="error",
+                    stage="render",
+                ),
+            ),
+        )
+    return CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=kind,
+        payload=payload,
+    )
+
+
+def _render(request: RenderRequest) -> CliCommandResult:
+    """Translate shared planning syntax and invoke the offline preview application service."""
+    try:
+        options = _planning_options(request.plan)
+    except _PlanOptionError as error:
+        return _invalid_render(
+            request,
+            (
+                ApplicationDiagnostic(
+                    code=error.code,
+                    severity="error",
+                    stage="invocation",
+                ),
+            ),
+        )
+    outcome = asyncio.run(
+        render_cli_request(
+            request,
+            options,
+            invocation_id=uuid4(),
+            run_id=uuid4(),
+        )
+    )
+    if outcome.diagnostics:
+        return _invalid_render(request, outcome.diagnostics)
+    return _render_previews(request, outcome.previews)
+
+
 def _artifact_limits(value: CliArtifactLimits) -> ArtifactReadLimits:
     """Translate explicit CLI limits to the application-owned admission contract."""
     return ArtifactReadLimits(
@@ -592,6 +855,14 @@ class DefaultCliServices:
     def plan(self, request: PlanRequest) -> CliCommandResult:
         """Compile and inspect one deterministic plan without runtime effects."""
         return _plan(request)
+
+    def execute(self, request: ExecutionRequest) -> CliCommandResult:
+        """Execute through the shared production composition and safe artifact boundary."""
+        return _execute(request)
+
+    def render(self, request: RenderRequest) -> CliCommandResult:
+        """Render sanitized planned requests through the offline application service."""
+        return _render(request)
 
     def artifact_inspect(self, request: ArtifactReadRequest) -> CliCommandResult:
         """Authenticate and summarize one artifact bundle."""
