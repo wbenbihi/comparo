@@ -29,13 +29,13 @@ from comparo.reporters import ReportError
 from comparo.reporters import ReportErrorCode
 from comparo.reporters import ReportFormat
 from comparo.reporters import decode_json_report
+from comparo.reporters import encode_report_schema
 from comparo.reporters import generate_report_schema
 from comparo.reporters import junit as junit_reporter
 from comparo.reporters import markdown as markdown_reporter
 from comparo.reporters import render_json_report
 from comparo.reporters import render_junit_report
 from comparo.reporters import render_markdown_report
-from comparo.reporters import render_report_schema
 from comparo.reporters import render_sarif_report
 from comparo.reporters import sarif as sarif_reporter
 from comparo.reporters._presentation import markdown_cell
@@ -166,7 +166,7 @@ def test_json_report_round_trips_and_its_checked_in_schema_is_canonical() -> Non
         / "schemas"
         / "comparo-report-v1alpha1.schema.json"
     )
-    assert checked_in.read_text(encoding="utf-8") == render_report_schema()
+    assert checked_in.read_text(encoding="utf-8") == encode_report_schema()
 
 
 def test_json_report_decoder_rejects_invalid_budgets_and_payloads() -> None:

@@ -113,6 +113,6 @@ def generate_report_schema() -> dict[str, object]:
     }
 
 
-def render_report_schema() -> str:
+def encode_report_schema() -> str:
     """Render the canonical checked-in JSON report schema."""
     return json.dumps(generate_report_schema(), indent=2, sort_keys=True) + "\n"
