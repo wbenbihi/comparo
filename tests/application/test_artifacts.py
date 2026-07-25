@@ -12,6 +12,7 @@ from comparo.adapters.artifacts import LocalArtifactBundleSink
 from comparo.application.artifacts import ArtifactOperationError
 from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.application.artifacts import ArtifactReadLimits
+from comparo.application.artifacts import initialize_project_artifact_root
 from comparo.application.artifacts import inspect_artifact
 from comparo.application.artifacts import read_artifact_blob
 from comparo.application.artifacts import render_artifact_report
@@ -47,6 +48,58 @@ def _bundle(tmp_path: Path) -> tuple[Path, RunArtifact]:
     sink.close()
     assert outcome.bundle_id == "artifact-0"
     return root, artifact
+
+
+def test_project_artifact_root_initialization_is_private_idempotent_and_contained(
+    tmp_path: Path,
+) -> None:
+    root = initialize_project_artifact_root(tmp_path.resolve(), Path(".comparo/artifacts"))
+    assert root == (tmp_path / ".comparo" / "artifacts").resolve()
+    assert root.is_dir()
+    assert root.stat().st_mode & 0o022 == 0
+    assert initialize_project_artifact_root(tmp_path.resolve(), Path(".comparo/artifacts")) == root
+
+
+@pytest.mark.parametrize(
+    ("project", "selected", "error"),
+    [
+        (cast("Path", object()), Path("artifacts"), TypeError),
+        (Path("relative"), Path("artifacts"), ArtifactOperationError),
+        (Path("/"), Path("/absolute"), ArtifactOperationError),
+        (Path("/"), Path("../escape"), ArtifactOperationError),
+    ],
+)
+def test_project_artifact_root_initialization_rejects_invalid_coordinates(
+    project: Path,
+    selected: Path,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        initialize_project_artifact_root(project, selected)
+
+
+def test_project_artifact_root_initialization_rejects_unsafe_or_missing_roots(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+    with pytest.raises(ArtifactOperationError) as unavailable:
+        initialize_project_artifact_root(missing, Path("artifacts"))
+    assert unavailable.value.code is ArtifactOperationErrorCode.ROOT_UNAVAILABLE
+
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir(mode=0o777)
+    unsafe.chmod(0o777)
+    with pytest.raises(ArtifactOperationError) as rejected:
+        initialize_project_artifact_root(tmp_path.resolve(), Path("unsafe"))
+    assert rejected.value.code is ArtifactOperationErrorCode.ROOT_UNSAFE
+
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "linked"
+    link.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ArtifactOperationError) as linked:
+        initialize_project_artifact_root(tmp_path.resolve(), Path("linked/artifacts"))
+    assert linked.value.code is ArtifactOperationErrorCode.ROOT_UNAVAILABLE
 
 
 def test_verify_inspect_and_report_share_authenticated_artifact(tmp_path: Path) -> None:

@@ -3,6 +3,9 @@
 from comparo.application.artifacts import ArtifactInspection as ArtifactInspection
 from comparo.application.artifacts import ArtifactOperationError as ArtifactOperationError
 from comparo.application.artifacts import ArtifactReadLimits as ArtifactReadLimits
+from comparo.application.artifacts import (
+    initialize_project_artifact_root as initialize_project_artifact_root,
+)
 from comparo.application.artifacts import inspect_artifact as inspect_artifact
 from comparo.application.artifacts import read_artifact_blob as read_artifact_blob
 from comparo.application.artifacts import render_artifact_report as render_artifact_report
@@ -185,6 +188,7 @@ __all__ = (
     "build_environment_snapshots",
     "build_invocation",
     "execute_production",
+    "initialize_project_artifact_root",
     "inspect_artifact",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",

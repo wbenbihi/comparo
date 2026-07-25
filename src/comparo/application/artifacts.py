@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import stat
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
 from typing import final
@@ -31,6 +34,8 @@ class ArtifactOperationErrorCode(StrEnum):
     BLOB_NOT_FOUND = "blob-not-found"
     OUTPUT_LIMIT_EXCEEDED = "output-limit-exceeded"
     REPORT_FAILED = "report-failed"
+    ROOT_UNAVAILABLE = "root-unavailable"
+    ROOT_UNSAFE = "root-unsafe"
 
 
 class ArtifactOperationError(RuntimeError):
@@ -100,6 +105,71 @@ class ArtifactInspection(msgspec.Struct, frozen=True, kw_only=True):
     blobs: int
     blob_bytes: int
     coverage_issues: int
+
+
+def initialize_project_artifact_root(project_root: Path, selected: Path) -> Path:
+    """Create and pin a private project-relative artifact root without following links."""
+    if not isinstance(project_root, Path) or not isinstance(selected, Path):
+        raise TypeError("artifact root initialization requires Path inputs")
+    if not project_root.is_absolute() or selected.is_absolute() or not selected.parts:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
+    if any(part in {"", ".", ".."} for part in selected.parts):
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
+    _initialize_relative_directories(project_root, selected.parts)
+    return _resolved_contained_root(project_root, selected)
+
+
+def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...]) -> None:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptors: list[int] = []
+    try:
+        current = os.open(project_root, flags)
+        descriptors.append(current)
+        _validate_private_directory(current, leaf=False)
+        for part in parts:
+            try:
+                child = os.open(part, flags, dir_fd=current)
+            except FileNotFoundError:
+                os.mkdir(part, mode=0o700, dir_fd=current)
+                child = os.open(part, flags, dir_fd=current)
+            descriptors.append(child)
+            current = child
+            _validate_private_directory(current, leaf=part == parts[-1])
+    except ArtifactOperationError:
+        raise
+    except OSError as error:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    finally:
+        for descriptor in reversed(descriptors):
+            with suppress(OSError):
+                os.close(descriptor)
+
+
+def _resolved_contained_root(project_root: Path, selected: Path) -> Path:
+    try:
+        resolved_project = project_root.resolve(strict=True)
+        resolved = (project_root / selected).resolve(strict=True)
+    except OSError as error:  # pragma: no cover - pinned directories remain addressable
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    if not resolved.is_relative_to(resolved_project):  # pragma: no cover - no-follow invariant
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
+    return resolved
+
+
+def _validate_private_directory(descriptor: int, *, leaf: bool) -> None:
+    metadata = os.fstat(descriptor)
+    unsafe_permissions = stat.S_IWGRP | stat.S_IWOTH
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or (leaf and metadata.st_mode & unsafe_permissions)
+    ):
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
 
 
 def inspect_artifact(
@@ -217,6 +287,7 @@ __all__ = (
     "ArtifactOperationError",
     "ArtifactOperationErrorCode",
     "ArtifactReadLimits",
+    "initialize_project_artifact_root",
     "inspect_artifact",
     "read_artifact_blob",
     "render_artifact_report",
