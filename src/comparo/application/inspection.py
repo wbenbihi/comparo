@@ -143,6 +143,14 @@ def inspect_configuration_diagnostic(
     )
 
 
+def inspect_policy_diagnostic(
+    diagnostic: ConfigurationDiagnostic,
+) -> ApplicationDiagnostic:
+    """Normalize one external-policy diagnostic without exposing its authored source."""
+    inspected = inspect_configuration_diagnostic(diagnostic)
+    return msgspec.structs.replace(inspected, stage="policy")
+
+
 def inspect_diagnostic(diagnostic: Diagnostic) -> ApplicationDiagnostic:
     """Normalize one domain diagnostic using only its closed safe context."""
     if type(diagnostic) is not Diagnostic:
@@ -279,4 +287,5 @@ __all__ = (
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",
     "inspect_plan",
+    "inspect_policy_diagnostic",
 )

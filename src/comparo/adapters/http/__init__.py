@@ -9,6 +9,9 @@ from comparo.adapters.http.materialization import BodyMaterializationError
 from comparo.adapters.http.materialization import BodyMaterializationFailureCode
 from comparo.adapters.http.materialization import BodyMaterializationLimits
 from comparo.adapters.http.materialization import RequestBodyMaterializer
+from comparo.adapters.http.preparation import HostResolver
+from comparo.adapters.http.preparation import PolicyHttpExchangePreparer
+from comparo.adapters.http.preparation import SystemHostResolver
 from comparo.adapters.http.redirect import StandardRedirectResolver
 from comparo.adapters.http.retry import AsyncioRetrySleeper
 from comparo.adapters.http.retry import ProductionRetryWaiter
@@ -47,10 +50,12 @@ __all__ = (
     "ClientKeyPasswordProvider",
     "DefaultCaptureBudgetProvider",
     "ExplicitTlsContextProvider",
+    "HostResolver",
     "HttpRequestFinalizer",
     "HttpcoreTransport",
     "HttpcoreTransportConfig",
     "NoClientKeyPasswords",
+    "PolicyHttpExchangePreparer",
     "ProductionRetryWaiter",
     "RequestBodyMaterializer",
     "ResponseCaptureLimits",
@@ -62,6 +67,7 @@ __all__ = (
     "StoredBodyStream",
     "StoredStreamSnapshotProvider",
     "StreamDecodingLimits",
+    "SystemHostResolver",
     "SystemRetryJitterSource",
     "TlsConfigurationError",
     "TlsConfigurationFailureCode",

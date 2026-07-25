@@ -131,6 +131,75 @@ class DoctorRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("doctor output mode must be typed")
 
 
+def _validate_plan_paths(
+    config: Path,
+    sources: tuple[Path, ...],
+    policy: Path | None,
+) -> None:
+    if not isinstance(config, Path):
+        raise TypeError("plan config must be a Path")
+    if type(sources) is not tuple or any(not isinstance(source, Path) for source in sources):
+        raise TypeError("plan additional sources must be an immutable Path tuple")
+    if policy is not None and not isinstance(policy, Path):
+        raise TypeError("plan policy must be a Path or None")
+
+
+def _validate_plan_text_options(
+    execution_profile: str | None,
+    baseline: str | None,
+    collections: tuple[tuple[str, ...], ...],
+) -> None:
+    if execution_profile is not None and type(execution_profile) is not str:
+        raise TypeError("plan execution profile must be text or None")
+    for values in collections:
+        if type(values) is not tuple or any(type(item) is not str for item in values):
+            raise TypeError("plan repeated options must be immutable text tuples")
+    if baseline is not None and type(baseline) is not str:
+        raise TypeError("plan baseline must be text or None")
+
+
+@final
+class PlanRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """Framework-neutral CLI inputs for one offline plan preview."""
+
+    config: Path
+    additional_sources: tuple[Path, ...]
+    policy: Path | None
+    execution_profile: str | None
+    subjects: tuple[str, ...]
+    environments: tuple[str, ...]
+    baseline: str | None
+    candidates: tuple[str, ...]
+    matrices: tuple[str, ...]
+    trials: int | None
+    maximum_attempts: int | None
+    fail_fast: bool | None
+    budgets: tuple[str, ...]
+    output: CliOutputMode
+
+    def __post_init__(self) -> None:
+        """Reject adapter type drift without interpreting authored values."""
+        _validate_plan_paths(self.config, self.additional_sources, self.policy)
+        _validate_plan_text_options(
+            self.execution_profile,
+            self.baseline,
+            (
+                self.subjects,
+                self.environments,
+                self.candidates,
+                self.matrices,
+                self.budgets,
+            ),
+        )
+        for value in (self.trials, self.maximum_attempts):
+            if value is not None and type(value) is not int:
+                raise TypeError("plan numeric options must be exact integers or None")
+        if self.fail_fast is not None and type(self.fail_fast) is not bool:
+            raise TypeError("plan fail-fast must be bool or None")
+        if type(self.output) is not CliOutputMode:
+            raise TypeError("plan output mode must be typed")
+
+
 @final
 class CliInvocation(msgspec.Struct, frozen=True, kw_only=True):
     """One parsed callback result awaiting outer terminal rendering."""

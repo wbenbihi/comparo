@@ -16,12 +16,16 @@ from comparo.application.inspection import (
 )
 from comparo.application.inspection import inspect_diagnostic as inspect_diagnostic
 from comparo.application.inspection import inspect_plan as inspect_plan
+from comparo.application.inspection import inspect_policy_diagnostic as inspect_policy_diagnostic
 from comparo.application.planning import BudgetOverride as BudgetOverride
 from comparo.application.planning import InvocationBuildError as InvocationBuildError
 from comparo.application.planning import MatrixOverride as MatrixOverride
 from comparo.application.planning import PlanningOptions as PlanningOptions
 from comparo.application.planning import build_invocation as build_invocation
 from comparo.application.planning import plan_project as plan_project
+from comparo.application.preflight import ProjectPlanRequest as ProjectPlanRequest
+from comparo.application.preflight import ProjectPlanResult as ProjectPlanResult
+from comparo.application.preflight import inspect_project_plan as inspect_project_plan
 
 __all__ = (
     "ApplicationDiagnostic",
@@ -33,12 +37,16 @@ __all__ = (
     "MatrixOverride",
     "PlanInspection",
     "PlanningOptions",
+    "ProjectPlanRequest",
+    "ProjectPlanResult",
     "SecurityCheck",
     "build_invocation",
     "inspect_artifact",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",
     "inspect_plan",
+    "inspect_policy_diagnostic",
+    "inspect_project_plan",
     "plan_project",
     "read_artifact_blob",
     "render_artifact_report",

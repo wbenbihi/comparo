@@ -22,8 +22,10 @@ from comparo.cli.contracts import CliCommandResult
 from comparo.cli.contracts import CliExitCode
 from comparo.cli.contracts import CliMessage
 from comparo.cli.contracts import CliMessageLevel
+from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
 from comparo.cli.contracts import DoctorRequest
+from comparo.cli.contracts import PlanRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import CliServices
 
@@ -46,6 +48,7 @@ class _StaticServices:
         self.result = _human_result() if result is None else result
         self.validate_request: ValidateRequest | None = None
         self.doctor_request: DoctorRequest | None = None
+        self.plan_request: PlanRequest | None = None
 
     def configuration_schema(self) -> CliCommandResult:
         return self.result
@@ -56,8 +59,7 @@ class _StaticServices:
     def report_schema(self) -> CliCommandResult:
         return self.result
 
-    def policy_schema(self, *, machine: bool) -> CliCommandResult:
-        del machine
+    def policy_schema(self) -> CliCommandResult:
         return self.result
 
     def validate(self, request: ValidateRequest) -> CliCommandResult:
@@ -66,6 +68,10 @@ class _StaticServices:
 
     def doctor(self, request: DoctorRequest) -> CliCommandResult:
         self.doctor_request = request
+        return self.result
+
+    def plan(self, request: PlanRequest) -> CliCommandResult:
+        self.plan_request = request
         return self.result
 
 
@@ -143,15 +149,18 @@ def test_schema_commands_emit_exact_checked_in_json(target: str, schema_file: st
     assert stderr == ""
 
 
-def test_policy_schema_supports_human_and_deterministic_json() -> None:
-    human_code, human_out, human_err = _invoke(["schema", "policy"])
-    json_code, json_out, json_err = _invoke(["schema", "policy", "--format", "json"])
-    assert human_code == int(CliExitCode.INTERNAL_ERROR)
-    assert human_out == ""
-    assert "not available yet" in human_err
-    assert json_code == int(CliExitCode.INTERNAL_ERROR)
-    assert json.loads(json_out)["code"] == "cli.schema.policy.unsupported"
-    assert json_err == ""
+def test_policy_schema_emits_exact_checked_in_json() -> None:
+    code, stdout, stderr = _invoke(["schema", "policy"])
+    expected = (
+        Path(__file__).parents[2]
+        / "src"
+        / "comparo"
+        / "schemas"
+        / "comparo-policy-v1alpha1.schema.json"
+    )
+    assert code == 0
+    assert stdout == expected.read_text(encoding="utf-8")
+    assert stderr == ""
 
 
 @pytest.mark.parametrize("output_format", ["markdown", "html", "rst"])
@@ -210,6 +219,62 @@ def test_doctor_callback_builds_framework_neutral_request() -> None:
     assert stderr == ""
     assert services.doctor_request is not None
     assert services.doctor_request.output.value == "json"
+
+
+def test_plan_callback_preserves_all_frontend_inputs_without_interpreting_them() -> None:
+    services = _StaticServices()
+    code, stdout, stderr = _invoke(
+        [
+            "plan",
+            "-C",
+            "project.yaml",
+            "-S",
+            "extra.yaml",
+            "--policy",
+            "operator.yaml",
+            "--profile",
+            "release",
+            "--subject",
+            "ping",
+            "--subject",
+            "health",
+            "--env",
+            "staging",
+            "--baseline",
+            "staging",
+            "--candidate",
+            "prod",
+            "--matrix",
+            "region=regions",
+            "--trials",
+            "2",
+            "--maximum-attempts",
+            "3",
+            "--no-fail-fast",
+            "--budget",
+            "requests=4",
+            "--format",
+            "json",
+        ],
+        services=services,
+    )
+    assert (code, stdout, stderr) == (0, "static result\n", "")
+    request = services.plan_request
+    assert request is not None
+    assert request.config == Path("project.yaml")
+    assert request.additional_sources == (Path("extra.yaml"),)
+    assert request.policy == Path("operator.yaml")
+    assert request.execution_profile == "release"
+    assert request.subjects == ("ping", "health")
+    assert request.environments == ("staging",)
+    assert request.baseline == "staging"
+    assert request.candidates == ("prod",)
+    assert request.matrices == ("region=regions",)
+    assert request.trials == 2
+    assert request.maximum_attempts == 3
+    assert request.fail_fast is False
+    assert request.budgets == ("requests=4",)
+    assert request.output is CliOutputMode.JSON
 
 
 @pytest.mark.parametrize("exit_code", [CliExitCode.GATE_FAILED, CliExitCode.EXECUTION_INCOMPLETE])

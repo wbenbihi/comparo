@@ -5,12 +5,25 @@ from __future__ import annotations
 import json
 from typing import Protocol
 from typing import final
+from uuid import uuid4
+
+import msgspec
 
 from comparo.application.diagnostics import run_security_checks
+from comparo.application.inspection import ApplicationDiagnostic
+from comparo.application.inspection import PlanInspection
+from comparo.application.planning import BudgetOverride
+from comparo.application.planning import InvocationBuildError
+from comparo.application.planning import MatrixOverride
+from comparo.application.planning import PlanningOptions
+from comparo.application.preflight import ProjectPlanRequest
+from comparo.application.preflight import inspect_project_plan
 from comparo.configuration.loader import compile_project_path
 from comparo.core.artifacts.codec import render_artifact_schema
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.schema_generation import render_v1alpha1_schema
+from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.policy import render_policy_schema
 from comparo.reporters.json import encode_report_schema
 
 from .contracts import CliCommandResult
@@ -20,6 +33,7 @@ from .contracts import CliMessageLevel
 from .contracts import CliOutputMode
 from .contracts import CliPayloadKind
 from .contracts import DoctorRequest
+from .contracts import PlanRequest
 from .contracts import ValidateRequest
 
 _CLI_API_VERSION = "comparo.cli/v1alpha1"
@@ -37,14 +51,17 @@ class CliServices(Protocol):
     def report_schema(self) -> CliCommandResult:
         """Return the public report schema."""
 
-    def policy_schema(self, *, machine: bool) -> CliCommandResult:
-        """Return the policy schema or a structured unavailable result."""
+    def policy_schema(self) -> CliCommandResult:
+        """Return the public external ExecutionPolicy schema."""
 
     def validate(self, request: ValidateRequest) -> CliCommandResult:
         """Compile a project without performing runtime effects."""
 
     def doctor(self, request: DoctorRequest) -> CliCommandResult:
         """Run offline security self-checks."""
+
+    def plan(self, request: PlanRequest) -> CliCommandResult:
+        """Compile and inspect one deterministic plan without runtime effects."""
 
 
 def _canonical_json(value: object) -> bytes:
@@ -89,24 +106,9 @@ def _report_schema() -> CliCommandResult:
     return _document(encode_report_schema(), CliPayloadKind.JSON)
 
 
-def _unsupported_policy_schema(*, machine: bool) -> CliCommandResult:
-    """Report the intentionally unavailable external policy schema."""
-    if not machine:
-        return _human(
-            CliExitCode.INTERNAL_ERROR,
-            (CliMessageLevel.ERROR, "The external policy schema is not available yet."),
-        )
-    return CliCommandResult(
-        exit_code=CliExitCode.INTERNAL_ERROR,
-        payload_kind=CliPayloadKind.JSON,
-        payload=_canonical_json(
-            {
-                "apiVersion": _CLI_API_VERSION,
-                "code": "cli.schema.policy.unsupported",
-                "status": "unsupported",
-            }
-        ),
-    )
+def _policy_schema() -> CliCommandResult:
+    """Return the canonical public external-policy schema."""
+    return _document(render_policy_schema(), CliPayloadKind.JSON)
 
 
 def _diagnostic_record(diagnostic: ConfigurationDiagnostic) -> dict[str, object]:
@@ -208,6 +210,173 @@ def _doctor(request: DoctorRequest) -> CliCommandResult:
     )
 
 
+class _PlanOptionError(ValueError):
+    """One closed CLI planning-option failure that never retains its raw token."""
+
+    __slots__ = ("code",)
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def _assignment(value: str, *, code: str) -> tuple[str, str]:
+    """Split one bounded NAME=VALUE option without retaining failures."""
+    if type(value) is not str or value.count("=") != 1:
+        raise _PlanOptionError(code)
+    name, assigned = value.split("=", 1)
+    if not name or not assigned:
+        raise _PlanOptionError(code)
+    return name, assigned
+
+
+def _planning_options(request: PlanRequest) -> PlanningOptions:
+    """Translate CLI override syntax to the shared frontend-neutral planning contract."""
+    try:
+        matrices = tuple(
+            MatrixOverride(binding=binding, matrix=matrix)
+            for binding, matrix in (
+                _assignment(value, code="cli.plan.matrix.invalid") for value in request.matrices
+            )
+        )
+        budgets: list[BudgetOverride] = []
+        for value in request.budgets:
+            resource, raw_limit = _assignment(value, code="cli.plan.budget.invalid")
+            if not raw_limit.isascii() or not raw_limit.isdecimal():
+                raise _PlanOptionError("cli.plan.budget.invalid")
+            try:
+                budget_resource = BudgetResource(resource)
+            except ValueError as error:
+                raise _PlanOptionError("cli.plan.budget.invalid") from error
+            budgets.append(BudgetOverride(resource=budget_resource, limit=int(raw_limit)))
+        return PlanningOptions(
+            execution_profile=request.execution_profile,
+            subjects=request.subjects,
+            environments=request.environments,
+            baseline=request.baseline,
+            candidates=request.candidates,
+            matrices=matrices,
+            trials=request.trials,
+            maximum_attempts=request.maximum_attempts,
+            fail_fast=request.fail_fast,
+            budgets=tuple(budgets),
+        )
+    except InvocationBuildError as error:
+        raise _PlanOptionError(f"invocation.{error.code.value}") from error
+
+
+def _application_diagnostic_record(diagnostic: ApplicationDiagnostic) -> dict[str, object]:
+    """Project one normalized diagnostic to deterministic machine fields."""
+    source = diagnostic.source
+    return {
+        "code": diagnostic.code,
+        "occurrences": diagnostic.occurrences,
+        "path": list(diagnostic.path),
+        "resource": diagnostic.resource,
+        "severity": diagnostic.severity,
+        "source": (
+            None
+            if source is None
+            else {
+                "column": source.column,
+                "document": source.document,
+                "line": source.line,
+                "source": source.source,
+            }
+        ),
+        "stage": diagnostic.stage,
+    }
+
+
+def _invalid_plan(
+    output: CliOutputMode,
+    diagnostics: tuple[ApplicationDiagnostic, ...],
+) -> CliCommandResult:
+    """Render a rejected preflight with value-free diagnostics."""
+    if output is CliOutputMode.HUMAN:
+        messages: list[tuple[CliMessageLevel, str]] = [
+            (CliMessageLevel.ERROR, f"Plan is invalid ({len(diagnostics)} issue(s)).")
+        ]
+        messages.extend(
+            (CliMessageLevel.ERROR, f"{item.code} ({item.stage})") for item in diagnostics
+        )
+        return _human(CliExitCode.INVALID_INVOCATION, *messages)
+    return CliCommandResult(
+        exit_code=CliExitCode.INVALID_INVOCATION,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "command": "plan",
+                "diagnostics": [_application_diagnostic_record(item) for item in diagnostics],
+                "status": "invalid",
+            }
+        ),
+    )
+
+
+def _human_plan(inspection: PlanInspection) -> CliCommandResult:
+    """Render a compact structural plan summary without resolving any value."""
+    cardinality = inspection.cardinality
+    policy = inspection.policy
+    return _human(
+        CliExitCode.SUCCESS,
+        (CliMessageLevel.SUCCESS, "Plan is valid."),
+        (
+            CliMessageLevel.INFO,
+            f"Plan {inspection.fingerprint}; run {inspection.run_id}; "
+            f"invocation {inspection.invocation_id}.",
+        ),
+        (
+            CliMessageLevel.INFO,
+            f"Policy {policy.namespace}/{policy.kind}/{policy.resource_id} ({policy.fingerprint}).",
+        ),
+        (
+            CliMessageLevel.INFO,
+            f"Work: {cardinality.cells} cell(s), {cardinality.trials} trial(s), "
+            f"{cardinality.environment_executions} environment execution(s), "
+            f"{cardinality.comparisons} comparison(s), "
+            f"{cardinality.maximum_attempts} maximum attempt(s).",
+        ),
+    )
+
+
+def _plan(request: PlanRequest) -> CliCommandResult:
+    """Run one complete offline preflight through the shared application service."""
+    try:
+        options = _planning_options(request)
+    except _PlanOptionError as error:
+        return _invalid_plan(
+            request.output,
+            (
+                ApplicationDiagnostic(
+                    code=error.code,
+                    severity="error",
+                    stage="invocation",
+                ),
+            ),
+        )
+    outcome = inspect_project_plan(
+        ProjectPlanRequest(
+            config=request.config,
+            additional_sources=request.additional_sources,
+            policy=request.policy,
+            options=options,
+            invocation_id=uuid4(),
+            run_id=uuid4(),
+        )
+    )
+    if outcome.inspection is None:
+        return _invalid_plan(request.output, outcome.diagnostics)
+    if request.output is CliOutputMode.HUMAN:
+        return _human_plan(outcome.inspection)
+    return CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(msgspec.to_builtins(outcome.inspection)),
+    )
+
+
 @final
 class DefaultCliServices:
     """Production read-only services used by the installed CLI."""
@@ -224,9 +393,9 @@ class DefaultCliServices:
         """Return the canonical public JSON-report schema."""
         return _report_schema()
 
-    def policy_schema(self, *, machine: bool) -> CliCommandResult:
-        """Return a structured result until the policy frontend exists."""
-        return _unsupported_policy_schema(machine=machine)
+    def policy_schema(self) -> CliCommandResult:
+        """Return the canonical public external-policy schema."""
+        return _policy_schema()
 
     def validate(self, request: ValidateRequest) -> CliCommandResult:
         """Compile a project without resolution or network activity."""
@@ -235,3 +404,7 @@ class DefaultCliServices:
     def doctor(self, request: DoctorRequest) -> CliCommandResult:
         """Run deterministic, offline security-boundary self-checks."""
         return _doctor(request)
+
+    def plan(self, request: PlanRequest) -> CliCommandResult:
+        """Compile and inspect one deterministic plan without runtime effects."""
+        return _plan(request)

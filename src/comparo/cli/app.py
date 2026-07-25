@@ -28,6 +28,7 @@ from comparo.cli.contracts import CliMessageLevel
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
 from comparo.cli.contracts import DoctorRequest
+from comparo.cli.contracts import PlanRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import CliServices
 from comparo.cli.services import DefaultCliServices
@@ -43,6 +44,31 @@ ConfigOption = Annotated[Path, Parameter(name="--config", alias="-C")]
 SourceOption = Annotated[
     tuple[Path, ...],
     Parameter(name="--source", alias="-S", consume_multiple=False),
+]
+PolicyOption = Annotated[Path | None, Parameter(name="--policy")]
+SubjectOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--subject", consume_multiple=False),
+]
+EnvironmentOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--environment", alias="--env", consume_multiple=False),
+]
+CandidateOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--candidate", consume_multiple=False),
+]
+MatrixOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--matrix", consume_multiple=False),
+]
+BudgetOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--budget", consume_multiple=False),
+]
+FailFastOption = Annotated[
+    bool | None,
+    Parameter(name="--fail-fast", negative="--no-fail-fast"),
 ]
 
 _LEVEL_STYLES: dict[CliMessageLevel, str] = {
@@ -127,19 +153,13 @@ def build_app(services: CliServices) -> App:
         return _invocation(services.report_schema(), color)
 
     @schema.command(name="policy")
-    def schema_policy(
-        *,
-        output_format: OutputOption = "human",
-        color: ColorOption = "auto",
-    ) -> CliInvocation:
-        """Print the policy schema when its external frontend is available.
+    def schema_policy(*, color: ColorOption = "auto") -> CliInvocation:
+        """Print the comparo.policy/v1alpha1 ExecutionPolicy JSON Schema.
 
         Args:
-            output_format: Human or deterministic JSON output.
             color: Terminal color behavior for human messages.
         """
-        result = services.policy_schema(machine=output_format == "json")
-        return _invocation(result, color)
+        return _invocation(services.policy_schema(), color)
 
     @schema.command(name="cli")
     def schema_cli(
@@ -197,6 +217,62 @@ def build_app(services: CliServices) -> App:
         """
         request = DoctorRequest(output=CliOutputMode(output_format))
         return _invocation(services.doctor(request), color)
+
+    @cli.command(name="plan")
+    def plan(
+        *,
+        config: ConfigOption = Path("comparo.yaml"),
+        source: SourceOption = (),
+        policy: PolicyOption = None,
+        profile: str | None = None,
+        subject: SubjectOption = (),
+        environment: EnvironmentOption = (),
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        matrix: MatrixOption = (),
+        trials: int | None = None,
+        maximum_attempts: int | None = None,
+        fail_fast: FailFastOption = None,
+        budget: BudgetOption = (),
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Compile and inspect a deterministic plan without resolving values or using the network.
+
+        Args:
+            config: Project manifest or directory containing comparo.yaml.
+            source: Additional local YAML source; repeat the option to add more.
+            policy: Explicit operator-owned ExecutionPolicy file; defaults to trusted-local.
+            profile: ExecutionProfile id to apply.
+            subject: Request or Scenario id; repeat to select more than one.
+            environment: Environment id for an assertion run; repeat to select more than one.
+            baseline: Baseline Environment id for a comparison run.
+            candidate: Candidate Environment id; repeat to select more than one.
+            matrix: Matrix override as BINDING=MATRIX; repeat for multiple bindings.
+            trials: Positive trial-count override.
+            maximum_attempts: Positive per-execution attempt limit.
+            fail_fast: Enable fail-fast; use --no-fail-fast to disable it.
+            budget: Planning budget as RESOURCE=LIMIT; repeat for multiple resources.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = PlanRequest(
+            config=config,
+            additional_sources=source,
+            policy=policy,
+            execution_profile=profile,
+            subjects=subject,
+            environments=environment,
+            baseline=baseline,
+            candidates=candidate,
+            matrices=matrix,
+            trials=trials,
+            maximum_attempts=maximum_attempts,
+            fail_fast=fail_fast,
+            budgets=budget,
+            output=CliOutputMode(output_format),
+        )
+        return _invocation(services.plan(request), color)
 
     @cli.command(name="completion")
     def completion(

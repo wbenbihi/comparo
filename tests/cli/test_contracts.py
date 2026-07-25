@@ -14,6 +14,7 @@ from comparo.cli.contracts import CliMessageLevel
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
 from comparo.cli.contracts import DoctorRequest
+from comparo.cli.contracts import PlanRequest
 from comparo.cli.contracts import ValidateRequest
 
 
@@ -27,6 +28,27 @@ def _human_result() -> CliCommandResult:
         payload_kind=CliPayloadKind.HUMAN,
         messages=(_message(),),
     )
+
+
+def _plan_request(**changes: object) -> PlanRequest:
+    values: dict[str, object] = {
+        "config": Path("comparo.yaml"),
+        "additional_sources": (),
+        "policy": None,
+        "execution_profile": None,
+        "subjects": (),
+        "environments": (),
+        "baseline": None,
+        "candidates": (),
+        "matrices": (),
+        "trials": None,
+        "maximum_attempts": None,
+        "fail_fast": None,
+        "budgets": (),
+        "output": CliOutputMode.HUMAN,
+    }
+    values.update(changes)
+    return PlanRequest(**values)  # type: ignore[arg-type]
 
 
 def test_exit_codes_and_valid_contracts_are_stable() -> None:
@@ -48,6 +70,7 @@ def test_exit_codes_and_valid_contracts_are_stable() -> None:
     assert request.additional_sources == (Path("extra.yaml"),)
     assert doctor.output is CliOutputMode.HUMAN
     assert invocation.result is human
+    assert _plan_request(policy=Path("policy.yaml")).policy == Path("policy.yaml")
 
 
 @pytest.mark.parametrize("text", ["", "x" * 4097, cast("str", 1)])
@@ -134,3 +157,28 @@ def test_doctor_and_invocation_reject_untyped_fields() -> None:
         )
     with pytest.raises(TypeError, match="color"):
         CliInvocation(result=_human_result(), color=cast("CliColorMode", object()))
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"config": object()}, "config"),
+        ({"additional_sources": []}, "sources"),
+        ({"additional_sources": (object(),)}, "sources"),
+        ({"policy": object()}, "policy"),
+        ({"execution_profile": object()}, "profile"),
+        ({"subjects": []}, "repeated"),
+        ({"subjects": (object(),)}, "repeated"),
+        ({"baseline": object()}, "baseline"),
+        ({"trials": True}, "numeric"),
+        ({"maximum_attempts": "2"}, "numeric"),
+        ({"fail_fast": 1}, "fail-fast"),
+        ({"output": object()}, "output"),
+    ],
+)
+def test_plan_request_rejects_untyped_fields(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(TypeError, match=message):
+        _plan_request(**changes)
