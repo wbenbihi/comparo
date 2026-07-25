@@ -9,6 +9,8 @@ from comparo.adapters.http.materialization import BodyMaterializationError
 from comparo.adapters.http.materialization import BodyMaterializationFailureCode
 from comparo.adapters.http.materialization import BodyMaterializationLimits
 from comparo.adapters.http.materialization import RequestBodyMaterializer
+from comparo.adapters.http.ordinary import OrdinaryResponseDecodeLimits
+from comparo.adapters.http.ordinary import StoredOrdinaryResponseSnapshotProvider
 from comparo.adapters.http.preparation import HostResolver
 from comparo.adapters.http.preparation import PolicyHttpExchangePreparer
 from comparo.adapters.http.preparation import SystemHostResolver
@@ -55,6 +57,7 @@ __all__ = (
     "HttpcoreTransport",
     "HttpcoreTransportConfig",
     "NoClientKeyPasswords",
+    "OrdinaryResponseDecodeLimits",
     "PolicyHttpExchangePreparer",
     "ProductionRetryWaiter",
     "RequestBodyMaterializer",
@@ -65,6 +68,7 @@ __all__ = (
     "SseDataJsonPolicy",
     "StandardRedirectResolver",
     "StoredBodyStream",
+    "StoredOrdinaryResponseSnapshotProvider",
     "StoredStreamSnapshotProvider",
     "StreamDecodingLimits",
     "SystemHostResolver",
