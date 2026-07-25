@@ -21,12 +21,14 @@ _SDIST_METADATA = frozenset(
 )
 _WHEEL_METADATA = frozenset(
     {
+        PurePosixPath("entry_points.txt"),
         PurePosixPath("METADATA"),
         PurePosixPath("RECORD"),
         PurePosixPath("WHEEL"),
         PurePosixPath("licenses/LICENSE"),
     }
 )
+_EXPECTED_ENTRY_POINTS = b"[console_scripts]\ncomparo = comparo.cli:main\n"
 _FORBIDDEN_PARTS = frozenset(
     {
         ".agents",
@@ -68,6 +70,23 @@ def _archive_members(archive: Path) -> frozenset[PurePosixPath]:
                 PurePosixPath(member.name) for member in source.getmembers() if member.isfile()
             )
     raise DistributionAuditError(f"unsupported distribution archive: {archive.name}")
+
+
+def _wheel_entry_points(archive: Path) -> bytes:
+    """Read the one console-entry-point record without extracting the wheel."""
+    if archive.suffix != ".whl":
+        raise DistributionAuditError("console entry-point audit requires a wheel")
+    with zipfile.ZipFile(archive) as wheel:
+        candidates = tuple(
+            member
+            for member in wheel.infolist()
+            if not member.is_dir()
+            and PurePosixPath(member.filename).name == "entry_points.txt"
+            and PurePosixPath(member.filename).parent.name.endswith(".dist-info")
+        )
+        if len(candidates) != 1:
+            raise DistributionAuditError("wheel requires one console entry-point record")
+        return wheel.read(candidates[0])
 
 
 def _is_sensitive(member: PurePosixPath) -> bool:
@@ -161,6 +180,12 @@ def verify_wheel_members(
     _require_exact_members(members, frozenset(expected), "wheel")
 
 
+def verify_wheel_entry_points(payload: bytes) -> None:
+    """Require the reviewed wheel to expose only the Comparo console command."""
+    if type(payload) is not bytes or payload != _EXPECTED_ENTRY_POINTS:
+        raise DistributionAuditError("wheel console entry-point record is not exact")
+
+
 def _require_exact_members(
     actual: frozenset[PurePosixPath],
     expected: frozenset[PurePosixPath],
@@ -190,6 +215,7 @@ def verify_distributions(archives: tuple[Path, ...], source_root: Path) -> None:
     expected_package = _expected_package_files(source_root)
     verify_sdist_members(_archive_members(source_archives[0]), expected_package)
     verify_wheel_members(_archive_members(wheels[0]), expected_package)
+    verify_wheel_entry_points(_wheel_entry_points(wheels[0]))
 
 
 def main(arguments: tuple[str, ...]) -> int:

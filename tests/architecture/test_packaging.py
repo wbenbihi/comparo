@@ -10,6 +10,7 @@ import pytest
 from tests.architecture import distribution_members
 from tests.architecture.distribution_members import DistributionAuditError
 from tests.architecture.distribution_members import verify_sdist_members
+from tests.architecture.distribution_members import verify_wheel_entry_points
 from tests.architecture.distribution_members import verify_wheel_members
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +47,22 @@ def test_source_distribution_uses_an_exact_public_allowlist() -> None:
     assert build["ignore-vcs"] is False
     assert set(sdist["include"]) == _EXPECTED_SDIST_INPUTS
     assert set(build["exclude"]) >= _REQUIRED_BUILD_EXCLUSIONS
+
+
+def test_package_exposes_one_exact_console_entry_point() -> None:
+    """Keep the installed command name and import target a reviewed public contract."""
+    configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text())
+    assert configuration["project"]["scripts"] == {"comparo": "comparo.cli:main"}
+
+    verify_wheel_entry_points(b"[console_scripts]\ncomparo = comparo.cli:main\n")
+    for malformed in (
+        b"",
+        b"[console_scripts]\ncomparo = comparo.cli.app:main\n",
+        b"[console_scripts]\ncomparo = comparo.cli:main\nunsafe = comparo.cli:main\n",
+        "[console_scripts]\ncomparo = comparo.cli:main\n",
+    ):
+        with pytest.raises(DistributionAuditError, match="entry-point record is not exact"):
+            verify_wheel_entry_points(malformed)  # type: ignore[arg-type]
 
 
 def test_sdist_member_audit_rejects_untracked_working_and_sensitive_files() -> None:
@@ -97,6 +114,7 @@ def test_wheel_member_audit_rejects_extra_package_content() -> None:
     """Keep wheels limited to explicit Python package files and fixed metadata."""
     package = frozenset({PurePosixPath("comparo/__init__.py")})
     safe = package | {
+        PurePosixPath("comparo-0.2.0.dist-info/entry_points.txt"),
         PurePosixPath("comparo-0.2.0.dist-info/METADATA"),
         PurePosixPath("comparo-0.2.0.dist-info/RECORD"),
         PurePosixPath("comparo-0.2.0.dist-info/WHEEL"),
