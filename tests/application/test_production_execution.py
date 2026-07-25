@@ -44,7 +44,9 @@ from comparo.core.planning import plan_run
 from comparo.core.policy import PolicyArtifacts
 from comparo.core.policy import planning_authority
 from comparo.core.policy import trusted_local_policy
+from comparo.core.resolution import RunCancellation
 from comparo.core.resolution import RunContext
+from comparo.core.runtime import RecordingEventSink
 from comparo.core.runtime.ports import EvaluationPreparation
 from comparo.core.selection import SelectionSnapshotRequirements
 from comparo.reporters import ReportFormat
@@ -255,6 +257,7 @@ def test_production_root_executes_http_evaluation_and_transient_artifact(
         )
         server = await _start_loopback_server(response)
         artifact_root = tmp_path / "artifacts"
+        events = RecordingEventSink()
         request = production.ProductionExecutionRequest(
             project=_evaluated_project(
                 tmp_path,
@@ -265,6 +268,7 @@ def test_production_root_executes_http_evaluation_and_transient_artifact(
             artifact_root=artifact_root,
             approve_mutations=False,
             tool_version="test",
+            events=events,
         )
         try:
             result = await production.execute_production(request)
@@ -275,6 +279,8 @@ def test_production_root_executes_http_evaluation_and_transient_artifact(
         assert result.persistence is None
         assert not artifact_root.exists()
         assert len(server.requests) == 2
+        assert events.events[0].kind.value == "run-started"
+        assert events.events[-1].kind.value == "run-finished"
         assert all(
             request_bytes.startswith(b"GET /check HTTP/1.1\r\n")
             for request_bytes in server.requests
@@ -701,10 +707,21 @@ def test_public_composition_contracts_reject_invalid_shapes(tmp_path: Path) -> N
         ("artifact_root", "artifacts", TypeError),
         ("approve_mutations", 1, TypeError),
         ("tool_version", "", ValueError),
+        ("events", object(), TypeError),
+        ("cancellation", object(), TypeError),
     )
     for field, value, error in invalid_request_fields:
         with pytest.raises(error):
             msgspec.structs.replace(request, **{field: value})
+    events = RecordingEventSink()
+    cancellation = RunCancellation()
+    interactive = msgspec.structs.replace(
+        request,
+        events=events,
+        cancellation=cancellation,
+    )
+    assert interactive.events is events
+    assert interactive.cancellation is cancellation
 
     artifact = _artifact()
     failure = ArtifactPersistenceOutcome(

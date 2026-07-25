@@ -86,12 +86,14 @@ from comparo.core.domain.values import BytesValue
 from comparo.core.planning.models import PreparedRun
 from comparo.core.resolution import DeterministicGenerator
 from comparo.core.resolution import EnvironmentSnapshot
+from comparo.core.resolution import RunCancellation
 from comparo.core.resolution import RunContext
 from comparo.core.runtime import ConfigurationRequestProvider
 from comparo.core.runtime import HttpExecutionDriver
 from comparo.core.runtime import NullEventSink
 from comparo.core.runtime import run_prepared
 from comparo.core.runtime.ports import EvaluationPreparation
+from comparo.core.runtime.ports import RuntimeEventSink
 from comparo.core.selection import SelectionSnapshotRequirements
 
 _GENERATION_SEED_ORIGIN = TaintOriginId(value="runtime/generation-seed")
@@ -225,6 +227,8 @@ class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
     artifact_root: Path | None
     approve_mutations: bool
     tool_version: str
+    events: RuntimeEventSink | None = None
+    cancellation: RunCancellation | None = None
 
     def __post_init__(self) -> None:
         """Validate primitive frontend choices without retaining any output text."""
@@ -251,6 +255,10 @@ class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
             or len(self.tool_version) > 64
         ):
             raise ValueError("production tool version must be bounded non-empty text")
+        if self.events is not None and not callable(getattr(self.events, "emit", None)):
+            raise TypeError("production execution events must implement RuntimeEventSink")
+        if self.cancellation is not None and type(self.cancellation) is not RunCancellation:
+            raise TypeError("production execution cancellation must be RunCancellation or None")
 
 
 @final
@@ -464,6 +472,7 @@ async def _prepare_context(
         snapshots.snapshots,
         resources.files,
         request.settings,
+        request.cancellation,
     )
     resources.context = context
     return context, ()
@@ -483,7 +492,7 @@ async def _run_compile_persist(
         evaluation=evaluation,
         cancellation=context.cancellation,
         clock=SystemRunClock(),
-        events=NullEventSink(),
+        events=NullEventSink() if request.events is None else request.events,
     )
     compilation = compile_run_artifact(
         request.project.prepared,
@@ -531,6 +540,7 @@ def _run_context(
     snapshots: tuple[EnvironmentSnapshot, ...],
     files: PinnedProjectFiles,
     settings: ProductionExecutionSettings,
+    cancellation: RunCancellation | None,
 ) -> RunContext:
     """Compose isolated value providers without consulting ambient process state."""
     seed = SensitiveValue(
@@ -545,6 +555,7 @@ def _run_context(
         file_provider=ProjectFileValueProvider(files, project.policy),
         secure_generator=SecureGenerator(),
         yaml_decoder=SafeYamlValueDecoder(settings.yaml),
+        cancellation=cancellation,
     )
 
 

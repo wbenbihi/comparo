@@ -51,6 +51,7 @@ from comparo.core.domain.values import ResolutionErrorCode
 from comparo.core.domain.values import Unavailable
 from comparo.core.planning.models import PreparedRun
 from comparo.core.resolution.context import RunContext
+from comparo.core.resolution.control import RunCancellation
 from comparo.core.resolution.generation import DeterministicGenerator
 from comparo.core.resolution.models import EnvironmentSnapshotEntry
 from comparo.core.resolution.models import ExternalProviderSource
@@ -267,6 +268,24 @@ def test_context_constructor_and_call_boundaries_fail_closed(prepared_run: Prepa
         )
     with pytest.raises(ValueError, match="unique"):
         _context(prepared_run, external=(provider, provider))
+    with pytest.raises(TypeError, match="cancellation"):
+        RunContext(
+            prepared=prepared_run,
+            environment_snapshots=snapshots(prepared_run),
+            clock=FixedClock(),
+            generator=provider,
+            cancellation=cast("Any", object()),
+        )
+    cancellation = RunCancellation()
+    owned = RunContext(
+        prepared=prepared_run,
+        environment_snapshots=snapshots(prepared_run),
+        clock=FixedClock(),
+        generator=provider,
+        cancellation=cancellation,
+    )
+    assert owned.cancellation is cancellation
+    _run(owned.close())
 
     async def scenario() -> None:
         context = _context(prepared_run, generator=provider)

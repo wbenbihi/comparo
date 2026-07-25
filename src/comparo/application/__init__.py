@@ -7,6 +7,14 @@ from comparo.application.artifacts import inspect_artifact as inspect_artifact
 from comparo.application.artifacts import read_artifact_blob as read_artifact_blob
 from comparo.application.artifacts import render_artifact_report as render_artifact_report
 from comparo.application.artifacts import verify_artifact as verify_artifact
+from comparo.application.compare import CompareExecutionControls as CompareExecutionControls
+from comparo.application.compare import CompareIntent as CompareIntent
+from comparo.application.compare import ComparePreparationHandle as ComparePreparationHandle
+from comparo.application.compare import ComparePreparationResult as ComparePreparationResult
+from comparo.application.compare import ComparePrepareRequest as ComparePrepareRequest
+from comparo.application.compare import CompareService as CompareService
+from comparo.application.compare import CompareServiceError as CompareServiceError
+from comparo.application.compare import CompareServiceErrorCode as CompareServiceErrorCode
 from comparo.application.diagnostics import SecurityCheck as SecurityCheck
 from comparo.application.diagnostics import run_security_checks as run_security_checks
 from comparo.application.environment_binding import (
@@ -15,6 +23,12 @@ from comparo.application.environment_binding import (
 from comparo.application.environment_binding import (
     build_environment_snapshots as build_environment_snapshots,
 )
+from comparo.application.execution_session import (
+    ExecutionProgressSnapshot as ExecutionProgressSnapshot,
+)
+from comparo.application.execution_session import ExecutionSession as ExecutionSession
+from comparo.application.execution_session import ExecutionSessionPhase as ExecutionSessionPhase
+from comparo.application.execution_session import start_execution_session as start_execution_session
 from comparo.application.inspection import ApplicationDiagnostic as ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection as PlanInspection
 from comparo.application.inspection import (
@@ -55,6 +69,16 @@ from comparo.application.production_execution import execute_production as execu
 from comparo.application.production_execution import (
     production_execution_defaults_v1 as production_execution_defaults_v1,
 )
+from comparo.application.project_workspace import ProjectResourceSummary as ProjectResourceSummary
+from comparo.application.project_workspace import ProjectSourceSummary as ProjectSourceSummary
+from comparo.application.project_workspace import ProjectWorkspaceRequest as ProjectWorkspaceRequest
+from comparo.application.project_workspace import ProjectWorkspaceResult as ProjectWorkspaceResult
+from comparo.application.project_workspace import (
+    ProjectWorkspaceSnapshot as ProjectWorkspaceSnapshot,
+)
+from comparo.application.project_workspace import (
+    inspect_project_workspace as inspect_project_workspace,
+)
 from comparo.application.render_preview import RenderedBodyOmission as RenderedBodyOmission
 from comparo.application.render_preview import RenderedCookie as RenderedCookie
 from comparo.application.render_preview import RenderedHeader as RenderedHeader
@@ -66,6 +90,25 @@ from comparo.application.render_preview import (
     RequestBodyOmissionReason as RequestBodyOmissionReason,
 )
 from comparo.application.render_preview import render_prepared_requests as render_prepared_requests
+from comparo.application.report_archive import ReportArchiveEntry as ReportArchiveEntry
+from comparo.application.report_archive import (
+    ReportArchiveEntryFailure as ReportArchiveEntryFailure,
+)
+from comparo.application.report_archive import ReportArchiveError as ReportArchiveError
+from comparo.application.report_archive import ReportArchiveErrorCode as ReportArchiveErrorCode
+from comparo.application.report_archive import ReportArchiveLimits as ReportArchiveLimits
+from comparo.application.report_archive import ReportArchiveListing as ReportArchiveListing
+from comparo.application.report_archive import list_report_archive as list_report_archive
+from comparo.application.results import ComparisonResultRow as ComparisonResultRow
+from comparo.application.results import ExecutionResultRow as ExecutionResultRow
+from comparo.application.results import ResultCrossLink as ResultCrossLink
+from comparo.application.results import ResultEntity as ResultEntity
+from comparo.application.results import ResultFact as ResultFact
+from comparo.application.results import ResultProjection as ResultProjection
+from comparo.application.results import ResultReference as ResultReference
+from comparo.application.results import ResultRelation as ResultRelation
+from comparo.application.results import ResultSummary as ResultSummary
+from comparo.application.results import project_results as project_results
 from comparo.application.runtime_capabilities import (
     RuntimeCapabilityPreflightResult as RuntimeCapabilityPreflightResult,
 )
@@ -79,7 +122,20 @@ __all__ = (
     "ArtifactOperationError",
     "ArtifactReadLimits",
     "BudgetOverride",
+    "CompareExecutionControls",
+    "CompareIntent",
+    "ComparePreparationHandle",
+    "ComparePreparationResult",
+    "ComparePrepareRequest",
+    "CompareService",
+    "CompareServiceError",
+    "CompareServiceErrorCode",
+    "ComparisonResultRow",
     "EnvironmentBindingResult",
+    "ExecutionProgressSnapshot",
+    "ExecutionResultRow",
+    "ExecutionSession",
+    "ExecutionSessionPhase",
     "InvocationBuildError",
     "MatrixOverride",
     "PlanInspection",
@@ -93,6 +149,11 @@ __all__ = (
     "ProjectPlanRequest",
     "ProjectPlanResult",
     "ProjectPreparationResult",
+    "ProjectResourceSummary",
+    "ProjectSourceSummary",
+    "ProjectWorkspaceRequest",
+    "ProjectWorkspaceResult",
+    "ProjectWorkspaceSnapshot",
     "RenderPreviewRequest",
     "RenderPreviewResult",
     "RenderPreviewSettings",
@@ -100,7 +161,20 @@ __all__ = (
     "RenderedCookie",
     "RenderedHeader",
     "RenderedRequestPreview",
+    "ReportArchiveEntry",
+    "ReportArchiveEntryFailure",
+    "ReportArchiveError",
+    "ReportArchiveErrorCode",
+    "ReportArchiveLimits",
+    "ReportArchiveListing",
     "RequestBodyOmissionReason",
+    "ResultCrossLink",
+    "ResultEntity",
+    "ResultFact",
+    "ResultProjection",
+    "ResultReference",
+    "ResultRelation",
+    "ResultSummary",
     "RuntimeCapabilityPreflightResult",
     "SecurityCheck",
     "ValueResourceOverride",
@@ -113,13 +187,17 @@ __all__ = (
     "inspect_plan",
     "inspect_policy_diagnostic",
     "inspect_project_plan",
+    "inspect_project_workspace",
+    "list_report_archive",
     "plan_project",
     "preflight_runtime_capabilities",
     "prepare_project_plan",
     "production_execution_defaults_v1",
+    "project_results",
     "read_artifact_blob",
     "render_artifact_report",
     "render_prepared_requests",
     "run_security_checks",
+    "start_execution_session",
     "verify_artifact",
 )

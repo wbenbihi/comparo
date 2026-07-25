@@ -117,6 +117,7 @@ class RunContext:
         secure_generator: GeneratedValueProvider | None = None,
         safety: tuple[DefinitionHandle, ...] = (),
         yaml_decoder: YamlValueDecoder | None = None,
+        cancellation: RunCancellation | None = None,
     ) -> None:
         """Create one isolated context from already admitted and snapshotted inputs."""
         if type(prepared) is not PreparedRun:
@@ -141,7 +142,9 @@ class RunContext:
         self._external_providers = external_providers
         self._safety = safety
         self._yaml_decoder = yaml_decoder
-        self._cancellation = RunCancellation()
+        if cancellation is not None and type(cancellation) is not RunCancellation:
+            raise TypeError("run context cancellation must be RunCancellation or None")
+        self._cancellation = RunCancellation() if cancellation is None else cancellation
         self._registry = SensitiveValueRegistry(self._run)
         self._providers = ProviderRuntime(self._cancellation, self._registry)
         self._resolver = ExpressionResolver(self)

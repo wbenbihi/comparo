@@ -474,6 +474,60 @@ def open_local_artifact_bundle(
     raise LocalArtifactStoreError(failure)
 
 
+def list_local_artifact_bundle_ids(
+    root: Path,
+    *,
+    maximum_entries: int,
+) -> tuple[str, ...]:
+    """List bounded safe bundle identifiers beneath one pinned validated root.
+
+    Every directory entry consumes the caller-owned budget, including names that cannot be
+    bundle identifiers. This keeps an attacker-controlled archive directory from hiding
+    unbounded scanning work behind ignored names. The returned identifiers are only lexical
+    candidates; callers must authenticate each bundle before trusting its contents.
+    """
+    try:
+        return _list_local_artifact_bundle_ids(root, maximum_entries=maximum_entries)
+    except LocalArtifactStoreError as error:
+        failure = error.code
+    raise LocalArtifactStoreError(failure)
+
+
+def _list_local_artifact_bundle_ids(
+    root: Path,
+    *,
+    maximum_entries: int,
+) -> tuple[str, ...]:
+    """Enumerate candidate names without following or re-resolving the archive root."""
+    if not isinstance(root, Path) or not root.is_absolute():
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
+    if type(maximum_entries) is not int or maximum_entries < 1:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+    root_fd = -1
+    try:
+        root_fd = os.open(root, _DIRECTORY_FLAGS)
+        _validate_root_fd(root_fd)
+        candidates: list[str] = []
+        scanned = 0
+        with os.scandir(root_fd) as entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > maximum_entries:
+                    raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
+                name = entry.name
+                if type(name) is str and _BUNDLE_ID.fullmatch(name) is not None:
+                    candidates.append(name)
+        return tuple(sorted(candidates))
+    except LocalArtifactStoreError:
+        raise
+    except OSError:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+    finally:
+        if root_fd >= 0:
+            with suppress(OSError):
+                os.close(root_fd)
+
+
 def _open_local_artifact_bundle(  # noqa: C901
     root: Path,
     bundle_id: str,
