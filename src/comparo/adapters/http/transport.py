@@ -500,7 +500,9 @@ def _response_fields(
     classified: tuple[HeaderName, ...],
 ) -> ResponseFields:
     sensitive_names = (
-        MANDATORY_SENSITIVE_HEADER_NAMES | {"set-cookie"} | {item.value for item in classified}
+        MANDATORY_SENSITIVE_HEADER_NAMES
+        | {"location", "set-cookie"}
+        | {item.value for item in classified}
     )
     origin = TaintOriginId(value=f"runtime/http-response-field/{exchange_hex}")
     result: list[ResponseField] = []

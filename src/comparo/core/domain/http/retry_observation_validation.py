@@ -113,6 +113,11 @@ class RetryAttemptLike(Protocol):
         """Return the exact terminal pre-send outcome, if transport was not entered."""
         ...
 
+    @property
+    def redirect_pre_send(self) -> HttpPreSendOutcome | None:
+        """Return a redirect target's terminal pre-send outcome when present."""
+        ...
+
 
 _TRIGGER_CONDITIONS = (
     (RetryTrigger.DNS_FAILURE, RetryCondition.DNS_FAILURE),
@@ -146,6 +151,15 @@ def _observed_retry_trigger(attempt: RetryAttemptLike) -> RetryTrigger | None:
     if type(attempt.pre_send) is HttpResolutionFailure:
         return RetryTrigger.DNS_FAILURE
     if type(attempt.pre_send) in {
+        HttpResolutionDenial,
+        HttpAuthorizationDenial,
+        HttpMutationApprovalDenial,
+        HttpProxyDnsApprovalDenial,
+    }:
+        return None
+    if type(attempt.redirect_pre_send) is HttpResolutionFailure:
+        return RetryTrigger.DNS_FAILURE
+    if type(attempt.redirect_pre_send) in {
         HttpResolutionDenial,
         HttpAuthorizationDenial,
         HttpMutationApprovalDenial,

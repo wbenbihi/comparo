@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.bodies import NoMaterializedBody
 from comparo.core.domain.http.fields import MANDATORY_SENSITIVE_HEADER_NAMES
@@ -15,6 +17,7 @@ from comparo.core.domain.http.pre_send import HttpAuthorizationDenial
 from comparo.core.domain.http.pre_send import HttpMutationApprovalDenial
 from comparo.core.domain.http.pre_send import HttpProxyDnsApprovalDenial
 from comparo.core.domain.http.pre_send import HttpResolutionDenial
+from comparo.core.domain.http.pre_send import HttpResolutionFailure
 from comparo.core.domain.http.responses import HttpStatus
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import HttpScheme
@@ -69,7 +72,7 @@ def _headers_after_body_decision(
 
 def _validate_redirect_origin(
     before: AuthorizedExchangeRequest,
-    after: AuthorizedExchangeRequest,
+    after: HttpAttemptRequest,
 ) -> tuple[bool, bool]:
     """Enforce cross-origin and downgrade policy, returning origin and stripping decisions."""
     policy = before.request.policies.redirects
@@ -92,7 +95,7 @@ def _validate_redirect_origin(
 def _validate_redirect_payload(
     previous: AuthorizedExchangeRequest,
     status: HttpStatus,
-    following: AuthorizedExchangeRequest,
+    following: HttpAttemptRequest,
 ) -> bool:
     """Enforce the status/mode-specific method and body transition."""
     before = previous.request
@@ -110,7 +113,7 @@ def _validate_redirect_payload(
 
 def _validate_redirect_credentials(
     previous: AuthorizedExchangeRequest,
-    following: AuthorizedExchangeRequest,
+    following: HttpAttemptRequest,
     *,
     drop_body: bool,
     strip: bool,
@@ -141,7 +144,7 @@ def _validate_redirect_credentials(
 
 def _validate_redirect_identity(
     previous: AuthorizedExchangeRequest,
-    following: AuthorizedExchangeRequest,
+    following: HttpAttemptRequest,
 ) -> None:
     """Enforce stable execution identity and fresh authorization by one policy revision."""
     before = previous.request
@@ -155,18 +158,18 @@ def _validate_redirect_identity(
     if after.provenance != before.provenance:
         raise ValueError("redirect request changed its provenance")
     before_intent = previous.authorization.intent
-    after_intent = following.authorization.intent
     before_occurrence = before_intent.occurrence
-    after_occurrence = after_intent.occurrence
+    after_occurrence = following.occurrence
     if after_occurrence.attempt != before_occurrence.attempt:
         raise ValueError("redirect request changed its execution or attempt occurrence")
     if after_occurrence.exchange_id == before_occurrence.exchange_id:
         raise ValueError("redirect request requires a fresh exchange authorization")
-    if after_intent.plan_fingerprint != before_intent.plan_fingerprint:
+    after_plan, after_policy, after_authority = _request_authority(following)
+    if after_plan != before_intent.plan_fingerprint:
         raise ValueError("redirect request changed its run-plan fingerprint")
     if (
-        after_intent.effective_policy_fingerprint != before_intent.effective_policy_fingerprint
-        or following.authorization.authority != previous.authorization.authority
+        after_policy != before_intent.effective_policy_fingerprint
+        or after_authority != previous.authorization.authority
     ):
         raise ValueError("redirect request must be re-authorized by the same policy revision")
 
@@ -187,6 +190,22 @@ def validate_redirect_transition(
     _validate_redirect_identity(previous, following)
 
 
+def validate_redirect_pre_send_transition(
+    previous: AuthorizedExchangeRequest,
+    status: HttpStatus,
+    resolved_url: AbsoluteHttpUrl,
+    following: HttpAttemptRequest,
+) -> None:
+    """Validate a redirect rewrite that terminated during fresh pre-send preparation."""
+    after = following.request
+    if after.url != resolved_url:
+        raise ValueError("redirect pre-send request URL must equal the retained resolved Location")
+    _, strip = _validate_redirect_origin(previous, following)
+    drop_body = _validate_redirect_payload(previous, status, following)
+    _validate_redirect_credentials(previous, following, drop_body=drop_body, strip=strip)
+    _validate_redirect_identity(previous, following)
+
+
 type HttpAttemptRequest = (
     AuthorizedExchangeRequest
     | AuthorizedResolutionRequest
@@ -195,6 +214,20 @@ type HttpAttemptRequest = (
     | HttpMutationApprovalDenial
     | HttpProxyDnsApprovalDenial
 )
+
+
+def http_pre_send_request(outcome: object) -> HttpAttemptRequest:
+    """Return the exact request authority represented by a typed pre-send outcome."""
+    if type(outcome) is HttpResolutionFailure:
+        return outcome.request
+    if type(outcome) in {
+        HttpResolutionDenial,
+        HttpAuthorizationDenial,
+        HttpMutationApprovalDenial,
+        HttpProxyDnsApprovalDenial,
+    }:
+        return cast("HttpAttemptRequest", outcome)
+    raise TypeError("redirect terminal requires an exact HTTP pre-send outcome")
 
 
 def _request_route(request: HttpAttemptRequest) -> ResolvedRoute | None:

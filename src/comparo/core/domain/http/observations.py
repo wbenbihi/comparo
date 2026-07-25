@@ -33,6 +33,8 @@ from comparo.core.domain.http.timing_validation import validate_exchange_timing_
 from comparo.core.domain.http.timings import EnvironmentExecutionTimings
 from comparo.core.domain.http.timings import HttpAttemptTimings
 from comparo.core.domain.http.timings import HttpExchangeTimings
+from comparo.core.domain.http.transition_validation import http_pre_send_request
+from comparo.core.domain.http.transition_validation import validate_redirect_pre_send_transition
 from comparo.core.domain.http.transition_validation import validate_redirect_transition
 from comparo.core.domain.http.transport import FailurePhase
 from comparo.core.domain.http.transport import TransportFailure
@@ -140,12 +142,17 @@ def _validate_followed_redirect(
         raise ValueError("followed redirect must retain the exact observed Location field")
 
 
-def _validate_attempt_redirects(exchanges: tuple[HttpExchange, ...]) -> None:
+def _validate_attempt_redirects(
+    exchanges: tuple[HttpExchange, ...],
+    redirect_pre_send: HttpPreSendOutcome | None,
+) -> None:
     """Validate ordered redirect markers, limits, policies, and request transitions."""
     if any(exchange.redirect is None for exchange in exchanges[:-1]):
         raise ValueError("every non-terminal exchange in an attempt must follow a redirect")
-    if exchanges[-1].redirect is not None:
-        raise ValueError("the terminal exchange in an attempt cannot point onward")
+    if (exchanges[-1].redirect is not None) is (redirect_pre_send is None):
+        raise ValueError(
+            "the terminal exchange may point onward only to a retained redirect pre-send outcome"
+        )
     redirect_policy = exchanges[0].request.request.policies.redirects
     if any(
         exchange.request.request.policies.redirects != redirect_policy for exchange in exchanges
@@ -162,6 +169,16 @@ def _validate_attempt_redirects(exchanges: tuple[HttpExchange, ...]) -> None:
             response.status,
             redirect.resolved_url,
             following.request,
+        )
+    if redirect_pre_send is not None:
+        previous = exchanges[-1]
+        redirect = cast(FollowedRedirect, previous.redirect)
+        response = cast(ResponseObservation, previous.response)
+        validate_redirect_pre_send_transition(
+            previous.request,
+            response.status,
+            redirect.resolved_url,
+            http_pre_send_request(redirect_pre_send),
         )
 
 
@@ -210,6 +227,7 @@ class HttpAttempt(msgspec.Struct, frozen=True, kw_only=True):
     timings: HttpAttemptTimings
     stream_reconnect: StreamReconnectTransition | None = None
     pre_send: HttpPreSendOutcome | None = None
+    redirect_pre_send: HttpPreSendOutcome | None = None
 
     def __post_init__(self) -> None:
         """Require every non-terminal exchange to be an explicit redirect."""
@@ -234,23 +252,36 @@ def _validate_attempt_shape(attempt: HttpAttempt) -> None:
         raise TypeError("attempt exchanges must be an immutable tuple")
     if any(type(exchange) is not HttpExchange for exchange in attempt.exchanges):
         raise TypeError("attempt exchanges must be an immutable tuple of HttpExchange values")
+    _validate_attempt_pre_send_shape(attempt)
+    if attempt.exchanges:
+        _validate_attempt_redirects(attempt.exchanges, attempt.redirect_pre_send)
+
+
+def _validate_attempt_pre_send_shape(attempt: HttpAttempt) -> None:
+    """Validate mutually exclusive initial and redirect-terminal pre-send outcomes."""
     if attempt.pre_send is not None and not is_http_pre_send_outcome(attempt.pre_send):
         raise TypeError("attempt pre-send outcome must be an exact typed variant")
+    if attempt.redirect_pre_send is not None and not is_http_pre_send_outcome(
+        attempt.redirect_pre_send
+    ):
+        raise TypeError("attempt redirect pre-send outcome must be an exact typed variant")
+    if attempt.pre_send is not None and attempt.redirect_pre_send is not None:
+        raise ValueError("an attempt cannot have initial and redirect pre-send outcomes")
+    if attempt.redirect_pre_send is not None and not attempt.exchanges:
+        raise ValueError("a redirect pre-send outcome requires a preceding exchange")
     if bool(attempt.exchanges) is (attempt.pre_send is not None):
         raise ValueError("an HTTP attempt requires either exchanges or one pre-send outcome")
-    if attempt.exchanges:
-        _validate_attempt_redirects(attempt.exchanges)
 
 
 def _validate_attempt_timing_and_ownership(attempt: HttpAttempt) -> None:
     """Bind attempt elapsed and IDs to its exact exchange or pre-send operation."""
     if type(attempt.timings) is not HttpAttemptTimings:
         raise TypeError("attempt timings must be HttpAttemptTimings")
-    child_timings = (
-        tuple(exchange.timings for exchange in attempt.exchanges)
-        if attempt.exchanges
-        else (cast(HttpPreSendOutcome, attempt.pre_send).timings,)
-    )
+    child_timings = tuple(exchange.timings for exchange in attempt.exchanges)
+    if attempt.redirect_pre_send is not None:
+        child_timings += (attempt.redirect_pre_send.timings,)
+    if not child_timings:
+        child_timings = (cast(HttpPreSendOutcome, attempt.pre_send).timings,)
     validate_attempt_timing_envelope(attempt.timings, child_timings)
     if any(
         exchange.request.occurrence.attempt_id != attempt.attempt_id
@@ -262,6 +293,11 @@ def _validate_attempt_timing_and_ownership(attempt: HttpAttempt) -> None:
         and attempt.pre_send.occurrence.attempt_id != attempt.attempt_id
     ):
         raise ValueError("pre-send request authority does not own this attempt")
+    if (
+        attempt.redirect_pre_send is not None
+        and attempt.redirect_pre_send.occurrence.attempt_id != attempt.attempt_id
+    ):  # pragma: no cover - redirect transition identity validation is stricter
+        raise ValueError("redirect pre-send request authority does not own this attempt")
 
 
 @final

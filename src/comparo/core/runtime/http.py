@@ -20,6 +20,7 @@ from comparo.core.domain.http.policies import RetryPolicy
 from comparo.core.domain.http.pre_send import HttpPreSendOutcome
 from comparo.core.domain.http.pre_send import HttpResolutionFailure
 from comparo.core.domain.http.requests import FinalizedWireRequest
+from comparo.core.domain.http.responses import ResponseObservation
 from comparo.core.domain.http.timings import EnvironmentExecutionTimings
 from comparo.core.domain.http.timings import HttpAttemptTimings
 from comparo.core.domain.http.timings import TimingUnavailable
@@ -38,8 +39,12 @@ from comparo.core.runtime.models import ExecutionOutcome
 from comparo.core.runtime.models import ExecutionWork
 from comparo.core.runtime.models import ObservedExecution
 from comparo.core.runtime.ports import HttpExchangePreparer
+from comparo.core.runtime.ports import HttpRedirectResolver
 from comparo.core.runtime.ports import HttpRequestProvider
 from comparo.core.runtime.ports import HttpTransport
+from comparo.core.runtime.ports import NoRedirect
+from comparo.core.runtime.ports import PreparedRedirect
+from comparo.core.runtime.ports import RedirectFailure
 from comparo.core.runtime.ports import RequestPreparationFailure
 from comparo.core.runtime.ports import RetryWaiter
 from comparo.core.runtime.ports import SelectionSnapshotProvider
@@ -60,6 +65,22 @@ class ObservationOnlySnapshotProvider:
 
     async def close(self) -> None:
         """Release no resources; observation-only snapshots own no storage handles."""
+
+
+class NoRedirectResolver:
+    """Disable redirect interpretation while retaining explicit response observations."""
+
+    def resolve(
+        self,
+        request: AuthorizedExchangeRequest,
+        response: ResponseObservation,
+    ) -> NoRedirect:
+        """Return the closed no-transition outcome for every terminal response."""
+        if type(request) is not AuthorizedExchangeRequest:
+            raise TypeError("redirect resolution requires AuthorizedExchangeRequest")
+        if type(response) is not ResponseObservation:
+            raise TypeError("redirect resolution requires ResponseObservation")
+        return NoRedirect()
 
 
 class ImmediateRetryWaiter:
@@ -97,6 +118,7 @@ class HttpExecutionDriver:
         "_closed",
         "_exchange_preparer",
         "_maximum_attempts",
+        "_redirect_resolver",
         "_request_provider",
         "_retry_waiter",
         "_snapshot_provider",
@@ -113,6 +135,7 @@ class HttpExecutionDriver:
         retry_waiter: RetryWaiter,
         cancellation: RunCancellation,
         maximum_attempts: PositiveCount,
+        redirect_resolver: HttpRedirectResolver | None = None,
     ) -> None:
         """Compose independent run-local services and the admitted attempt ceiling."""
         if type(cancellation) is not RunCancellation:
@@ -126,6 +149,9 @@ class HttpExecutionDriver:
         self._retry_waiter = retry_waiter
         self._cancellation = cancellation
         self._maximum_attempts = maximum_attempts
+        self._redirect_resolver = redirect_resolver or NoRedirectResolver()
+        if not hasattr(self._redirect_resolver, "resolve"):
+            raise TypeError("HTTP execution driver requires HttpRedirectResolver")
         self._closed = False
 
     async def execute(self, work: ExecutionWork) -> ExecutionOutcome:
@@ -144,36 +170,7 @@ class HttpExecutionDriver:
             if type(prepared) is RequestPreparationFailure:
                 return prepared.outcome
             request = prepared
-            occurrence = HttpRequestOccurrence(
-                attempt=attempt_scope,
-                exchange_id=ExchangeId(value=uuid5(attempt_scope.attempt_id.value, "exchange:0")),
-            )
-            exchange_preparation = await self._exchange_preparer.prepare(request, occurrence)
-            if type(exchange_preparation) is AuthorizedExchangeRequest:
-                result = await self._transport.exchange(exchange_preparation)
-                exchange = HttpExchange(
-                    exchange_id=occurrence.exchange_id,
-                    request=exchange_preparation,
-                    response=result.response,
-                    failure=result.failure,
-                    redirect=None,
-                    timings=result.timings,
-                )
-                attempt = HttpAttempt(
-                    attempt_id=attempt_scope.attempt_id,
-                    retry=retry,
-                    exchanges=(exchange,),
-                    timings=HttpAttemptTimings(elapsed=result.timings.elapsed),
-                )
-            else:
-                pre_send = exchange_preparation
-                attempt = HttpAttempt(
-                    attempt_id=attempt_scope.attempt_id,
-                    retry=retry,
-                    exchanges=(),
-                    pre_send=pre_send,
-                    timings=HttpAttemptTimings(elapsed=pre_send.timings.elapsed),
-                )
+            attempt = await self._execute_attempt(request, attempt_scope, retry)
             attempts.append(attempt)
             trigger = _retry_trigger(attempt)
             policy = request.policies.retries
@@ -199,6 +196,73 @@ class HttpExecutionDriver:
         )
         snapshot = await self._snapshot_provider.snapshot(observation)
         return ObservedExecution(observation=observation, snapshot=snapshot)
+
+    async def _execute_attempt(
+        self,
+        request: FinalizedWireRequest,
+        attempt_scope: AttemptScope,
+        retry: RetryMetadata | None,
+    ) -> HttpAttempt:
+        """Execute one initial request and its bounded, freshly authorized redirect chain."""
+        occurrence = _exchange_occurrence(attempt_scope, 0)
+        preparation = await self._exchange_preparer.prepare(request, occurrence)
+        if type(preparation) is not AuthorizedExchangeRequest:
+            return HttpAttempt(
+                attempt_id=attempt_scope.attempt_id,
+                retry=retry,
+                exchanges=(),
+                pre_send=preparation,
+                timings=HttpAttemptTimings(elapsed=preparation.timings.elapsed),
+            )
+        authorized = preparation
+        exchanges: list[HttpExchange] = []
+        redirect_pre_send: HttpPreSendOutcome | None = None
+        maximum_hops = request.policies.redirects.max_hops.value
+        for exchange_index in range(maximum_hops + 1):  # pragma: no branch - positive range
+            result = await self._transport.exchange(authorized)
+            failure = result.failure
+            redirect = None
+            following: AuthorizedExchangeRequest | None = None
+            if result.response is not None and failure is None and exchange_index < maximum_hops:
+                resolution = self._redirect_resolver.resolve(authorized, result.response)
+                if type(resolution) is RedirectFailure:
+                    failure = resolution.failure
+                elif type(resolution) is PreparedRedirect:
+                    redirect = resolution.transition
+                    next_occurrence = _exchange_occurrence(attempt_scope, exchange_index + 1)
+                    next_preparation = await self._exchange_preparer.prepare(
+                        resolution.request,
+                        next_occurrence,
+                    )
+                    if type(next_preparation) is AuthorizedExchangeRequest:
+                        following = next_preparation
+                    else:
+                        redirect_pre_send = next_preparation
+            exchanges.append(
+                HttpExchange(
+                    exchange_id=authorized.occurrence.exchange_id,
+                    request=authorized,
+                    response=result.response,
+                    failure=failure,
+                    redirect=redirect,
+                    timings=result.timings,
+                )
+            )
+            if following is None:
+                break
+            authorized = following
+        elapsed = (
+            exchanges[0].timings.elapsed
+            if len(exchanges) == 1 and redirect_pre_send is None
+            else _UNAVAILABLE_TIMING
+        )
+        return HttpAttempt(
+            attempt_id=attempt_scope.attempt_id,
+            retry=retry,
+            exchanges=tuple(exchanges),
+            timings=HttpAttemptTimings(elapsed=elapsed),
+            redirect_pre_send=redirect_pre_send,
+        )
 
     async def close(self) -> None:
         """Attempt every owned cleanup exactly once, without leaking adapter exceptions."""
@@ -228,6 +292,16 @@ def _attempt_scope(work: ExecutionWork, attempt_index: int) -> AttemptScope:
     )
 
 
+def _exchange_occurrence(
+    attempt: AttemptScope,
+    exchange_index: int,
+) -> HttpRequestOccurrence:
+    return HttpRequestOccurrence(
+        attempt=attempt,
+        exchange_id=ExchangeId(value=uuid5(attempt.attempt_id.value, f"exchange:{exchange_index}")),
+    )
+
+
 def _retry_trigger(attempt: HttpAttempt) -> RetryTrigger | None:
     failure_mapping = {
         FailurePhase.DNS: (RetryTrigger.DNS_FAILURE, RetryCondition.DNS_FAILURE),
@@ -248,6 +322,8 @@ def _retry_trigger(attempt: HttpAttempt) -> RetryTrigger | None:
     failure = None
     if type(attempt.pre_send) is HttpResolutionFailure:
         failure = attempt.pre_send.failure
+    elif type(attempt.redirect_pre_send) is HttpResolutionFailure:
+        failure = attempt.redirect_pre_send.failure
     elif attempt.exchanges:
         failure = attempt.exchanges[-1].failure
     if failure is not None:

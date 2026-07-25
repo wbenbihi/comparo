@@ -19,6 +19,7 @@ from comparo.core.domain.gates.model import CompiledGateProfile
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
 from comparo.core.domain.http.observations import EnvironmentExecutionObservation
+from comparo.core.domain.http.observations import FollowedRedirect
 from comparo.core.domain.http.observations import RetryMetadata
 from comparo.core.domain.http.observations import RetryTrigger
 from comparo.core.domain.http.policies import RetryPolicy
@@ -26,6 +27,7 @@ from comparo.core.domain.http.pre_send import HttpPreSendOutcome
 from comparo.core.domain.http.requests import FinalizedWireRequest
 from comparo.core.domain.http.responses import ResponseObservation
 from comparo.core.domain.http.timings import HttpExchangeTimings
+from comparo.core.domain.http.transport import FailurePhase
 from comparo.core.domain.http.transport import TransportFailure
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.scopes import AttemptScope
@@ -90,6 +92,60 @@ class HttpTransport(Protocol):
 
     async def close(self) -> None:
         """Release run-owned connections and transport resources."""
+        ...
+
+
+@final
+class NoRedirect(msgspec.Struct, frozen=True, kw_only=True):
+    """The terminal response does not produce an automatic redirect transition."""
+
+    def __post_init__(self) -> None:
+        """Retain a uniform direct-construction validation boundary."""
+
+
+@final
+class PreparedRedirect(msgspec.Struct, frozen=True, kw_only=True):
+    """One pure redirect rewrite ready for fresh resolution and authorization."""
+
+    request: FinalizedWireRequest
+    transition: FollowedRedirect
+
+    def __post_init__(self) -> None:
+        """Require exact rewritten request and retained Location evidence."""
+        if type(self.request) is not FinalizedWireRequest:
+            raise TypeError("prepared redirect request must be FinalizedWireRequest")
+        if type(self.transition) is not FollowedRedirect:
+            raise TypeError("prepared redirect transition must be FollowedRedirect")
+        if self.request.url != self.transition.resolved_url:
+            raise ValueError("prepared redirect request must use its resolved Location URL")
+
+
+@final
+class RedirectFailure(msgspec.Struct, frozen=True, kw_only=True):
+    """A value-free failure interpreting an otherwise terminal redirect response."""
+
+    failure: TransportFailure
+
+    def __post_init__(self) -> None:
+        """Restrict redirect interpretation failures to the protocol phase."""
+        if type(self.failure) is not TransportFailure:
+            raise TypeError("redirect failure must contain TransportFailure")
+        if self.failure.phase is not FailurePhase.PROTOCOL:
+            raise ValueError("redirect interpretation failures must use the protocol phase")
+
+
+type RedirectResolution = NoRedirect | PreparedRedirect | RedirectFailure
+
+
+class HttpRedirectResolver(Protocol):
+    """Interpret and rewrite one observed redirect without resolving or sending it."""
+
+    def resolve(
+        self,
+        request: AuthorizedExchangeRequest,
+        response: ResponseObservation,
+    ) -> RedirectResolution:
+        """Return no transition, a rewritten request, or a typed protocol failure."""
         ...
 
 

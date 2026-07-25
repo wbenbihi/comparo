@@ -59,6 +59,11 @@ class AttemptLineageLike(Protocol):
         """Return the exact pre-send terminal outcome when no exchange occurred."""
         ...
 
+    @property
+    def redirect_pre_send(self) -> HttpPreSendOutcome | None:
+        """Return a redirect target's terminal pre-send outcome when present."""
+        ...
+
 
 def validate_execution_occurrences(
     execution_id: EnvironmentExecutionId,
@@ -74,6 +79,13 @@ def validate_execution_occurrences(
         else attempt.pre_send
         for attempt in attempts
         if attempt.pre_send is not None
+    )
+    requests += tuple(
+        attempt.redirect_pre_send.request
+        if type(attempt.redirect_pre_send) is HttpResolutionFailure
+        else attempt.redirect_pre_send
+        for attempt in attempts
+        if attempt.redirect_pre_send is not None
     )
     if any(request.request.environment != environment for request in requests):
         raise ValueError("every HTTP request must bind to the observed Environment")
