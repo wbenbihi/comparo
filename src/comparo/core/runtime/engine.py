@@ -63,25 +63,32 @@ async def run_prepared(
         raise TypeError("runtime engine requires PreparedRun")
     if type(cancellation) is not RunCancellation:
         raise TypeError("runtime engine requires RunCancellation")
-    scheduled = await schedule_executions(prepared, driver, cancellation, events)
-    records, assertion_incomplete = await _evaluate_assertions(
-        prepared,
-        scheduled.records,
-        evaluation,
-    )
-    comparisons, diff_incomplete, next_sequence = await _evaluate_comparisons(
-        prepared,
-        records,
-        evaluation,
-        events,
-        scheduled.next_event_sequence.value,
-    )
+    cleanup_failed = False
+    try:
+        scheduled = await schedule_executions(prepared, driver, cancellation, events)
+        records, assertion_incomplete = await _evaluate_assertions(
+            prepared,
+            scheduled.records,
+            evaluation,
+        )
+        comparisons, diff_incomplete, next_sequence = await _evaluate_comparisons(
+            prepared,
+            records,
+            evaluation,
+            events,
+            scheduled.next_event_sequence.value,
+        )
+    finally:
+        try:
+            await driver.close()
+        except Exception:  # noqa: BLE001 - cleanup defects become a value-free run outcome
+            cleanup_failed = True
     completion = _completion(
         records,
         cancellation,
         clock,
         evaluation_incomplete=assertion_incomplete or diff_incomplete,
-        cleanup_failed=scheduled.cleanup_failed,
+        cleanup_failed=cleanup_failed,
     )
     gate = _gate(evaluation, records, comparisons, completion, prepared)
     await events.emit(

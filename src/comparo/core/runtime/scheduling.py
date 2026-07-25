@@ -190,7 +190,6 @@ class ScheduledExecutions(msgspec.Struct, frozen=True, kw_only=True):
     records: tuple[ExecutionRecord, ...]
     ledgers: tuple[ResourceBudget, ResourceBudget]
     next_event_sequence: Count
-    cleanup_failed: bool = False
 
     def __post_init__(self) -> None:
         """Require immutable typed scheduler products."""
@@ -204,8 +203,6 @@ class ScheduledExecutions(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("scheduled ledgers must be immutable ResourceBudget values")
         if type(self.next_event_sequence) is not Count:
             raise TypeError("scheduled event sequence must be a Count")
-        if type(self.cleanup_failed) is not bool:
-            raise TypeError("scheduled cleanup failure marker must be a bool")
 
 
 async def schedule_executions(
@@ -226,43 +223,35 @@ async def schedule_executions(
     records: dict[int, ExecutionRecord] = {}
 
     await emitter.emit(RuntimeEventKind.RUN_STARTED)
-    cleanup_failed = False
-    try:
-        async with asyncio.TaskGroup() as group:
+    async with asyncio.TaskGroup() as group:
+        group.create_task(
+            _produce(
+                prepared,
+                queue,
+                queue_slots,
+                ledger,
+                emitter,
+                cancellation,
+                ledger.concurrency_limit,
+            )
+        )
+        for _worker_index in range(ledger.concurrency_limit):
             group.create_task(
-                _produce(
-                    prepared,
+                _consume(
                     queue,
                     queue_slots,
+                    records,
                     ledger,
                     emitter,
+                    driver,
                     cancellation,
-                    ledger.concurrency_limit,
+                    prepared.effective.fail_fast,
                 )
             )
-            for _worker_index in range(ledger.concurrency_limit):
-                group.create_task(
-                    _consume(
-                        queue,
-                        queue_slots,
-                        records,
-                        ledger,
-                        emitter,
-                        driver,
-                        cancellation,
-                        prepared.effective.fail_fast,
-                    )
-                )
-    finally:
-        try:
-            await driver.close()
-        except Exception:  # noqa: BLE001 - cleanup defects become a value-free run outcome
-            cleanup_failed = True
     return ScheduledExecutions(
         records=tuple(records[index] for index in sorted(records)),
         ledgers=ledger.snapshots(),
         next_event_sequence=emitter.next_sequence,
-        cleanup_failed=cleanup_failed,
     )
 
 

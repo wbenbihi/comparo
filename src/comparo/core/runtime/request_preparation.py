@@ -262,8 +262,7 @@ class ConfigurationRequestProvider:
         return _unavailable(_SHAPE_INVALID)
 
     async def close(self) -> None:
-        """Release every run-scoped value cache and sensitive registry entry."""
-        await self._context.close()
+        """Release no resources because the injected RunContext remains caller-owned."""
 
 
 async def _resolve_request_fields(

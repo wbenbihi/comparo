@@ -27,6 +27,7 @@ from comparo.core.runtime import ExecutionRecord
 from comparo.core.runtime import ExecutionWork
 from comparo.core.runtime import NoEvaluationPreparation
 from comparo.core.runtime import NullEventSink
+from comparo.core.runtime import ProgrammableFakeTransport
 from comparo.core.runtime import RecordingEventSink
 from comparo.core.runtime import UnavailableExecution
 from comparo.core.runtime import iter_execution_work
@@ -121,9 +122,6 @@ def test_scheduler_ledger_and_terminal_product_reject_inconsistent_state(
         msgspec.structs.replace(valid, ledgers=(object(), object()))
     with pytest.raises(TypeError, match="event sequence"):
         msgspec.structs.replace(valid, next_event_sequence=0)
-    with pytest.raises(TypeError, match="cleanup failure"):
-        msgspec.structs.replace(valid, cleanup_failed=0)
-
     with pytest.raises(ValueError, match="exact scheduling budget"):
         _budget(prepared_comparison_run, BudgetResource.OPEN_CONNECTIONS)
 
@@ -223,6 +221,64 @@ def test_cleanup_failure_becomes_a_safe_internal_run_outcome(
     )
     assert type(result.completion) is RunInternalError
     assert result.completion.diagnostic.code.value == "runtime.cleanup.failed"
+
+
+class LifecyclePreparation:
+    """Prove offline evaluation still owns every live driver-backed dependency."""
+
+    def __init__(self, transport: ProgrammableFakeTransport) -> None:
+        self.transport = transport
+        self.assertion_calls = 0
+        self.diff_calls = 0
+
+    @property
+    def gate_profile(self) -> CompiledGateProfile | None:
+        return None
+
+    async def assertions(
+        self,
+        prepared: PreparedRun,
+        record: ExecutionRecord,
+    ) -> tuple[AssertionCall, ...]:
+        del prepared, record
+        assert not self.transport.closed
+        self.assertion_calls += 1
+        return ()
+
+    async def diffs(
+        self,
+        prepared: PreparedRun,
+        work: ComparisonWork,
+        baseline: ExecutionRecord,
+        candidate: ExecutionRecord,
+    ) -> tuple[DiffCall, ...]:
+        del prepared, work, baseline, candidate
+        assert not self.transport.closed
+        self.diff_calls += 1
+        return ()
+
+
+def test_driver_remains_open_through_evaluation_then_closes(
+    prepared_comparison_run: PreparedRun,
+) -> None:
+    cancellation = RunCancellation()
+    driver, transport = _driver(prepared_comparison_run, cancellation)
+    evaluation = LifecyclePreparation(transport)
+
+    result = asyncio.run(
+        run_prepared(
+            prepared_comparison_run,
+            driver=driver,
+            evaluation=evaluation,
+            cancellation=cancellation,
+            clock=FixedClock(),
+            events=NullEventSink(),
+        )
+    )
+
+    assert evaluation.assertion_calls == len(result.executions)
+    assert evaluation.diff_calls == len(result.comparisons)
+    assert transport.closed
 
 
 class InvalidPreparation:

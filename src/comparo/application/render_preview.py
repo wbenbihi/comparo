@@ -287,7 +287,7 @@ class _RenderResources:
                 await self.provider.close()
             except Exception:  # noqa: BLE001 - continue closing independent resources
                 failed = True
-        elif self.context is not None:
+        if self.context is not None:
             try:
                 await self.context.close()
             except Exception:  # noqa: BLE001 - continue closing independent resources

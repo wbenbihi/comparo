@@ -120,6 +120,7 @@ async def _prepare(prepared: PreparedRun) -> PreparedRequest:
         return await provider.prepare(work, _attempt_scope(work, 0))
     finally:
         await provider.close()
+        await context.close()
 
 
 def _configuration_provenance() -> ValueProvenance:
@@ -218,6 +219,7 @@ def test_sensitive_method_origin_is_denied_by_routing_boundary() -> None:
         )
     )
     asyncio.run(provider.close())
+    asyncio.run(context.close())
 
     assert type(result) is RequestPreparationFailure
     outcome = cast(UnavailableExecution, result.outcome)
@@ -337,6 +339,8 @@ def test_provider_rejects_invalid_context_calls_and_non_request_subjects() -> No
     result = asyncio.run(provider.prepare(work, _attempt_scope(work, 0)))
     assert type(result) is RequestPreparationFailure
     asyncio.run(provider.close())
+    asyncio.run(scenario_context.sanitization_snapshot())
+    asyncio.run(scenario_context.close())
 
 
 def test_resolution_failures_map_to_value_free_execution_outcomes() -> None:

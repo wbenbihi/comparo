@@ -116,7 +116,6 @@ def test_compiled_plan_runs_offline_with_bounded_work_and_deterministic_results(
             events=events,
         )
     )
-
     assert type(result.completion) is RunComplete
     assert len(result.executions) == (
         prepared_comparison_run.plan.cardinality.environment_executions.value
@@ -275,6 +274,7 @@ def test_compiled_request_values_resolve_per_environment_before_fake_transport(
             events=RecordingEventSink(),
         )
     )
+    asyncio.run(context.close())
 
     assert type(result.completion) is RunComplete
     assert len(exchange_preparer.requests) == len(work)

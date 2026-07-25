@@ -644,12 +644,12 @@ def test_resource_cleanup_is_best_effort(failing: str | None) -> None:
     context = _AsyncClose(fails=failing == "context")
     files = _SyncClose(fails=failing == "files")
     resources.boundary = cast("Any", boundary)
-    resources.provider = None if failing == "context" else cast("Any", provider)
+    resources.provider = cast("Any", provider)
     resources.context = cast("Any", context)
     resources.files = cast("Any", files)
 
     assert asyncio.run(resources.close()) is (failing is not None)
     assert boundary.closed
     assert files.closed
-    assert context.closed is (failing == "context")
-    assert provider.closed is (failing != "context")
+    assert context.closed
+    assert provider.closed
