@@ -878,7 +878,9 @@ def _compile_gate(
         ),
         require_complete_run=True,
         require_assertion_coverage=any(item.assertions for item in subjects),
-        require_diff_coverage=any(item.diffs for item in subjects),
+        require_diff_coverage=(
+            prepared.plan.cardinality.comparisons.value > 0 and any(item.diffs for item in subjects)
+        ),
         thresholds=(
             GateThreshold(
                 severity=GateSeverity.BLOCKING,

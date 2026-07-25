@@ -101,6 +101,7 @@ def _prepared(
     diff: str | None = None,
     gate: str | None = None,
     inline: bool = False,
+    assertion_topology: bool = False,
     assertion_profile_fields: str = "",
     diff_profile_fields: str = "",
 ) -> PreparedRun:
@@ -137,12 +138,16 @@ def _prepared(
             attachments.append("gate: {$use: strict}")
             resources.append(document("GateProfile", "strict", gate))
     suffix = ", " + ", ".join(attachments) if attachments else ""
+    topology = (
+        "environments: [{$use: staging}]"
+        if assertion_topology
+        else "baseline: {$use: staging}, candidates: [{$use: prod}]"
+    )
     project = compile_project(
         document(
             "Project",
             "demo",
-            "{defaults: {subjects: [{$use: Request/check}], baseline: {$use: staging}, "
-            f"candidates: [{{$use: prod}}]{suffix}}}}}",
+            f"{{defaults: {{subjects: [{{$use: Request/check}}], {topology}{suffix}}}}}",
         ),
         document("Environment", "staging", "{baseUrl: 'https://staging.example'}"),
         document("Environment", "prod", "{baseUrl: 'https://prod.example'}"),
@@ -379,6 +384,23 @@ def test_empty_profile_and_nonempty_gate_fail_closed() -> None:
     assert _codes(empty) == ("evaluation.profile.empty",)
     assert _codes(gate) == ("evaluation.gate.unsupported",)
     assert gate.rejected[0].family is binding.EvaluationCapabilityFamily.GATE
+
+
+def test_assertion_topology_does_not_require_impossible_diff_coverage() -> None:
+    outcome = _bind(
+        _prepared(
+            assertion="[{selector: status, operator: {name: equals, expected: 200}}]",
+            diff="[{selector: status, comparator: exact}]",
+            gate="{}",
+            assertion_topology=True,
+        )
+    )
+
+    assert outcome.diagnostics == ()
+    assert outcome.preparation is not None
+    assert outcome.preparation.gate_profile is not None
+    assert outcome.preparation.gate_profile.require_assertion_coverage
+    assert not outcome.preparation.gate_profile.require_diff_coverage
 
 
 def test_inline_gate_is_explicitly_rejected() -> None:

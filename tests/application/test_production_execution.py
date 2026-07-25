@@ -120,12 +120,17 @@ def _evaluated_project(root: Path, *, base_url: str) -> PreparedProjectPlan:
             "status-assertions",
             "{rules: [{id: status-ok, selector: response.status, "
             "operator: {name: comparo.core/equals@1, expected: 200}, severity: blocking, "
+            "quantifier: one, completeness: complete}, "
+            "{id: body-present, selector: response.body, "
+            "operator: {name: comparo.core/notEquals@1, expected: null}, severity: blocking, "
             "quantifier: one, completeness: complete}]}",
         ),
         document(
             "DiffProfile",
             "status-diffs",
             "{rules: [{id: status-exact, selector: status, comparator: {name: exact}, "
+            "severity: blocking, completeness: complete}, "
+            "{id: body-exact, selector: response.body, comparator: {name: exact}, "
             "severity: blocking, completeness: complete}]}",
         ),
         document("GateProfile", "strict", "{}"),
@@ -292,13 +297,18 @@ def test_production_root_executes_http_evaluation_and_transient_artifact(
         assert len(artifact.executions) == 2
         assert all(
             execution.outcome is ArtifactExecutionOutcome.OBSERVED
-            and len(execution.assertions) == 1
-            and execution.assertions[0].outcome is ArtifactFactOutcome.SATISFIED
+            and len(execution.assertions) == 2
+            and all(
+                assertion.outcome is ArtifactFactOutcome.SATISFIED
+                for assertion in execution.assertions
+            )
             for execution in artifact.executions
         )
         assert len(artifact.comparisons) == 1
-        assert len(artifact.comparisons[0].diffs) == 1
-        assert artifact.comparisons[0].diffs[0].outcome is ArtifactFactOutcome.EQUIVALENT
+        assert len(artifact.comparisons[0].diffs) == 2
+        assert all(
+            diff.outcome is ArtifactFactOutcome.EQUIVALENT for diff in artifact.comparisons[0].diffs
+        )
         responses = tuple(
             exchange.response
             for execution in artifact.executions

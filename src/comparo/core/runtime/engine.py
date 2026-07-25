@@ -16,6 +16,8 @@ from comparo.core.domain.diagnostics import DiagnosticStage
 from comparo.core.domain.gates.model import GateEvaluation
 from comparo.core.domain.gates.normalization import normalize_assertion_fact
 from comparo.core.domain.gates.normalization import normalize_diff_fact
+from comparo.core.domain.gates.summaries import AssertionGateSummary
+from comparo.core.domain.gates.summaries import DiffGateSummary
 from comparo.core.domain.gates.summaries import GateEnvironmentExecution
 from comparo.core.domain.gates.summaries import NormalizedFactSummary
 from comparo.core.domain.gates.types import EnvironmentRole
@@ -293,22 +295,33 @@ def _gate(
     prepared: PreparedRun,
 ) -> GateEvaluation:
     assertion_summaries = tuple(
-        normalize_assertion_fact(
-            item.fact,
-            execution=GateEnvironmentExecution(
-                environment=record.work.environment,
-                execution_id=record.work.scope.execution_id,
-                roles=_roles(prepared, record),
-            ),
+        AssertionGateSummary(
+            rules=tuple(
+                rule
+                for item in record.assertions
+                for rule in normalize_assertion_fact(
+                    item.fact,
+                    execution=GateEnvironmentExecution(
+                        environment=record.work.environment,
+                        execution_id=record.work.scope.execution_id,
+                        roles=_roles(prepared, record),
+                    ),
+                ).rules
+            )
         )
         for record in records
-        for item in record.assertions
+        if record.assertions
     )
     diff_summaries = tuple(
-        normalize_diff_fact(item.fact)
+        DiffGateSummary(
+            rules=tuple(
+                rule
+                for item in comparison.outcome.diffs
+                for rule in normalize_diff_fact(item.fact).rules
+            )
+        )
         for comparison in comparisons
-        if type(comparison.outcome) is EvaluatedComparison
-        for item in comparison.outcome.diffs
+        if type(comparison.outcome) is EvaluatedComparison and comparison.outcome.diffs
     )
     return evaluate_gate(
         evaluation.gate_profile,
