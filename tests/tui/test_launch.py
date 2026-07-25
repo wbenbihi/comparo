@@ -13,9 +13,11 @@ from comparo.application import ProductionExecutionSettings
 from comparo.application import ProjectLoadLimits
 from comparo.application import ReportArchiveLimits
 from comparo.tui.app import ComparoApp
+from comparo.tui.contracts import TuiInteractionLimits
 from comparo.tui.contracts import TuiLaunchLimits
 from comparo.tui.contracts import TuiLaunchRequest
 from comparo.tui.contracts import tui_artifact_read_limits_defaults_v1
+from comparo.tui.contracts import tui_interaction_limits_defaults_v1
 from comparo.tui.contracts import tui_launch_limits_defaults_v1
 from comparo.tui.launch import build_tui_app
 from comparo.tui.launch import run_tui
@@ -46,6 +48,11 @@ def test_launch_limit_defaults_are_fresh_complete_and_persist_results() -> None:
     assert type(first.policy_load) is PolicyLoadLimits
     assert type(first.execution_settings) is ProductionExecutionSettings
     assert type(first.report_archive) is ReportArchiveLimits
+    assert type(first.interaction) is TuiInteractionLimits
+    assert first.interaction == tui_interaction_limits_defaults_v1()
+    assert first.interaction.maximum_input_characters == 64 * 1024
+    assert first.interaction.maximum_input_items == 4096
+    assert first.interaction.maximum_navigation_frames_per_workspace == 256
     assert first.report_archive.maximum_entries == 4096
     assert first.report_archive.artifact == tui_artifact_read_limits_defaults_v1()
     assert first.maximum_outstanding_preparations == 8
@@ -59,6 +66,7 @@ def test_launch_limit_defaults_are_fresh_complete_and_persist_results() -> None:
         ("policy_load", object(), TypeError),
         ("execution_settings", object(), TypeError),
         ("report_archive", object(), TypeError),
+        ("interaction", object(), TypeError),
         ("maximum_outstanding_preparations", 0, ValueError),
         ("maximum_outstanding_preparations", True, ValueError),
     ],
@@ -78,6 +86,25 @@ def test_launch_limits_require_exact_construction_type() -> None:
         field: getattr(defaults, field) for field in defaults.__struct_fields__
     }
     assert type(TuiLaunchLimits(**values)) is TuiLaunchLimits  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("maximum_input_characters", 0),
+        ("maximum_input_characters", True),
+        ("maximum_input_items", 0),
+        ("maximum_input_items", True),
+        ("maximum_navigation_frames_per_workspace", 1),
+        ("maximum_navigation_frames_per_workspace", True),
+    ],
+)
+def test_interaction_limits_reject_unbounded_or_untyped_values(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=r"TUI .* limit"):
+        msgspec.structs.replace(tui_interaction_limits_defaults_v1(), **{field: value})
 
 
 def test_production_builder_composes_an_unstarted_app(tmp_path: Path) -> None:

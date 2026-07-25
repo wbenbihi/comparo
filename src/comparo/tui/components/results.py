@@ -375,6 +375,11 @@ class ResultsWorkspaceView(ResponsiveWidget):
         """Return the result collection currently visible in this workspace."""
         return self._index
 
+    @property
+    def selected_reference(self) -> ResultReference | None:
+        """Return the exact result currently represented by the detail surface."""
+        return self._selected_reference
+
     @on(ResultIndexSelector.IndexSelected)
     def show_index(self, message: ResultIndexSelector.IndexSelected) -> None:
         """Switch collections without discarding the inspected result context."""
@@ -395,6 +400,12 @@ class ResultsWorkspaceView(ResponsiveWidget):
         self._selected_reference = reference
         if self.is_mounted:
             self.refresh(recompose=True)
+
+    def clear_reference(self) -> None:
+        """Return to the collection index without retaining a stale detail selection."""
+        self._selected_reference = None
+        if self.is_mounted:
+            self.query_one(".result-detail", ResultDetail).show_reference(None)
 
 
 __all__ = (

@@ -61,6 +61,18 @@ class ProjectResourceList(ListView):
         if type(event.item) is ProjectResourceItem:
             self.post_message(self.ResourceSelected(event.item.resource))
 
+    def show_resource(self, resource: ProjectResourceSummary) -> None:
+        """Move the visual cursor to one exact already-projected resource."""
+        if type(resource) is not ProjectResourceSummary:
+            raise TypeError("project resource selection must be typed")
+        for index, item in enumerate(self.children):
+            if (
+                type(item) is ProjectResourceItem
+                and item.resource.coordinate == resource.coordinate
+            ):
+                self.index = index
+                return
+
 
 @final
 class ProjectResourceDetail(Static):

@@ -30,6 +30,7 @@ from comparo.tui.components.status import StatusBadge
 from comparo.tui.components.status import status_for_outcome
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import CompareMode
+from comparo.tui.contracts import TuiInteractionLimits
 from comparo.tui.presentation import safe_terminal_text
 
 
@@ -128,6 +129,7 @@ class CompareDraftForm(Vertical):
         self,
         draft: CompareDraft,
         *,
+        limits: TuiInteractionLimits,
         resources: tuple[ProjectResourceSummary, ...] = (),
         id: str | None = None,
         classes: str | None = None,
@@ -136,11 +138,14 @@ class CompareDraftForm(Vertical):
         super().__init__(id=id, classes=classes)
         if type(draft) is not CompareDraft:
             raise TypeError("Compare draft form requires CompareDraft")
+        if type(limits) is not TuiInteractionLimits:
+            raise TypeError("Compare draft form requires TuiInteractionLimits")
         if type(resources) is not tuple or any(
             type(item) is not ProjectResourceSummary for item in resources
         ):
             raise TypeError("Compare draft resources must be immutable safe summaries")
         self._draft = _initialize_draft(draft, resources)
+        self._limits = limits
         self._resources = resources
 
     @override
@@ -153,7 +158,7 @@ class CompareDraftForm(Vertical):
             _format_selections(self._draft.subjects),
             _resource_hint(self._resources, {"Request", "Scenario"}),
             "compare-field-subjects",
-            maximum=512,
+            maximum=self._limits.maximum_input_characters,
         )
         yield _draft_input(
             "Environments",
@@ -161,7 +166,7 @@ class CompareDraftForm(Vertical):
             _format_selections(self._draft.environments),
             _resource_hint(self._resources, {"Environment"}),
             "compare-field-environments",
-            maximum=512,
+            maximum=self._limits.maximum_input_characters,
         )
         yield _draft_input(
             "Baseline",
@@ -176,7 +181,7 @@ class CompareDraftForm(Vertical):
             _format_selections(self._draft.candidates),
             _resource_hint(self._resources, {"Environment"}),
             "compare-field-candidates",
-            maximum=512,
+            maximum=self._limits.maximum_input_characters,
         )
         yield _draft_input(
             "Execution profile",
@@ -185,7 +190,7 @@ class CompareDraftForm(Vertical):
             _resource_hint(self._resources, {"ExecutionProfile"}),
             "compare-field-profile",
         )
-        yield CompareAdvancedOptions(self._draft)
+        yield CompareAdvancedOptions(self._draft, limits=self._limits)
 
     def on_mount(self) -> None:
         """Apply initial mode-dependent field visibility."""
@@ -198,6 +203,7 @@ class CompareDraftForm(Vertical):
         advanced = self.query_one(CompareAdvancedOptions)
         draft = parse_compare_draft(
             self._draft,
+            limits=self._limits,
             mode=self.query_one(CompareModeSelector).mode,
             subjects=_input_value(self, "#compare-draft-subjects"),
             environments=_input_value(self, "#compare-draft-environments"),

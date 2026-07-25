@@ -73,9 +73,35 @@ class ExplorerWorkspace(Vertical):
         """Keep this workspace mounted while presenting a new safe project result."""
         if type(result) is not ProjectWorkspaceResult:
             raise TypeError("Explorer workspace requires ProjectWorkspaceResult")
+        if self._result is result:
+            return
         self._result = result
         if self.is_mounted:
             self.refresh(recompose=True)
+
+    def restore_resource(self, entity: str | None) -> None:
+        """Restore the exact resource represented by a retained local route."""
+        snapshot = None if self._result is None else self._result.snapshot
+        if snapshot is None or not self.is_mounted:
+            return
+        resources = (snapshot.project, *snapshot.resources)
+        resource = snapshot.project
+        if entity is not None:
+            kind, separator, resource_id = entity.partition("/")
+            if separator:
+                selected = next(
+                    (
+                        item
+                        for item in resources
+                        if item.coordinate.kind == kind
+                        and item.coordinate.resource_id == resource_id
+                    ),
+                    None,
+                )
+                if selected is not None:
+                    resource = selected
+        self.query_one(ProjectResourceList).show_resource(resource)
+        self.query_one(ProjectResourceDetail).show_resource(resource)
 
 
 __all__ = ("ExplorerWorkspace",)

@@ -24,6 +24,8 @@ from comparo.tui.components import StatePanelMode
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import CompareMode
 from comparo.tui.contracts import ResultAccess
+from comparo.tui.contracts import TuiInteractionLimits
+from comparo.tui.contracts import tui_interaction_limits_defaults_v1
 
 
 class CompareWorkspaceState(StrEnum):
@@ -49,6 +51,7 @@ class CompareWorkspace(Vertical):
         progress: ExecutionProgressSnapshot | None = None,
         results: ResultProjection | None = None,
         diagnostics: tuple[ApplicationDiagnostic, ...] = (),
+        interaction_limits: TuiInteractionLimits | None = None,
         id: str | None = None,
         classes: str | None = "workspace",
     ) -> None:
@@ -60,6 +63,13 @@ class CompareWorkspace(Vertical):
             raise TypeError("Compare workspace state must be typed")
         if draft is not None and type(draft) is not CompareDraft:
             raise TypeError("Compare workspace draft must be typed")
+        selected_limits = (
+            tui_interaction_limits_defaults_v1()
+            if interaction_limits is None
+            else interaction_limits
+        )
+        if type(selected_limits) is not TuiInteractionLimits:
+            raise TypeError("Compare workspace interaction limits must be typed")
         self.draft = CompareDraft(mode=mode) if draft is None else draft
         self.resources = resources
         self.state = state
@@ -67,6 +77,7 @@ class CompareWorkspace(Vertical):
         self.progress = progress
         self.results = results
         self.diagnostics = diagnostics
+        self.interaction_limits = selected_limits
 
     @override
     def compose(self) -> ComposeResult:
@@ -99,7 +110,11 @@ class CompareWorkspace(Vertical):
 
     def _prepare_panel(self) -> StatePanel:
         children = [
-            CompareDraftForm(self.draft, resources=self.resources),
+            CompareDraftForm(
+                self.draft,
+                limits=self.interaction_limits,
+                resources=self.resources,
+            ),
             PlanPreview(self.plan),
         ]
         children.extend((DiagnosticsList(self.diagnostics),) if self.diagnostics else ())
@@ -167,10 +182,23 @@ class CompareWorkspace(Vertical):
         if self.is_mounted:
             self.refresh(recompose=True)
 
+    def show_starting(self) -> None:
+        """Replace preparation controls before a session emits its first snapshot."""
+        if self.state is CompareWorkspaceState.RUNNING and self.progress is None:
+            return
+        self.state = CompareWorkspaceState.RUNNING
+        self.progress = None
+        self.results = None
+        self.diagnostics = ()
+        if self.is_mounted:
+            self.refresh(recompose=True)
+
     def show_results(self, results: ResultProjection) -> None:
         """Keep Compare mounted while switching to the shared live results component."""
         if type(results) is not ResultProjection:
             raise TypeError("Compare results require ResultProjection")
+        if self.state is CompareWorkspaceState.RESULTS and self.results is results:
+            return
         self.state = CompareWorkspaceState.RESULTS
         self.progress = None
         self.results = results

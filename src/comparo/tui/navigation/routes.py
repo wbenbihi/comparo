@@ -137,13 +137,25 @@ def switch_workspace(state: NavigationState, workspace: WorkspaceId) -> Navigati
     return state if state.active is workspace else msgspec.structs.replace(state, active=workspace)
 
 
-def push_route(state: NavigationState, frame: NavigationFrame) -> NavigationState:
-    """Push a frame onto its workspace and make that workspace active."""
+def push_route(
+    state: NavigationState,
+    frame: NavigationFrame,
+    *,
+    maximum_frames_per_workspace: int,
+) -> NavigationState:
+    """Push one frame while retaining a caller-bounded root-and-recency history."""
     _require_state(state)
     if type(frame) is not NavigationFrame:
         raise TypeError("navigation push requires NavigationFrame")
+    if type(maximum_frames_per_workspace) is not int or maximum_frames_per_workspace < 2:
+        raise ValueError("navigation push requires room for root and detail frames")
     history = _history(state, frame.route.workspace)
-    replacement = msgspec.structs.replace(history, frames=(*history.frames, frame))
+    if history.frames[-1] == frame:
+        return switch_workspace(state, frame.route.workspace)
+    frames = (*history.frames, frame)
+    if len(frames) > maximum_frames_per_workspace:
+        frames = (frames[0], *frames[-(maximum_frames_per_workspace - 1) :])
+    replacement = msgspec.structs.replace(history, frames=frames)
     return NavigationState(
         active=frame.route.workspace,
         histories=tuple(

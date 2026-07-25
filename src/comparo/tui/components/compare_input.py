@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 
 import msgspec
@@ -15,9 +16,7 @@ from comparo.application.planning import ValueResourceOverride
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import CompareDraftValidationCode
 from comparo.tui.contracts import CompareMode
-
-_MAXIMUM_FIELD_CHARACTERS = 512
-_MAXIMUM_ITEMS = 64
+from comparo.tui.contracts import TuiInteractionLimits
 
 
 class FailFastChoice(StrEnum):
@@ -28,9 +27,22 @@ class FailFastChoice(StrEnum):
     DISABLED = "disabled"
 
 
+class _InputLimitError(ValueError):
+    """Internal control-flow marker for a caller-owned input ceiling."""
+
+
+class _DraftValidationError(ValueError):
+    """Internal value-free marker carrying one closed validation code."""
+
+    def __init__(self, code: CompareDraftValidationCode) -> None:
+        super().__init__(code.value)
+        self.code = code
+
+
 def parse_compare_draft(
     fallback: CompareDraft,
     *,
+    limits: TuiInteractionLimits,
     mode: CompareMode,
     subjects: str,
     environments: str,
@@ -48,39 +60,68 @@ def parse_compare_draft(
     approve_mutations: bool,
 ) -> CompareDraft:
     """Return a typed draft or a value-free invalid marker retaining no authored text."""
-    if type(fallback) is not CompareDraft or type(mode) is not CompareMode:
+    if (
+        type(fallback) is not CompareDraft
+        or type(limits) is not TuiInteractionLimits
+        or type(mode) is not CompareMode
+    ):
         raise TypeError("Compare input parsing requires typed draft and mode")
     if type(fail_fast) is not FailFastChoice or type(approve_mutations) is not bool:
         return _invalid(fallback, CompareDraftValidationCode.INVALID_COMBINATION)
-    try:
-        parsed_subjects = _selection_list(subjects)
-        parsed_environments = _selection_list(environments)
-        parsed_baseline = _optional_selection(baseline)
-        parsed_candidates = _selection_list(candidates)
-        parsed_profile = _optional_selection(execution_profile)
-    except ValueError:
-        return _invalid(fallback, CompareDraftValidationCode.INVALID_SELECTION)
-    try:
-        parsed_matrices = _matrices(matrices)
-    except ValueError:
-        return _invalid(fallback, CompareDraftValidationCode.INVALID_MATRIX)
-    try:
-        parsed_trials = _positive_integer(trials)
-        parsed_attempts = _positive_integer(maximum_attempts)
-    except ValueError:
+    fields = (
+        subjects,
+        environments,
+        baseline,
+        candidates,
+        execution_profile,
+        matrices,
+        trials,
+        maximum_attempts,
+        budgets,
+        parameters,
+        variables,
+        secrets,
+    )
+    if any(
+        type(value) is not str or len(value) > limits.maximum_input_characters for value in fields
+    ):
         return _invalid(fallback, CompareDraftValidationCode.INVALID_LIMIT)
     try:
-        parsed_budgets = _budgets(budgets)
-    except (TypeError, ValueError):
-        return _invalid(fallback, CompareDraftValidationCode.INVALID_BUDGET)
-    try:
-        value_resources = (
-            *_value_resources(parameters, ValueNamespace.PARAMETERS),
-            *_value_resources(variables, ValueNamespace.VARIABLES),
-            *_value_resources(secrets, ValueNamespace.SECRETS),
+        selections = _validated(
+            lambda: (
+                _selection_list(subjects, limits),
+                _selection_list(environments, limits),
+                _optional_selection(baseline, limits),
+                _selection_list(candidates, limits),
+                _optional_selection(execution_profile, limits),
+            ),
+            CompareDraftValidationCode.INVALID_SELECTION,
         )
-    except (TypeError, ValueError):
-        return _invalid(fallback, CompareDraftValidationCode.INVALID_VALUE_RESOURCE)
+        parsed_matrices = _validated(
+            lambda: _matrices(matrices, limits),
+            CompareDraftValidationCode.INVALID_MATRIX,
+        )
+        parsed_trials, parsed_attempts = _validated(
+            lambda: (_positive_integer(trials), _positive_integer(maximum_attempts)),
+            CompareDraftValidationCode.INVALID_LIMIT,
+        )
+        parsed_budgets = _validated(
+            lambda: _budgets(budgets, limits),
+            CompareDraftValidationCode.INVALID_BUDGET,
+        )
+        value_resources = _validated(
+            lambda: (
+                *_value_resources(parameters, ValueNamespace.PARAMETERS, limits),
+                *_value_resources(variables, ValueNamespace.VARIABLES, limits),
+                *_value_resources(secrets, ValueNamespace.SECRETS, limits),
+            ),
+            CompareDraftValidationCode.INVALID_VALUE_RESOURCE,
+        )
+    except _DraftValidationError as error:
+        return _invalid(fallback, error.code)
+    parsed_subjects, parsed_environments, parsed_baseline, parsed_candidates, parsed_profile = (
+        selections
+    )
     try:
         return CompareDraft(
             mode=mode,
@@ -148,40 +189,41 @@ def fail_fast_choice(value: bool | None) -> FailFastChoice:
     return FailFastChoice.ENABLED if value else FailFastChoice.DISABLED
 
 
-def _selection_list(value: str) -> tuple[str, ...]:
-    values = _items(value)
+def _selection_list(value: str, limits: TuiInteractionLimits) -> tuple[str, ...]:
+    values = _items(value, limits)
     if any(len(item) > 63 for item in values):
         raise ValueError("selection is outside the bounded adapter grammar")
     return values
 
 
-def _optional_selection(value: str) -> str | None:
-    values = _selection_list(value)
+def _optional_selection(value: str, limits: TuiInteractionLimits) -> str | None:
+    values = _selection_list(value, limits)
     if len(values) > 1:
         raise ValueError("single selection expected")
     return None if not values else values[0]
 
 
-def _matrices(value: str) -> tuple[MatrixOverride, ...]:
+def _matrices(value: str, limits: TuiInteractionLimits) -> tuple[MatrixOverride, ...]:
     return tuple(
         MatrixOverride(binding=left, matrix=right)
-        for left, right in (_assignment(item) for item in _items(value))
+        for left, right in (_assignment(item) for item in _items(value, limits))
     )
 
 
-def _budgets(value: str) -> tuple[BudgetOverride, ...]:
+def _budgets(value: str, limits: TuiInteractionLimits) -> tuple[BudgetOverride, ...]:
     return tuple(
         BudgetOverride(resource=BudgetResource(left), limit=_required_integer(right))
-        for left, right in (_assignment(item) for item in _items(value))
+        for left, right in (_assignment(item) for item in _items(value, limits))
     )
 
 
 def _value_resources(
     value: str,
     namespace: ValueNamespace,
+    limits: TuiInteractionLimits,
 ) -> tuple[ValueResourceOverride, ...]:
     results = []
-    for item in _items(value):
+    for item in _items(value, limits):
         if "=" in item:
             environment, resource = _assignment(item)
         else:
@@ -196,15 +238,27 @@ def _value_resources(
     return tuple(results)
 
 
-def _items(value: str) -> tuple[str, ...]:
-    if type(value) is not str or len(value) > _MAXIMUM_FIELD_CHARACTERS:
-        raise ValueError("input is outside the bounded adapter grammar")
+def _items(value: str, limits: TuiInteractionLimits) -> tuple[str, ...]:
     if not value.strip():
         return ()
     items = tuple(item.strip() for item in value.split(","))
-    if len(items) > _MAXIMUM_ITEMS or any(not item for item in items):
-        raise ValueError("input is outside the bounded adapter grammar")
+    if len(items) > limits.maximum_input_items:
+        raise _InputLimitError
+    if any(not item for item in items):
+        raise ValueError("input is outside the adapter grammar")
     return items
+
+
+def _validated[T](
+    parser: Callable[[], T],
+    invalid_code: CompareDraftValidationCode,
+) -> T:
+    try:
+        return parser()
+    except _InputLimitError as error:
+        raise _DraftValidationError(CompareDraftValidationCode.INVALID_LIMIT) from error
+    except (TypeError, ValueError) as error:
+        raise _DraftValidationError(invalid_code) from error
 
 
 def _assignment(value: str) -> tuple[str, str]:

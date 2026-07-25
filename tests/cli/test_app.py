@@ -258,6 +258,12 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
             "23",
             "--maximum-outstanding-preparations",
             "3",
+            "--maximum-input-characters",
+            "8192",
+            "--maximum-input-items",
+            "257",
+            "--maximum-navigation-frames-per-workspace",
+            "33",
         ],
         services=cast("CliServices", _StaticServices()),
         stdout=stdout,
@@ -270,6 +276,9 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
     assert limits.execution_settings.transport.capture.maximum_encoded_body_bytes.value == 1234
     assert limits.report_archive.maximum_entries == 23
     assert limits.maximum_outstanding_preparations == 3
+    assert limits.interaction.maximum_input_characters == 8192
+    assert limits.interaction.maximum_input_items == 257
+    assert limits.interaction.maximum_navigation_frames_per_workspace == 33
     assert limits.execution_settings.artifact.persist.value == "always"
     assert stdout.getvalue() == ""
     assert stderr.getvalue() == ""
@@ -282,6 +291,9 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
         ["--maximum-blobs", "0"],
         ["--maximum-report-entries", "0"],
         ["--maximum-outstanding-preparations", "0"],
+        ["--maximum-input-characters", "0"],
+        ["--maximum-input-items", "0"],
+        ["--maximum-navigation-frames-per-workspace", "1"],
     ],
 )
 def test_tui_command_rejects_invalid_limits_without_launching(arguments: list[str]) -> None:

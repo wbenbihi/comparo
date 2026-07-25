@@ -81,7 +81,11 @@ class StatePanel(Vertical):
         message = self.query_one(".state-message", Static)
         content = self.query_one(".state-content", Vertical)
         loading.display = self._mode is StatePanelMode.LOADING
-        message.display = self._mode in {StatePanelMode.EMPTY, StatePanelMode.ERROR}
+        message.display = bool(self._message) and self._mode in {
+            StatePanelMode.LOADING,
+            StatePanelMode.EMPTY,
+            StatePanelMode.ERROR,
+        }
         content.display = self._mode in {StatePanelMode.CONTENT, StatePanelMode.ERROR}
         message.update(self._message)
         for candidate in StatePanelMode:

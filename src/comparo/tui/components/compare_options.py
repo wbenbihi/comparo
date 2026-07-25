@@ -22,6 +22,7 @@ from comparo.tui.components.compare_input import format_budgets
 from comparo.tui.components.compare_input import format_matrices
 from comparo.tui.components.compare_input import format_value_resources
 from comparo.tui.contracts import CompareDraft
+from comparo.tui.contracts import TuiInteractionLimits
 
 ADVANCED_INPUT_IDS = (
     "compare-draft-matrices",
@@ -42,6 +43,7 @@ class CompareAdvancedOptions(Vertical):
         self,
         draft: CompareDraft,
         *,
+        limits: TuiInteractionLimits,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
@@ -49,7 +51,10 @@ class CompareAdvancedOptions(Vertical):
         super().__init__(id=id, classes=classes)
         if type(draft) is not CompareDraft:
             raise TypeError("advanced Compare options require CompareDraft")
+        if type(limits) is not TuiInteractionLimits:
+            raise TypeError("advanced Compare options require TuiInteractionLimits")
         self._draft = draft
+        self._limits = limits
 
     @override
     def compose(self) -> ComposeResult:
@@ -60,20 +65,21 @@ class CompareAdvancedOptions(Vertical):
             "compare-draft-matrices",
             format_matrices(self._draft.matrices),
             "region=regions, tenant=tenants",
+            maximum=self._limits.maximum_input_characters,
         )
         yield _option_input(
             "Trials",
             "compare-draft-trials",
             _optional_integer(self._draft.trials),
             "Inherit",
-            maximum=12,
+            maximum=self._limits.maximum_input_characters,
         )
         yield _option_input(
             "Maximum attempts",
             "compare-draft-attempts",
             _optional_integer(self._draft.maximum_attempts),
             "Inherit",
-            maximum=12,
+            maximum=self._limits.maximum_input_characters,
         )
         yield _option_row(
             "Fail fast",
@@ -93,24 +99,28 @@ class CompareAdvancedOptions(Vertical):
             "compare-draft-budgets",
             format_budgets(self._draft.budgets),
             "concurrency=4, attempts=20",
+            maximum=self._limits.maximum_input_characters,
         )
         yield _option_input(
             "Parameter Values",
             "compare-draft-parameters",
             format_value_resources(self._draft.value_resources, ValueNamespace.PARAMETERS),
             "Value/params, staging=Value/staging-params",
+            maximum=self._limits.maximum_input_characters,
         )
         yield _option_input(
             "Variable Values",
             "compare-draft-variables",
             format_value_resources(self._draft.value_resources, ValueNamespace.VARIABLES),
             "Value/variables",
+            maximum=self._limits.maximum_input_characters,
         )
         yield _option_input(
             "Secret Values",
             "compare-draft-secrets",
             format_value_resources(self._draft.value_resources, ValueNamespace.SECRETS),
             "Value/secrets, prod=Value/prod-secrets",
+            maximum=self._limits.maximum_input_characters,
         )
         yield _option_row(
             "Approve mutations",
@@ -180,7 +190,7 @@ def _option_input(
     value: str,
     placeholder: str,
     *,
-    maximum: int = 512,
+    maximum: int,
 ) -> Horizontal:
     return _option_row(
         label,

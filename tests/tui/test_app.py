@@ -54,9 +54,11 @@ from comparo.core.artifacts import ArtifactProvenance
 from comparo.core.artifacts import ArtifactSummary
 from comparo.core.artifacts import RunArtifact
 from comparo.tui.app import ComparoApp
+from comparo.tui.app import _route_result_reference
 from comparo.tui.commands import CommandId
 from comparo.tui.components import CommandFooter
 from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import ProjectResourceDetail
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
 from comparo.tui.components import ResultIndex
@@ -69,15 +71,20 @@ from comparo.tui.contracts import TuiBackend
 from comparo.tui.contracts import TuiBackendError
 from comparo.tui.contracts import TuiBackendErrorCode
 from comparo.tui.contracts import TuiExecutionControls
+from comparo.tui.contracts import TuiInteractionLimits
 from comparo.tui.controllers import CompareSurface
 from comparo.tui.controllers import ReportSurface
 from comparo.tui.controllers import TuiCoordinator
+from comparo.tui.controllers import TuiOperationSlot
 from comparo.tui.controllers.coordinator import failure_code
 from comparo.tui.controllers.coordinator import same_compare_intent
+from comparo.tui.navigation import NavigationFrame
+from comparo.tui.navigation import Route
 from comparo.tui.navigation import WorkspaceId
 from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
 from comparo.tui.workspaces import CompareWorkspace
+from comparo.tui.workspaces import ExplorerWorkspace
 from comparo.tui.workspaces import ReportWorkspace
 
 _CANARY = "app-secret-canary-9f31d26a"
@@ -488,6 +495,13 @@ def _footer_text(app: ComparoApp) -> str:
     return " ".join(str(item.content) for item in app.query_one(CommandFooter).query(Static))
 
 
+def test_result_route_identity_recovers_only_typed_closed_references() -> None:
+    assert _route_result_reference("execution:execution-1") == _result_reference()
+    assert _route_result_reference(None) is None
+    assert _route_result_reference("missing-separator") is None
+    assert _route_result_reference("unknown:result-1") is None
+
+
 def test_shell_has_four_workspaces_one_switcher_and_contextual_commands() -> None:
     async def scenario() -> None:
         backend = _FakeBackend()
@@ -530,18 +544,51 @@ def test_shell_has_four_workspaces_one_switcher_and_contextual_commands() -> Non
             await app.select_workspace(WorkspaceId.EXPLORER)
             resource = _project_result().snapshot
             assert resource is not None
-            app.track_project_resource(ProjectResourceList.ResourceSelected(resource.resources[0]))
+            explorer = app.query_one("#workspace-explorer", ExplorerWorkspace)
+            explorer.restore_resource(None)
+            explorer.restore_resource("malformed")
+            explorer.restore_resource("Request/missing")
+            first_resource = resource.resources[0]
+            second_resource = resource.resources[1]
+            explorer.show_selected_resource(ProjectResourceList.ResourceSelected(first_resource))
+            app.track_project_resource(ProjectResourceList.ResourceSelected(first_resource))
+            explorer.show_selected_resource(ProjectResourceList.ResourceSelected(second_resource))
+            app.track_project_resource(ProjectResourceList.ResourceSelected(second_resource))
             assert app.navigation.current.route.view == "resource"
+            await app.go_back()
+            assert first_resource.coordinate.resource_id in str(
+                explorer.query_one(ProjectResourceDetail).render()
+            )
+            explorer.show_selected_resource(ProjectResourceList.ResourceSelected(second_resource))
             await app.select_workspace(WorkspaceId.REPORT)
             assert app.navigation.current.route.view == "result"
-            app.track_result_selection(ResultIndex.ResultSelected(_result_reference()))
+            results = app.query_one("#workspace-report ResultsWorkspaceView", ResultsWorkspaceView)
+            first_reference = _result_reference()
+            second_reference = ResultReference(
+                entity=ResultEntity.DIFF,
+                result_id="diff-2",
+            )
+            results.follow_reference(first_reference)
+            app.track_result_selection(ResultIndex.ResultSelected(first_reference))
+            results.follow_reference(second_reference)
+            app.track_result_selection(ResultIndex.ResultSelected(second_reference))
             assert app.navigation.current.route.view == "result-detail"
             await app.go_back()
+            assert app.navigation.current.route.entity == "execution:execution-1"
+            selected_after_first_back: object = results.selected_reference
+            assert selected_after_first_back == first_reference
+            await app.go_back()
             assert app.navigation.current.route.view == "result"
+            selected_after_second_back: object = results.selected_reference
+            assert selected_after_second_back is None
             assert app._coordinator.report_surface.value == "result"
             await app.go_back()
             assert app.navigation.current.route.view == "root"
             assert app._coordinator.report_surface.value == "browse"
+            await app.select_workspace(WorkspaceId.EXPLORER)
+            assert first_resource.coordinate.resource_id in str(
+                explorer.query_one(ProjectResourceDetail).render()
+            )
 
         assert backend.closed
 
@@ -792,6 +839,12 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
                 _controls(),
                 preferences=_invalid_preferences(),
             )
+        with pytest.raises(TypeError, match="interaction limits"):
+            construct(
+                cast("TuiBackend", backend),
+                _controls(),
+                interaction_limits=cast("TuiInteractionLimits", object()),
+            )
 
         unmounted = _app(_FakeBackend())
         await unmounted._render_workspace(WorkspaceId.EXPLORER)
@@ -799,6 +852,7 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
         unmounted._apply_responsive_class(80)
         await unmounted.prepare_compare()
         await unmounted.close_services()
+        ExplorerWorkspace(None).restore_resource(None)
 
         app = _app(backend)
         palette_calls: list[bool] = []
@@ -807,6 +861,21 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             await _wait_until(
                 cast("Pilot[object]", pilot),
                 lambda: app.project_result is not None and app.report_listing is not None,
+            )
+            release_duplicate = asyncio.Event()
+
+            async def held_project_operation() -> None:
+                await release_duplicate.wait()
+
+            app._spawn_operation(held_project_operation(), TuiOperationSlot.PROJECT)
+            app._spawn_operation(held_project_operation(), TuiOperationSlot.PROJECT)
+            release_duplicate.set()
+            await pilot.pause()
+            app._restore_frame(
+                NavigationFrame(route=Route(workspace=WorkspaceId.SETTINGS, view="root"))
+            )
+            app._restore_frame(
+                NavigationFrame(route=Route(workspace=WorkspaceId.COMPARE, view="root"))
             )
             await pilot.click("#tab-report")
             await pilot.pause()
@@ -880,6 +949,13 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             app._coordinator.compare_surface = CompareSurface.RUNNING
             app._coordinator.compare_progress = None
             app._render_compare()
+            await pilot.pause()
+            compare = app.query_one("#workspace-compare", CompareWorkspace)
+            assert compare.state.value == "running"
+            assert len(compare.query(CompareDraftForm)) == 0
+            starting = compare.query_one(".state-message", Static)
+            assert starting.display
+            assert "Starting the admitted execution" in str(starting.content)
             app._coordinator.compare_surface = CompareSurface.RESULTS
             app._coordinator.compare_result = None
             app._render_compare()
@@ -1029,6 +1105,19 @@ def test_coordinator_validates_drafts_helpers_and_bounded_task_lifecycle() -> No
         assert WorkspaceId.COMPARE in changes
 
         changes.clear()
+        coordinator.compare_diagnostics = (
+            ApplicationDiagnostic(
+                code="safe.invalidated",
+                severity="error",
+                stage="invocation",
+            ),
+        )
+        coordinator.update_draft(assertion)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert WorkspaceId.COMPARE in changes
+
+        changes.clear()
         coordinator.update_draft(differences)
         await asyncio.sleep(0)
         assert not changes
@@ -1058,7 +1147,68 @@ def test_coordinator_validates_drafts_helpers_and_bounded_task_lifecycle() -> No
         await coordinator.close()
         await coordinator.close()
         operation = coordinator.reload_project()
-        coordinator.spawn(operation)
+        coordinator.spawn(operation, slot=TuiOperationSlot.PROJECT)
+
+    asyncio.run(scenario())
+
+
+def test_coordinator_coalesces_each_finite_operation_slot() -> None:
+    async def scenario() -> None:
+        backend = _FakeBackend()
+
+        async def changed(_workspace: WorkspaceId) -> None:
+            return
+
+        coordinator = TuiCoordinator(cast("TuiBackend", backend), _controls(), changed)
+        release = asyncio.Event()
+        started: list[str] = []
+
+        async def held(name: str) -> None:
+            started.append(name)
+            await release.wait()
+
+        assert coordinator.spawn(held("project"), slot=TuiOperationSlot.PROJECT)
+        await asyncio.sleep(0)
+        assert not coordinator.spawn(held("duplicate"), slot=TuiOperationSlot.PROJECT)
+        assert coordinator.spawn(held("report"), slot=TuiOperationSlot.REPORT)
+        invalid = held("invalid")
+        with pytest.raises(TypeError, match="slot"):
+            coordinator.spawn(invalid, slot=cast("TuiOperationSlot", object()))
+        assert len(coordinator._tasks) == 2
+        assert set(coordinator._slot_tasks) == {
+            TuiOperationSlot.PROJECT,
+            TuiOperationSlot.REPORT,
+        }
+
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert started == ["project", "report"]
+        assert not coordinator._tasks
+        assert not coordinator._slot_tasks
+
+        async def completed() -> None:
+            return
+
+        stale = asyncio.create_task(completed())
+        await stale
+        replacement_release = asyncio.Event()
+
+        async def replacement() -> None:
+            await replacement_release.wait()
+
+        assert coordinator.spawn(replacement(), slot=TuiOperationSlot.PROJECT)
+        coordinator._task_finished(TuiOperationSlot.PROJECT, stale)
+        assert coordinator._slot_tasks[TuiOperationSlot.PROJECT] is not stale
+        replacement_release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        await coordinator.close()
+        assert not coordinator.spawn(
+            coordinator.reload_project(),
+            slot=TuiOperationSlot.PROJECT,
+        )
 
     asyncio.run(scenario())
 
@@ -1169,6 +1319,23 @@ def test_coordinator_contains_backend_session_and_projection_failures(
         assert coordinator.compare_diagnostics[0].code == "tui.compare.execution-failed"
         backend.failures.pop("start")
 
+        execution_slot_release = asyncio.Event()
+
+        async def occupy_execution_slot() -> None:
+            await execution_slot_release.wait()
+
+        assert coordinator.spawn(
+            occupy_execution_slot(),
+            slot=TuiOperationSlot.EXECUTION,
+        )
+        await coordinator.prepare_compare(CompareDraft(mode=CompareMode.DIFFERENCES))
+        await coordinator.start_compare()
+        assert backend.session.closed
+        assert coordinator.compare_diagnostics[0].code == "tui.compare.execution-failed"
+        execution_slot_release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
         assert not coordinator.cancel_compare()
         exploding = _ExplodingSession(cancel_error=True)
         coordinator.session = cast("ExecutionSession", exploding)
@@ -1203,8 +1370,24 @@ def test_coordinator_contains_backend_session_and_projection_failures(
         )
         assert coordinator.compare_diagnostics[0].code == ("tui.compare.result-projection-failed")
 
+        refill_handle = ComparePreparationHandle(value="refilled-discard")
+        refill_pending = True
+
+        async def refill_during_change(_workspace: WorkspaceId) -> None:
+            nonlocal refill_pending
+            if refill_pending:
+                refill_pending = False
+                coordinator._discard_queue.append(refill_handle)
+
+        coordinator._changed = refill_during_change
+        first_handle = ComparePreparationHandle(value="first-discard")
+        coordinator._discard_queue.append(first_handle)
+        await coordinator._finish_invalidation()
+        assert first_handle in backend.discarded
+        assert refill_handle in backend.discarded
+
         backend.failures["discard"] = RuntimeError(_CANARY)
-        await coordinator._finish_invalidation(None)
+        await coordinator._finish_invalidation()
         coordinator.compare_handle = ComparePreparationHandle(value="discard-error")
         await coordinator._discard_prepared()
         coordinator.session = cast(

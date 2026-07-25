@@ -35,6 +35,7 @@ def build_tui_app(
         ProductionTuiBackend(request),
         default_tui_execution_controls(request.limits.execution_settings),
         preferences=preferences,
+        interaction_limits=request.limits.interaction,
     )
 
 

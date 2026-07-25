@@ -57,8 +57,12 @@ from comparo.cli.loading import policy_load_limits
 from comparo.cli.loading import project_load_limits
 from comparo.cli.services import CliServices
 from comparo.cli.services import DefaultCliServices
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_INPUT_CHARACTERS_V1
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_INPUT_ITEMS_V1
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_NAVIGATION_FRAMES_V1
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1
+from comparo.tui.contracts import TuiInteractionLimits
 from comparo.tui.contracts import TuiLaunchLimits
 from comparo.tui.contracts import TuiLaunchRequest
 
@@ -116,6 +120,12 @@ MaximumReportEntriesOption = Annotated[int, Parameter(name="--maximum-report-ent
 MaximumPreparationsOption = Annotated[
     int,
     Parameter(name="--maximum-outstanding-preparations"),
+]
+MaximumInputCharactersOption = Annotated[int, Parameter(name="--maximum-input-characters")]
+MaximumInputItemsOption = Annotated[int, Parameter(name="--maximum-input-items")]
+MaximumNavigationFramesOption = Annotated[
+    int,
+    Parameter(name="--maximum-navigation-frames-per-workspace"),
 ]
 
 
@@ -1132,6 +1142,13 @@ def _register_tui_command(cli: App) -> None:
         maximum_outstanding_preparations: MaximumPreparationsOption = (
             DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
         ),
+        maximum_input_characters: MaximumInputCharactersOption = (
+            DEFAULT_TUI_MAXIMUM_INPUT_CHARACTERS_V1
+        ),
+        maximum_input_items: MaximumInputItemsOption = DEFAULT_TUI_MAXIMUM_INPUT_ITEMS_V1,
+        maximum_navigation_frames_per_workspace: MaximumNavigationFramesOption = (
+            DEFAULT_TUI_MAXIMUM_NAVIGATION_FRAMES_V1
+        ),
     ) -> TuiLaunchRequest:
         """Open the interactive terminal interface.
 
@@ -1145,6 +1162,9 @@ def _register_tui_command(cli: App) -> None:
             artifact_limits: Caller-owned artifact persistence and read ceilings.
             maximum_report_entries: Maximum archived report entries admitted per refresh.
             maximum_outstanding_preparations: Maximum retained Compare preparations.
+            maximum_input_characters: Maximum characters admitted by one Compare input.
+            maximum_input_items: Maximum comma-separated items admitted by one Compare input.
+            maximum_navigation_frames_per_workspace: Maximum retained local routes per workspace.
         """
         try:
             parsed_config_limits = _config_load_limits(config_load_limits)
@@ -1159,6 +1179,13 @@ def _register_tui_command(cli: App) -> None:
                 report_archive=ReportArchiveLimits(
                     maximum_entries=maximum_report_entries,
                     artifact=_artifact_read_limits(artifact_limits),
+                ),
+                interaction=TuiInteractionLimits(
+                    maximum_input_characters=maximum_input_characters,
+                    maximum_input_items=maximum_input_items,
+                    maximum_navigation_frames_per_workspace=(
+                        maximum_navigation_frames_per_workspace
+                    ),
                 ),
                 maximum_outstanding_preparations=maximum_outstanding_preparations,
             )

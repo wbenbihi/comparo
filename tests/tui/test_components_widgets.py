@@ -91,8 +91,13 @@ from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import CompareDraftValidationCode
 from comparo.tui.contracts import CompareMode
 from comparo.tui.contracts import ResultAccess
+from comparo.tui.contracts import TuiInteractionLimits
+from comparo.tui.contracts import tui_interaction_limits_defaults_v1
 from comparo.tui.design import LayoutClass
 from comparo.tui.design import SemanticStatus
+from comparo.tui.workspaces import CompareWorkspace
+
+_INTERACTION_LIMITS = tui_interaction_limits_defaults_v1()
 
 
 def _run_async[**P](
@@ -393,6 +398,7 @@ def _progress(*, finished: int = 0) -> ExecutionProgressSnapshot:
 def _parse_draft(
     *,
     fallback: CompareDraft | None = None,
+    limits: TuiInteractionLimits = _INTERACTION_LIMITS,
     mode: CompareMode = CompareMode.EXECUTION_PROFILE,
     subjects: str = "",
     environments: str = "",
@@ -411,6 +417,7 @@ def _parse_draft(
 ) -> CompareDraft:
     return parse_compare_draft(
         CompareDraft(mode=mode) if fallback is None else fallback,
+        limits=limits,
         mode=mode,
         subjects=subjects,
         environments=environments,
@@ -479,7 +486,11 @@ async def test_compare_draft_form_supports_all_modes(
     visible: tuple[str, ...],
     hidden: tuple[str, ...],
 ) -> None:
-    form = CompareDraftForm(CompareDraft(mode=mode), resources=_resources())
+    form = CompareDraftForm(
+        CompareDraft(mode=mode),
+        limits=_INTERACTION_LIMITS,
+        resources=_resources(),
+    )
     app = _DraftApp(form)
 
     async with app.run_test(size=(120, 36)) as pilot:
@@ -501,6 +512,7 @@ async def test_compare_draft_form_supports_all_modes(
 async def test_compare_draft_form_emits_typed_changes_and_submission() -> None:
     form = CompareDraftForm(
         CompareDraft(mode=CompareMode.ASSERTIONS),
+        limits=_INTERACTION_LIMITS,
         resources=_resources(),
     )
     app = _DraftApp(form)
@@ -581,7 +593,7 @@ def test_status_outcomes_use_the_shared_semantic_vocabulary(
 
 def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
     draft = CompareDraft(mode=CompareMode.ASSERTIONS, subjects=("ping",))
-    form = CompareDraftForm(draft)
+    form = CompareDraftForm(draft, limits=_INTERACTION_LIMITS)
     assert form.current_draft() == draft
     form.show_draft(CompareDraft(mode=CompareMode.DIFFERENCES))
     assert form.current_draft().mode is CompareMode.DIFFERENCES
@@ -596,6 +608,12 @@ def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
     progress.show_snapshot(_progress(finished=1))
     assert PlanPreview(None).render()
     assert ProjectResourceDetail(None).render()
+    compare_workspace = CompareWorkspace()
+    compare_workspace.show_starting()
+    compare_workspace.show_starting()
+    assert compare_workspace.state.value == "running"
+    with pytest.raises(TypeError, match="interaction limits"):
+        CompareWorkspace(interaction_limits=cast("TuiInteractionLimits", object()))
 
     with pytest.raises(TypeError, match="state panel mode"):
         StatePanel(mode=cast("StatePanelMode", object()))
@@ -609,12 +627,22 @@ def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
     with pytest.raises(TypeError, match="CompareMode"):
         selector.show_mode(cast("CompareMode", object()))
     with pytest.raises(TypeError, match="CompareDraft"):
-        CompareDraftForm(cast("CompareDraft", object()))
-    with pytest.raises(TypeError, match="safe summaries"):
-        CompareDraftForm(draft, resources=cast("tuple[ProjectResourceSummary, ...]", []))
+        CompareDraftForm(cast("CompareDraft", object()), limits=_INTERACTION_LIMITS)
+    with pytest.raises(TypeError, match="TuiInteractionLimits"):
+        CompareDraftForm(
+            draft,
+            limits=cast("TuiInteractionLimits", object()),
+        )
     with pytest.raises(TypeError, match="safe summaries"):
         CompareDraftForm(
             draft,
+            limits=_INTERACTION_LIMITS,
+            resources=cast("tuple[ProjectResourceSummary, ...]", []),
+        )
+    with pytest.raises(TypeError, match="safe summaries"):
+        CompareDraftForm(
+            draft,
+            limits=_INTERACTION_LIMITS,
             resources=(cast("ProjectResourceSummary", object()),),
         )
     with pytest.raises(TypeError, match="CompareDraft"):
@@ -631,6 +659,11 @@ def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
     )
     unmounted_results.follow_reference(_projection().diffs[0].reference)
     assert unmounted_results.current_index is ResultIndexKind.DIFFS
+    selected_before_clear: object = unmounted_results.selected_reference
+    assert selected_before_clear == _projection().diffs[0].reference
+    unmounted_results.clear_reference()
+    selected_after_clear: object = unmounted_results.selected_reference
+    assert selected_after_clear is None
     with pytest.raises(TypeError, match="ResultReference"):
         ResultsWorkspaceView(
             _projection(),
@@ -676,7 +709,11 @@ async def test_shared_state_status_diagnostics_and_footer_cover_all_presentation
 
 @_run_async
 async def test_form_updates_plan_and_progress_without_replacing_shared_controls() -> None:
-    form = CompareDraftForm(CompareDraft(mode=CompareMode.ASSERTIONS), resources=())
+    form = CompareDraftForm(
+        CompareDraft(mode=CompareMode.ASSERTIONS),
+        limits=_INTERACTION_LIMITS,
+        resources=(),
+    )
     preview = PlanPreview(None)
     progress = ExecutionProgress(_progress())
     app = _WidgetApp(form, preview, progress)
@@ -732,6 +769,10 @@ async def test_project_and_report_lists_emit_only_typed_safe_identifiers() -> No
     async with app.run_test(size=(120, 36)) as pilot:
         await pilot.pause()
         resource_item = resources.query_one(ProjectResourceItem)
+        resources.show_resource(resource)
+        resources.show_resource(_resource("Request", "missing"))
+        with pytest.raises(TypeError, match="selection"):
+            resources.show_resource(cast("ProjectResourceSummary", object()))
         resources.on_list_view_selected(ListView.Selected(resources, resource_item, 0))
         resources.on_list_view_selected(ListView.Selected(resources, ListItem(), 0))
         report_item = reports.query_one(ReportListItem)
@@ -766,6 +807,8 @@ async def test_every_result_index_and_detail_path_reuses_one_navigation_contract
             detail.show_reference(reference)
         detail.show_reference(None)
         view.show_selected_result(ResultIndex.ResultSelected(references[0]))
+        view.clear_reference()
+        assert view.selected_reference is None
         await pilot.pause()
 
 
@@ -821,6 +864,37 @@ def test_compare_input_adapter_builds_every_typed_application_override() -> None
             environment="prod",
             resource="Value/prod-secrets",
         ),
+    )
+
+
+def test_compare_input_capacity_is_caller_owned_instead_of_a_hidden_project_cap() -> None:
+    permissive = TuiInteractionLimits(
+        maximum_input_characters=4096,
+        maximum_input_items=100,
+        maximum_navigation_frames_per_workspace=2,
+    )
+    subjects = ", ".join(f"request-{index}" for index in range(96))
+    accepted = _parse_draft(limits=permissive, subjects=subjects)
+    assert accepted.validation_code is None
+    assert len(accepted.subjects) == 96
+
+    item_limited = TuiInteractionLimits(
+        maximum_input_characters=4096,
+        maximum_input_items=2,
+        maximum_navigation_frames_per_workspace=2,
+    )
+    assert (
+        _parse_draft(limits=item_limited, subjects="one, two, three").validation_code
+        is CompareDraftValidationCode.INVALID_LIMIT
+    )
+    character_limited = TuiInteractionLimits(
+        maximum_input_characters=8,
+        maximum_input_items=100,
+        maximum_navigation_frames_per_workspace=2,
+    )
+    assert (
+        _parse_draft(limits=character_limited, subjects="ninechars").validation_code
+        is CompareDraftValidationCode.INVALID_LIMIT
     )
 
 
@@ -898,6 +972,7 @@ def test_compare_input_formatters_are_exact_and_bounded() -> None:
     with pytest.raises(TypeError, match="typed draft and mode"):
         parse_compare_draft(
             cast("CompareDraft", object()),
+            limits=_INTERACTION_LIMITS,
             mode=CompareMode.ASSERTIONS,
             subjects="",
             environments="",
@@ -930,7 +1005,7 @@ async def test_advanced_compare_widget_round_trips_and_reports_safe_invalid_text
         secrets="prod=Value/prod-secrets",
         approve_mutations=True,
     )
-    form = CompareDraftForm(draft)
+    form = CompareDraftForm(draft, limits=_INTERACTION_LIMITS)
     app = _DraftApp(form)
 
     async with app.run_test(size=(160, 52)) as pilot:
@@ -939,7 +1014,14 @@ async def test_advanced_compare_widget_round_trips_and_reports_safe_invalid_text
         advanced = form.query_one(CompareAdvancedOptions)
         assert advanced.fail_fast is FailFastChoice.ENABLED
         assert advanced.approve_mutations
-        assert form.query_one("#compare-draft-matrices", Input).max_length == 512
+        assert (
+            form.query_one("#compare-draft-matrices", Input).max_length
+            == _INTERACTION_LIMITS.maximum_input_characters
+        )
+        assert (
+            form.query_one("#compare-draft-trials", Input).max_length
+            == _INTERACTION_LIMITS.maximum_input_characters
+        )
 
         form.query_one("#compare-draft-fail-fast", Select).value = FailFastChoice.DISABLED
         form.query_one("#compare-draft-approve-mutations", Switch).value = False
@@ -958,14 +1040,22 @@ def test_unmounted_advanced_options_validate_and_retain_typed_defaults() -> None
         fail_fast=False,
         approve_mutations=True,
     )
-    advanced = CompareAdvancedOptions(draft)
+    advanced = CompareAdvancedOptions(draft, limits=_INTERACTION_LIMITS)
     assert advanced.fail_fast.value == "disabled"
     assert advanced.approve_mutations
     advanced.show_validation_code("safe")
     advanced.show_draft(CompareDraft(mode=CompareMode.ASSERTIONS))
     assert advanced.fail_fast.value == "inherit"
     with pytest.raises(TypeError, match="CompareDraft"):
-        CompareAdvancedOptions(cast("CompareDraft", object()))
+        CompareAdvancedOptions(
+            cast("CompareDraft", object()),
+            limits=_INTERACTION_LIMITS,
+        )
+    with pytest.raises(TypeError, match="TuiInteractionLimits"):
+        CompareAdvancedOptions(
+            draft,
+            limits=cast("TuiInteractionLimits", object()),
+        )
     with pytest.raises(TypeError, match="CompareDraft"):
         advanced.show_draft(cast("CompareDraft", object()))
 

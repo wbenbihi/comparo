@@ -52,6 +52,17 @@ class ReportSurface(StrEnum):
     RESULT = "result"
 
 
+class TuiOperationSlot(StrEnum):
+    """Finite independently coalesced background-operation categories."""
+
+    STARTUP = "startup"
+    CLEANUP = "cleanup"
+    PROJECT = "project"
+    REPORT = "report"
+    COMPARE = "compare"
+    EXECUTION = "execution"
+
+
 ChangeCallback = Callable[[WorkspaceId], Awaitable[None]]
 
 
@@ -86,6 +97,8 @@ class TuiCoordinator:
         self._prepared_approve_mutations: bool | None = None
         self.session: ExecutionSession | None = None
         self._tasks: set[asyncio.Task[None]] = set()
+        self._slot_tasks: dict[TuiOperationSlot, asyncio.Task[None]] = {}
+        self._discard_queue: list[ComparePreparationHandle] = []
         self._project_revision = 0
         self._report_revision = 0
         self._compare_revision = 0
@@ -110,20 +123,34 @@ class TuiCoordinator:
 
     def begin(self) -> None:
         """Load the project before opening its project-relative report archive."""
-        self.spawn(self._initial_load())
+        self.spawn(self._initial_load(), slot=TuiOperationSlot.STARTUP)
 
     async def _initial_load(self) -> None:
         await self.reload_project()
         await self.reload_reports()
 
-    def spawn(self, operation: Coroutine[Any, Any, None]) -> None:
-        """Own one background operation and consume its safe terminal state."""
+    def spawn(
+        self,
+        operation: Coroutine[Any, Any, None],
+        *,
+        slot: TuiOperationSlot,
+    ) -> bool:
+        """Own at most one background operation in each finite semantic slot."""
+        if type(slot) is not TuiOperationSlot:
+            operation.close()
+            raise TypeError("TUI background operation slot must be typed")
         if self._closing:
             operation.close()
-            return
+            return False
+        existing = self._slot_tasks.get(slot)
+        if existing is not None and not existing.done():
+            operation.close()
+            return False
         task = asyncio.create_task(operation)
         self._tasks.add(task)
-        task.add_done_callback(self._task_finished)
+        self._slot_tasks[slot] = task
+        task.add_done_callback(lambda completed: self._task_finished(slot, completed))
+        return True
 
     def update_draft(self, draft: CompareDraft) -> None:
         """Retain a meaningful preparation change and invalidate an old preview."""
@@ -146,7 +173,11 @@ class TuiCoordinator:
         handle = self.compare_handle
         self.compare_handle = None
         self._reset_preparation()
-        self.spawn(self._finish_invalidation(handle))
+        if handle is None:
+            self.spawn(self._finish_invalidation(), slot=TuiOperationSlot.CLEANUP)
+        else:
+            self._discard_queue.append(handle)
+            self.spawn(self._finish_invalidation(), slot=TuiOperationSlot.CLEANUP)
 
     async def reload_project(self) -> None:
         """Load one safe project snapshot and reject stale completion."""
@@ -293,7 +324,14 @@ class TuiCoordinator:
             await self._changed(WorkspaceId.COMPARE)
             return
         self.session = session
-        self.spawn(self._supervise_execution(session, plan))
+        if not self.spawn(
+            self._supervise_execution(session, plan),
+            slot=TuiOperationSlot.EXECUTION,
+        ):
+            with suppress(Exception):
+                await session.close()
+            self._show_failure(())
+            await self._changed(WorkspaceId.COMPARE)
 
     def cancel_compare(self) -> bool:
         """Request cancellation without allowing session failures to escape."""
@@ -325,6 +363,7 @@ class TuiCoordinator:
         with suppress(Exception):
             await self._backend.close()
         self.session = None
+        self._discard_queue.clear()
         self._closed = True
 
     async def _supervise_execution(
@@ -381,13 +420,13 @@ class TuiCoordinator:
         self.compare_surface = CompareSurface.RESULTS
         await self._changed(WorkspaceId.COMPARE)
 
-    async def _finish_invalidation(
-        self,
-        handle: ComparePreparationHandle | None,
-    ) -> None:
-        if handle is not None:
-            await self._discard_handle(handle)
-        await self._changed(WorkspaceId.COMPARE)
+    async def _finish_invalidation(self) -> None:
+        while True:
+            while self._discard_queue:
+                await self._discard_handle(self._discard_queue.pop(0))
+            await self._changed(WorkspaceId.COMPARE)
+            if not self._discard_queue:
+                return
 
     def _show_failure(self, diagnostics: tuple[ApplicationDiagnostic, ...]) -> None:
         self.session = None
@@ -416,8 +455,10 @@ class TuiCoordinator:
         self.compare_diagnostics = ()
         self._prepared_approve_mutations = None
 
-    def _task_finished(self, task: asyncio.Task[None]) -> None:
+    def _task_finished(self, slot: TuiOperationSlot, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
+        if self._slot_tasks.get(slot) is task:
+            self._slot_tasks.pop(slot)
         if not task.cancelled():
             with suppress(Exception):
                 task.exception()
@@ -456,6 +497,7 @@ __all__ = (
     "CompareSurface",
     "ReportSurface",
     "TuiCoordinator",
+    "TuiOperationSlot",
     "diagnostic",
     "failure_code",
     "failure_diagnostic",

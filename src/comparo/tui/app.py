@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from contextlib import suppress
 from pathlib import PurePath
 from typing import ClassVar
+from typing import cast
 from typing import final
 from typing import override
 
@@ -25,7 +27,9 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection
 from comparo.application.project_workspace import ProjectWorkspaceResult
 from comparo.application.report_archive import ReportArchiveListing
+from comparo.application.results import ResultEntity
 from comparo.application.results import ResultProjection
+from comparo.application.results import ResultReference
 from comparo.tui.commands import COMMAND_CATALOG
 from comparo.tui.commands import CommandDescriptor
 from comparo.tui.commands import CommandId
@@ -35,13 +39,17 @@ from comparo.tui.components import CompareDraftForm
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
 from comparo.tui.components import ResultIndex
+from comparo.tui.components import ResultsWorkspaceView
 from comparo.tui.components import TuiOnlySettingsPanel
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import TuiBackend
 from comparo.tui.contracts import TuiExecutionControls
+from comparo.tui.contracts import TuiInteractionLimits
+from comparo.tui.contracts import tui_interaction_limits_defaults_v1
 from comparo.tui.controllers import CompareSurface
 from comparo.tui.controllers import ReportSurface
 from comparo.tui.controllers import TuiCoordinator
+from comparo.tui.controllers import TuiOperationSlot
 from comparo.tui.controllers import available_commands
 from comparo.tui.design import LayoutClass
 from comparo.tui.design import layout_class
@@ -95,16 +103,25 @@ class ComparoApp(App[int]):
         controls: TuiExecutionControls,
         *,
         preferences: TuiPreferences | None = None,
+        interaction_limits: TuiInteractionLimits | None = None,
     ) -> None:
         """Create a shell with injected effects and TUI-only preferences."""
         if type(controls) is not TuiExecutionControls:
             raise TypeError("Comparo app execution controls must be typed")
         if preferences is not None and type(preferences) is not TuiPreferences:
             raise TypeError("Comparo app preferences must be typed")
+        selected_limits = (
+            tui_interaction_limits_defaults_v1()
+            if interaction_limits is None
+            else interaction_limits
+        )
+        if type(selected_limits) is not TuiInteractionLimits:
+            raise TypeError("Comparo app interaction limits must be typed")
         selected = TuiPreferences() if preferences is None else preferences
         super().__init__()
         self._system_theme = self.theme
         self._preferences = selected
+        self._interaction_limits = selected_limits
         self._navigation = switch_workspace(initial_navigation(), selected.default_workspace)
         self._coordinator = TuiCoordinator(backend, controls, self._render_workspace)
         self._footer_lock = asyncio.Lock()
@@ -186,7 +203,7 @@ class ComparoApp(App[int]):
         yield CommandFooter(self.active_commands, id="command-footer")
 
     def on_mount(self) -> None:
-        """Apply presentation state and begin independent initial loads."""
+        """Apply presentation state and begin ordered project/archive loading."""
         self._shell_mounted = True
         self._apply_preferences(self._preferences)
         self._apply_responsive_class(self.screen.size.width)
@@ -230,7 +247,10 @@ class ComparoApp(App[int]):
     @on(CompareDraftForm.Submitted)
     def submit_compare_draft(self, message: CompareDraftForm.Submitted) -> None:
         """Prepare the exact submitted draft."""
-        self._coordinator.spawn(self.prepare_compare(message.draft))
+        self._spawn_operation(
+            self.prepare_compare(message.draft),
+            TuiOperationSlot.COMPARE,
+        )
 
     @on(TuiOnlySettingsPanel.PreferencesChanged)
     def update_preferences(self, message: TuiOnlySettingsPanel.PreferencesChanged) -> None:
@@ -244,7 +264,10 @@ class ComparoApp(App[int]):
     @on(ReportList.ReportSelected)
     def select_report(self, message: ReportList.ReportSelected) -> None:
         """Open an authenticated stored report."""
-        self._coordinator.spawn(self.open_report(message.bundle_id))
+        self._spawn_operation(
+            self.open_report(message.bundle_id),
+            TuiOperationSlot.REPORT,
+        )
 
     @on(ProjectResourceList.ResourceSelected)
     def track_project_resource(self, message: ProjectResourceList.ResourceSelected) -> None:
@@ -313,15 +336,16 @@ class ComparoApp(App[int]):
 
     def _dispatch_workspace(self, command_id: CommandId) -> None:
         operations = {
-            CommandId.PROJECT_RELOAD: self.reload_project,
-            CommandId.COMPARE_PREVIEW: self.prepare_compare,
-            CommandId.COMPARE_START: self.start_compare,
-            CommandId.REPORT_RELOAD: self.reload_reports,
+            CommandId.PROJECT_RELOAD: (self.reload_project, TuiOperationSlot.PROJECT),
+            CommandId.COMPARE_PREVIEW: (self.prepare_compare, TuiOperationSlot.COMPARE),
+            CommandId.COMPARE_START: (self.start_compare, TuiOperationSlot.COMPARE),
+            CommandId.REPORT_RELOAD: (self.reload_reports, TuiOperationSlot.REPORT),
         }
         if command_id is CommandId.COMPARE_CANCEL:
             self.cancel_compare()
-        elif operation := operations.get(command_id):
-            self._coordinator.spawn(operation())
+        elif selected := operations.get(command_id):
+            operation, slot = selected
+            self._spawn_operation(operation(), slot)
 
     async def select_workspace(self, workspace: WorkspaceId) -> None:
         """Switch workspace without changing any other local history or effect."""
@@ -334,6 +358,7 @@ class ComparoApp(App[int]):
         tabs = self.query_one("#workspace-tabs", Tabs)
         if tabs.active != tab_id:
             tabs.active = tab_id
+        self._restore_frame(self._navigation.current)
         await self._render_footer()
 
     async def go_back(self) -> None:
@@ -352,6 +377,7 @@ class ComparoApp(App[int]):
         if after.route.workspace is WorkspaceId.REPORT and after.route.view == "root":
             self._coordinator.show_report_archive()
         await self._render_workspace(after.route.workspace)
+        self._restore_frame(after)
 
     async def reload_project(self) -> None:
         """Reload Explorer through the coordinator."""
@@ -410,7 +436,9 @@ class ComparoApp(App[int]):
                 resources=state.project_resources,
             )
         elif state.compare_surface is CompareSurface.RUNNING:
-            if state.compare_progress is not None:
+            if state.compare_progress is None:
+                view.show_starting()
+            else:
                 view.show_running(state.compare_progress)
         elif state.compare_result is not None:
             view.show_results(state.compare_result)
@@ -476,6 +504,7 @@ class ComparoApp(App[int]):
             progress=state.compare_progress,
             results=state.compare_result,
             diagnostics=state.compare_diagnostics,
+            interaction_limits=self._interaction_limits,
             id="workspace-compare",
         )
 
@@ -492,7 +521,56 @@ class ComparoApp(App[int]):
         self._navigation = push_route(
             self._navigation,
             NavigationFrame(route=Route(workspace=workspace, view=view, entity=entity)),
+            maximum_frames_per_workspace=(
+                self._interaction_limits.maximum_navigation_frames_per_workspace
+            ),
         )
+
+    def _spawn_operation(
+        self,
+        operation: Coroutine[object, object, None],
+        slot: TuiOperationSlot,
+    ) -> None:
+        """Submit one coalesced operation and explain a duplicate request."""
+        if not self._coordinator.spawn(operation, slot=slot):
+            self.notify("That operation is already in progress.")
+
+    def _restore_frame(self, frame: NavigationFrame) -> None:
+        """Restore the safe entity selection retained by one local navigation frame."""
+        workspace = frame.route.workspace
+        if workspace is WorkspaceId.EXPLORER:
+            self.query_one("#workspace-explorer", ExplorerWorkspace).restore_resource(
+                frame.route.entity if frame.route.view == "resource" else None
+            )
+            return
+        if workspace not in {WorkspaceId.COMPARE, WorkspaceId.REPORT}:
+            return
+        views = self.query(f"#workspace-{workspace.value} ResultsWorkspaceView")
+        if not len(views):
+            return
+        result_view = cast("ResultsWorkspaceView", views.first())
+        reference = (
+            _route_result_reference(frame.route.entity)
+            if frame.route.view == "result-detail"
+            else None
+        )
+        if reference is None:
+            result_view.clear_reference()
+        else:
+            result_view.follow_reference(reference)
+
+
+def _route_result_reference(entity: str | None) -> ResultReference | None:
+    """Recover one typed result reference from the bounded route identity."""
+    if entity is None:
+        return None
+    raw_kind, separator, result_id = entity.partition(":")
+    if not separator:
+        return None
+    try:
+        return ResultReference(entity=ResultEntity(raw_kind), result_id=result_id)
+    except (TypeError, ValueError):
+        return None
 
 
 __all__ = ("ComparoApp",)

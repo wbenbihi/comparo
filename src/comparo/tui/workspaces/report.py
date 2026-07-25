@@ -103,6 +103,8 @@ class ReportWorkspace(Vertical):
         """Keep Report mounted and reuse the shared result component read-only."""
         if type(result) is not ResultProjection:
             raise TypeError("Report workspace result must be typed")
+        if self.state is ReportWorkspaceState.RESULT and self.result is result:
+            return
         self.state = ReportWorkspaceState.RESULT
         self.result = result
         if self.is_mounted:
