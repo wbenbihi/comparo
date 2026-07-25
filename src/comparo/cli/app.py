@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
@@ -22,6 +23,8 @@ from cyclopts.exceptions import CycloptsError
 from rich.console import Console
 from rich.text import Text
 
+from comparo.application import ArtifactReadLimits
+from comparo.application import ReportArchiveLimits
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
 from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
@@ -49,8 +52,15 @@ from comparo.cli.contracts import PlanRequest
 from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
+from comparo.cli.execution import production_execution_settings
+from comparo.cli.loading import policy_load_limits
+from comparo.cli.loading import project_load_limits
 from comparo.cli.services import CliServices
 from comparo.cli.services import DefaultCliServices
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1
+from comparo.tui.contracts import TuiLaunchLimits
+from comparo.tui.contracts import TuiLaunchRequest
 
 type ColorName = Literal["auto", "always", "never"]
 type OutputName = Literal["human", "json"]
@@ -102,6 +112,15 @@ FailFastOption = Annotated[
 ArtifactRootOption = Annotated[Path, Parameter(name="--root")]
 BlobOutputLimitOption = Annotated[int, Parameter(name="--maximum-output-bytes")]
 ExecutionArtifactRootOption = Annotated[Path, Parameter(name="--artifact-root")]
+MaximumReportEntriesOption = Annotated[int, Parameter(name="--maximum-report-entries")]
+MaximumPreparationsOption = Annotated[
+    int,
+    Parameter(name="--maximum-outstanding-preparations"),
+]
+
+
+class _InvalidTuiLaunchError(Exception):
+    """Value-free marker for invalid typed TUI launch limits."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -664,6 +683,22 @@ def _artifact_limits(value: _ArtifactLimitArguments) -> CliArtifactLimits:
     )
 
 
+def _artifact_read_limits(value: _ArtifactLimitArguments) -> ArtifactReadLimits:
+    """Project CLI artifact ceilings into the application report-reader contract."""
+    limits = _artifact_limits(value)
+    return ArtifactReadLimits(
+        maximum_blobs=limits.maximum_blobs,
+        maximum_blob_bytes=limits.maximum_blob_bytes,
+        maximum_total_blob_bytes=limits.maximum_total_blob_bytes,
+        maximum_manifest_bytes=limits.maximum_manifest_bytes,
+        maximum_report_bytes=limits.maximum_report_bytes,
+        maximum_redaction_patterns=limits.maximum_redaction_patterns,
+        maximum_redaction_pattern_bytes=limits.maximum_redaction_pattern_bytes,
+        maximum_redaction_value_bytes=limits.maximum_redaction_value_bytes,
+        maximum_redaction_value_nodes=limits.maximum_redaction_value_nodes,
+    )
+
+
 def _execution_limits(
     runtime: _RuntimeLimitArguments,
     artifact: _ArtifactLimitArguments,
@@ -1078,6 +1113,66 @@ def _register_artifact_commands(cli: App, services: CliServices) -> None:
         return _invocation(services.report(request), color)
 
 
+def _register_tui_command(cli: App) -> None:
+    """Attach the lazy terminal frontend launch contract."""
+
+    @cli.command(name="tui")
+    def tui(
+        *,
+        config: ConfigOption = Path("comparo.yaml"),
+        source: SourceOption = (),
+        policy: PolicyOption = None,
+        artifact_root: ExecutionArtifactRootOption = Path(".comparo/artifacts"),
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        maximum_report_entries: MaximumReportEntriesOption = (
+            DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1
+        ),
+        maximum_outstanding_preparations: MaximumPreparationsOption = (
+            DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
+        ),
+    ) -> TuiLaunchRequest:
+        """Open the interactive terminal interface.
+
+        Args:
+            config: Project manifest or directory containing comparo.yaml.
+            source: Additional local YAML source; repeat the option to add more.
+            policy: External ExecutionPolicy path; omission uses trusted-local authority.
+            artifact_root: Authenticated sanitized report archive root.
+            config_load_limits: Caller-owned project and policy YAML admission ceilings.
+            runtime_limits: Caller-owned HTTP capture and decoding ceilings.
+            artifact_limits: Caller-owned artifact persistence and read ceilings.
+            maximum_report_entries: Maximum archived report entries admitted per refresh.
+            maximum_outstanding_preparations: Maximum retained Compare preparations.
+        """
+        try:
+            parsed_config_limits = _config_load_limits(config_load_limits)
+            parsed_execution_limits = _execution_limits(runtime_limits, artifact_limits)
+            limits = TuiLaunchLimits(
+                project_load=project_load_limits(parsed_config_limits),
+                policy_load=policy_load_limits(parsed_config_limits),
+                execution_settings=production_execution_settings(
+                    parsed_execution_limits,
+                    persist=True,
+                ),
+                report_archive=ReportArchiveLimits(
+                    maximum_entries=maximum_report_entries,
+                    artifact=_artifact_read_limits(artifact_limits),
+                ),
+                maximum_outstanding_preparations=maximum_outstanding_preparations,
+            )
+            return TuiLaunchRequest(
+                config=config,
+                additional_sources=source,
+                policy=policy,
+                artifact_root=artifact_root,
+                limits=limits,
+            )
+        except Exception as error:
+            raise _InvalidTuiLaunchError from error
+
+
 def build_app(services: CliServices) -> App:
     """Build an isolated command graph around injected framework-neutral services."""
     cli = App(
@@ -1095,6 +1190,7 @@ def build_app(services: CliServices) -> App:
     _register_artifact_commands(cli, services)
     _register_execution_commands(cli, services)
     _register_render_command(cli, services)
+    _register_tui_command(cli)
 
     @schema.command(name="config")
     def schema_config(*, color: ColorOption = "auto") -> CliInvocation:
@@ -1366,12 +1462,16 @@ def main(
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
     binary_stdout: BinaryIO | None = None,
+    stdin: TextIO | None = None,
+    tui_launcher: Callable[[TuiLaunchRequest], int] | None = None,
 ) -> int:
     """Run the CLI and return a stable exit code without raising parser exits."""
     tokens = tuple(sys.argv[1:] if argv is None else argv)
     color = _requested_color(tokens)
     output_console = _console(sys.stdout if stdout is None else stdout, color)
     error_console = _console(sys.stderr if stderr is None else stderr, color)
+    if not tokens and _is_interactive_terminal(stdin, stdout, stderr):
+        return _launch_tui(TuiLaunchRequest(), tui_launcher, error_console)
     current_app = _DEFAULT_APP if services is None else build_app(services)
     try:
         parsed = current_app(
@@ -1385,7 +1485,7 @@ def main(
     except KeyboardInterrupt:
         _render_static_error(error_console, "Interrupted.")
         return int(CliExitCode.INTERRUPTED)
-    except CycloptsError:
+    except (CycloptsError, _InvalidTuiLaunchError):
         _render_static_error(error_console, "Invalid command invocation. Run with --help.")
         return int(CliExitCode.INVALID_INVOCATION)
     except Exception:  # noqa: BLE001 - the process boundary must fail closed without exception text.
@@ -1393,6 +1493,8 @@ def main(
         return int(CliExitCode.INTERNAL_ERROR)
     if parsed is None:
         return int(CliExitCode.SUCCESS)
+    if type(parsed) is TuiLaunchRequest:
+        return _launch_tui(parsed, tui_launcher, error_console)
     if type(parsed) is not CliInvocation:
         _render_static_error(error_console, "Comparo received an invalid command result.")
         return int(CliExitCode.INTERNAL_ERROR)
@@ -1401,6 +1503,51 @@ def main(
         _render_static_error(error_console, "Comparo could not write binary output safely.")
         return int(CliExitCode.INTERNAL_ERROR)
     return int(parsed.result.exit_code)
+
+
+def _is_interactive_terminal(
+    stdin: TextIO | None,
+    stdout: TextIO | None,
+    stderr: TextIO | None,
+) -> bool:
+    """Open the implicit TUI only when all process streams are real terminals."""
+    streams = (
+        sys.stdin if stdin is None else stdin,
+        sys.stdout if stdout is None else stdout,
+        sys.stderr if stderr is None else stderr,
+    )
+    return all(stream.isatty() for stream in streams)
+
+
+def _launch_tui(
+    request: TuiLaunchRequest,
+    launcher: Callable[[TuiLaunchRequest], int] | None,
+    error_console: Console,
+) -> int:
+    """Invoke the lazy terminal adapter and contain its process-boundary failures."""
+    selected = _default_tui_launcher if launcher is None else launcher
+    try:
+        code = selected(request)
+    except KeyboardInterrupt:
+        _render_static_error(error_console, "Interrupted.")
+        return int(CliExitCode.INTERRUPTED)
+    except Exception:  # noqa: BLE001 - never expose terminal/bootstrap exception text
+        _render_static_error(
+            error_console,
+            "Comparo could not start the terminal interface safely.",
+        )
+        return int(CliExitCode.INTERNAL_ERROR)
+    if type(code) is not int or code < 0 or code > 255:
+        _render_static_error(error_console, "Comparo received an invalid terminal exit status.")
+        return int(CliExitCode.INTERNAL_ERROR)
+    return code
+
+
+def _default_tui_launcher(request: TuiLaunchRequest) -> int:
+    """Import Textual only after the user deliberately enters the TUI journey."""
+    from comparo.tui.launch import run_tui
+
+    return run_tui(request)
 
 
 __all__ = ["build_app", "generate_cli_reference", "main"]

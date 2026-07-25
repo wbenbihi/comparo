@@ -65,7 +65,11 @@ class CliExecutionOutcome(msgspec.Struct, frozen=True, kw_only=True):
         raise ValueError("CLI execution outcome requires exactly summary or diagnostics")
 
 
-def _settings(limits: CliExecutionLimits, *, persist: bool) -> ProductionExecutionSettings:
+def production_execution_settings(
+    limits: CliExecutionLimits,
+    *,
+    persist: bool,
+) -> ProductionExecutionSettings:
     """Replace every exposed runtime limit over one explicit versioned default set."""
     defaults = production_execution_defaults_v1()
     capture = ResponseCaptureLimits(
@@ -214,7 +218,7 @@ async def execute_cli_request(
             ),
         )
     try:
-        settings = _settings(request.limits, persist=request.persist)
+        settings = production_execution_settings(request.limits, persist=request.persist)
     except (TypeError, ValueError):
         return CliExecutionOutcome(
             exit_code=CliExitCode.INVALID_INVOCATION,
@@ -281,4 +285,8 @@ async def execute_cli_request(
     )
 
 
-__all__ = ("CliExecutionOutcome", "execute_cli_request")
+__all__ = (
+    "CliExecutionOutcome",
+    "execute_cli_request",
+    "production_execution_settings",
+)

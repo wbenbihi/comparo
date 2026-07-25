@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from io import BytesIO
 from io import StringIO
@@ -35,6 +36,7 @@ from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import CliServices
+from comparo.tui.contracts import TuiLaunchRequest
 
 _SECRET_TOKEN = "malformed-super-secret-value"
 
@@ -170,6 +172,14 @@ class _TerminalBytes(BytesIO):
         return True
 
 
+class _TerminalText(StringIO):
+    """In-memory text stream representing an interactive terminal."""
+
+    @override
+    def isatty(self) -> bool:
+        return True
+
+
 @pytest.mark.parametrize("arguments", [[], ["--help"]])
 def test_root_help_is_generated_without_running_services(arguments: list[str]) -> None:
     code, stdout, stderr = _invoke(arguments, services=_StaticServices())
@@ -183,7 +193,191 @@ def test_root_help_is_generated_without_running_services(arguments: list[str]) -
     assert "diff" in stdout
     assert "exec" in stdout
     assert "render" in stdout
+    assert "tui" in stdout
     assert stderr == ""
+
+
+def test_explicit_tui_command_builds_a_typed_launch_request() -> None:
+    captured: list[TuiLaunchRequest] = []
+
+    def launch(request: TuiLaunchRequest) -> int:
+        captured.append(request)
+        return 0
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = main(
+        [
+            "tui",
+            "--config",
+            "project.yaml",
+            "--source",
+            "one.yaml",
+            "--source",
+            "two.yaml",
+            "--policy",
+            "policy.yaml",
+            "--artifact-root",
+            "reports",
+        ],
+        services=cast("CliServices", _StaticServices()),
+        stdout=stdout,
+        stderr=stderr,
+        tui_launcher=launch,
+    )
+    assert code == 0
+    assert captured == [
+        TuiLaunchRequest(
+            config=Path("project.yaml"),
+            additional_sources=(Path("one.yaml"), Path("two.yaml")),
+            policy=Path("policy.yaml"),
+            artifact_root=Path("reports"),
+        )
+    ]
+    assert stdout.getvalue() == ""
+    assert stderr.getvalue() == ""
+
+
+def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> None:
+    captured: list[TuiLaunchRequest] = []
+
+    def launch(request: TuiLaunchRequest) -> int:
+        captured.append(request)
+        return 0
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = main(
+        [
+            "tui",
+            "--maximum-config-sources",
+            "17",
+            "--maximum-encoded-body-bytes",
+            "1234",
+            "--maximum-report-entries",
+            "23",
+            "--maximum-outstanding-preparations",
+            "3",
+        ],
+        services=cast("CliServices", _StaticServices()),
+        stdout=stdout,
+        stderr=stderr,
+        tui_launcher=launch,
+    )
+    assert code == 0
+    limits = captured[0].limits
+    assert limits.project_load.maximum_sources == 17
+    assert limits.execution_settings.transport.capture.maximum_encoded_body_bytes.value == 1234
+    assert limits.report_archive.maximum_entries == 23
+    assert limits.maximum_outstanding_preparations == 3
+    assert limits.execution_settings.artifact.persist.value == "always"
+    assert stdout.getvalue() == ""
+    assert stderr.getvalue() == ""
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--maximum-config-sources", "0"],
+        ["--maximum-blobs", "0"],
+        ["--maximum-report-entries", "0"],
+        ["--maximum-outstanding-preparations", "0"],
+    ],
+)
+def test_tui_command_rejects_invalid_limits_without_launching(arguments: list[str]) -> None:
+    launched: list[TuiLaunchRequest] = []
+
+    def launch(request: TuiLaunchRequest) -> int:
+        launched.append(request)
+        return 0
+
+    stdout = StringIO()
+    stderr = StringIO()
+    code = main(
+        ["tui", *arguments],
+        services=cast("CliServices", _StaticServices()),
+        stdout=stdout,
+        stderr=stderr,
+        tui_launcher=launch,
+    )
+    assert code == 2
+    assert launched == []
+    assert stdout.getvalue() == ""
+    assert stderr.getvalue() == "Invalid command invocation. Run with --help.\n"
+
+
+def test_empty_interactive_invocation_opens_tui_but_redirected_invocation_keeps_help() -> None:
+    launched: list[TuiLaunchRequest] = []
+
+    def launch(request: TuiLaunchRequest) -> int:
+        launched.append(request)
+        return 0
+
+    terminal_input = _TerminalText()
+    terminal_output = _TerminalText()
+    terminal_error = _TerminalText()
+    code = main(
+        [],
+        services=cast("CliServices", _StaticServices()),
+        stdin=terminal_input,
+        stdout=terminal_output,
+        stderr=terminal_error,
+        tui_launcher=launch,
+    )
+    assert code == 0
+    assert launched == [TuiLaunchRequest()]
+    assert terminal_output.getvalue() == ""
+    assert terminal_error.getvalue() == ""
+
+    redirected = _invoke([], services=cast("CliServices", _StaticServices()))
+    assert redirected[0] == 0
+    assert "Usage: comparo COMMAND" in redirected[1]
+
+
+@pytest.mark.parametrize(
+    ("launcher", "code", "message"),
+    [
+        (
+            lambda _request: (_ for _ in ()).throw(RuntimeError(_SECRET_TOKEN)),
+            4,
+            "Comparo could not start the terminal interface safely.",
+        ),
+        (lambda _request: 256, 4, "Comparo received an invalid terminal exit status."),
+        (
+            lambda _request: (_ for _ in ()).throw(KeyboardInterrupt()),
+            130,
+            "Interrupted.",
+        ),
+    ],
+)
+def test_tui_launcher_failures_are_stable_and_value_free(
+    launcher: Callable[[TuiLaunchRequest], int],
+    code: int,
+    message: str,
+) -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+    result = main(
+        ["tui"],
+        services=cast("CliServices", _StaticServices()),
+        stdout=stdout,
+        stderr=stderr,
+        tui_launcher=launcher,
+    )
+    assert result == code
+    assert stdout.getvalue() == ""
+    assert stderr.getvalue() == f"{message}\n"
+    assert _SECRET_TOKEN not in stderr.getvalue()
+
+
+def test_default_tui_launcher_imports_the_terminal_adapter_lazily(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from comparo.tui import launch as launch_module
+
+    request = TuiLaunchRequest()
+    monkeypatch.setattr(launch_module, "run_tui", lambda received: 7 if received is request else 4)
+    assert app_module._default_tui_launcher(request) == 7
 
 
 @pytest.mark.parametrize("command", ["run", "diff", "exec"])
