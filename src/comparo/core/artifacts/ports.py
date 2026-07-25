@@ -28,6 +28,7 @@ class ArtifactStoreErrorCode(DomainStrEnum):
     IO_FAILED = "io-failed"
     COMMIT_UNCERTAIN = "commit-uncertain"
     UNSUPPORTED_PLATFORM = "unsupported-platform"
+    INVALID_ARTIFACT = "invalid-artifact"
     CLOSED = "closed"
 
 
