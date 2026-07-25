@@ -15,6 +15,7 @@ from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.authorization import HttpAuthorizationGrant
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
+from comparo.core.domain.http.authorization import SecretEgressApproval
 from comparo.core.domain.http.bodies import RequestBody
 from comparo.core.domain.http.policies import RequestPolicies
 from comparo.core.domain.http.pre_send import AuthorizedResolutionRequest
@@ -64,4 +65,5 @@ __all__ = (
     "RequestPolicies",
     "RequestTarget",
     "ResolvedRoute",
+    "SecretEgressApproval",
 )

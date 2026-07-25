@@ -92,6 +92,7 @@ def _write_policy(root: Path) -> Path:
         "    ambientEnvironment: {names: [], allowAny: false}\n"
         "    allowProjectFiles: false\n"
         "    remoteSchemas: {sources: [], allowAny: false}\n"
+        "    secretEgress: {rules: [], allowAny: false}\n"
         "  artifacts:\n"
         "    allowSanitizedPersistence: false\n"
         "    roots: []\n",

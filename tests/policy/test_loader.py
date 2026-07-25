@@ -44,6 +44,7 @@ spec:
     ambientEnvironment: {names: [], allowAny: false}
     allowProjectFiles: false
     remoteSchemas: {sources: [], allowAny: false}
+    secretEgress: {rules: [], allowAny: false}
   artifacts:
     allowSanitizedPersistence: false
     roots: []

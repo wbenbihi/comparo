@@ -9,19 +9,15 @@ import msgspec
 from comparo.core.domain.capabilities import CapabilityId
 from comparo.core.domain.capabilities import CapabilityOperation
 from comparo.core.domain.capabilities import ExecutionPolicyAuthority
-from comparo.core.domain.http.policies import ExplicitProxy
 from comparo.core.domain.http.policies import MutationApprovalRequired
-from comparo.core.domain.http.policies import NoProxy
 from comparo.core.domain.http.requests import FinalizedWireRequest
-from comparo.core.domain.http.url import AbsoluteHttpUrl
-from comparo.core.domain.http.url import ClientResolvedTarget
-from comparo.core.domain.http.url import DirectResolvedRoute
-from comparo.core.domain.http.url import Ipv6Host
-from comparo.core.domain.http.url import NetworkDestination
+from comparo.core.domain.http.route_authority import (
+    validate_route_request as _validate_route_request,
+)
+from comparo.core.domain.http.secret_egress import http_secret_egress_origins
 from comparo.core.domain.http.url import ProxyResolvedRoute
 from comparo.core.domain.http.url import ProxyResolvedTarget
 from comparo.core.domain.http.url import ResolvedRoute
-from comparo.core.domain.http.url import effective_port
 from comparo.core.domain.http.url import is_resolved_route
 from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import EnvironmentExecutionId
@@ -35,86 +31,9 @@ _HTTP_MUTATION_ID = CapabilityId(namespace="comparo", name="http.mutation", vers
 _HTTP_MUTATION_OPERATION = CapabilityOperation(value="request.mutate")
 _PROXY_DNS_ID = CapabilityId(namespace="comparo", name="http.proxy-dns", version="1")
 _PROXY_DNS_OPERATION = CapabilityOperation(value="dns.delegate")
+_SECRET_EGRESS_ID = CapabilityId(namespace="comparo", name="secret-egress", version="1")
+_SECRET_EGRESS_OPERATION = CapabilityOperation(value="request.egress")
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
-
-
-def _destination_identifier(destination: NetworkDestination) -> str:
-    host = destination.host.value
-    if type(destination.host) is Ipv6Host:
-        host = f"[{host}]"
-    addresses = ",".join(address.value for address in destination.resolved_addresses)
-    return (
-        f"{destination.scheme.value}://{host}:{destination.port.value}"
-        f"@{destination.selected_address.value}[{addresses}]"
-    )
-
-
-def network_destination_identifier(destination: NetworkDestination) -> str:
-    """Return a public deterministic identifier for one pinned network destination."""
-    if type(destination) is not NetworkDestination:
-        raise TypeError("destination identifier requires NetworkDestination")
-    return _destination_identifier(destination)
-
-
-def proxy_dns_target_identifier(target: ProxyResolvedTarget) -> str:
-    """Return the capability target for DNS resolution deliberately delegated to a proxy."""
-    if type(target) is not ProxyResolvedTarget:
-        raise TypeError("proxy DNS target identifier requires ProxyResolvedTarget")
-    port = target.authority.port or effective_port(
-        AbsoluteHttpUrl(scheme=target.scheme, authority=target.authority)
-    )
-    return f"proxy-dns:{target.scheme.value}://{target.authority.host.value}:{port.value}"
-
-
-def resolved_route_identifier(route: ResolvedRoute) -> str:
-    """Return the capability-target identity including target-resolution ownership."""
-    if type(route) is DirectResolvedRoute:
-        return f"direct:{_destination_identifier(route.destination)}"
-    if type(route) is not ProxyResolvedRoute:
-        raise TypeError("route identifier requires ResolvedRoute")
-    proxy = _destination_identifier(route.proxy_destination)
-    if type(route.target) is ClientResolvedTarget:
-        target = f"client:{_destination_identifier(route.target.destination)}"
-    else:
-        target = proxy_dns_target_identifier(route.target)
-    return f"proxy:{proxy}->{target}"
-
-
-def _validate_route_request(route: ResolvedRoute, request: FinalizedWireRequest) -> None:
-    if type(route) is DirectResolvedRoute:
-        target = route.destination
-    elif type(route) is ProxyResolvedRoute and type(route.target) is ClientResolvedTarget:
-        target = route.target.destination
-    elif type(route) is ProxyResolvedRoute and type(route.target) is ProxyResolvedTarget:
-        if (
-            route.target.scheme is not request.url.scheme
-            or route.target.authority != request.url.authority
-        ):
-            raise ValueError("proxy-resolved route target does not match the finalized request")
-        target = None
-    else:
-        raise TypeError("authorization route must be ResolvedRoute")
-    if target is not None and (
-        target.scheme is not request.url.scheme
-        or target.host != request.url.authority.host
-        or target.port != effective_port(request.url)
-    ):
-        raise ValueError("resolved route target does not match the finalized request")
-    proxy_policy = request.policies.proxy
-    if type(proxy_policy) is NoProxy and type(route) is not DirectResolvedRoute:
-        raise ValueError("a no-proxy request requires a direct resolved route")
-    if type(proxy_policy) is ExplicitProxy:
-        if type(route) is not ProxyResolvedRoute:
-            raise ValueError("an explicit proxy request requires a proxy resolved route")
-        expected_port = proxy_policy.authority.port or effective_port(
-            AbsoluteHttpUrl(scheme=proxy_policy.scheme, authority=proxy_policy.authority)
-        )
-        if (
-            route.proxy_destination.scheme is not proxy_policy.scheme
-            or route.proxy_destination.host != proxy_policy.authority.host
-            or route.proxy_destination.port != expected_port
-        ):
-            raise ValueError("resolved proxy route does not match the explicit proxy policy")
 
 
 def _validate_contract(
@@ -193,12 +112,19 @@ def _requires_proxy_dns_approval(intent: HttpAuthorizationIntent) -> bool:
     )
 
 
+def _requires_secret_egress_approval(intent: HttpAuthorizationIntent) -> bool:
+    """Return whether this exact request carries authorization-relevant sealed data."""
+    return bool(http_secret_egress_origins(intent.request))
+
+
 def _validate_required_safeguard_approvals(intent: HttpAuthorizationIntent) -> None:
     """Require every positive safeguard before issuing final HTTP send authority."""
     if _requires_mutation_approval(intent) and intent.mutation_approval is None:
         raise ValueError("unsafe HTTP method requires ExecutionPolicy mutation approval")
     if _requires_proxy_dns_approval(intent) and intent.proxy_dns_approval is None:
         raise ValueError("proxy-side DNS requires explicit ExecutionPolicy approval")
+    if _requires_secret_egress_approval(intent) and intent.secret_egress_approval is None:
+        raise ValueError("sensitive HTTP request requires ExecutionPolicy secret-egress approval")
 
 
 @final
@@ -283,6 +209,46 @@ class ProxyDnsApproval(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class SecretEgressApproval(msgspec.Struct, frozen=True, kw_only=True):
+    """ExecutionPolicy authority to disclose sealed values in one exact HTTP request."""
+
+    request: FinalizedWireRequest
+    route: ResolvedRoute
+    occurrence: HttpRequestOccurrence
+    plan_fingerprint: Fingerprint
+    authority: ExecutionPolicyAuthority
+    capability_id: CapabilityId = _SECRET_EGRESS_ID
+    operation: CapabilityOperation = _SECRET_EGRESS_OPERATION
+
+    def __post_init__(self) -> None:
+        """Bind egress authority to exact request bytes, route, occurrence, plan, and policy."""
+        if type(self.request) is not FinalizedWireRequest:
+            raise TypeError("secret egress approval request must be FinalizedWireRequest")
+        if not http_secret_egress_origins(self.request):
+            raise ValueError("secret egress approval requires a sensitive HTTP request")
+        if not is_resolved_route(self.route):
+            raise TypeError("secret egress approval route must be ResolvedRoute")
+        if type(self.occurrence) is not HttpRequestOccurrence:
+            raise TypeError("secret egress approval occurrence must be HttpRequestOccurrence")
+        _validate_occurrence_request(self.occurrence, self.request)
+        if type(self.plan_fingerprint) is not Fingerprint:
+            raise TypeError("secret egress approval plan binding must be Fingerprint")
+        _validate_policy_authority(self.authority, self.authority.policy.fingerprint)
+        _validate_route_request(self.route, self.request)
+        _validate_contract(
+            actual_id=self.capability_id,
+            actual_operation=self.operation,
+            capability_id=_SECRET_EGRESS_ID,
+            operation=_SECRET_EGRESS_OPERATION,
+        )
+
+    @property
+    def effective_policy_fingerprint(self) -> Fingerprint:
+        """Return the exact policy revision carried by the issuing authority."""
+        return self.authority.policy.fingerprint
+
+
+@final
 class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
     """Complete immutable input presented to the HTTP ExecutionPolicy authority."""
 
@@ -293,6 +259,7 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
     effective_policy_fingerprint: Fingerprint
     mutation_approval: MutationApproval | None = None
     proxy_dns_approval: ProxyDnsApproval | None = None
+    secret_egress_approval: SecretEgressApproval | None = None
 
     def __post_init__(self) -> None:
         """Bind route mode and every separately required approval to the full request intent."""
@@ -310,6 +277,7 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
         _validate_route_request(self.route, self.request)
         self._validate_mutation_approval()
         self._validate_proxy_dns_approval()
+        self._validate_secret_egress_approval()
 
     def _validate_mutation_approval(self) -> None:
         unsafe = self.request.method.value not in _SAFE_METHODS
@@ -356,6 +324,24 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
         ):
             raise ValueError("proxy DNS approval is not bound to this HTTP intent")
 
+    def _validate_secret_egress_approval(self) -> None:
+        approval = self.secret_egress_approval
+        sensitive = bool(http_secret_egress_origins(self.request))
+        if not sensitive and approval is not None:
+            raise ValueError("public HTTP requests cannot carry secret-egress approval")
+        if approval is None:
+            return
+        if type(approval) is not SecretEgressApproval:
+            raise TypeError("secret egress approval must be SecretEgressApproval")
+        if (
+            approval.request != self.request
+            or approval.route != self.route
+            or approval.occurrence != self.occurrence
+            or approval.plan_fingerprint != self.plan_fingerprint
+            or approval.effective_policy_fingerprint != self.effective_policy_fingerprint
+        ):
+            raise ValueError("secret egress approval is not bound to this HTTP intent")
+
 
 @final
 class HttpAuthorizationGrant(msgspec.Struct, frozen=True, kw_only=True):
@@ -372,7 +358,11 @@ class HttpAuthorizationGrant(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("HTTP authorization grant intent must be HttpAuthorizationIntent")
         _validate_required_safeguard_approvals(self.intent)
         _validate_policy_authority(self.authority, self.intent.effective_policy_fingerprint)
-        approvals = (self.intent.mutation_approval, self.intent.proxy_dns_approval)
+        approvals = (
+            self.intent.mutation_approval,
+            self.intent.proxy_dns_approval,
+            self.intent.secret_egress_approval,
+        )
         if any(
             approval is not None and approval.authority != self.authority for approval in approvals
         ):

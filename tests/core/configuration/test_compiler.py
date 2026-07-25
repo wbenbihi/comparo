@@ -617,6 +617,37 @@ def test_static_dynamic_detection_recurses_through_sequences() -> None:
     assert "configuration.spec.static-dynamic" in _codes(result)
 
 
+def test_environment_value_fingerprint_redaction_preserves_only_type_and_shape() -> None:
+    parsed = parse_yaml_source(
+        source_id=_SOURCE,
+        text="values: {TOKEN: [one, {nested: null}]}",
+    )
+    root = cast("MappingNode", parsed.documents[0].root)
+
+    assert compiler._fingerprint_node(root, context="environment-env") == {
+        "values": {
+            "sensitive": True,
+            "type": "mapping",
+            "entries": {
+                "TOKEN": {
+                    "sensitive": True,
+                    "type": "sequence",
+                    "items": [
+                        {"sensitive": True, "type": "str"},
+                        {
+                            "sensitive": True,
+                            "type": "mapping",
+                            "entries": {
+                                "nested": {"sensitive": True, "type": "null"},
+                            },
+                        },
+                    ],
+                }
+            },
+        }
+    }
+
+
 def test_profile_and_value_reference_cycles_are_source_located_errors() -> None:
     profiles = _compile(
         _valid_project()

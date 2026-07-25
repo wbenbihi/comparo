@@ -22,6 +22,7 @@ from comparo.core.policy.models import NetworkAddressClass
 from comparo.core.policy.models import PolicyArtifacts
 from comparo.core.policy.models import PolicyHttp
 from comparo.core.policy.models import PolicyPlanning
+from comparo.core.policy.models import PolicySecretEgress
 from comparo.core.policy.models import PolicyValues
 from comparo.core.policy.models import RemoteSchemaPolicy
 
@@ -72,6 +73,7 @@ def trusted_local_policy() -> CompiledExecutionPolicy:
         ambient_environment=AmbientEnvironmentPolicy(names=(), allow_any=True),
         allow_project_files=True,
         remote_schemas=RemoteSchemaPolicy(sources=(), allow_any=True),
+        secret_egress=PolicySecretEgress(rules=(), allow_any=True),
     )
     artifacts = PolicyArtifacts(
         allow_sanitized_persistence=True,

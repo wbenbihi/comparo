@@ -116,20 +116,47 @@ def _fingerprint_node(
         return [_fingerprint_node(item, context=context) for item in node.items]
     credential_name = _structured_credential_name(node, context=context)
     return {
-        entry.name: _fingerprint_node(
-            entry.value,
-            redact=_fingerprint_entry_is_sensitive(
-                entry.name,
-                context=context,
-                credential_name=credential_name,
-            ),
-            context=_fingerprint_context(entry.name),
+        entry.name: (
+            _fingerprint_sensitive_shape(entry.value)
+            if context == "environment-env" and entry.name == "values"
+            else _fingerprint_node(
+                entry.value,
+                redact=_fingerprint_entry_is_sensitive(
+                    entry.name,
+                    context=context,
+                    credential_name=credential_name,
+                ),
+                context=_fingerprint_context(entry.name, parent=context),
+            )
         )
         for entry in sorted(node.entries, key=lambda item: item.name)
     }
 
 
-def _fingerprint_context(name: str) -> str | None:
+def _fingerprint_sensitive_shape(node: ConfigurationNode) -> object:
+    """Retain authored structure and exact value types without hashing sensitive content."""
+    if type(node) is ScalarNode:
+        value_type = "null" if node.value is None else type(node.value).__name__
+        return {"sensitive": True, "type": value_type}
+    if type(node) is SequenceNode:
+        return {
+            "sensitive": True,
+            "type": "sequence",
+            "items": [_fingerprint_sensitive_shape(item) for item in node.items],
+        }
+    return {
+        "sensitive": True,
+        "type": "mapping",
+        "entries": {
+            entry.name: _fingerprint_sensitive_shape(entry.value)
+            for entry in sorted(node.entries, key=lambda item: item.name)
+        },
+    }
+
+
+def _fingerprint_context(name: str, *, parent: str | None = None) -> str | None:
+    if parent == "environment-spec" and name == "env":
+        return "environment-env"
     if name in {"headers", "query", "cookies", "auth"}:
         return name
     if name in {"url", "endpoint", "baseUrl"}:
@@ -199,6 +226,7 @@ def _definition(
         "spec": _fingerprint_node(
             resource.spec,
             redact=resource.kind is ResourceKind.VALUE,
+            context=("environment-spec" if resource.kind is ResourceKind.ENVIRONMENT else None),
         ),
     }
     encoded = json.dumps(
@@ -646,7 +674,10 @@ def _inline_fingerprint(
             "id": origin.owner.resource_id.value,
         },
         "fragment": origin.fragment.value,
-        "spec": _fingerprint_node(node),
+        "spec": _fingerprint_node(
+            node,
+            context="environment-spec" if kind is ResourceKind.ENVIRONMENT else None,
+        ),
     }
     encoded = json.dumps(
         content, ensure_ascii=False, sort_keys=True, separators=(",", ":")

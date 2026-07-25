@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from typing import Protocol
 from typing import cast
 
@@ -30,6 +29,9 @@ from comparo.core.domain.sensitivity import SensitiveValueAccess
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.sensitivity import is_sensitive_value
 from comparo.core.domain.sensitivity import stable_taint_origin_union
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import normalize_secret_egress_origins
+from comparo.core.domain.value_egress import value_egress_origin
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import Blocked
@@ -370,11 +372,18 @@ class ExpressionResolver:
         production_scope: RuntimeScope | None = None,
     ) -> Present[ResolvedValue]:
         """Create a present expression result with secret-namespace fail-closed tainting."""
-        if target.namespace is ValueNamespace.SECRETS and not is_sensitive_value(value):
-            value = SensitiveValue(
-                cast("ResolvedValue", value),
-                origins=(_secret_origin(target.symbol),),
-            )
+        if target.namespace is ValueNamespace.SECRETS:
+            secret_origin = _secret_origin(target.symbol)
+            if is_sensitive_value(value):
+                value = _with_origins(
+                    cast("ResolvedValue", value.reveal(access=_ACCESS)),
+                    normalize_secret_egress_origins(value.origins, target.symbol),
+                )
+            else:
+                value = SensitiveValue(
+                    cast("ResolvedValue", value),
+                    origins=(secret_origin,),
+                )
         return present(
             value,
             symbol=target.symbol,
@@ -457,8 +466,7 @@ def _with_origins(
 
 
 def _secret_origin(symbol: SymbolPath) -> TaintOriginId:
-    digest = hashlib.sha256(".".join(symbol.segments).encode()).hexdigest()[:24]
-    return TaintOriginId(value=f"secret/{digest}")
+    return value_egress_origin(ValueEgressSourceKind.SECRET, symbol)
 
 
 def _prepend_unavailable(

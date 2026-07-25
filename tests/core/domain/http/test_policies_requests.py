@@ -14,7 +14,6 @@ from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.authorization import HttpAuthorizationGrant
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
-from comparo.core.domain.http.authorization import network_destination_identifier
 from comparo.core.domain.http.bodies import NoBody
 from comparo.core.domain.http.bodies import NoMaterializedBody
 from comparo.core.domain.http.fields import HeaderField
@@ -52,6 +51,7 @@ from comparo.core.domain.http.requests import EffectiveRequest
 from comparo.core.domain.http.requests import FinalizedWireRequest
 from comparo.core.domain.http.requests import LogicalRequest
 from comparo.core.domain.http.requests import prove_request_materialization
+from comparo.core.domain.http.route_authority import network_destination_identifier
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import BaseRelativeTarget
 from comparo.core.domain.http.url import DirectResolvedRoute

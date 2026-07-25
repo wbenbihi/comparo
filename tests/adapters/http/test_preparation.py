@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from collections.abc import Iterable
+from pathlib import Path
 from typing import cast
 
 import msgspec
@@ -13,9 +14,18 @@ import pytest
 from comparo.adapters.http import PolicyHttpExchangePreparer
 from comparo.adapters.http import SystemHostResolver
 from comparo.adapters.http import preparation as preparation_module
+from comparo.adapters.values import EnvironmentSnapshotRequest
+from comparo.adapters.values import PinnedProjectFiles
+from comparo.adapters.values import RunEnvironmentSnapshotBuilder
 from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
+from comparo.core.domain.http.fields import HeaderField
+from comparo.core.domain.http.fields import HeaderName
+from comparo.core.domain.http.fields import HeaderSource
+from comparo.core.domain.http.fields import HeaderText
+from comparo.core.domain.http.fields import HttpMethod
+from comparo.core.domain.http.fields import RequestHeaders
 from comparo.core.domain.http.policies import ExplicitProxy
 from comparo.core.domain.http.policies import MutationApprovalRequired
 from comparo.core.domain.http.policies import ProxyTlsDisabled
@@ -25,6 +35,7 @@ from comparo.core.domain.http.pre_send import HttpResolutionDenial
 from comparo.core.domain.http.pre_send import HttpResolutionFailure
 from comparo.core.domain.http.requests import EffectiveRequest
 from comparo.core.domain.http.requests import FinalizedWireRequest
+from comparo.core.domain.http.secret_egress import http_secret_egress_origins
 from comparo.core.domain.http.url import DirectResolvedRoute
 from comparo.core.domain.http.url import DnsHost
 from comparo.core.domain.http.url import HttpAuthority
@@ -35,13 +46,40 @@ from comparo.core.domain.http.url import Ipv4Host
 from comparo.core.domain.http.url import Ipv6Host
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
+from comparo.core.domain.provenance import ProvenanceEntry
+from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.value_egress import CONFIGURATION_SECRET_MARKER
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_origin
+from comparo.core.domain.value_egress import value_egress_source
+from comparo.core.domain.value_references import SymbolPath
+from comparo.core.domain.values import BytesValue
+from comparo.core.planning.planner import plan_run
 from comparo.core.policy import CompiledExecutionPolicy
 from comparo.core.policy import NetworkAddressClass
+from comparo.core.policy import PolicySecretEgress
+from comparo.core.policy import PolicySecretEgressRule
 from comparo.core.policy import trusted_local_policy
+from comparo.core.policy.compiler import policy_fingerprint
+from comparo.core.resolution import DeterministicGenerator
+from comparo.core.resolution import RunContext
+from comparo.core.runtime import ConfigurationRequestProvider
+from comparo.core.runtime import RequestPreparationFailure
+from comparo.core.runtime import iter_execution_work
+from comparo.core.runtime.http import _attempt_scope
 from tests.core.domain.http.factories import fingerprint
+from tests.core.domain.http.factories import provenance
 from tests.core.domain.http.factories import request_occurrence
 from tests.core.domain.http.observation_factories import finalized_wire_request
 from tests.core.domain.http.observation_factories import request
+from tests.core.planning.conftest import authority as planning_authority
+from tests.core.planning.conftest import compile_project
+from tests.core.planning.conftest import document
+from tests.core.planning.conftest import invocation
+from tests.core.runtime.conftest import FixedClock
 
 
 class _Resolver:
@@ -114,6 +152,80 @@ def _wire(
     return finalized_wire_request(effective)
 
 
+def _sensitive_wire(
+    *,
+    host: str,
+    origins: tuple[TaintOriginId, ...],
+    value: str = "egress-canary",
+) -> FinalizedWireRequest:
+    effective = request()
+    effective = msgspec.structs.replace(
+        effective,
+        url=msgspec.structs.replace(
+            effective.url,
+            authority=HttpAuthority(host=DnsHost(value=host)),
+        ),
+        headers=RequestHeaders(
+            fields=(
+                HeaderField(
+                    name=HeaderName(value="x-sensitive-value"),
+                    value=SensitiveValue(HeaderText(value=value), origins=origins),
+                    source=HeaderSource.AUTHORED,
+                    provenance=provenance(),
+                ),
+            )
+        ),
+    )
+    return finalized_wire_request(effective)
+
+
+def _restricted_egress_policy(
+    *sources: tuple[ValueEgressSourceKind, str],
+) -> CompiledExecutionPolicy:
+    base = trusted_local_policy()
+    rule = PolicySecretEgressRule(
+        sources=tuple(
+            sorted(
+                (
+                    value_egress_source(kind, SymbolPath(segments=tuple(name.split("."))))
+                    for kind, name in sources
+                ),
+                key=lambda source: (source.kind.value, source.symbol.segments),
+            )
+        ),
+        allowed_schemes=(HttpScheme.HTTPS,),
+        allowed_methods=(HttpMethod(value="GET"),),
+        allowed_hosts=(DnsHost(value="allowed.example.test"),),
+        allowed_ports=(HttpPort(value=443),),
+    )
+    values = msgspec.structs.replace(
+        base.values,
+        secret_egress=PolicySecretEgress(rules=(rule,), allow_any=False),
+    )
+    http = msgspec.structs.replace(
+        base.http,
+        allowed_hosts=(
+            DnsHost(value="allowed.example.test"),
+            DnsHost(value="other.example.test"),
+        ),
+        allow_any_host=False,
+    )
+    digest = policy_fingerprint(
+        base.definition.identity,
+        base.metadata,
+        base.planning,
+        http,
+        values,
+        base.artifacts,
+    )
+    return msgspec.structs.replace(
+        base,
+        definition=msgspec.structs.replace(base.definition, fingerprint=digest),
+        http=http,
+        values=values,
+    )
+
+
 def _occurrence(wire: FinalizedWireRequest) -> HttpRequestOccurrence:
     return request_occurrence(environment=wire.environment.identity)
 
@@ -167,6 +279,237 @@ def test_logical_denial_occurs_before_dns_and_contains_only_safe_code() -> None:
         assert type(outcome) is HttpResolutionDenial
         assert outcome.code.value == "http.policy-resolution-denied"
         assert resolver.calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_named_secret_egress_is_destination_bound_and_denied_before_dns() -> None:
+    async def scenario() -> None:
+        secret_symbol = SymbolPath(segments=("chat", "token"))
+        environment_symbol = SymbolPath(segments=("API_TOKEN",))
+        secret_origin = value_egress_origin(ValueEgressSourceKind.SECRET, secret_symbol)
+        environment_origin = value_egress_origin(
+            ValueEgressSourceKind.ENVIRONMENT,
+            environment_symbol,
+        )
+        policy = _restricted_egress_policy(
+            (ValueEgressSourceKind.ENVIRONMENT, "API_TOKEN"),
+            (ValueEgressSourceKind.SECRET, "chat.token"),
+        )
+
+        for origin in (secret_origin, environment_origin):
+            resolver = _Resolver()
+            denied_wire = _sensitive_wire(
+                host="other.example.test",
+                origins=(origin,),
+            )
+            denied = await PolicyHttpExchangePreparer(
+                policy=policy,
+                plan_fingerprint=fingerprint("f"),
+                resolver=resolver,
+            ).prepare(denied_wire, _occurrence(denied_wire))
+            assert type(denied) is HttpResolutionDenial
+            assert denied.code.value == "http.policy-secret-egress-denied"
+            assert resolver.calls == 0
+            assert "egress-canary" not in repr(denied)
+
+        allowed_wire = _sensitive_wire(
+            host="allowed.example.test",
+            origins=(environment_origin, secret_origin),
+        )
+        allowed = await PolicyHttpExchangePreparer(
+            policy=policy,
+            plan_fingerprint=fingerprint("f"),
+            resolver=_Resolver(),
+        ).prepare(allowed_wire, _occurrence(allowed_wire))
+        assert type(allowed) is AuthorizedExchangeRequest
+        approval = allowed.authorization.intent.secret_egress_approval
+        assert approval is not None
+        assert approval.request is allowed_wire
+        assert approval.route == allowed.route
+        assert approval.authority == allowed.authorization.authority
+
+        unknown_wire = _sensitive_wire(
+            host="allowed.example.test",
+            origins=(TaintOriginId(value="unknown/provider-origin"), secret_origin),
+        )
+        unknown_resolver = _Resolver()
+        unknown = await PolicyHttpExchangePreparer(
+            policy=policy,
+            plan_fingerprint=fingerprint("f"),
+            resolver=unknown_resolver,
+        ).prepare(unknown_wire, _occurrence(unknown_wire))
+        assert type(unknown) is HttpResolutionDenial
+        assert unknown.code.value == "http.policy-secret-egress-denied"
+        assert unknown_resolver.calls == 0
+
+        marker_resolver = _Resolver()
+        marker_wire = _sensitive_wire(
+            host="allowed.example.test",
+            origins=(CONFIGURATION_SECRET_MARKER, environment_origin),
+        )
+        marker_denied = await PolicyHttpExchangePreparer(
+            policy=policy,
+            plan_fingerprint=fingerprint("f"),
+            resolver=marker_resolver,
+        ).prepare(marker_wire, _occurrence(marker_wire))
+        assert type(marker_denied) is HttpResolutionDenial
+        assert marker_denied.code.value == "http.policy-secret-egress-denied"
+        assert marker_resolver.calls == 0
+        assert "egress-canary" not in repr(marker_denied)
+
+    asyncio.run(scenario())
+
+
+def test_configuration_resolution_preserves_egress_origins_until_pre_send(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        ambient_canary = "ambient-provider-run-context-canary"
+        configured_canary = "configured-value-run-context-canary"
+        policy = _restricted_egress_policy(
+            (ValueEgressSourceKind.ENVIRONMENT, "API_TOKEN"),
+            (ValueEgressSourceKind.SECRET, "chat.wrapped"),
+            (ValueEgressSourceKind.SECRET, "chat.configured"),
+        )
+        project = compile_project(
+            document(
+                "Project",
+                "demo",
+                "{secrets: {chat: {configured: {$use: configured-token}}}, "
+                "defaults: {subjects: "
+                "[{$use: Request/check}], baseline: {$use: allowed}, "
+                "candidates: [{$use: other}]}}",
+            ),
+            document(
+                "Environment",
+                "allowed",
+                "{baseUrl: 'https://allowed.example.test', env: {inheritProcess: true}, "
+                "secrets: {chat: {wrapped: {$use: ambient-token}}}}",
+            ),
+            document(
+                "Environment",
+                "other",
+                "{baseUrl: 'https://other.example.test', env: {inheritProcess: true}, "
+                "secrets: {chat: {wrapped: {$use: ambient-token}}}}",
+            ),
+            document(
+                "Request",
+                "check",
+                "{request: {method: GET, endpoint: /, headers: {x-direct: {$env: API_TOKEN}, "
+                "x-wrapped: {$secret: chat.wrapped}, "
+                "x-configured: {$secret: chat.configured}}}}",
+            ),
+            document("Value", "ambient-token", "{value: {$env: API_TOKEN}}"),
+            document("Value", "configured-token", f"{{value: {configured_canary}}}"),
+        )
+        authority = msgspec.structs.replace(planning_authority(), policy=policy.definition)
+        planned = plan_run(project, invocation(), authority)
+        assert planned.prepared is not None
+        prepared = planned.prepared
+        configuration = ValueProvenance(entries=(ProvenanceEntry(kind=ProvenanceKind.PROJECT),))
+        snapshots = []
+        with PinnedProjectFiles(tmp_path.resolve()) as files:
+            builder = RunEnvironmentSnapshotBuilder(
+                files,
+                policy,
+                ambient={"API_TOKEN": ambient_canary},
+            )
+            for environment in prepared.effective.environments:
+                result = await builder.build(
+                    EnvironmentSnapshotRequest(
+                        environment=environment,
+                        configuration=configuration,
+                        policy=policy.definition,
+                        inherit_process=True,
+                    )
+                )
+                assert result.snapshot is not None
+                snapshots.append(result.snapshot)
+
+        context = RunContext(
+            prepared=prepared,
+            environment_snapshots=tuple(snapshots),
+            clock=FixedClock(),
+            generator=DeterministicGenerator(
+                SensitiveValue(
+                    BytesValue(value=b"egress-integration-seed"),
+                    origins=(TaintOriginId(value="test/egress-integration-seed"),),
+                )
+            ),
+        )
+        provider = ConfigurationRequestProvider(prepared, context)
+        work_by_environment = {
+            work.environment.identity.resource_id.value: work
+            for work in iter_execution_work(prepared)
+        }
+        allowed_request = await provider.prepare(
+            work_by_environment["allowed"],
+            _attempt_scope(work_by_environment["allowed"], 0),
+        )
+        other_request = await provider.prepare(
+            work_by_environment["other"],
+            _attempt_scope(work_by_environment["other"], 0),
+        )
+        assert not isinstance(allowed_request, RequestPreparationFailure)
+        assert not isinstance(other_request, RequestPreparationFailure)
+
+        expected_origins = {
+            value_egress_origin(
+                ValueEgressSourceKind.ENVIRONMENT,
+                SymbolPath(segments=("API_TOKEN",)),
+            ),
+            value_egress_origin(
+                ValueEgressSourceKind.SECRET,
+                SymbolPath(segments=("chat", "wrapped")),
+            ),
+            value_egress_origin(
+                ValueEgressSourceKind.SECRET,
+                SymbolPath(segments=("chat", "configured")),
+            ),
+        }
+        assert set(http_secret_egress_origins(allowed_request)) == expected_origins
+        assert ambient_canary not in repr(allowed_request)
+        assert configured_canary not in repr(allowed_request)
+
+        allowed_resolver = _Resolver()
+        allowed = await PolicyHttpExchangePreparer(
+            policy=policy,
+            plan_fingerprint=prepared.plan.fingerprint,
+            resolver=allowed_resolver,
+        ).prepare(allowed_request, _occurrence(allowed_request))
+        assert type(allowed) is AuthorizedExchangeRequest
+        assert allowed_resolver.calls == 1
+
+        direct_environment_denied_policy = _restricted_egress_policy(
+            (ValueEgressSourceKind.SECRET, "chat.wrapped"),
+            (ValueEgressSourceKind.SECRET, "chat.configured"),
+        )
+        direct_environment_resolver = _Resolver()
+        direct_environment_denied = await PolicyHttpExchangePreparer(
+            policy=direct_environment_denied_policy,
+            plan_fingerprint=prepared.plan.fingerprint,
+            resolver=direct_environment_resolver,
+        ).prepare(allowed_request, _occurrence(allowed_request))
+        assert type(direct_environment_denied) is HttpResolutionDenial
+        assert direct_environment_denied.code.value == "http.policy-secret-egress-denied"
+        assert direct_environment_resolver.calls == 0
+        assert ambient_canary not in repr(direct_environment_denied)
+
+        other_resolver = _Resolver()
+        denied = await PolicyHttpExchangePreparer(
+            policy=policy,
+            plan_fingerprint=prepared.plan.fingerprint,
+            resolver=other_resolver,
+        ).prepare(other_request, _occurrence(other_request))
+        assert type(denied) is HttpResolutionDenial
+        assert denied.code.value == "http.policy-secret-egress-denied"
+        assert other_resolver.calls == 0
+        assert ambient_canary not in repr(denied)
+        assert configured_canary not in repr(denied)
+
+        await provider.close()
+        await context.close()
 
     asyncio.run(scenario())
 

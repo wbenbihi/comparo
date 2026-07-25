@@ -12,6 +12,8 @@ from comparo.core.policy.models import PolicyCompilationResult as PolicyCompilat
 from comparo.core.policy.models import PolicyHttp as PolicyHttp
 from comparo.core.policy.models import PolicyPlanning as PolicyPlanning
 from comparo.core.policy.models import PolicyResourceSelector as PolicyResourceSelector
+from comparo.core.policy.models import PolicySecretEgress as PolicySecretEgress
+from comparo.core.policy.models import PolicySecretEgressRule as PolicySecretEgressRule
 from comparo.core.policy.models import PolicyValues as PolicyValues
 from comparo.core.policy.models import RemoteSchemaPolicy as RemoteSchemaPolicy
 from comparo.core.policy.models import planning_authority as planning_authority
@@ -30,6 +32,8 @@ __all__ = (
     "PolicyHttp",
     "PolicyPlanning",
     "PolicyResourceSelector",
+    "PolicySecretEgress",
+    "PolicySecretEgressRule",
     "PolicyValues",
     "RemoteSchemaPolicy",
     "compile_execution_policy",

@@ -22,12 +22,18 @@ from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.metadata import Metadata
 from comparo.core.domain.planning_inputs import PlanningBudgetValue
 from comparo.core.domain.provenance import SourceLocation
+from comparo.core.domain.value_egress import ValueEgressSource
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_source
+from comparo.core.domain.value_references import SymbolPath
 from comparo.core.policy import AmbientEnvironmentPolicy
 from comparo.core.policy import CompiledExecutionPolicy
 from comparo.core.policy import PolicyArtifacts
 from comparo.core.policy import PolicyCompilationResult
 from comparo.core.policy import PolicyPlanning
 from comparo.core.policy import PolicyResourceSelector
+from comparo.core.policy import PolicySecretEgress
+from comparo.core.policy import PolicySecretEgressRule
 from comparo.core.policy import PolicyValues
 from comparo.core.policy import RemoteSchemaPolicy
 from comparo.core.policy import trusted_local_policy
@@ -214,6 +220,86 @@ def test_http_policy_rejects_untyped_empty_or_noncanonical_allowlists() -> None:
     )
     for error, match, callback in cases:
         _assert_rejected(error, match, callback)
+
+
+def test_secret_egress_policy_rejects_ambiguous_or_untyped_authority() -> None:
+    environment = value_egress_source(
+        ValueEgressSourceKind.ENVIRONMENT,
+        SymbolPath(segments=("API_TOKEN",)),
+    )
+    secret = value_egress_source(
+        ValueEgressSourceKind.SECRET,
+        SymbolPath(segments=("chat", "token")),
+    )
+    rule = PolicySecretEgressRule(
+        sources=(environment, secret),
+        allowed_schemes=(HttpScheme.HTTPS,),
+        allowed_methods=(HttpMethod(value="POST"),),
+        allowed_hosts=(DnsHost(value="api.example.test"),),
+        allowed_ports=(HttpPort(value=443),),
+    )
+    cases: tuple[tuple[type[Exception], str, Callable[[], object]], ...] = (
+        (
+            TypeError,
+            "sources must be immutable",
+            lambda: msgspec.structs.replace(
+                rule,
+                sources=cast("tuple[ValueEgressSource, ...]", [environment]),
+            ),
+        ),
+        (
+            ValueError,
+            "sources must be non-empty",
+            lambda: msgspec.structs.replace(rule, sources=()),
+        ),
+        (
+            ValueError,
+            "sources must be non-empty",
+            lambda: msgspec.structs.replace(rule, sources=(secret, environment)),
+        ),
+        (
+            ValueError,
+            "hosts must be non-empty",
+            lambda: msgspec.structs.replace(rule, allowed_hosts=()),
+        ),
+        (
+            ValueError,
+            "ports must be non-empty",
+            lambda: msgspec.structs.replace(rule, allowed_ports=()),
+        ),
+        (
+            TypeError,
+            "rules must be immutable",
+            lambda: PolicySecretEgress(
+                rules=cast("tuple[PolicySecretEgressRule, ...]", [rule]),
+                allow_any=False,
+            ),
+        ),
+        (
+            ValueError,
+            "rules must be unique",
+            lambda: PolicySecretEgress(rules=(rule, rule), allow_any=False),
+        ),
+        (
+            TypeError,
+            "allowAny must be bool",
+            lambda: PolicySecretEgress(rules=(), allow_any=cast("bool", 1)),
+        ),
+        (
+            ValueError,
+            "redundant rules",
+            lambda: PolicySecretEgress(rules=(rule,), allow_any=True),
+        ),
+    )
+    for error, match, callback in cases:
+        _assert_rejected(error, match, callback)
+    with pytest.raises(TypeError, match="secret egress section"):
+        PolicyValues(
+            ambient_environment=AmbientEnvironmentPolicy(names=(), allow_any=False),
+            allow_project_files=False,
+            remote_schemas=RemoteSchemaPolicy(sources=(), allow_any=False),
+            secret_egress=cast("PolicySecretEgress", object()),
+        )
 
 
 def test_value_and_artifact_policies_reject_ambiguous_or_untyped_values() -> None:

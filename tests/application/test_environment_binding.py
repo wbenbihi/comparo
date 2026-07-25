@@ -17,6 +17,8 @@ from comparo.application.environment_binding import build_environment_snapshots
 from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.preflight import prepare_project_plan
 from comparo.core.domain.diagnostics import Diagnostic
+from comparo.core.domain.sensitivity import SensitiveValueAccess
+from comparo.core.domain.sensitivity import is_sensitive_value
 from comparo.core.domain.values import JsonString
 from comparo.core.resolution.models import EnvironmentSnapshot
 from tests.application.test_preflight import _request
@@ -67,9 +69,13 @@ def test_selected_environments_receive_isolated_explicit_precedence(tmp_path: Pa
         result = _build(project, files, ambient={"A": "ambient", "ONLY_AMBIENT": "yes"})
     assert result.diagnostics == ()
     assert len(result.snapshots) == 2
+    access = SensitiveValueAccess(purpose="test.environment-binding")
     for snapshot in result.snapshots:
         values = {
-            item.symbol.segments[0]: cast("JsonString", item.value).value
+            item.symbol.segments[0]: cast(
+                "JsonString",
+                item.value.reveal(access=access) if is_sensitive_value(item.value) else item.value,
+            ).value
             for item in snapshot.entries
         }
         assert values == {"A": "file", "B": "inline", "ONLY_AMBIENT": "yes"}

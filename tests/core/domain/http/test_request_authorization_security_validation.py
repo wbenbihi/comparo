@@ -12,17 +12,25 @@ from comparo.core.domain.capabilities import CapabilityId
 from comparo.core.domain.capabilities import CapabilityOperation
 from comparo.core.domain.capabilities import ExecutionPolicyAuthority
 from comparo.core.domain.http import authorization as authorization_models
+from comparo.core.domain.http import route_authority as route_authority_models
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.authorization import HttpAuthorizationGrant
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
 from comparo.core.domain.http.authorization import MutationApproval
 from comparo.core.domain.http.authorization import ProxyDnsApproval
-from comparo.core.domain.http.authorization import network_destination_identifier
-from comparo.core.domain.http.authorization import proxy_dns_target_identifier
-from comparo.core.domain.http.authorization import resolved_route_identifier
+from comparo.core.domain.http.authorization import SecretEgressApproval
+from comparo.core.domain.http.fields import HeaderField
+from comparo.core.domain.http.fields import HeaderName
+from comparo.core.domain.http.fields import HeaderSource
+from comparo.core.domain.http.fields import HeaderText
+from comparo.core.domain.http.fields import RequestHeaders
 from comparo.core.domain.http.policies import MutationApprovalRequired
 from comparo.core.domain.http.requests import FinalizedWireRequest
+from comparo.core.domain.http.route_authority import network_destination_identifier
+from comparo.core.domain.http.route_authority import proxy_dns_target_identifier
+from comparo.core.domain.http.route_authority import resolved_route_identifier
+from comparo.core.domain.http.secret_egress import http_secret_egress_origins
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import ClientResolvedTarget
 from comparo.core.domain.http.url import DirectResolvedRoute
@@ -38,16 +46,38 @@ from comparo.core.domain.identity import ExchangeId
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.scopes import AttemptScope
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.value_egress import CONFIGURATION_SECRET_MARKER
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_origin
+from comparo.core.domain.value_references import SymbolPath
 from tests.core.domain.http.factories import authority
 from tests.core.domain.http.factories import definition
 from tests.core.domain.http.factories import destination
 from tests.core.domain.http.factories import direct_intent
 from tests.core.domain.http.factories import finalized_request
 from tests.core.domain.http.factories import fingerprint
+from tests.core.domain.http.factories import provenance
 from tests.core.domain.http.factories import proxy_request_and_route
 from tests.core.domain.http.factories import request_occurrence
 
 _OCCURRENCE = request_occurrence()
+
+
+def _sensitive_request(*origins: TaintOriginId) -> FinalizedWireRequest:
+    return finalized_request(
+        headers=RequestHeaders(
+            fields=(
+                HeaderField(
+                    name=HeaderName(value="x-sensitive"),
+                    value=SensitiveValue(HeaderText(value="canary"), origins=origins),
+                    source=HeaderSource.AUTHORED,
+                    provenance=provenance(),
+                ),
+            )
+        )
+    )
 
 
 def test_http_request_occurrence_requires_exact_typed_ids() -> None:
@@ -137,7 +167,7 @@ def test_route_request_binding_rejects_every_mismatch() -> None:
             ),
         )
     with pytest.raises(TypeError, match="route must be ResolvedRoute"):
-        authorization_models._validate_route_request(
+        route_authority_models.validate_route_request(
             cast("ResolvedRoute", object()),
             finalized_request(),
         )
@@ -389,6 +419,82 @@ def test_authorization_intent_validates_all_components_and_approval_bindings() -
             effective_policy_fingerprint=fingerprint("b"),
             mutation_approval=replayed,
         )
+
+
+def test_secret_egress_approval_is_exact_and_required_for_sensitive_requests() -> None:
+    """Reject missing, malformed, unnecessary, or replayed sensitive-data authority."""
+    secret_origin = value_egress_origin(
+        ValueEgressSourceKind.SECRET,
+        SymbolPath(segments=("chat", "token")),
+    )
+    request = _sensitive_request(CONFIGURATION_SECRET_MARKER, secret_origin)
+    route = DirectResolvedRoute(destination=destination())
+    plan = fingerprint("a")
+    policy_authority = authority("b")
+    assert http_secret_egress_origins(request) == (
+        CONFIGURATION_SECRET_MARKER,
+        secret_origin,
+    )
+    with pytest.raises(TypeError, match="requires FinalizedWireRequest"):
+        http_secret_egress_origins(cast("FinalizedWireRequest", object()))
+
+    approval = SecretEgressApproval(
+        request=request,
+        route=route,
+        occurrence=_OCCURRENCE,
+        plan_fingerprint=plan,
+        authority=policy_authority,
+    )
+    assert approval.effective_policy_fingerprint == fingerprint("b")
+    intent = HttpAuthorizationIntent(
+        request=request,
+        route=route,
+        occurrence=_OCCURRENCE,
+        plan_fingerprint=plan,
+        effective_policy_fingerprint=fingerprint("b"),
+        secret_egress_approval=approval,
+    )
+    assert HttpAuthorizationGrant(intent=intent, authority=policy_authority).intent is intent
+
+    without_approval = msgspec.structs.replace(intent, secret_egress_approval=None)
+    with pytest.raises(ValueError, match="requires ExecutionPolicy secret-egress approval"):
+        HttpAuthorizationGrant(intent=without_approval, authority=policy_authority)
+    with pytest.raises(ValueError, match="requires a sensitive HTTP request"):
+        msgspec.structs.replace(approval, request=finalized_request())
+    with pytest.raises(TypeError, match="approval request"):
+        msgspec.structs.replace(approval, request=cast("FinalizedWireRequest", object()))
+    with pytest.raises(TypeError, match="approval route"):
+        msgspec.structs.replace(approval, route=cast("ResolvedRoute", object()))
+    with pytest.raises(TypeError, match="approval occurrence"):
+        msgspec.structs.replace(
+            approval,
+            occurrence=cast("HttpRequestOccurrence", object()),
+        )
+    with pytest.raises(TypeError, match="plan binding"):
+        msgspec.structs.replace(approval, plan_fingerprint=cast("Fingerprint", object()))
+    with pytest.raises(ValueError, match="wrong built-in capability"):
+        msgspec.structs.replace(
+            approval,
+            operation=CapabilityOperation(value="request.inspect"),
+        )
+    with pytest.raises(TypeError, match="must be SecretEgressApproval"):
+        msgspec.structs.replace(
+            intent,
+            secret_egress_approval=cast("SecretEgressApproval", object()),
+        )
+    with pytest.raises(ValueError, match="not bound to this HTTP intent"):
+        msgspec.structs.replace(
+            intent,
+            secret_egress_approval=msgspec.structs.replace(
+                approval,
+                occurrence=request_occurrence(exchange=2),
+            ),
+        )
+    with pytest.raises(ValueError, match="public HTTP requests"):
+        msgspec.structs.replace(intent, request=finalized_request())
+
+    marker_only = _sensitive_request(CONFIGURATION_SECRET_MARKER)
+    assert http_secret_egress_origins(marker_only) == (CONFIGURATION_SECRET_MARKER,)
 
 
 def test_proxy_dns_approval_modes_are_exactly_bound() -> None:

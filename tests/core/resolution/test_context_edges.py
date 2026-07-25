@@ -36,6 +36,8 @@ from comparo.core.domain.provenance import ValueProviderIdentity
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_origin
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import Blocked
@@ -381,6 +383,13 @@ def test_environment_matrix_steps_cycle_and_nonpresent_binding_paths(
             _target(prepared_run),
         )
         assert type(found) is Present
+        assert type(found.value) is SensitiveValue
+        assert found.value.origins == (
+            value_egress_origin(
+                ValueEgressSourceKind.ENVIRONMENT,
+                SymbolPath(segments=("TOKEN",)),
+            ),
+        )
         absent = await context.resolve(
             _lookup(ValueNamespace.ENV, "MISSING", ValueScopeKind.ENVIRONMENT),
             _target(prepared_run),

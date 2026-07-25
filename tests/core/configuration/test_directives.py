@@ -139,6 +139,45 @@ def test_file_fallback_optional_literal_and_value_use_compile_to_closed_nodes() 
     assert diagnostics == ()
 
 
+def test_value_use_in_secret_context_recursively_seals_literal_leaves() -> None:
+    shared, diagnostics = _compile(
+        "{token: literal-secret-canary, nested: [{$from: [fallback-secret-canary, "
+        "{$optional: {$env: MAYBE}}]}], file: {$file: token.txt}, "
+        "converted: {$env: {name: PORT, as: integer}}, "
+        "message: 'public-prefix-${env.SUFFIX}' }"
+    )
+    assert diagnostics == ()
+    assert "literal-secret-canary" in repr(shared)
+    assert "fallback-secret-canary" in repr(shared)
+
+    used, diagnostics = _compile("{$use: shared}", resolver=shared, sensitive=True)
+
+    assert type(used) is ObjectExpr
+    assert "literal-secret-canary" not in repr(used)
+    assert "fallback-secret-canary" not in repr(used)
+    assert diagnostics == ()
+    token = next(member.expression for member in used.members if member.name == "token")
+    nested = next(member.expression for member in used.members if member.name == "nested")
+    file_expression = next(member.expression for member in used.members if member.name == "file")
+    converted = next(member.expression for member in used.members if member.name == "converted")
+    message = next(member.expression for member in used.members if member.name == "message")
+    assert type(token) is SensitiveLiteralExpr
+    assert type(nested) is ArrayExpr
+    assert type(nested.items[0]) is FallbackExpr
+    assert type(nested.items[0].sources[0]) is SensitiveLiteralExpr
+    assert type(nested.items[0].sources[1]) is OptionalExpr
+    assert type(file_expression) is FileExpr
+    assert type(file_expression.path) is LiteralExpr
+    assert type(converted) is ConvertExpr
+    assert type(message) is InterpolationExpr
+    assert shared.provenance == used.provenance
+
+    already_sensitive, diagnostics = _compile("already-sealed", sensitive=True)
+    repeated, diagnostics = _compile("{$use: shared}", resolver=already_sensitive, sensitive=True)
+    assert repeated is already_sensitive
+    assert diagnostics == ()
+
+
 def test_nested_arrays_objects_sensitive_literals_and_optional_positions_are_safe() -> None:
     expression, diagnostics = _compile(
         "{token: literal-secret, nested: [1, {$env: PORT}]}", sensitive=True

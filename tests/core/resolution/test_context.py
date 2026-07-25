@@ -38,6 +38,9 @@ from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import SensitiveValueAccess
 from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.value_egress import CONFIGURATION_SECRET_MARKER
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_origin
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import BytesValue
@@ -190,6 +193,25 @@ def test_layered_namespace_matrix_and_secret_resolution(prepared_run: PreparedRu
             assert type(token) is Present
             assert type(token.value) is SensitiveValue
             assert token.value.reveal(access=_ACCESS) == JsonString(value="hidden")
+            assert CONFIGURATION_SECRET_MARKER not in token.value.origins
+            assert token.value.origins == (
+                value_egress_origin(
+                    ValueEgressSourceKind.SECRET,
+                    SymbolPath(segments=("token",)),
+                ),
+            )
+
+            marked_literal = SensitiveLiteralExpr(
+                value=SensitiveValue(
+                    JsonString(value="marked"),
+                    origins=(CONFIGURATION_SECRET_MARKER,),
+                ),
+                provenance=configuration_provenance(),
+            )
+            outside_secrets = await context.resolve(marked_literal, target)
+            assert type(outside_secrets) is Present
+            assert type(outside_secrets.value) is SensitiveValue
+            assert outside_secrets.value.origins == (CONFIGURATION_SECRET_MARKER,)
             assert (await context.sanitization_snapshot()).revision.value >= 1
 
     _run(scenario())

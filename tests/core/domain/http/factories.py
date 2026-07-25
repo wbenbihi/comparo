@@ -15,6 +15,7 @@ from comparo.core.domain.http.auth import BearerToken
 from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
+from comparo.core.domain.http.authorization import SecretEgressApproval
 from comparo.core.domain.http.bodies import BytesBody
 from comparo.core.domain.http.bodies import FinalizedBody
 from comparo.core.domain.http.bodies import MaterializedBody
@@ -48,6 +49,7 @@ from comparo.core.domain.http.requests import EffectiveRequest
 from comparo.core.domain.http.requests import FinalizedWireRequest
 from comparo.core.domain.http.requests import LogicalRequest
 from comparo.core.domain.http.requests import prove_request_materialization
+from comparo.core.domain.http.secret_egress import http_secret_egress_origins
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import BaseRelativeTarget
 from comparo.core.domain.http.url import ClientResolvedTarget
@@ -380,12 +382,27 @@ def direct_intent(
 ) -> HttpAuthorizationIntent:
     """Build one valid direct-route authorization intent."""
     actual_request = request or finalized_request()
+    route = DirectResolvedRoute(destination=destination())
+    request_occurrence_value = occurrence or request_occurrence()
+    policy_authority = authority()
+    secret_approval = (
+        SecretEgressApproval(
+            request=actual_request,
+            route=route,
+            occurrence=request_occurrence_value,
+            plan_fingerprint=fingerprint("c"),
+            authority=policy_authority,
+        )
+        if http_secret_egress_origins(actual_request)
+        else None
+    )
     return HttpAuthorizationIntent(
         request=actual_request,
-        route=DirectResolvedRoute(destination=destination()),
-        occurrence=occurrence or request_occurrence(),
+        route=route,
+        occurrence=request_occurrence_value,
         plan_fingerprint=fingerprint("c"),
         effective_policy_fingerprint=fingerprint("e"),
+        secret_egress_approval=secret_approval,
     )
 
 

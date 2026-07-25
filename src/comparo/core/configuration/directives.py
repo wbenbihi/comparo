@@ -40,7 +40,7 @@ from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.sensitivity import SensitiveValue
-from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.value_egress import CONFIGURATION_SECRET_MARKER
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import JsonArray
@@ -148,11 +148,85 @@ def _literal_expression(
         return SensitiveLiteralExpr(
             value=SensitiveValue(
                 exact,
-                origins=(TaintOriginId(value="configuration/secret"),),
+                origins=(CONFIGURATION_SECRET_MARKER,),
             ),
             provenance=provenance,
         )
     return LiteralExpr(value=exact, provenance=provenance)
+
+
+def seal_expression_literals(expression: ValueExpression) -> ValueExpression:
+    """Return an expression tree whose authored output literals are sealed as secrets.
+
+    Value resources are compiled independently of their consumers.  When one is reused from a
+    secret namespace, its literal leaves therefore need the same sensitivity treatment they
+    would have received if they had been authored inline.  Lookups remain lookups so provider
+    provenance is retained at resolution time; all expression provenance is preserved exactly.
+    File paths remain public control inputs, matching an inline secret ``$file`` declaration.
+    """
+    if type(expression) is LiteralExpr:
+        return SensitiveLiteralExpr(
+            value=SensitiveValue(
+                expression.value,
+                origins=(CONFIGURATION_SECRET_MARKER,),
+            ),
+            provenance=expression.provenance,
+        )
+    if type(expression) is SensitiveLiteralExpr:
+        return expression
+    if type(expression) is LookupExpr:
+        return expression
+    if type(expression) is FileExpr:
+        return FileExpr(
+            path=expression.path,
+            conversion=expression.conversion,
+            trim=expression.trim,
+            maximum_bytes=expression.maximum_bytes,
+            provenance=expression.provenance,
+        )
+    if type(expression) is FallbackExpr:
+        return FallbackExpr(
+            sources=tuple(seal_expression_literals(source) for source in expression.sources),
+            provenance=expression.provenance,
+        )
+    if type(expression) is OptionalExpr:
+        return OptionalExpr(
+            source=seal_expression_literals(expression.source),
+            provenance=expression.provenance,
+        )
+    if type(expression) is ConvertExpr:
+        return ConvertExpr(
+            source=seal_expression_literals(expression.source),
+            target=expression.target,
+            provenance=expression.provenance,
+        )
+    if type(expression) is ArrayExpr:
+        return ArrayExpr(
+            items=tuple(seal_expression_literals(item) for item in expression.items),
+            provenance=expression.provenance,
+        )
+    if type(expression) is ObjectExpr:
+        return ObjectExpr(
+            members=tuple(
+                ObjectExpressionMember(
+                    name=member.name,
+                    expression=seal_expression_literals(member.expression),
+                )
+                for member in expression.members
+            ),
+            provenance=expression.provenance,
+        )
+    interpolation = expression
+    return InterpolationExpr(
+        mode=interpolation.mode,
+        segments=tuple(
+            ExpressionSegment(expression=seal_expression_literals(segment.expression))
+            if type(segment) is ExpressionSegment
+            else segment
+            for segment in interpolation.segments
+        ),
+        provenance=interpolation.provenance,
+    )
 
 
 def _mapping_fields(node: MappingNode) -> dict[str, ConfigurationNode]:
@@ -446,7 +520,7 @@ def _directive(
         if resolved is None:
             diagnostics.append(_issue(_REFERENCE_INVALID, argument.span))
             return _literal_expression(argument, owner=owner, sensitive_literals=False)
-        return resolved
+        return seal_expression_literals(resolved) if sensitive_literals else resolved
     diagnostics.append(
         _issue(_UNSUPPORTED if directive in _FUTURE_DIRECTIVES else _UNKNOWN, argument.span)
     )

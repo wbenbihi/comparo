@@ -54,7 +54,10 @@ from comparo.core.domain.values import JsonString
 from comparo.core.planning import plan_run
 from comparo.core.planning.fingerprints import _expression
 from comparo.core.planning.fingerprints import _identities
+from comparo.core.planning.fingerprints import _optional_secret_expression
 from tests.core.planning.conftest import authority
+from tests.core.planning.conftest import compile_project
+from tests.core.planning.conftest import document
 from tests.core.planning.conftest import invocation
 
 
@@ -181,6 +184,74 @@ def test_plan_fingerprint_binds_values_budgets_and_authority_projection(
     changed = plan_run(comparison_project, invocation(), changed_authority).prepared
     assert changed is not None
     assert changed.plan.fingerprint != plain.plan.fingerprint
+
+
+def test_value_reused_as_project_secret_is_absent_from_plan_fingerprint_artifacts() -> None:
+    canary = "value-use-plan-fingerprint-secret-canary"
+    fragment_canary = "interpolation-fragment-plan-fingerprint-secret-canary"
+    project = compile_project(
+        document(
+            "Project",
+            "demo",
+            "{secrets: {$use: shared}, defaults: {subjects: [{$use: Request/check}], "
+            "environments: [{$use: dev}]}}",
+        ),
+        document("Environment", "dev", "{baseUrl: 'https://api.example.test'}"),
+        document("Request", "check", "{request: {method: GET, endpoint: /}}"),
+        document(
+            "Value",
+            "shared",
+            f"{{value: {{token: {canary}, embedded: '{fragment_canary}-${{env.SUFFIX}}'}}}}",
+        ),
+    )
+
+    prepared = plan_run(project, invocation(), authority()).prepared
+
+    assert prepared is not None
+    secret_expression = next(
+        layer.secrets for layer in prepared.effective.value_layers if layer.secrets is not None
+    )
+    fingerprint_input = _optional_secret_expression(secret_expression)
+    assert canary not in repr(fingerprint_input)
+    assert fragment_canary not in repr(fingerprint_input)
+    assert canary not in prepared.plan.fingerprint.digest.hex_value
+    assert fragment_canary not in prepared.plan.fingerprint.digest.hex_value
+    assert type(secret_expression) is ObjectExpr
+    assert type(secret_expression.members[0].expression) is SensitiveLiteralExpr
+    embedded = secret_expression.members[1].expression
+    assert type(embedded) is InterpolationExpr
+    assert fragment_canary in repr(_expression(embedded))
+
+
+def test_inline_environment_value_rotation_is_hash_blind_for_definition_and_plan() -> None:
+    def project_with(token: str) -> CompiledProject:
+        return compile_project(
+            document(
+                "Project",
+                "demo",
+                "{defaults: {subjects: [{$use: Request/check}], environments: [{$use: dev}]}}",
+            ),
+            document(
+                "Environment",
+                "dev",
+                f"{{baseUrl: 'https://api.example.test', env: {{values: {{TOKEN: {token}}}}}" + "}",
+            ),
+            document("Request", "check", "{request: {method: GET, endpoint: /}}"),
+        )
+
+    first = project_with("one")
+    second = project_with("two")
+    first_environment = first.find(ResourceKind.ENVIRONMENT, ResourceId(value="dev"))
+    second_environment = second.find(ResourceKind.ENVIRONMENT, ResourceId(value="dev"))
+    assert first_environment is not None
+    assert second_environment is not None
+    assert first_environment.definition == second_environment.definition
+
+    first_prepared = plan_run(first, invocation(), authority()).prepared
+    second_prepared = plan_run(second, invocation(), authority()).prepared
+    assert first_prepared is not None
+    assert second_prepared is not None
+    assert first_prepared.plan.fingerprint == second_prepared.plan.fingerprint
 
 
 def test_authority_identity_encoding_distinguishes_unbounded_and_empty_allowlists() -> None:

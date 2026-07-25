@@ -40,6 +40,10 @@ from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import SourceLocation
+from comparo.core.domain.value_egress import ValueEgressSource
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_source
+from comparo.core.domain.value_references import SymbolPath
 from comparo.core.policy.models import PLANNING_RESOURCES
 from comparo.core.policy.models import POLICY_API_VERSION
 from comparo.core.policy.models import AmbientEnvironmentPolicy
@@ -50,6 +54,8 @@ from comparo.core.policy.models import PolicyCompilationResult
 from comparo.core.policy.models import PolicyHttp
 from comparo.core.policy.models import PolicyPlanning
 from comparo.core.policy.models import PolicyResourceSelector
+from comparo.core.policy.models import PolicySecretEgress
+from comparo.core.policy.models import PolicySecretEgressRule
 from comparo.core.policy.models import PolicyValues
 from comparo.core.policy.models import RemoteSchemaPolicy
 
@@ -382,7 +388,12 @@ class _PolicyCompiler:
         )
 
     def _values(self, node: ConfigurationNode | None) -> PolicyValues | None:
-        required = {"ambientEnvironment", "allowProjectFiles", "remoteSchemas"}
+        required = {
+            "ambientEnvironment",
+            "allowProjectFiles",
+            "remoteSchemas",
+            "secretEgress",
+        }
         fields = self._object(
             node,
             prefix="policy.values",
@@ -397,12 +408,14 @@ class _PolicyCompiler:
             code="policy.values.project-files",
         )
         remote = self._remote_schemas(fields.get("remoteSchemas"))
-        if ambient is None or project_files is None or remote is None:
+        secret_egress = self._secret_egress(fields.get("secretEgress"))
+        if ambient is None or project_files is None or remote is None or secret_egress is None:
             return None
         return PolicyValues(
             ambient_environment=ambient,
             allow_project_files=project_files,
             remote_schemas=remote,
+            secret_egress=secret_egress,
         )
 
     def _ambient_environment(
@@ -469,6 +482,181 @@ class _PolicyCompiler:
             allow_any=allow_any,
         )
 
+    def _secret_egress(self, node: ConfigurationNode | None) -> PolicySecretEgress | None:
+        fields = self._object(
+            node,
+            prefix="policy.values.secret-egress",
+            allowed={"rules", "allowAny"},
+            required={"rules", "allowAny"},
+        )
+        if fields is None:
+            return None
+        allow_any = self._boolean(
+            fields.get("allowAny"),
+            code="policy.values.secret-egress-flag",
+        )
+        rules_node = fields.get("rules")
+        if type(rules_node) is not SequenceNode:
+            self._add("policy.values.secret-egress-rule", self._span(rules_node))
+            return None
+        rules = tuple(
+            rule
+            for item in rules_node.items
+            if (rule := self._secret_egress_rule(item)) is not None
+        )
+        if allow_any is None:
+            return None
+        if len(rules) != len(rules_node.items):
+            return None
+        if allow_any and rules:
+            self._add("policy.values.secret-egress-conflict", rules_node.span)
+            return None
+        canonical = tuple(sorted(rules, key=_egress_rule_sort_key))
+        if len(canonical) != len(set(canonical)):
+            self._add("policy.value.duplicate", rules_node.span)
+            return None
+        return PolicySecretEgress(rules=canonical, allow_any=allow_any)
+
+    def _secret_egress_rule(
+        self,
+        node: ConfigurationNode,
+    ) -> PolicySecretEgressRule | None:
+        required = {
+            "sources",
+            "allowedSchemes",
+            "allowedMethods",
+            "allowedHosts",
+            "allowedPorts",
+        }
+        fields = self._object(
+            node,
+            prefix="policy.values.secret-egress-rule",
+            allowed=required,
+            required=required,
+        )
+        if fields is None:
+            return None
+        sources = self._secret_egress_sources(fields.get("sources"))
+        schemes = self._enum_list(
+            fields.get("allowedSchemes"),
+            HttpScheme,
+            code="policy.values.secret-egress-scheme",
+        )
+        methods = self._methods(
+            fields.get("allowedMethods"),
+            code="policy.values.secret-egress-method",
+        )
+        hosts = self._hosts(
+            fields.get("allowedHosts"),
+            code="policy.values.secret-egress-host",
+        )
+        ports = self._ports(
+            fields.get("allowedPorts"),
+            code="policy.values.secret-egress-port",
+        )
+        if any(value is None for value in (sources, schemes, methods, hosts, ports)):
+            return None
+        self._require_nonempty_secret_egress_fields(
+            fields,
+            sources=cast("tuple[object, ...]", sources),
+            schemes=cast("tuple[HttpScheme, ...]", schemes),
+            methods=cast("tuple[HttpMethod, ...]", methods),
+            hosts=cast("tuple[HttpHost, ...]", hosts),
+            ports=cast("tuple[HttpPort, ...]", ports),
+        )
+        if self._diagnostics:
+            return None
+        return PolicySecretEgressRule(
+            sources=cast("tuple[ValueEgressSource, ...]", sources),
+            allowed_schemes=cast("tuple[HttpScheme, ...]", schemes),
+            allowed_methods=cast("tuple[HttpMethod, ...]", methods),
+            allowed_hosts=cast("tuple[HttpHost, ...]", hosts),
+            allowed_ports=cast("tuple[HttpPort, ...]", ports),
+        )
+
+    def _secret_egress_sources(
+        self,
+        node: ConfigurationNode | None,
+    ) -> tuple[ValueEgressSource, ...] | None:
+        if type(node) is not SequenceNode:
+            self._add("policy.values.secret-egress-source", self._span(node))
+            return None
+        groups = tuple(self._secret_egress_source_entry(item) for item in node.items)
+        if any(group is None for group in groups):
+            return None
+        sources = tuple(
+            source
+            for group in cast("tuple[tuple[ValueEgressSource, ...], ...]", groups)
+            for source in group
+        )
+        canonical = tuple(sorted(sources, key=_egress_source_sort_key))
+        if not canonical:
+            self._add("policy.values.secret-egress-source", node.span)
+            return None
+        if len(canonical) != len(set(canonical)):
+            self._add("policy.value.duplicate", node.span)
+            return None
+        return canonical
+
+    def _secret_egress_source_entry(
+        self,
+        node: ConfigurationNode,
+    ) -> tuple[ValueEgressSource, ...] | None:
+        fields = self._object(
+            node,
+            prefix="policy.values.secret-egress-source",
+            allowed={"source", "names"},
+            required={"source", "names"},
+        )
+        if fields is None:
+            return None
+        source_text = self._text(
+            fields.get("source"),
+            code="policy.values.secret-egress-source",
+        )
+        names = self._string_list(
+            fields.get("names"),
+            code="policy.values.secret-egress-name",
+            validator=_valid_egress_name,
+        )
+        if source_text is None or names is None:
+            return None
+        try:
+            kind = ValueEgressSourceKind(source_text)
+        except ValueError:
+            self._add("policy.values.secret-egress-source", fields["source"].span)
+            return None
+        if not names or (
+            kind is ValueEgressSourceKind.ENVIRONMENT
+            and any(_ENVIRONMENT_NAME.fullmatch(name) is None for name in names)
+        ):
+            self._add("policy.values.secret-egress-name", fields["names"].span)
+            return None
+        return tuple(
+            value_egress_source(kind, SymbolPath(segments=tuple(name.split(".")))) for name in names
+        )
+
+    def _require_nonempty_secret_egress_fields(
+        self,
+        fields: dict[str, ConfigurationNode],
+        *,
+        sources: tuple[object, ...],
+        schemes: tuple[HttpScheme, ...],
+        methods: tuple[HttpMethod, ...],
+        hosts: tuple[HttpHost, ...],
+        ports: tuple[HttpPort, ...],
+    ) -> None:
+        checks = (
+            (sources, "source", "sources"),
+            (schemes, "scheme", "allowedSchemes"),
+            (methods, "method", "allowedMethods"),
+            (hosts, "host", "allowedHosts"),
+            (ports, "port", "allowedPorts"),
+        )
+        for values, code, field in checks:
+            if not values:
+                self._add(f"policy.values.secret-egress-{code}", fields[field].span)
+
     def _artifacts(self, node: ConfigurationNode | None) -> PolicyArtifacts | None:
         fields = self._object(
             node,
@@ -494,20 +682,30 @@ class _PolicyCompiler:
             return None
         return PolicyArtifacts(allow_sanitized_persistence=allowed, roots=roots)
 
-    def _methods(self, node: ConfigurationNode | None) -> tuple[HttpMethod, ...] | None:
+    def _methods(
+        self,
+        node: ConfigurationNode | None,
+        *,
+        code: str = "policy.http.method",
+    ) -> tuple[HttpMethod, ...] | None:
         values = self._string_list(
             node,
-            code="policy.http.method",
+            code=code,
             validator=_valid_method,
         )
         if values is None:
             return None
         return tuple(HttpMethod(value=value) for value in values)
 
-    def _hosts(self, node: ConfigurationNode | None) -> tuple[HttpHost, ...] | None:
+    def _hosts(
+        self,
+        node: ConfigurationNode | None,
+        *,
+        code: str = "policy.http.host",
+    ) -> tuple[HttpHost, ...] | None:
         values = self._string_list(
             node,
-            code="policy.http.host",
+            code=code,
             validator=_valid_host,
         )
         if values is None:
@@ -515,21 +713,26 @@ class _PolicyCompiler:
         hosts = tuple(_host(value) for value in values)
         return tuple(sorted(hosts, key=lambda item: (type(item).__name__, item.value)))
 
-    def _ports(self, node: ConfigurationNode | None) -> tuple[HttpPort, ...] | None:
+    def _ports(
+        self,
+        node: ConfigurationNode | None,
+        *,
+        code: str = "policy.http.port",
+    ) -> tuple[HttpPort, ...] | None:
         if type(node) is not SequenceNode:
-            self._add("policy.http.port", self._span(node))
+            self._add(code, self._span(node))
             return None
         ports: list[HttpPort] = []
         valid = True
         for item in node.items:
             if type(item) is not ScalarNode or type(item.value) is not int:
-                self._add("policy.http.port", item.span)
+                self._add(code, item.span)
                 valid = False
                 continue
             try:
                 ports.append(HttpPort(value=item.value))
             except (TypeError, ValueError):
-                self._add("policy.http.port", item.span)
+                self._add(code, item.span)
                 valid = False
         if not valid:
             return None
@@ -725,6 +928,30 @@ def policy_fingerprint(
                 "sources": [item.identifier for item in values.remote_schemas.sources],
                 "allowAny": values.remote_schemas.allow_any,
             },
+            "secretEgress": {
+                "allowAny": values.secret_egress.allow_any,
+                "rules": [
+                    {
+                        "sources": [
+                            {
+                                "source": kind.value,
+                                "names": [
+                                    ".".join(source.symbol.segments)
+                                    for source in rule.sources
+                                    if source.kind is kind
+                                ],
+                            }
+                            for kind in ValueEgressSourceKind
+                            if any(source.kind is kind for source in rule.sources)
+                        ],
+                        "allowedSchemes": [item.value for item in rule.allowed_schemes],
+                        "allowedMethods": [item.value for item in rule.allowed_methods],
+                        "allowedHosts": [item.value for item in rule.allowed_hosts],
+                        "allowedPorts": [item.value for item in rule.allowed_ports],
+                    }
+                    for rule in values.secret_egress.rules
+                ],
+            },
         },
         "artifacts": {
             "allowSanitizedPersistence": artifacts.allow_sanitized_persistence,
@@ -774,6 +1001,33 @@ def _valid_slug(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _valid_egress_name(value: str) -> bool:
+    if len(value) > 255:
+        return False
+    try:
+        SymbolPath(segments=tuple(value.split(".")))
+    except ValueError:
+        return False
+    return True
+
+
+def _egress_rule_sort_key(rule: PolicySecretEgressRule) -> tuple[object, ...]:
+    return (
+        tuple(
+            (source.kind.value, source.provider.name, source.symbol.segments)
+            for source in rule.sources
+        ),
+        tuple(item.value for item in rule.allowed_schemes),
+        tuple(item.value for item in rule.allowed_methods),
+        tuple((type(item).__name__, item.value) for item in rule.allowed_hosts),
+        tuple(item.value for item in rule.allowed_ports),
+    )
+
+
+def _egress_source_sort_key(source: ValueEgressSource) -> tuple[str, tuple[str, ...]]:
+    return source.kind.value, source.symbol.segments
 
 
 def _valid_method(value: str) -> bool:

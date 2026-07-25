@@ -34,6 +34,8 @@ from comparo.core.resolution.models import ProviderPresent
 from comparo.core.resolution.provenance import LITERAL_PROVIDER
 from comparo.core.resolution.provenance import present
 from comparo.core.resolution.provenance import resolution_source
+from comparo.core.resolution.provider_runtime import reveal
+from comparo.core.resolution.provider_runtime import seal
 from comparo.core.resolution.registry import SensitiveValueRegistry
 from tests.core.resolution.conftest import configuration_provenance
 from tests.core.resolution.test_scopes_and_snapshots import _coordinates
@@ -119,6 +121,19 @@ def test_run_cancellation_is_typed_first_wins_and_waitable() -> None:
             cancellation.cancel(invalid_source)
 
     _run(scenario())
+
+
+def test_sealing_an_already_sensitive_value_unions_new_lineage() -> None:
+    first = TaintOriginId(value="test/first-origin")
+    second = TaintOriginId(value="test/second-origin")
+    original = SensitiveValue(JsonString(value="sealed"), origins=(first,))
+
+    updated = seal(cast("SensitiveValue[ResolvedValue]", original), second)
+
+    assert updated is not original
+    assert updated.origins == (first, second)
+    assert reveal(updated) == JsonString(value="sealed")
+    assert seal(updated, second) is updated
 
 
 def test_deterministic_generator_covers_every_scope_and_secure_rejection(

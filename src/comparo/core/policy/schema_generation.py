@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from comparo.core.domain.http.url import HttpScheme
+from comparo.core.domain.value_egress import ValueEgressSourceKind
 from comparo.core.policy.models import PLANNING_RESOURCES
 from comparo.core.policy.models import POLICY_API_VERSION
 from comparo.core.policy.models import NetworkAddressClass
@@ -25,11 +26,19 @@ def _strict_object(
     }
 
 
-def _string_list(*, pattern: str, maximum: int | None = None) -> JsonSchema:
+def _string_list(
+    *,
+    pattern: str,
+    maximum: int | None = None,
+    minimum_items: int | None = None,
+) -> JsonSchema:
     item: JsonSchema = {"type": "string", "minLength": 1, "pattern": pattern}
     if maximum is not None:
         item["maxLength"] = maximum
-    return {"type": "array", "items": item, "uniqueItems": True}
+    result: JsonSchema = {"type": "array", "items": item, "uniqueItems": True}
+    if minimum_items is not None:
+        result["minItems"] = minimum_items
+    return result
 
 
 def generate_policy_schema() -> JsonSchema:
@@ -147,13 +156,97 @@ def generate_policy_schema() -> JsonSchema:
         },
         required=("sources", "allowAny"),
     )
+    secret_egress_source = {
+        "oneOf": [
+            _strict_object(
+                {
+                    "source": {"const": ValueEgressSourceKind.ENVIRONMENT.value},
+                    "names": _string_list(
+                        pattern="^[A-Za-z_][A-Za-z0-9_]*$",
+                        maximum=255,
+                        minimum_items=1,
+                    ),
+                },
+                required=("source", "names"),
+            ),
+            _strict_object(
+                {
+                    "source": {"const": ValueEgressSourceKind.SECRET.value},
+                    "names": _string_list(
+                        pattern=("^[A-Za-z_][A-Za-z0-9_-]*(?:\\.[A-Za-z_][A-Za-z0-9_-]*)*$"),
+                        maximum=255,
+                        minimum_items=1,
+                    ),
+                },
+                required=("source", "names"),
+            ),
+        ]
+    }
+    secret_egress_rule = _strict_object(
+        {
+            "sources": {
+                "type": "array",
+                "items": secret_egress_source,
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "allowedSchemes": {
+                "type": "array",
+                "items": {"enum": [item.value for item in HttpScheme]},
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "allowedMethods": {
+                "type": "array",
+                "items": {"type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]+$"},
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "allowedHosts": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 253},
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "allowedPorts": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 1, "maximum": 65_535},
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+        },
+        required=(
+            "sources",
+            "allowedSchemes",
+            "allowedMethods",
+            "allowedHosts",
+            "allowedPorts",
+        ),
+    )
+    secret_egress = _strict_object(
+        {
+            "rules": {
+                "type": "array",
+                "items": secret_egress_rule,
+                "uniqueItems": True,
+            },
+            "allowAny": {"type": "boolean"},
+        },
+        required=("rules", "allowAny"),
+    )
     values = _strict_object(
         {
             "ambientEnvironment": allowlist,
             "allowProjectFiles": {"type": "boolean"},
             "remoteSchemas": remote_schemas,
+            "secretEgress": secret_egress,
         },
-        required=("ambientEnvironment", "allowProjectFiles", "remoteSchemas"),
+        required=(
+            "ambientEnvironment",
+            "allowProjectFiles",
+            "remoteSchemas",
+            "secretEgress",
+        ),
     )
     artifacts = _strict_object(
         {

@@ -276,12 +276,140 @@
                 "allowAny"
               ],
               "type": "object"
+            },
+            "secretEgress": {
+              "additionalProperties": false,
+              "properties": {
+                "allowAny": {
+                  "type": "boolean"
+                },
+                "rules": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "allowedHosts": {
+                        "items": {
+                          "maxLength": 253,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "allowedMethods": {
+                        "items": {
+                          "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]+$",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "allowedPorts": {
+                        "items": {
+                          "maximum": 65535,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "allowedSchemes": {
+                        "items": {
+                          "enum": [
+                            "http",
+                            "https"
+                          ]
+                        },
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "sources": {
+                        "items": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "names": {
+                                  "items": {
+                                    "maxLength": 255,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                                    "type": "string"
+                                  },
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "source": {
+                                  "const": "environment"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "names"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "names": {
+                                  "items": {
+                                    "maxLength": 255,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z_][A-Za-z0-9_-]*(?:\\.[A-Za-z_][A-Za-z0-9_-]*)*$",
+                                    "type": "string"
+                                  },
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "source": {
+                                  "const": "secret"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "names"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "sources",
+                      "allowedSchemes",
+                      "allowedMethods",
+                      "allowedHosts",
+                      "allowedPorts"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "rules",
+                "allowAny"
+              ],
+              "type": "object"
             }
           },
           "required": [
             "ambientEnvironment",
             "allowProjectFiles",
-            "remoteSchemas"
+            "remoteSchemas",
+            "secretEgress"
           ],
           "type": "object"
         }

@@ -30,6 +30,7 @@ from comparo.core.domain.metadata import Metadata
 from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import PlanningBudgetValue
 from comparo.core.domain.provenance import SourceLocation
+from comparo.core.domain.value_egress import ValueEgressSource
 
 POLICY_API_VERSION = "comparo.policy/v1alpha1"
 
@@ -201,12 +202,66 @@ class RemoteSchemaPolicy(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class PolicySecretEgressRule(msgspec.Struct, frozen=True, kw_only=True):
+    """Destination-bound authority for named sensitive value sources."""
+
+    sources: tuple[ValueEgressSource, ...]
+    allowed_schemes: tuple[HttpScheme, ...]
+    allowed_methods: tuple[HttpMethod, ...]
+    allowed_hosts: tuple[HttpHost, ...]
+    allowed_ports: tuple[HttpPort, ...]
+
+    def __post_init__(self) -> None:
+        """Require exact sources and a non-empty canonical destination contract."""
+        if type(self.sources) is not tuple or any(
+            type(source) is not ValueEgressSource for source in self.sources
+        ):
+            raise TypeError("secret egress sources must be immutable and typed")
+        if not self.sources or self.sources != tuple(
+            sorted(set(self.sources), key=_egress_source_sort_key)
+        ):
+            raise ValueError("secret egress sources must be non-empty, unique, and canonical")
+        _validate_enum_values(self.allowed_schemes, HttpScheme, "egress schemes")
+        _validate_methods(self.allowed_methods)
+        _validate_hosts(self.allowed_hosts)
+        if not self.allowed_hosts:
+            raise ValueError("secret egress hosts must be non-empty")
+        _validate_ports(self.allowed_ports)
+        if not self.allowed_ports:
+            raise ValueError("secret egress ports must be non-empty")
+
+
+@final
+class PolicySecretEgress(msgspec.Struct, frozen=True, kw_only=True):
+    """Explicit operator authority for sending sealed values in HTTP requests."""
+
+    rules: tuple[PolicySecretEgressRule, ...]
+    allow_any: bool
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous wildcard authority and non-canonical duplicate rules."""
+        if type(self.rules) is not tuple or any(
+            type(rule) is not PolicySecretEgressRule for rule in self.rules
+        ):
+            raise TypeError("secret egress rules must be immutable and typed")
+        if self.rules != tuple(sorted(set(self.rules), key=_egress_rule_sort_key)):
+            raise ValueError("secret egress rules must be unique and canonical")
+        if type(self.allow_any) is not bool:
+            raise TypeError("secret egress allowAny must be bool")
+        if self.allow_any and self.rules:
+            raise ValueError("secret egress allowAny cannot retain redundant rules")
+
+
+@final
 class PolicyValues(msgspec.Struct, frozen=True, kw_only=True):
     """External value-source authority independent from namespace precedence."""
 
     ambient_environment: AmbientEnvironmentPolicy
     allow_project_files: bool
     remote_schemas: RemoteSchemaPolicy
+    secret_egress: PolicySecretEgress = msgspec.field(
+        default_factory=lambda: PolicySecretEgress(rules=(), allow_any=False)
+    )
 
     def __post_init__(self) -> None:
         """Require explicit typed value-source policy sections."""
@@ -216,6 +271,8 @@ class PolicyValues(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("policy project-file permission must be bool")
         if type(self.remote_schemas) is not RemoteSchemaPolicy:
             raise TypeError("policy remote schema section must be typed")
+        if type(self.secret_egress) is not PolicySecretEgress:
+            raise TypeError("policy secret egress section must be typed")
 
 
 @final
@@ -391,6 +448,22 @@ def _host_sort_key(host: HttpHost) -> tuple[str, str]:
     return type(host).__name__, host.value
 
 
+def _egress_source_sort_key(source: ValueEgressSource) -> tuple[str, str, tuple[str, ...]]:
+    return source.kind.value, source.provider.name, source.symbol.segments
+
+
+def _egress_rule_sort_key(
+    rule: PolicySecretEgressRule,
+) -> tuple[object, ...]:
+    return (
+        tuple(_egress_source_sort_key(source) for source in rule.sources),
+        tuple(item.value for item in rule.allowed_schemes),
+        tuple(item.value for item in rule.allowed_methods),
+        tuple(_host_sort_key(item) for item in rule.allowed_hosts),
+        tuple(item.value for item in rule.allowed_ports),
+    )
+
+
 def _is_absolute_root(value: object) -> bool:
     if type(value) is not str or not value or len(value) > 4096:
         return False
@@ -420,6 +493,8 @@ __all__ = (
     "PolicyHttp",
     "PolicyPlanning",
     "PolicyResourceSelector",
+    "PolicySecretEgress",
+    "PolicySecretEgressRule",
     "PolicyValues",
     "RemoteSchemaPolicy",
     "is_policy_host",

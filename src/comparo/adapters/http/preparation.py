@@ -16,6 +16,7 @@ from comparo.core.domain.http.authorization import HttpAuthorizationGrant
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
 from comparo.core.domain.http.authorization import MutationApproval
+from comparo.core.domain.http.authorization import SecretEgressApproval
 from comparo.core.domain.http.policies import MutationApprovalRequired
 from comparo.core.domain.http.policies import NoProxy
 from comparo.core.domain.http.pre_send import AuthorizedResolutionRequest
@@ -26,6 +27,7 @@ from comparo.core.domain.http.pre_send import HttpResolutionFailure
 from comparo.core.domain.http.pre_send import HttpResolutionGrant
 from comparo.core.domain.http.pre_send import HttpResolutionIntent
 from comparo.core.domain.http.requests import FinalizedWireRequest
+from comparo.core.domain.http.secret_egress import http_secret_egress_origins
 from comparo.core.domain.http.timings import HttpExchangeTimings
 from comparo.core.domain.http.timings import TimingUnavailable
 from comparo.core.domain.http.timings import TimingUnavailableReason
@@ -47,6 +49,7 @@ from comparo.core.policy import NetworkAddressClass
 _RESOLUTION_DENIED = DiagnosticCode(value="http.policy-resolution-denied")
 _DESTINATION_DENIED = DiagnosticCode(value="http.policy-destination-denied")
 _MUTATION_DENIED = DiagnosticCode(value="http.policy-mutation-approval-required")
+_SECRET_EGRESS_DENIED = DiagnosticCode(value="http.policy-secret-egress-denied")
 _DNS_FAILED = DiagnosticCode(value="http.dns-failed")
 
 
@@ -145,6 +148,13 @@ class PolicyHttpExchangePreparer:
                 code=_RESOLUTION_DENIED,
                 timings=_unavailable_timings(),
             )
+        if not _secret_egress_allowed(self._policy, request):
+            return HttpResolutionDenial(
+                intent=resolution_intent,
+                authority=self._authority,
+                code=_SECRET_EGRESS_DENIED,
+                timings=_unavailable_timings(),
+            )
         resolution_grant = HttpResolutionGrant(
             intent=resolution_intent,
             authority=self._authority,
@@ -173,6 +183,7 @@ class PolicyHttpExchangePreparer:
         )
         route = DirectResolvedRoute(destination=destination)
         approval = self._mutation_approval(request, occurrence, route)
+        secret_egress_approval = self._secret_egress_approval(request, occurrence, route)
         intent = HttpAuthorizationIntent(
             request=request,
             route=route,
@@ -180,6 +191,7 @@ class PolicyHttpExchangePreparer:
             plan_fingerprint=self._plan,
             effective_policy_fingerprint=self._policy.definition.fingerprint,
             mutation_approval=approval,
+            secret_egress_approval=secret_egress_approval,
         )
         if _mutation_required(self._policy, request) and approval is None:
             if type(request.policies.mutation_approval) is MutationApprovalRequired:
@@ -232,6 +244,22 @@ class PolicyHttpExchangePreparer:
             authority=self._authority,
         )
 
+    def _secret_egress_approval(
+        self,
+        request: FinalizedWireRequest,
+        occurrence: HttpRequestOccurrence,
+        route: DirectResolvedRoute,
+    ) -> SecretEgressApproval | None:
+        if not http_secret_egress_origins(request):
+            return None
+        return SecretEgressApproval(
+            request=request,
+            route=route,
+            occurrence=occurrence,
+            plan_fingerprint=self._plan,
+            authority=self._authority,
+        )
+
     async def close(self) -> None:
         """Close the resolver exactly once."""
         if self._closed:
@@ -271,6 +299,29 @@ def _mutation_required(
         "OPTIONS",
         "TRACE",
     }
+
+
+def _secret_egress_allowed(
+    policy: CompiledExecutionPolicy,
+    request: FinalizedWireRequest,
+) -> bool:
+    origins = http_secret_egress_origins(request)
+    if not origins or policy.values.secret_egress.allow_any:
+        return True
+    scheme = request.url.scheme
+    method = request.method
+    host = request.url.authority.host
+    port = effective_port(request.url)
+    allowed_origins = {
+        source.origin
+        for rule in policy.values.secret_egress.rules
+        if scheme in rule.allowed_schemes
+        and method in rule.allowed_methods
+        and host in rule.allowed_hosts
+        and port in rule.allowed_ports
+        for source in rule.sources
+    }
+    return frozenset(origins).issubset(allowed_origins)
 
 
 def _addresses_allowed(

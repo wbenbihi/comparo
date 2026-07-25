@@ -92,7 +92,7 @@ def plan_fingerprint(
                 ),
                 "parameters": _optional_expression(layer.parameters),
                 "variables": _optional_expression(layer.variables),
-                "secrets": _optional_expression(layer.secrets),
+                "secrets": _optional_secret_expression(layer.secrets),
             }
             for layer in effective.value_layers
         ],
@@ -179,10 +179,14 @@ def _optional_expression(expression: ValueExpression | None) -> object:
     return None if expression is None else _expression(expression)
 
 
-def _expression(expression: ValueExpression) -> object:
+def _optional_secret_expression(expression: ValueExpression | None) -> object:
+    return None if expression is None else _expression(expression, sensitive_context=True)
+
+
+def _expression(expression: ValueExpression, *, sensitive_context: bool = False) -> object:
     """Return a stable semantic shape without ever opening a sensitive literal."""
     if type(expression) is LiteralExpr:
-        return ["literal", _exact_value(expression.value)]
+        return _literal_expression(expression, sensitive_context=sensitive_context)
     if type(expression) is SensitiveLiteralExpr:
         return [
             "sensitive-literal",
@@ -200,34 +204,68 @@ def _expression(expression: ValueExpression) -> object:
     if type(expression) is FileExpr:
         return [
             "file",
+            # The path is a public control input, not output data from the secret expression.
             _expression(expression.path),
             None if expression.conversion is None else expression.conversion.value,
             expression.trim.value,
             None if expression.maximum_bytes is None else expression.maximum_bytes.value,
         ]
     if type(expression) is FallbackExpr:
-        return ["fallback", [_expression(source) for source in expression.sources]]
+        return [
+            "fallback",
+            [
+                _expression(source, sensitive_context=sensitive_context)
+                for source in expression.sources
+            ],
+        ]
     if type(expression) is OptionalExpr:
-        return ["optional", _expression(expression.source)]
+        return [
+            "optional",
+            _expression(expression.source, sensitive_context=sensitive_context),
+        ]
     if type(expression) is ConvertExpr:
-        return ["convert", expression.target.value, _expression(expression.source)]
+        return [
+            "convert",
+            expression.target.value,
+            _expression(expression.source, sensitive_context=sensitive_context),
+        ]
     if type(expression) is ArrayExpr:
-        return ["array", [_expression(item) for item in expression.items]]
+        return [
+            "array",
+            [_expression(item, sensitive_context=sensitive_context) for item in expression.items],
+        ]
     if type(expression) is ObjectExpr:
         return [
             "object",
-            [[member.name, _expression(member.expression)] for member in expression.members],
+            [
+                [
+                    member.name,
+                    _expression(member.expression, sensitive_context=sensitive_context),
+                ]
+                for member in expression.members
+            ],
         ]
     return [
         "interpolation",
         expression.mode.value,
         [
-            ["text", segment.value]
+            ["sensitive-text"]
+            if type(segment) is LiteralTextSegment and sensitive_context
+            else ["text", segment.value]
             if type(segment) is LiteralTextSegment
-            else ["expression", _expression(segment.expression)]
+            else [
+                "expression",
+                _expression(segment.expression, sensitive_context=sensitive_context),
+            ]
             for segment in expression.segments
         ],
     ]
+
+
+def _literal_expression(expression: LiteralExpr, *, sensitive_context: bool) -> object:
+    if sensitive_context:
+        return ["context-sensitive-literal", type(expression.value).__name__]
+    return ["literal", _exact_value(expression.value)]
 
 
 def _exact_value(value: ExactValue) -> object:

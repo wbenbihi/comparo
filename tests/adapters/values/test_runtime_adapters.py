@@ -47,7 +47,11 @@ from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import SensitiveValueAccess
 from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.sensitivity import is_sensitive_value
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_origin
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import JsonObject
@@ -248,10 +252,18 @@ async def test_environment_snapshot_uses_explicit_precedence_and_no_expansion(
             )
         )
     assert result.snapshot is not None
-    actual = {
-        item.symbol.segments[0]: cast("JsonString", item.value).value
-        for item in result.snapshot.entries
-    }
+    access = SensitiveValueAccess(purpose="test.environment-snapshot")
+    actual = {}
+    for item in result.snapshot.entries:
+        assert is_sensitive_value(item.value)
+        assert cast("SensitiveValue[JsonString]", item.value).origins == (
+            value_egress_origin(ValueEgressSourceKind.ENVIRONMENT, item.symbol),
+        )
+        value = cast(
+            "JsonString",
+            item.value.reveal(access=access) if is_sensitive_value(item.value) else item.value,
+        )
+        actual[item.symbol.segments[0]] = value.value
     assert actual == {
         "AMBIENT": "yes",
         "BASE": "second",
@@ -262,6 +274,10 @@ async def test_environment_snapshot_uses_explicit_precedence_and_no_expansion(
         "SINGLE": "a b",
     }
     assert result.snapshot.provider.name == "env-snapshot"
+    ambient = next(
+        item for item in result.snapshot.entries if item.symbol == SymbolPath(segments=("AMBIENT",))
+    )
+    assert is_sensitive_value(ambient.value)
 
 
 @_async_test
@@ -314,7 +330,10 @@ async def test_environment_snapshot_conflict_keep_and_failure_mapping(tmp_path: 
             )
         )
         assert kept.snapshot is not None
-        assert cast("JsonString", kept.snapshot.entries[0].value).value == "first"
+        kept_value = cast("SensitiveValue[JsonString]", kept.snapshot.entries[0].value)
+        assert kept_value.reveal(access=SensitiveValueAccess(purpose="test.dotenv-keep")) == (
+            JsonString(value="first")
+        )
         missing = await builder.build(
             _snapshot_request(policy, files=(_file_source("missing.env"),))
         )

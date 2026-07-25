@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Any
 from typing import cast
 
 import msgspec
@@ -85,10 +87,32 @@ def _text(
         "    remoteSchemas:\n"
         "      sources: [https://schemas.example.com/public.json]\n"
         "      allowAny: false\n"
+        "    secretEgress: {rules: [], allowAny: false}\n"
         "  artifacts:\n"
         "    allowSanitizedPersistence: true\n"
         "    roots: [/var/lib/comparo, /tmp/comparo]\n"
         f"{changes}"
+    )
+
+
+_EGRESS_RULE = (
+    "        - sources:\n"
+    "            - {source: secret, names: [chat.token]}\n"
+    "          allowedSchemes: [https]\n"
+    "          allowedMethods: [POST]\n"
+    "          allowedHosts: [api.example.com]\n"
+    "          allowedPorts: [443]\n"
+)
+
+
+def _with_secret_egress(
+    rules: str = _EGRESS_RULE,
+    *,
+    allow_any: str = "false",
+) -> str:
+    return _text().replace(
+        "    secretEgress: {rules: [], allowAny: false}\n",
+        f"    secretEgress:\n      allowAny: {allow_any}\n      rules:\n{rules}",
     )
 
 
@@ -158,6 +182,110 @@ def test_policy_fingerprint_is_deterministic_and_semantic_lists_are_canonical() 
     assert first.definition.fingerprint == second.definition.fingerprint
     assert default_planning_ceilings() == default_planning_ceilings()
     assert tuple(item.resource for item in default_planning_ceilings()) == PLANNING_RESOURCES
+
+
+def test_policy_compiles_destination_bound_named_secret_egress_sources() -> None:
+    text = _text().replace(
+        "    secretEgress: {rules: [], allowAny: false}\n",
+        "    secretEgress:\n"
+        "      allowAny: false\n"
+        "      rules:\n"
+        "        - sources:\n"
+        "            - {source: secret, names: [chat.token]}\n"
+        "            - {source: environment, names: [API_TOKEN]}\n"
+        "          allowedSchemes: [https]\n"
+        "          allowedMethods: [POST]\n"
+        "          allowedHosts: [api.example.com]\n"
+        "          allowedPorts: [443]\n",
+    )
+    policy = _compile(text).policy
+    assert policy is not None
+    rule = policy.values.secret_egress.rules[0]
+    assert tuple(source.kind.value for source in rule.sources) == (
+        "environment",
+        "secret",
+    )
+    assert tuple(source.provider.name for source in rule.sources) == (
+        "env-snapshot",
+        "secret-namespace",
+    )
+    assert tuple(source.symbol.segments for source in rule.sources) == (
+        ("API_TOKEN",),
+        ("chat", "token"),
+    )
+
+
+def test_secret_egress_environment_name_schema_matches_compiler() -> None:
+    schema = cast("dict[str, Any]", generate_policy_schema())
+    source_schema = schema["properties"]["spec"]["properties"]["values"]["properties"][
+        "secretEgress"
+    ]["properties"]["rules"]["items"]["properties"]["sources"]["items"]
+    environment_schema = next(
+        item
+        for item in source_schema["oneOf"]
+        if item["properties"]["source"]["const"] == "environment"
+    )
+    pattern = environment_schema["properties"]["names"]["items"]["pattern"]
+    assert environment_schema["properties"]["names"]["minItems"] == 1
+    assert re.fullmatch(pattern, "API_TOKEN") is not None
+    assert re.fullmatch(pattern, "BAD-NAME") is None
+
+    invalid = _compile(
+        _with_secret_egress(
+            _EGRESS_RULE.replace(
+                "{source: secret, names: [chat.token]}",
+                "{source: environment, names: [BAD-NAME]}",
+            )
+        )
+    )
+    assert invalid.policy is None
+    assert "policy.values.secret-egress-name" in {item.code.value for item in invalid.diagnostics}
+    empty = _compile(
+        _with_secret_egress(
+            _EGRESS_RULE.replace(
+                "{source: secret, names: [chat.token]}",
+                "{source: environment, names: []}",
+            )
+        )
+    )
+    assert empty.policy is None
+    assert "policy.values.secret-egress-name" in {item.code.value for item in empty.diagnostics}
+
+
+def test_secret_egress_source_schema_with_draft_2020_12_validator() -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = cast("dict[str, Any]", generate_policy_schema())
+    source_schema = schema["properties"]["spec"]["properties"]["values"]["properties"][
+        "secretEgress"
+    ]["properties"]["rules"]["items"]["properties"]["sources"]["items"]
+    validator = jsonschema.Draft202012Validator(source_schema)
+
+    assert validator.is_valid({"source": "environment", "names": ["API_TOKEN"]})
+    assert not validator.is_valid({"source": "environment", "names": ["BAD-NAME"]})
+    assert not validator.is_valid({"source": "environment", "names": []})
+    assert validator.is_valid({"source": "secret", "names": ["chat.api-token"]})
+
+
+def test_secret_egress_rule_permutations_compile_to_one_canonical_policy() -> None:
+    mixed = (
+        "        - sources:\n"
+        "            - {source: environment, names: [A]}\n"
+        "            - {source: secret, names: [B]}\n"
+        "          allowedSchemes: [https]\n"
+        "          allowedMethods: [POST]\n"
+        "          allowedHosts: [api.example.com]\n"
+        "          allowedPorts: [443]\n"
+    )
+    environments = mixed.replace(
+        "{source: secret, names: [B]}",
+        "{source: environment, names: [B]}",
+    )
+    first = _compile(_with_secret_egress(mixed + environments)).policy
+    second = _compile(_with_secret_egress(environments + mixed)).policy
+    assert first is not None
+    assert second is not None
+    assert first == second
+    assert first.definition.fingerprint == second.definition.fingerprint
 
 
 def test_policy_schema_is_deterministic_strict_and_has_no_raw_persistence() -> None:
@@ -247,6 +375,135 @@ def test_invalid_policy_values_are_source_located(old: str, new: str, code: str)
     assert result.policy is None
     assert code in {item.code.value for item in result.diagnostics}
     assert all(item.primary.start.source_id == _SOURCE for item in result.diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        (
+            _text().replace(
+                "    secretEgress: {rules: [], allowAny: false}",
+                "    secretEgress: plain",
+            ),
+            "policy.values.secret-egress.mapping",
+        ),
+        (
+            _with_secret_egress(allow_any="nope"),
+            "policy.values.secret-egress-flag",
+        ),
+        (
+            _with_secret_egress(allow_any="true"),
+            "policy.values.secret-egress-conflict",
+        ),
+        (
+            _text().replace(
+                "    secretEgress: {rules: [], allowAny: false}",
+                "    secretEgress: {rules: plain, allowAny: false}",
+            ),
+            "policy.values.secret-egress-rule",
+        ),
+        (
+            _with_secret_egress("        - plain\n"),
+            "policy.values.secret-egress-rule.mapping",
+        ),
+        (
+            _with_secret_egress(
+                _EGRESS_RULE.replace(
+                    "        - sources:\n            - {source: secret, names: [chat.token]}\n",
+                    "        - sources: plain\n",
+                )
+            ),
+            "policy.values.secret-egress-source",
+        ),
+        (
+            _with_secret_egress(
+                _EGRESS_RULE.replace(
+                    "        - sources:\n            - {source: secret, names: [chat.token]}\n",
+                    "        - sources: []\n",
+                )
+            ),
+            "policy.values.secret-egress-source",
+        ),
+        (
+            _with_secret_egress(
+                _EGRESS_RULE.replace(
+                    "            - {source: secret, names: [chat.token]}\n",
+                    "            - plain\n",
+                )
+            ),
+            "policy.values.secret-egress-source.mapping",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("source: secret", "source: unknown")),
+            "policy.values.secret-egress-source",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("names: [chat.token]", "names: plain")),
+            "policy.values.secret-egress-name",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("names: [chat.token]", "names: []")),
+            "policy.values.secret-egress-name",
+        ),
+        (
+            _with_secret_egress(
+                _EGRESS_RULE.replace("names: [chat.token]", f"names: [{'A' * 256}]")
+            ),
+            "policy.values.secret-egress-name",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("names: [chat.token]", "names: ['']")),
+            "policy.values.secret-egress-name",
+        ),
+        (
+            _with_secret_egress(
+                _EGRESS_RULE.replace(
+                    "source: secret, names: [chat.token]",
+                    "source: environment, names: [chat.token]",
+                )
+            ),
+            "policy.values.secret-egress-name",
+        ),
+        (
+            _with_secret_egress(
+                _EGRESS_RULE.replace(
+                    "            - {source: secret, names: [chat.token]}\n",
+                    "            - {source: secret, names: [chat.token]}\n"
+                    "            - {source: secret, names: [chat.token]}\n",
+                )
+            ),
+            "policy.value.duplicate",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("[https]", "[]")),
+            "policy.values.secret-egress-scheme",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("[POST]", "[]")),
+            "policy.values.secret-egress-method",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("[api.example.com]", "[]")),
+            "policy.values.secret-egress-host",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("[443]", "[]")),
+            "policy.values.secret-egress-port",
+        ),
+        (
+            _with_secret_egress(_EGRESS_RULE.replace("[443]", "plain")),
+            "policy.values.secret-egress-port",
+        ),
+        (
+            _with_secret_egress(f"{_EGRESS_RULE}{_EGRESS_RULE}"),
+            "policy.value.duplicate",
+        ),
+    ],
+)
+def test_secret_egress_policy_shapes_fail_closed(text: str, code: str) -> None:
+    result = _compile(text)
+    assert result.policy is None
+    assert code in {item.code.value for item in result.diagnostics}
 
 
 @pytest.mark.parametrize(

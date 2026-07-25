@@ -19,11 +19,15 @@ from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_origin
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.values import JsonString
 from comparo.core.policy.models import CompiledExecutionPolicy
 from comparo.core.resolution.models import EnvironmentSnapshot
 from comparo.core.resolution.models import EnvironmentSnapshotEntry
+from comparo.core.resolution.models import SnapshotValue
 from comparo.core.resolution.provenance import ENV_PROVIDER
 
 _ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -229,21 +233,39 @@ class RunEnvironmentSnapshotBuilder:
         admission = self._admit(request)
         if admission is not None:
             return _failure(admission)
-        values: dict[str, tuple[str, ValueProvenance]] = {}
+        values: dict[str, tuple[SnapshotValue, ValueProvenance]] = {}
         if request.inherit_process:
-            values.update((name, (value, request.configuration)) for name, value in self._ambient)
+            values.update(
+                (
+                    name,
+                    (
+                        SensitiveValue(
+                            JsonString(value=value),
+                            origins=(
+                                value_egress_origin(
+                                    ValueEgressSourceKind.ENVIRONMENT,
+                                    SymbolPath(segments=(name,)),
+                                ),
+                            ),
+                        ),
+                        request.configuration,
+                    ),
+                )
+                for name, value in self._ambient
+            )
         file_names: set[str] = set()
         load_error = await self._load_files(request.files, values, file_names)
         if load_error is not None:
             return _failure(load_error)
         for item in request.values:
-            values[item.symbol.segments[0]] = (item.value.value, item.configuration)
+            name = item.symbol.segments[0]
+            values[name] = (_environment_value(name, item.value), item.configuration)
         if len(values) > self._limits.maximum_entries.value:
             return _failure(EnvironmentSnapshotErrorCode.BUDGET_EXCEEDED)
         entries = tuple(
             EnvironmentSnapshotEntry(
                 symbol=SymbolPath(segments=(name,)),
-                value=JsonString(value=value),
+                value=value,
                 configuration=configuration,
             )
             for name, (value, configuration) in sorted(values.items())
@@ -273,7 +295,7 @@ class RunEnvironmentSnapshotBuilder:
     async def _load_files(
         self,
         sources: tuple[EnvironmentFileSource, ...],
-        values: dict[str, tuple[str, ValueProvenance]],
+        values: dict[str, tuple[SnapshotValue, ValueProvenance]],
         file_names: set[str],
     ) -> EnvironmentSnapshotErrorCode | None:
         total_bytes = 0
@@ -394,7 +416,7 @@ def _dotenv_value(raw: str) -> str | None:
 
 
 def _merge_file(
-    values: dict[str, tuple[str, ValueProvenance]],
+    values: dict[str, tuple[SnapshotValue, ValueProvenance]],
     file_names: set[str],
     assignments: tuple[_DotenvAssignment, ...],
     source: EnvironmentFileSource,
@@ -405,9 +427,28 @@ def _merge_file(
                 return EnvironmentSnapshotErrorCode.CONFLICT
             if source.on_conflict is EnvFileConflict.KEEP:
                 continue
-        values[assignment.name] = (assignment.value, source.configuration)
+        values[assignment.name] = (
+            _environment_value(assignment.name, JsonString(value=assignment.value)),
+            source.configuration,
+        )
         file_names.add(assignment.name)
     return None
+
+
+def _environment_value(
+    name: str,
+    value: JsonString,
+) -> SensitiveValue[JsonString]:
+    """Seal one snapshot value with its exact Environment provider/name lineage."""
+    return SensitiveValue(
+        value,
+        origins=(
+            value_egress_origin(
+                ValueEgressSourceKind.ENVIRONMENT,
+                SymbolPath(segments=(name,)),
+            ),
+        ),
+    )
 
 
 def _read_error(code: ConfinedReadCode | None) -> EnvironmentSnapshotErrorCode:

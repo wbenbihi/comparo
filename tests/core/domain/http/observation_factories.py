@@ -12,6 +12,7 @@ from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
 from comparo.core.domain.http.authorization import HttpAuthorizationGrant
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
+from comparo.core.domain.http.authorization import SecretEgressApproval
 from comparo.core.domain.http.bodies import FinalizedBody
 from comparo.core.domain.http.bodies import NoBody
 from comparo.core.domain.http.bodies import NoMaterializedBody
@@ -46,6 +47,7 @@ from comparo.core.domain.http.responses import HttpStatus
 from comparo.core.domain.http.responses import ResponseField
 from comparo.core.domain.http.responses import ResponseFields
 from comparo.core.domain.http.responses import ResponseObservation
+from comparo.core.domain.http.secret_egress import http_secret_egress_origins
 from comparo.core.domain.http.timings import HttpAttemptTimings
 from comparo.core.domain.http.timings import HttpExchangeTimings
 from comparo.core.domain.http.timings import Measured
@@ -341,15 +343,30 @@ def authorized_request(
         destination=endpoint(scheme=effective_request.url.scheme).destination
     )
     wire_request = finalized_wire_request(effective_request, body=body)
+    actual_occurrence = request_occurrence or occurrence(
+        environment=effective_request.environment.identity
+    )
+    policy_authority = authority()
+    secret_approval = (
+        SecretEgressApproval(
+            request=wire_request,
+            route=resolved_route,
+            occurrence=actual_occurrence,
+            plan_fingerprint=fingerprint("f"),
+            authority=policy_authority,
+        )
+        if http_secret_egress_origins(wire_request)
+        else None
+    )
     intent = HttpAuthorizationIntent(
         request=wire_request,
         route=resolved_route,
-        occurrence=request_occurrence
-        or occurrence(environment=effective_request.environment.identity),
+        occurrence=actual_occurrence,
         plan_fingerprint=fingerprint("f"),
         effective_policy_fingerprint=fingerprint("e"),
+        secret_egress_approval=secret_approval,
     )
-    authorization = HttpAuthorizationGrant(intent=intent, authority=authority())
+    authorization = HttpAuthorizationGrant(intent=intent, authority=policy_authority)
     return AuthorizedExchangeRequest(authorization=authorization)
 
 

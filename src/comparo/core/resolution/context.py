@@ -17,6 +17,8 @@ from comparo.core.domain.scopes import RuntimeScope
 from comparo.core.domain.scopes import run_scope_of
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import is_sensitive_value
+from comparo.core.domain.value_egress import ValueEgressSourceKind
+from comparo.core.domain.value_egress import value_egress_origin
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import JsonString
@@ -402,7 +404,10 @@ class RunContext:
         if type(resolved) is Present:
             value = resolved.value
             if dependency.namespace is ValueNamespace.SECRETS:
-                value = seal(value, taint_origin("secret", dependency.symbol))
+                value = seal(
+                    value,
+                    value_egress_origin(ValueEgressSourceKind.SECRET, dependency.symbol),
+                )
             return self._resolver.present(expression, target, value, provider)
         return resolved
 
@@ -426,10 +431,14 @@ class RunContext:
         )
         if entry is None:
             return self._resolver.unavailable(expression, target, snapshot.provider)
+        value = seal(
+            entry.value,
+            value_egress_origin(ValueEgressSourceKind.ENVIRONMENT, entry.symbol),
+        )
         return self._resolver.present(
             expression,
             target,
-            entry.value,
+            value,
             snapshot.provider,
             environment,
         )
