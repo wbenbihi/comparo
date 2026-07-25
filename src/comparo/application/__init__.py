@@ -9,6 +9,12 @@ from comparo.application.artifacts import render_artifact_report as render_artif
 from comparo.application.artifacts import verify_artifact as verify_artifact
 from comparo.application.diagnostics import SecurityCheck as SecurityCheck
 from comparo.application.diagnostics import run_security_checks as run_security_checks
+from comparo.application.environment_binding import (
+    EnvironmentBindingResult as EnvironmentBindingResult,
+)
+from comparo.application.environment_binding import (
+    build_environment_snapshots as build_environment_snapshots,
+)
 from comparo.application.inspection import ApplicationDiagnostic as ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection as PlanInspection
 from comparo.application.inspection import (
@@ -36,6 +42,7 @@ __all__ = (
     "ArtifactOperationError",
     "ArtifactReadLimits",
     "BudgetOverride",
+    "EnvironmentBindingResult",
     "InvocationBuildError",
     "MatrixOverride",
     "PlanInspection",
@@ -45,6 +52,7 @@ __all__ = (
     "ProjectPlanResult",
     "ProjectPreparationResult",
     "SecurityCheck",
+    "build_environment_snapshots",
     "build_invocation",
     "inspect_artifact",
     "inspect_configuration_diagnostic",

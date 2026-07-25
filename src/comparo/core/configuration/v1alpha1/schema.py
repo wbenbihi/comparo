@@ -171,7 +171,7 @@ RESOURCE_SCHEMAS: tuple[ResourceSchema, ...] = (
         kind=ResourceKind.ENVIRONMENT,
         fields=(
             _field("baseUrl", FieldMode.RESOLVABLE, required=True),
-            _field("envFiles", FieldMode.STATIC),
+            _field("env", FieldMode.STATIC),
             _field("variables", FieldMode.RESOLVABLE),
             _field("secrets", FieldMode.RESOLVABLE),
             _field("headers", FieldMode.RESOLVABLE),

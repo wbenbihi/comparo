@@ -157,7 +157,7 @@
             "cookies": {
               "$ref": "#/$defs/resolvableValue"
             },
-            "envFiles": {
+            "env": {
               "$ref": "#/$defs/jsonValue"
             },
             "headers": {

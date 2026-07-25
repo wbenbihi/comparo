@@ -342,6 +342,10 @@ def test_profile_rules_accept_structured_and_versioned_builtin_operations() -> N
             ("Environment", "env", "{baseUrl: x, unknown: true}"),
             "configuration.spec.field-unknown",
         ),
+        (
+            ("Environment", "env", "{baseUrl: x, envFiles: []}"),
+            "configuration.spec.field-unknown",
+        ),
         (("Environment", "env", "{}"), "configuration.spec.field-required"),
         (
             ("Environment", "env", "{baseUrl: x, tls: {$env: BAD}}"),
