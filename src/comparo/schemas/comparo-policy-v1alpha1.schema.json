@@ -1,0 +1,303 @@
+{
+  "$id": "https://comparo.dev/schemas/comparo-policy-v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "comparo.policy/v1alpha1"
+    },
+    "kind": {
+      "const": "ExecutionPolicy"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "additionalProperties": false,
+          "properties": {
+            "allowSanitizedPersistence": {
+              "type": "boolean"
+            },
+            "roots": {
+              "items": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "allowSanitizedPersistence",
+            "roots"
+          ],
+          "type": "object"
+        },
+        "http": {
+          "additionalProperties": false,
+          "properties": {
+            "allowAnyHost": {
+              "type": "boolean"
+            },
+            "allowProxyDns": {
+              "type": "boolean"
+            },
+            "allowedAddressClasses": {
+              "items": {
+                "enum": [
+                  "public",
+                  "private",
+                  "loopback",
+                  "link-local",
+                  "multicast",
+                  "unspecified",
+                  "reserved"
+                ]
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "allowedHosts": {
+              "items": {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "allowedMethods": {
+              "items": {
+                "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]+$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "allowedPorts": {
+              "items": {
+                "maximum": 65535,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "allowedSchemes": {
+              "items": {
+                "enum": [
+                  "http",
+                  "https"
+                ]
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "requireMutationApproval": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "allowedSchemes",
+            "allowedMethods",
+            "allowedHosts",
+            "allowedPorts",
+            "allowedAddressClasses",
+            "allowAnyHost",
+            "requireMutationApproval",
+            "allowProxyDns"
+          ],
+          "type": "object"
+        },
+        "planning": {
+          "additionalProperties": false,
+          "properties": {
+            "allowAnyEnvironments": {
+              "type": "boolean"
+            },
+            "allowAnySubjects": {
+              "type": "boolean"
+            },
+            "ceilings": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "comparisons": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "concurrency": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "environment-executions": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "matrix-cells": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "queued-work": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "requests": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "trials": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "environments": {
+              "items": {
+                "maxLength": 75,
+                "minLength": 1,
+                "pattern": "^Environment/[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "subjects": {
+              "items": {
+                "maxLength": 72,
+                "minLength": 1,
+                "pattern": "^(?:Request|Scenario)/[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "subjects",
+            "environments",
+            "allowAnySubjects",
+            "allowAnyEnvironments"
+          ],
+          "type": "object"
+        },
+        "values": {
+          "additionalProperties": false,
+          "properties": {
+            "allowProjectFiles": {
+              "type": "boolean"
+            },
+            "ambientEnvironment": {
+              "additionalProperties": false,
+              "properties": {
+                "allowAny": {
+                  "type": "boolean"
+                },
+                "names": {
+                  "items": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "names",
+                "allowAny"
+              ],
+              "type": "object"
+            },
+            "remoteSchemas": {
+              "additionalProperties": false,
+              "properties": {
+                "allowAny": {
+                  "type": "boolean"
+                },
+                "sources": {
+                  "items": {
+                    "maxLength": 2048,
+                    "pattern": "^https?://",
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "sources",
+                "allowAny"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ambientEnvironment",
+            "allowProjectFiles",
+            "remoteSchemas"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "planning",
+        "http",
+        "values",
+        "artifacts"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "Comparo comparo.policy/v1alpha1 ExecutionPolicy",
+  "type": "object"
+}
