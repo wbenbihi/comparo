@@ -112,7 +112,7 @@ def _expected_package_files(source_root: Path) -> frozenset[PurePosixPath]:
         if line.startswith(source_prefix)
         and (
             line.endswith((".py", "/py.typed"))
-            or line == "src/comparo/schemas/comparo-v1alpha1.schema.json"
+            or (line.startswith("src/comparo/schemas/") and line.endswith(".schema.json"))
         )
     )
     if not members:

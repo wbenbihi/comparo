@@ -22,6 +22,8 @@ class ReportErrorCode(StrEnum):
 
     INVALID_INPUT = "invalid-input"
     BUDGET_EXCEEDED = "budget-exceeded"
+    MALFORMED = "malformed"
+    UNSUPPORTED_VERSION = "unsupported-version"
     RENDER_FAILED = "render-failed"
 
 

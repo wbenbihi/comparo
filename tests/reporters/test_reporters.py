@@ -7,6 +7,7 @@ from xml.etree import ElementTree
 import msgspec
 import pytest
 
+from comparo.core.artifacts import ArtifactSummary
 from comparo.core.artifacts.common import ArtifactCaptureExtent
 from comparo.core.artifacts.common import ArtifactFactOutcome
 from comparo.core.artifacts.common import ArtifactGateVerdict
@@ -46,9 +47,10 @@ def _failed_artifact(*, controls: bool = False) -> RunArtifact:
     if controls:
         reason = "threshold\x1b]8;;https://evil.test\x07|<script>"
     names = ("drifted", "violated")
+    gate_profile = _definition("GateProfile", "strict")
     gate = ArtifactGate(
         verdict=ArtifactGateVerdict.FAILED,
-        profile=_definition("GateProfile", "strict"),
+        profile=gate_profile,
         reasons=(reason,),
         coverage=(_metric("run-complete", 1),),
         assessments=(
@@ -62,8 +64,20 @@ def _failed_artifact(*, controls: bool = False) -> RunArtifact:
     return msgspec.structs.replace(
         artifact,
         gate=gate,
-        executions=(execution,),
+        summary=ArtifactSummary(
+            executions=(_metric("observed", 2),),
+            comparisons=(_metric("evaluated", 1),),
+            assertions=(_metric("violated", 1),),
+            diffs=(_metric("drifted", 1),),
+        ),
+        executions=(execution, artifact.executions[1]),
         comparisons=(comparison,),
+        resources=tuple(
+            sorted(
+                (*artifact.resources, gate_profile),
+                key=lambda item: (item.namespace, item.kind, item.resource_id),
+            )
+        ),
         coverage_issues=(
             ArtifactCoverageIssue(
                 source="response.body",
@@ -160,11 +174,16 @@ def test_sarif_contains_only_adverse_facts_and_coverage_findings() -> None:
 
     assert document["version"] == "2.1.0"
     assert [item["id"] for item in rules] == sorted(item["id"] for item in rules)
+    adverse_rule_ids = {
+        item["ruleId"] for item in results if item["ruleId"] != "comparo/artifact-coverage"
+    }
+    assert len(adverse_rule_ids) == 2
     assert {item["properties"]["outcome"] for item in results if "properties" in item} == {
         "violated",
         "drifted",
     }
     assert any(item["ruleId"] == "comparo/artifact-coverage" for item in results)
+    assert run["invocations"][0]["executionSuccessful"] is True
 
     positive = msgspec.json.decode(
         render_report(_artifact(), ReportFormat.SARIF, maximum_bytes=1_000_000).content

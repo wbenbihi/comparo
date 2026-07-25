@@ -12,7 +12,10 @@ from comparo.reporters.contracts import ReportError as ReportError
 from comparo.reporters.contracts import ReportErrorCode as ReportErrorCode
 from comparo.reporters.contracts import ReportFormat as ReportFormat
 from comparo.reporters.json import REPORT_API_VERSION as REPORT_API_VERSION
+from comparo.reporters.json import decode_json_report as decode_json_report
+from comparo.reporters.json import generate_report_schema as generate_report_schema
 from comparo.reporters.json import render_json_report as render_json_report
+from comparo.reporters.json import render_report_schema as render_report_schema
 from comparo.reporters.junit import render_junit_report as render_junit_report
 from comparo.reporters.markdown import render_markdown_report as render_markdown_report
 from comparo.reporters.sarif import render_sarif_report as render_sarif_report
@@ -66,9 +69,12 @@ __all__ = (
     "ReportError",
     "ReportErrorCode",
     "ReportFormat",
+    "decode_json_report",
+    "generate_report_schema",
     "render_json_report",
     "render_junit_report",
     "render_markdown_report",
     "render_report",
+    "render_report_schema",
     "render_sarif_report",
 )

@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 import unicodedata
 
+_MARKDOWN_PUNCTUATION = frozenset("\\`*_{}[]()#+-.!|>")
+
 
 def safe_plain(value: str) -> str:
     """Replace terminal controls, bidi controls, and invalid XML characters visibly."""
@@ -32,4 +34,6 @@ def markdown_cell(value: object) -> str:
     """Escape one value for a fixed Markdown table cell without enabling HTML."""
     text = safe_plain(str(value)).replace("\r", " ").replace("\n", " ")
     text = html.escape(text, quote=False)
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("`", "\\`")
+    return "".join(
+        f"\\{character}" if character in _MARKDOWN_PUNCTUATION else character for character in text
+    )
