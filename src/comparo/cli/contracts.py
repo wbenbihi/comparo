@@ -39,6 +39,7 @@ class CliPayloadKind(StrEnum):
     MARKDOWN = "markdown"
     HTML = "html"
     RST = "rst"
+    BINARY = "binary"
 
 
 class CliOutputMode(StrEnum):
@@ -54,6 +55,63 @@ class CliColorMode(StrEnum):
     AUTO = "auto"
     ALWAYS = "always"
     NEVER = "never"
+
+
+class CliReportFormat(StrEnum):
+    """Closed report projections supported by the CLI."""
+
+    JSON = "json"
+    JUNIT = "junit"
+    SARIF = "sarif"
+    MARKDOWN = "markdown"
+
+
+@final
+class CliArtifactLimits(msgspec.Struct, frozen=True, kw_only=True):
+    """Explicit finite artifact read limits carried by every CLI operation."""
+
+    maximum_blobs: int
+    maximum_blob_bytes: int
+    maximum_total_blob_bytes: int
+    maximum_manifest_bytes: int
+    maximum_report_bytes: int
+    maximum_redaction_patterns: int
+    maximum_redaction_pattern_bytes: int
+    maximum_redaction_value_bytes: int
+    maximum_redaction_value_nodes: int
+
+    def __post_init__(self) -> None:
+        """Require exact integers while leaving range validation to the application service."""
+        if any(
+            type(value) is not int
+            for value in (
+                self.maximum_blobs,
+                self.maximum_blob_bytes,
+                self.maximum_total_blob_bytes,
+                self.maximum_manifest_bytes,
+                self.maximum_report_bytes,
+                self.maximum_redaction_patterns,
+                self.maximum_redaction_pattern_bytes,
+                self.maximum_redaction_value_bytes,
+                self.maximum_redaction_value_nodes,
+            )
+        ):
+            raise TypeError("CLI artifact limits must be exact integers")
+
+
+DEFAULT_CLI_ARTIFACT_ROOT_V1 = Path(".comparo/artifacts")
+DEFAULT_CLI_ARTIFACT_LIMITS_V1 = CliArtifactLimits(
+    maximum_blobs=4096,
+    maximum_blob_bytes=64 * 1024 * 1024,
+    maximum_total_blob_bytes=512 * 1024 * 1024,
+    maximum_manifest_bytes=64 * 1024 * 1024,
+    maximum_report_bytes=64 * 1024 * 1024,
+    maximum_redaction_patterns=4096,
+    maximum_redaction_pattern_bytes=1024 * 1024,
+    maximum_redaction_value_bytes=256 * 1024,
+    maximum_redaction_value_nodes=4096,
+)
+DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1 = 64 * 1024 * 1024
 
 
 @final
@@ -93,8 +151,9 @@ class CliCommandResult(msgspec.Struct, frozen=True, kw_only=True):
         if type(self.payload) is not bytes:
             raise TypeError("CLI result payload must be immutable bytes")
         human = self.payload_kind is CliPayloadKind.HUMAN
+        empty_document = not self.payload and self.payload_kind is not CliPayloadKind.BINARY
         if (human and (self.payload or not self.messages)) or (
-            not human and (self.messages or not self.payload)
+            not human and (self.messages or empty_document)
         ):
             raise ValueError("CLI result must contain exactly its selected output representation")
 
@@ -129,6 +188,70 @@ class DoctorRequest(msgspec.Struct, frozen=True, kw_only=True):
         """Require a closed output mode."""
         if type(self.output) is not CliOutputMode:
             raise TypeError("doctor output mode must be typed")
+
+
+@final
+class ArtifactReadRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """Framework-neutral input shared by artifact inspection and verification."""
+
+    root: Path
+    bundle_id: str
+    limits: CliArtifactLimits
+    output: CliOutputMode
+
+    def __post_init__(self) -> None:
+        """Require exact adapter coordinates and closed presentation contracts."""
+        if not isinstance(self.root, Path):
+            raise TypeError("artifact root must be a Path")
+        if type(self.bundle_id) is not str:
+            raise TypeError("artifact bundle id must be text")
+        if type(self.limits) is not CliArtifactLimits:
+            raise TypeError("artifact read limits must be CliArtifactLimits")
+        if type(self.output) is not CliOutputMode:
+            raise TypeError("artifact output mode must be typed")
+
+
+@final
+class ArtifactBlobRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """Framework-neutral input for one bounded raw sanitized-blob read."""
+
+    root: Path
+    bundle_id: str
+    sha256: str
+    limits: CliArtifactLimits
+    maximum_output_bytes: int
+
+    def __post_init__(self) -> None:
+        """Require exact adapter coordinates while deferring range validation."""
+        if not isinstance(self.root, Path):
+            raise TypeError("artifact blob root must be a Path")
+        if type(self.bundle_id) is not str or type(self.sha256) is not str:
+            raise TypeError("artifact blob coordinates must be text")
+        if type(self.limits) is not CliArtifactLimits:
+            raise TypeError("artifact blob limits must be CliArtifactLimits")
+        if type(self.maximum_output_bytes) is not int:
+            raise TypeError("artifact blob output limit must be an exact integer")
+
+
+@final
+class ReportRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """Framework-neutral input for one bounded report rendered to stdout."""
+
+    root: Path
+    bundle_id: str
+    limits: CliArtifactLimits
+    format: CliReportFormat
+
+    def __post_init__(self) -> None:
+        """Require exact local coordinates and one closed report format."""
+        if not isinstance(self.root, Path):
+            raise TypeError("report artifact root must be a Path")
+        if type(self.bundle_id) is not str:
+            raise TypeError("report bundle id must be text")
+        if type(self.limits) is not CliArtifactLimits:
+            raise TypeError("report limits must be CliArtifactLimits")
+        if type(self.format) is not CliReportFormat:
+            raise TypeError("report format must be typed")
 
 
 def _validate_plan_paths(

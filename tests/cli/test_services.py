@@ -1,19 +1,30 @@
 """Tests for framework-free read-only CLI services."""
 
+import asyncio
 import json
 from pathlib import Path
 from typing import cast
 
 import pytest
 
+from comparo.adapters.artifacts import LocalArtifactBundleSink
 from comparo.cli import services as service_module
+from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
+from comparo.cli.contracts import ArtifactBlobRequest
+from comparo.cli.contracts import ArtifactReadRequest
+from comparo.cli.contracts import CliArtifactLimits
 from comparo.cli.contracts import CliExitCode
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
+from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
 from comparo.cli.contracts import PlanRequest
+from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import DefaultCliServices
+from comparo.core.artifacts.model import RunArtifact
+from tests.adapters.artifacts.test_local_store import _stored_artifact
+from tests.core.artifacts.test_capture_compiler import _limits as domain_artifact_limits
 
 
 def _write_project(root: Path) -> Path:
@@ -99,6 +110,31 @@ def _plan_request(
         maximum_attempts=None,
         fail_fast=None,
         budgets=budgets,
+        output=output,
+    )
+
+
+def _artifact_bundle(root: Path) -> tuple[Path, RunArtifact]:
+    store = root / "artifacts"
+    store.mkdir(mode=0o700)
+    artifact, blobs = asyncio.run(_stored_artifact())
+    sink = LocalArtifactBundleSink(store)
+    outcome = asyncio.run(sink.persist(artifact, blobs, domain_artifact_limits()))
+    sink.close()
+    assert outcome.bundle_id == "artifact-0"
+    return store, artifact
+
+
+def _read_request(
+    root: Path,
+    *,
+    output: CliOutputMode = CliOutputMode.HUMAN,
+    limits: CliArtifactLimits = DEFAULT_CLI_ARTIFACT_LIMITS_V1,
+) -> ArtifactReadRequest:
+    return ArtifactReadRequest(
+        root=root,
+        bundle_id="artifact-0",
+        limits=limits,
         output=output,
     )
 
@@ -303,3 +339,141 @@ def test_assignment_rejects_untyped_values_without_retaining_them() -> None:
     with pytest.raises(ValueError, match=r"safe\.code") as caught:
         service_module._assignment(cast("str", object()), code="safe.code")
     assert str(caught.value) == "safe.code"
+
+
+def test_artifact_inspect_and_verify_succeed_in_human_and_machine_modes(
+    tmp_path: Path,
+) -> None:
+    root, _artifact = _artifact_bundle(tmp_path)
+    services = DefaultCliServices()
+    inspected_human = services.artifact_inspect(_read_request(root))
+    inspected_json = services.artifact_inspect(_read_request(root, output=CliOutputMode.JSON))
+    verified_human = services.artifact_verify(_read_request(root))
+    verified_json = services.artifact_verify(_read_request(root, output=CliOutputMode.JSON))
+
+    assert inspected_human.exit_code is CliExitCode.SUCCESS
+    assert inspected_human.messages[0].text == "Artifact bundle is authentic."
+    assert "2 blob(s), 9 byte(s)" in inspected_human.messages[-1].text
+    inspection = _json(inspected_json.payload)
+    assert inspection["api_version"] == "comparo.artifact/v1alpha1"
+    assert inspection["artifact_id"] == "artifact-0"
+    assert verified_human.messages[0].text == "Artifact bundle is authentic."
+    assert _json(verified_json.payload) == {
+        "apiVersion": "comparo.cli/v1alpha1",
+        "command": "artifact verify",
+        "status": "verified",
+    }
+
+
+def test_artifact_failures_are_closed_in_human_and_machine_modes(tmp_path: Path) -> None:
+    sensitive_root = tmp_path / "secret-artifact-root"
+    services = DefaultCliServices()
+    human = services.artifact_verify(_read_request(sensitive_root))
+    machine = services.artifact_inspect(_read_request(sensitive_root, output=CliOutputMode.JSON))
+    assert human.exit_code is CliExitCode.INVALID_INVOCATION
+    assert human.messages[0].text == "Artifact operation failed (artifact-unavailable)."
+    assert _json(machine.payload) == {
+        "apiVersion": "comparo.cli/v1alpha1",
+        "code": "artifact-unavailable",
+        "command": "artifact inspect",
+        "status": "invalid",
+    }
+    assert "secret-artifact-root" not in human.messages[0].text + machine.payload.decode()
+
+    values = {
+        name: getattr(DEFAULT_CLI_ARTIFACT_LIMITS_V1, name)
+        for name in DEFAULT_CLI_ARTIFACT_LIMITS_V1.__struct_fields__
+    }
+    values["maximum_blobs"] = 0
+    invalid_limits = CliArtifactLimits(**values)
+    invalid = services.artifact_verify(_read_request(sensitive_root, limits=invalid_limits))
+    assert invalid.messages[0].text == "Artifact operation failed (invalid-limit)."
+
+
+def test_artifact_blob_returns_exact_bytes_and_applies_independent_output_limit(
+    tmp_path: Path,
+) -> None:
+    root, artifact = _artifact_bundle(tmp_path)
+    blob = artifact.blobs[0]
+    services = DefaultCliServices()
+    request = ArtifactBlobRequest(
+        root=root,
+        bundle_id="artifact-0",
+        sha256=blob.sha256,
+        limits=DEFAULT_CLI_ARTIFACT_LIMITS_V1,
+        maximum_output_bytes=blob.byte_count,
+    )
+    result = services.artifact_blob(request)
+    assert result.exit_code is CliExitCode.SUCCESS
+    assert result.payload_kind is CliPayloadKind.BINARY
+    assert result.payload in {b"left", b"right"}
+
+    exceeded = services.artifact_blob(
+        ArtifactBlobRequest(
+            root=root,
+            bundle_id="artifact-0",
+            sha256=blob.sha256,
+            limits=DEFAULT_CLI_ARTIFACT_LIMITS_V1,
+            maximum_output_bytes=blob.byte_count - 1,
+        )
+    )
+    assert exceeded.messages[0].text == ("Artifact operation failed (output-limit-exceeded).")
+    missing = services.artifact_blob(
+        ArtifactBlobRequest(
+            root=root,
+            bundle_id="artifact-0",
+            sha256="0" * 64,
+            limits=DEFAULT_CLI_ARTIFACT_LIMITS_V1,
+            maximum_output_bytes=1024,
+        )
+    )
+    assert missing.messages[0].text == "Artifact operation failed (blob-not-found)."
+
+
+@pytest.mark.parametrize(
+    ("format", "kind", "prefix"),
+    [
+        (CliReportFormat.JSON, CliPayloadKind.JSON, b'{"api_version"'),
+        (CliReportFormat.JUNIT, CliPayloadKind.TEXT, b"<?xml"),
+        (CliReportFormat.SARIF, CliPayloadKind.JSON, b'{"$schema"'),
+        (CliReportFormat.MARKDOWN, CliPayloadKind.MARKDOWN, b"# Comparo"),
+    ],
+)
+def test_report_renders_every_built_in_format_to_complete_stdout_payload(
+    tmp_path: Path,
+    format: CliReportFormat,
+    kind: CliPayloadKind,
+    prefix: bytes,
+) -> None:
+    root, _artifact = _artifact_bundle(tmp_path)
+    result = DefaultCliServices().report(
+        ReportRequest(
+            root=root,
+            bundle_id="artifact-0",
+            limits=DEFAULT_CLI_ARTIFACT_LIMITS_V1,
+            format=format,
+        )
+    )
+    assert result.exit_code is CliExitCode.SUCCESS
+    assert result.payload_kind is kind
+    assert result.payload.startswith(prefix)
+
+
+def test_report_failure_is_value_free_and_does_not_publish_partial_output(tmp_path: Path) -> None:
+    root, _artifact = _artifact_bundle(tmp_path)
+    values = {
+        name: getattr(DEFAULT_CLI_ARTIFACT_LIMITS_V1, name)
+        for name in DEFAULT_CLI_ARTIFACT_LIMITS_V1.__struct_fields__
+    }
+    values["maximum_report_bytes"] = 0
+    result = DefaultCliServices().report(
+        ReportRequest(
+            root=root,
+            bundle_id="artifact-0",
+            limits=CliArtifactLimits(**values),
+            format=CliReportFormat.JSON,
+        )
+    )
+    assert result.exit_code is CliExitCode.INVALID_INVOCATION
+    assert result.payload == b""
+    assert result.messages[0].text == "Artifact operation failed (report-failed)."

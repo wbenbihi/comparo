@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
+from typing import BinaryIO
 from typing import Literal
 from typing import TextIO
 
@@ -20,6 +22,12 @@ from cyclopts.exceptions import CycloptsError
 from rich.console import Console
 from rich.text import Text
 
+from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
+from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
+from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
+from comparo.cli.contracts import ArtifactBlobRequest
+from comparo.cli.contracts import ArtifactReadRequest
+from comparo.cli.contracts import CliArtifactLimits
 from comparo.cli.contracts import CliColorMode
 from comparo.cli.contracts import CliCommandResult
 from comparo.cli.contracts import CliExitCode
@@ -27,8 +35,10 @@ from comparo.cli.contracts import CliInvocation
 from comparo.cli.contracts import CliMessageLevel
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
+from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
 from comparo.cli.contracts import PlanRequest
+from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import CliServices
 from comparo.cli.services import DefaultCliServices
@@ -37,6 +47,7 @@ type ColorName = Literal["auto", "always", "never"]
 type OutputName = Literal["human", "json"]
 type DocumentationFormat = Literal["markdown", "html", "rst"]
 type CompletionShell = Literal["bash", "zsh", "fish"]
+type ReportFormatName = Literal["json", "junit", "sarif", "markdown"]
 
 ColorOption = Annotated[ColorName, Parameter(name="--color")]
 OutputOption = Annotated[OutputName, Parameter(name="--format")]
@@ -70,6 +81,50 @@ FailFastOption = Annotated[
     bool | None,
     Parameter(name="--fail-fast", negative="--no-fail-fast"),
 ]
+ArtifactRootOption = Annotated[Path, Parameter(name="--root")]
+BlobOutputLimitOption = Annotated[int, Parameter(name="--maximum-output-bytes")]
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ArtifactLimitArguments:
+    """Cyclopts-only flattened form of the version-owned artifact limit contract."""
+
+    maximum_blobs: Annotated[int, Parameter(name="--maximum-blobs")] = (
+        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blobs
+    )
+    maximum_blob_bytes: Annotated[int, Parameter(name="--maximum-blob-bytes")] = (
+        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blob_bytes
+    )
+    maximum_total_blob_bytes: Annotated[
+        int,
+        Parameter(name="--maximum-total-blob-bytes"),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_total_blob_bytes
+    maximum_manifest_bytes: Annotated[int, Parameter(name="--maximum-manifest-bytes")] = (
+        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_manifest_bytes
+    )
+    maximum_report_bytes: Annotated[int, Parameter(name="--maximum-report-bytes")] = (
+        DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_report_bytes
+    )
+    maximum_redaction_patterns: Annotated[
+        int,
+        Parameter(name="--maximum-redaction-patterns"),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_patterns
+    maximum_redaction_pattern_bytes: Annotated[
+        int,
+        Parameter(name="--maximum-redaction-pattern-bytes"),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_pattern_bytes
+    maximum_redaction_value_bytes: Annotated[
+        int,
+        Parameter(name="--maximum-redaction-value-bytes"),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_value_bytes
+    maximum_redaction_value_nodes: Annotated[
+        int,
+        Parameter(name="--maximum-redaction-value-nodes"),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_value_nodes
+
+
+ArtifactLimitsOption = Annotated[_ArtifactLimitArguments, Parameter(name="*")]
+_DEFAULT_ARTIFACT_LIMIT_ARGUMENTS = _ArtifactLimitArguments()
 
 _LEVEL_STYLES: dict[CliMessageLevel, str] = {
     CliMessageLevel.SUCCESS: "green",
@@ -110,6 +165,138 @@ def _generate_reference(cli: App, output_format: DocumentationFormat) -> tuple[s
     return generate_rst_docs(cli, usage_name="comparo"), CliPayloadKind.RST
 
 
+def _artifact_limits(value: _ArtifactLimitArguments) -> CliArtifactLimits:
+    """Project framework-owned parsed arguments to the framework-neutral contract."""
+    return CliArtifactLimits(
+        maximum_blobs=value.maximum_blobs,
+        maximum_blob_bytes=value.maximum_blob_bytes,
+        maximum_total_blob_bytes=value.maximum_total_blob_bytes,
+        maximum_manifest_bytes=value.maximum_manifest_bytes,
+        maximum_report_bytes=value.maximum_report_bytes,
+        maximum_redaction_patterns=value.maximum_redaction_patterns,
+        maximum_redaction_pattern_bytes=value.maximum_redaction_pattern_bytes,
+        maximum_redaction_value_bytes=value.maximum_redaction_value_bytes,
+        maximum_redaction_value_nodes=value.maximum_redaction_value_nodes,
+    )
+
+
+def _register_artifact_commands(cli: App, services: CliServices) -> None:
+    """Attach artifact readers without adding their concerns to the main command graph."""
+    artifact = App(name="artifact", help="Read authenticated sanitized artifact bundles.")
+    cli.command(artifact)
+
+    @artifact.command(name="inspect")
+    def artifact_inspect(
+        bundle_id: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Authenticate a bundle and print a body-free result summary.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            root: Local artifact-store root.
+            limits: Version-owned finite read limits, individually overridable.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = ArtifactReadRequest(
+            root=root,
+            bundle_id=bundle_id,
+            limits=_artifact_limits(limits),
+            output=CliOutputMode(output_format),
+        )
+        return _invocation(services.artifact_inspect(request), color)
+
+    @artifact.command(name="verify")
+    def artifact_verify(
+        bundle_id: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Authenticate a bundle manifest and every declared sanitized blob.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            root: Local artifact-store root.
+            limits: Version-owned finite read limits, individually overridable.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = ArtifactReadRequest(
+            root=root,
+            bundle_id=bundle_id,
+            limits=_artifact_limits(limits),
+            output=CliOutputMode(output_format),
+        )
+        return _invocation(services.artifact_verify(request), color)
+
+    @artifact.command(name="blob")
+    def artifact_blob(
+        bundle_id: str,
+        sha256: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        maximum_output_bytes: BlobOutputLimitOption = DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1,
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Write one authenticated sanitized blob as exact raw bytes to redirected stdout.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            sha256: Declared SHA-256 blob identity.
+            root: Local artifact-store root.
+            limits: Version-owned finite read limits, individually overridable.
+            maximum_output_bytes: Independent maximum bytes written to redirected stdout.
+            color: Terminal color behavior for failures.
+        """
+        request = ArtifactBlobRequest(
+            root=root,
+            bundle_id=bundle_id,
+            sha256=sha256,
+            limits=_artifact_limits(limits),
+            maximum_output_bytes=maximum_output_bytes,
+        )
+        return _invocation(services.artifact_blob(request), color)
+
+    @cli.command(name="report")
+    def report(
+        bundle_id: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        report_format: Annotated[ReportFormatName, Parameter(name="--format")] = "json",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Render an authenticated artifact as JSON, JUnit, SARIF, or Markdown to stdout.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            root: Local artifact-store root.
+            limits: Version-owned finite read and report-output limits, individually overridable.
+            report_format: Built-in report format.
+            color: Terminal color behavior for failures.
+        """
+        request = ReportRequest(
+            root=root,
+            bundle_id=bundle_id,
+            limits=_artifact_limits(limits),
+            format=CliReportFormat(report_format),
+        )
+        return _invocation(services.report(request), color)
+
+
 def build_app(services: CliServices) -> App:
     """Build an isolated command graph around injected framework-neutral services."""
     cli = App(
@@ -124,6 +311,7 @@ def build_app(services: CliServices) -> App:
     )
     schema = App(name="schema", help="Print versioned public schemas and CLI documentation.")
     cli.command(schema)
+    _register_artifact_commands(cli, services)
 
     @schema.command(name="config")
     def schema_config(*, color: ColorOption = "auto") -> CliInvocation:
@@ -335,15 +523,27 @@ def _requested_color(tokens: tuple[str, ...]) -> CliColorMode:
     return CliColorMode.AUTO
 
 
-def _render_result(result: CliCommandResult, output: Console, error: Console) -> None:
+def _render_result(
+    result: CliCommandResult,
+    output: Console,
+    error: Console,
+    binary_output: BinaryIO | None,
+) -> bool:
     """Render one complete result without interpreting payload content as markup."""
+    if result.payload_kind is CliPayloadKind.BINARY:
+        if binary_output is None or binary_output.isatty():
+            return False
+        binary_output.write(result.payload)
+        binary_output.flush()
+        return True
     if result.payload_kind is not CliPayloadKind.HUMAN:
         output.file.write(result.payload.decode())
         output.file.flush()
-        return
+        return True
     destination = output if result.exit_code is CliExitCode.SUCCESS else error
     for message in result.messages:
         destination.print(Text(message.text, style=_LEVEL_STYLES[message.level]))
+    return True
 
 
 def _render_static_error(console: Console, message: str) -> None:
@@ -357,6 +557,7 @@ def main(
     services: CliServices | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
+    binary_stdout: BinaryIO | None = None,
 ) -> int:
     """Run the CLI and return a stable exit code without raising parser exits."""
     tokens = tuple(sys.argv[1:] if argv is None else argv)
@@ -387,7 +588,10 @@ def main(
     if type(parsed) is not CliInvocation:
         _render_static_error(error_console, "Comparo received an invalid command result.")
         return int(CliExitCode.INTERNAL_ERROR)
-    _render_result(parsed.result, output_console, error_console)
+    raw_output = sys.stdout.buffer if binary_stdout is None and stdout is None else binary_stdout
+    if not _render_result(parsed.result, output_console, error_console, raw_output):
+        _render_static_error(error_console, "Comparo could not write binary output safely.")
+        return int(CliExitCode.INTERNAL_ERROR)
     return int(parsed.result.exit_code)
 
 

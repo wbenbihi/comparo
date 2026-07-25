@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from importlib.metadata import PackageNotFoundError
+from io import BytesIO
 from io import StringIO
 from pathlib import Path
 from typing import TextIO
@@ -17,6 +18,8 @@ from cyclopts import App
 from comparo.cli import app as app_module
 from comparo.cli import generate_cli_reference
 from comparo.cli import main
+from comparo.cli.contracts import ArtifactBlobRequest
+from comparo.cli.contracts import ArtifactReadRequest
 from comparo.cli.contracts import CliColorMode
 from comparo.cli.contracts import CliCommandResult
 from comparo.cli.contracts import CliExitCode
@@ -24,8 +27,10 @@ from comparo.cli.contracts import CliMessage
 from comparo.cli.contracts import CliMessageLevel
 from comparo.cli.contracts import CliOutputMode
 from comparo.cli.contracts import CliPayloadKind
+from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
 from comparo.cli.contracts import PlanRequest
+from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
 from comparo.cli.services import CliServices
 
@@ -49,6 +54,10 @@ class _StaticServices:
         self.validate_request: ValidateRequest | None = None
         self.doctor_request: DoctorRequest | None = None
         self.plan_request: PlanRequest | None = None
+        self.artifact_inspect_request: ArtifactReadRequest | None = None
+        self.artifact_verify_request: ArtifactReadRequest | None = None
+        self.artifact_blob_request: ArtifactBlobRequest | None = None
+        self.report_request: ReportRequest | None = None
 
     def configuration_schema(self) -> CliCommandResult:
         return self.result
@@ -72,6 +81,22 @@ class _StaticServices:
 
     def plan(self, request: PlanRequest) -> CliCommandResult:
         self.plan_request = request
+        return self.result
+
+    def artifact_inspect(self, request: ArtifactReadRequest) -> CliCommandResult:
+        self.artifact_inspect_request = request
+        return self.result
+
+    def artifact_verify(self, request: ArtifactReadRequest) -> CliCommandResult:
+        self.artifact_verify_request = request
+        return self.result
+
+    def artifact_blob(self, request: ArtifactBlobRequest) -> CliCommandResult:
+        self.artifact_blob_request = request
+        return self.result
+
+    def report(self, request: ReportRequest) -> CliCommandResult:
+        self.report_request = request
         return self.result
 
 
@@ -107,6 +132,32 @@ def _invoke(
     return code, stdout.getvalue(), stderr.getvalue()
 
 
+def _invoke_binary(
+    arguments: list[str],
+    *,
+    services: CliServices,
+) -> tuple[int, str, str, bytes]:
+    stdout = StringIO()
+    stderr = StringIO()
+    binary = BytesIO()
+    code = main(
+        arguments,
+        services=services,
+        stdout=stdout,
+        stderr=stderr,
+        binary_stdout=binary,
+    )
+    return code, stdout.getvalue(), stderr.getvalue(), binary.getvalue()
+
+
+class _TerminalBytes(BytesIO):
+    """Binary test sink representing an interactive terminal."""
+
+    @override
+    def isatty(self) -> bool:
+        return True
+
+
 @pytest.mark.parametrize("arguments", [[], ["--help"]])
 def test_root_help_is_generated_without_running_services(arguments: list[str]) -> None:
     code, stdout, stderr = _invoke(arguments, services=_StaticServices())
@@ -114,6 +165,8 @@ def test_root_help_is_generated_without_running_services(arguments: list[str]) -
     assert "Usage: comparo COMMAND" in stdout
     assert "schema" in stdout
     assert "validate" in stdout
+    assert "artifact" in stdout
+    assert "report" in stdout
     assert stderr == ""
 
 
@@ -275,6 +328,126 @@ def test_plan_callback_preserves_all_frontend_inputs_without_interpreting_them()
     assert request.fail_fast is False
     assert request.budgets == ("requests=4",)
     assert request.output is CliOutputMode.JSON
+
+
+def test_artifact_callbacks_preserve_limits_coordinates_and_output_modes() -> None:
+    services = _StaticServices()
+    common_limits = [
+        "--maximum-blobs",
+        "2",
+        "--maximum-blob-bytes",
+        "3",
+        "--maximum-total-blob-bytes",
+        "4",
+        "--maximum-manifest-bytes",
+        "5",
+        "--maximum-report-bytes",
+        "6",
+        "--maximum-redaction-patterns",
+        "7",
+        "--maximum-redaction-pattern-bytes",
+        "8",
+        "--maximum-redaction-value-bytes",
+        "9",
+        "--maximum-redaction-value-nodes",
+        "10",
+    ]
+    inspected = _invoke(
+        [
+            "artifact",
+            "inspect",
+            "artifact-0",
+            "--root",
+            "store",
+            "--format",
+            "json",
+            *common_limits,
+        ],
+        services=services,
+    )
+    assert inspected == (0, "static result\n", "")
+    request = services.artifact_inspect_request
+    assert request is not None
+    assert request.root == Path("store")
+    assert request.bundle_id == "artifact-0"
+    assert request.output is CliOutputMode.JSON
+    assert tuple(getattr(request.limits, name) for name in request.limits.__struct_fields__) == (
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+    )
+
+    assert _invoke(
+        ["artifact", "verify", "artifact-1"],
+        services=services,
+    ) == (0, "static result\n", "")
+    assert services.artifact_verify_request is not None
+    assert services.artifact_verify_request.bundle_id == "artifact-1"
+
+    assert _invoke(
+        [
+            "artifact",
+            "blob",
+            "artifact-2",
+            "a" * 64,
+            "--root",
+            "store",
+            "--maximum-output-bytes",
+            "11",
+        ],
+        services=services,
+    ) == (0, "static result\n", "")
+    blob = services.artifact_blob_request
+    assert blob is not None
+    assert blob.sha256 == "a" * 64
+    assert blob.maximum_output_bytes == 11
+
+    assert _invoke(
+        ["report", "artifact-3", "--root", "store", "--format", "sarif"],
+        services=services,
+    ) == (0, "static result\n", "")
+    report = services.report_request
+    assert report is not None
+    assert report.format is CliReportFormat.SARIF
+
+
+def test_binary_payload_uses_only_the_explicit_raw_stdout_boundary() -> None:
+    result = CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=CliPayloadKind.BINARY,
+        payload=b"\xff\x00body",
+    )
+    services = _StaticServices(result)
+    written = _invoke_binary(
+        ["artifact", "blob", "artifact-0", "a" * 64],
+        services=services,
+    )
+    assert written == (0, "", "", b"\xff\x00body")
+
+    unavailable = _invoke(
+        ["artifact", "blob", "artifact-0", "a" * 64],
+        services=services,
+    )
+    assert unavailable == (4, "", "Comparo could not write binary output safely.\n")
+
+    stdout = StringIO()
+    stderr = StringIO()
+    terminal_code = main(
+        ["artifact", "blob", "artifact-0", "a" * 64],
+        services=services,
+        stdout=stdout,
+        stderr=stderr,
+        binary_stdout=_TerminalBytes(),
+    )
+    assert terminal_code == 4
+    assert stdout.getvalue() == ""
+    assert stderr.getvalue() == "Comparo could not write binary output safely.\n"
 
 
 @pytest.mark.parametrize("exit_code", [CliExitCode.GATE_FAILED, CliExitCode.EXECUTION_INCOMPLETE])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Protocol
 from typing import final
@@ -9,6 +10,13 @@ from uuid import uuid4
 
 import msgspec
 
+from comparo.application.artifacts import ArtifactInspection
+from comparo.application.artifacts import ArtifactOperationError
+from comparo.application.artifacts import ArtifactReadLimits
+from comparo.application.artifacts import inspect_artifact
+from comparo.application.artifacts import read_artifact_blob
+from comparo.application.artifacts import render_artifact_report
+from comparo.application.artifacts import verify_artifact
 from comparo.application.diagnostics import run_security_checks
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection
@@ -24,16 +32,22 @@ from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.schema_generation import render_v1alpha1_schema
 from comparo.core.domain.budget_contracts import BudgetResource
 from comparo.core.policy import render_policy_schema
+from comparo.reporters import ReportFormat
 from comparo.reporters.json import encode_report_schema
 
+from .contracts import ArtifactBlobRequest
+from .contracts import ArtifactReadRequest
+from .contracts import CliArtifactLimits
 from .contracts import CliCommandResult
 from .contracts import CliExitCode
 from .contracts import CliMessage
 from .contracts import CliMessageLevel
 from .contracts import CliOutputMode
 from .contracts import CliPayloadKind
+from .contracts import CliReportFormat
 from .contracts import DoctorRequest
 from .contracts import PlanRequest
+from .contracts import ReportRequest
 from .contracts import ValidateRequest
 
 _CLI_API_VERSION = "comparo.cli/v1alpha1"
@@ -62,6 +76,18 @@ class CliServices(Protocol):
 
     def plan(self, request: PlanRequest) -> CliCommandResult:
         """Compile and inspect one deterministic plan without runtime effects."""
+
+    def artifact_inspect(self, request: ArtifactReadRequest) -> CliCommandResult:
+        """Authenticate and summarize one artifact bundle."""
+
+    def artifact_verify(self, request: ArtifactReadRequest) -> CliCommandResult:
+        """Authenticate one artifact bundle and all declared blobs."""
+
+    def artifact_blob(self, request: ArtifactBlobRequest) -> CliCommandResult:
+        """Read one explicitly selected sanitized blob."""
+
+    def report(self, request: ReportRequest) -> CliCommandResult:
+        """Render one authenticated artifact report to stdout."""
 
 
 def _canonical_json(value: object) -> bytes:
@@ -377,6 +403,164 @@ def _plan(request: PlanRequest) -> CliCommandResult:
     )
 
 
+def _artifact_limits(value: CliArtifactLimits) -> ArtifactReadLimits:
+    """Translate explicit CLI limits to the application-owned admission contract."""
+    return ArtifactReadLimits(
+        maximum_blobs=value.maximum_blobs,
+        maximum_blob_bytes=value.maximum_blob_bytes,
+        maximum_total_blob_bytes=value.maximum_total_blob_bytes,
+        maximum_manifest_bytes=value.maximum_manifest_bytes,
+        maximum_report_bytes=value.maximum_report_bytes,
+        maximum_redaction_patterns=value.maximum_redaction_patterns,
+        maximum_redaction_pattern_bytes=value.maximum_redaction_pattern_bytes,
+        maximum_redaction_value_bytes=value.maximum_redaction_value_bytes,
+        maximum_redaction_value_nodes=value.maximum_redaction_value_nodes,
+    )
+
+
+def _artifact_failure(
+    error: ArtifactOperationError,
+    *,
+    command: str,
+    output: CliOutputMode,
+) -> CliCommandResult:
+    """Return one value-free closed artifact failure in the requested representation."""
+    code = error.code.value
+    if output is CliOutputMode.HUMAN:
+        return _human(
+            CliExitCode.INVALID_INVOCATION,
+            (CliMessageLevel.ERROR, f"Artifact operation failed ({code})."),
+        )
+    return CliCommandResult(
+        exit_code=CliExitCode.INVALID_INVOCATION,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "code": code,
+                "command": command,
+                "status": "invalid",
+            }
+        ),
+    )
+
+
+def _human_artifact_inspection(value: ArtifactInspection) -> CliCommandResult:
+    """Render a compact authenticated artifact summary without body content."""
+    return _human(
+        CliExitCode.SUCCESS,
+        (CliMessageLevel.SUCCESS, "Artifact bundle is authentic."),
+        (
+            CliMessageLevel.INFO,
+            f"Completion: {value.completion}; gate: {value.gate}.",
+        ),
+        (
+            CliMessageLevel.INFO,
+            f"Results: {value.executions} execution(s), {value.comparisons} comparison(s), "
+            f"{value.assertions} assertion(s), {value.diffs} diff(s).",
+        ),
+        (
+            CliMessageLevel.INFO,
+            f"Storage: {value.blobs} blob(s), {value.blob_bytes} byte(s), "
+            f"{value.coverage_issues} coverage issue(s).",
+        ),
+    )
+
+
+def _artifact_inspect(request: ArtifactReadRequest) -> CliCommandResult:
+    """Authenticate and inspect through the application artifact service."""
+    try:
+        inspection = inspect_artifact(
+            request.root,
+            request.bundle_id,
+            _artifact_limits(request.limits),
+        )
+    except ArtifactOperationError as error:
+        return _artifact_failure(error, command="artifact inspect", output=request.output)
+    if request.output is CliOutputMode.HUMAN:
+        return _human_artifact_inspection(inspection)
+    return CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(msgspec.to_builtins(inspection)),
+    )
+
+
+def _artifact_verify(request: ArtifactReadRequest) -> CliCommandResult:
+    """Authenticate every artifact component without publishing its content."""
+    try:
+        verify_artifact(request.root, request.bundle_id, _artifact_limits(request.limits))
+    except ArtifactOperationError as error:
+        return _artifact_failure(error, command="artifact verify", output=request.output)
+    if request.output is CliOutputMode.HUMAN:
+        return _human(
+            CliExitCode.SUCCESS,
+            (CliMessageLevel.SUCCESS, "Artifact bundle is authentic."),
+        )
+    return CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=CliPayloadKind.JSON,
+        payload=_canonical_json(
+            {
+                "apiVersion": _CLI_API_VERSION,
+                "command": "artifact verify",
+                "status": "verified",
+            }
+        ),
+    )
+
+
+def _artifact_blob(request: ArtifactBlobRequest) -> CliCommandResult:
+    """Read one authenticated sanitized blob as exact raw bytes."""
+    try:
+        payload = asyncio.run(
+            read_artifact_blob(
+                request.root,
+                request.bundle_id,
+                request.sha256,
+                _artifact_limits(request.limits),
+                maximum_output_bytes=request.maximum_output_bytes,
+            )
+        )
+    except ArtifactOperationError as error:
+        return _artifact_failure(
+            error,
+            command="artifact blob",
+            output=CliOutputMode.HUMAN,
+        )
+    return CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=CliPayloadKind.BINARY,
+        payload=payload,
+    )
+
+
+_REPORT_PAYLOAD_KINDS = {
+    CliReportFormat.JSON: CliPayloadKind.JSON,
+    CliReportFormat.JUNIT: CliPayloadKind.TEXT,
+    CliReportFormat.SARIF: CliPayloadKind.JSON,
+    CliReportFormat.MARKDOWN: CliPayloadKind.MARKDOWN,
+}
+
+
+def _report(request: ReportRequest) -> CliCommandResult:
+    """Render one complete authenticated report without filesystem output writes."""
+    try:
+        report = render_artifact_report(
+            request.root,
+            request.bundle_id,
+            _artifact_limits(request.limits),
+            ReportFormat(request.format.value),
+        )
+    except ArtifactOperationError as error:
+        return _artifact_failure(error, command="report", output=CliOutputMode.HUMAN)
+    return CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=_REPORT_PAYLOAD_KINDS[request.format],
+        payload=report.content,
+    )
+
+
 @final
 class DefaultCliServices:
     """Production read-only services used by the installed CLI."""
@@ -408,3 +592,19 @@ class DefaultCliServices:
     def plan(self, request: PlanRequest) -> CliCommandResult:
         """Compile and inspect one deterministic plan without runtime effects."""
         return _plan(request)
+
+    def artifact_inspect(self, request: ArtifactReadRequest) -> CliCommandResult:
+        """Authenticate and summarize one artifact bundle."""
+        return _artifact_inspect(request)
+
+    def artifact_verify(self, request: ArtifactReadRequest) -> CliCommandResult:
+        """Authenticate one artifact bundle and every declared blob."""
+        return _artifact_verify(request)
+
+    def artifact_blob(self, request: ArtifactBlobRequest) -> CliCommandResult:
+        """Read one explicitly selected sanitized blob."""
+        return _artifact_blob(request)
+
+    def report(self, request: ReportRequest) -> CliCommandResult:
+        """Render one authenticated artifact report to stdout."""
+        return _report(request)
