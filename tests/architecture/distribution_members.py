@@ -59,6 +59,11 @@ _REVIEWED_SECURITY_MODULES = frozenset(
         PurePosixPath("src/comparo/core/domain/http/secret_egress.py"),
     }
 )
+_REVIEWED_PACKAGE_ASSETS = frozenset(
+    {
+        "src/comparo/tui/components/comparo.tcss",
+    }
+)
 
 
 class DistributionAuditError(ValueError):
@@ -142,6 +147,7 @@ def _expected_package_files(source_root: Path) -> frozenset[PurePosixPath]:
         and (
             line.endswith((".py", "/py.typed"))
             or (line.startswith("src/comparo/schemas/") and line.endswith(".schema.json"))
+            or line in _REVIEWED_PACKAGE_ASSETS
         )
     )
     if not members:
