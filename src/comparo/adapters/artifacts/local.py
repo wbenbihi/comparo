@@ -22,6 +22,7 @@ import msgspec
 from comparo.core.artifacts.codec import ArtifactCodecError
 from comparo.core.artifacts.codec import decode_run_artifact
 from comparo.core.artifacts.codec import encode_run_artifact
+from comparo.core.artifacts.common import ARTIFACT_API_VERSION
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.policy import ArtifactLimits
@@ -82,13 +83,15 @@ class LocalArtifactBundleSink:
 
     async def persist(  # noqa: C901
         self,
-        artifact: RunArtifact,
+        artifact: object,
         blobs: SanitizedBlobSource,
-        limits: ArtifactLimits,
+        limits: object,
     ) -> ArtifactPersistenceOutcome:
         """Write, sync, and no-replace publish one complete sanitized bundle."""
         if self._closed:
             return _failure(ArtifactStoreErrorCode.CLOSED)
+        if type(artifact) is not RunArtifact or type(limits) is not ArtifactLimits:
+            return _failure(ArtifactStoreErrorCode.INVALID_ARTIFACT)
         bundle_id = artifact.metadata.artifact_id
         if _BUNDLE_ID.fullmatch(bundle_id) is None:
             return _failure(ArtifactStoreErrorCode.INVALID_ARTIFACT)
@@ -256,7 +259,7 @@ class _BundleTransaction:
         _write_file(self._staging_fd, "manifest.json", manifest)
         self._created_files.append("manifest.json")
         os.fsync(self._staging_fd)
-        marker = f"{results_digest}\n".encode("ascii")
+        marker = f"{sha256(manifest).hexdigest()}\n".encode("ascii")
         _write_file(self._staging_fd, "COMPLETE", marker)
         self._created_files.append("COMPLETE")
         os.fsync(self._staging_fd)
@@ -357,11 +360,13 @@ def read_local_artifact_bundle(  # noqa: C901
             "manifest.json",
             maximum=limits.maximum_manifest_bytes.value,
         )
+        if marker != f"{sha256(manifest_bytes).hexdigest()}\n".encode("ascii"):
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
         manifest = msgspec.json.decode(manifest_bytes, type=_BundleManifest)
         if (
             manifest.api_version != _BUNDLE_API_VERSION
+            or manifest.artifact_api_version != ARTIFACT_API_VERSION
             or manifest.artifact_id != bundle_id
-            or marker != f"{manifest.results_sha256}\n".encode("ascii")
         ):
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
         results = _read_file(
@@ -378,7 +383,11 @@ def read_local_artifact_bundle(  # noqa: C901
             results,
             maximum_bytes=limits.maximum_manifest_bytes.value,
         )
-        if artifact.metadata.artifact_id != bundle_id or artifact.blobs != manifest.blobs:
+        if (
+            artifact.api_version != manifest.artifact_api_version
+            or artifact.metadata.artifact_id != bundle_id
+            or artifact.blobs != manifest.blobs
+        ):
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
         if len(artifact.blobs) > limits.maximum_blobs.value:
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
