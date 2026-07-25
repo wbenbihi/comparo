@@ -176,6 +176,16 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
     )
 
 
+def persisted_production_execution_defaults_v1() -> ProductionExecutionSettings:
+    """Return the versioned production defaults with sanitized persistence enabled."""
+    defaults = production_execution_defaults_v1()
+    artifact = msgspec.structs.replace(
+        defaults.artifact,
+        persist=ArtifactPersistMode.ALWAYS,
+    )
+    return msgspec.structs.replace(defaults, artifact=artifact)
+
+
 @final
 class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
     """Every caller-owned finite resource and decoding limit for one production run."""
@@ -727,5 +737,6 @@ __all__ = (
     "ProductionExecutionResult",
     "ProductionExecutionSettings",
     "execute_production",
+    "persisted_production_execution_defaults_v1",
     "production_execution_defaults_v1",
 )

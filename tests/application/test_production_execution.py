@@ -723,6 +723,11 @@ def test_public_composition_contracts_reject_invalid_shapes(tmp_path: Path) -> N
     assert interactive.events is events
     assert interactive.cancellation is cancellation
 
+    persisted = production.persisted_production_execution_defaults_v1()
+    assert persisted.artifact.persist is ArtifactPersistMode.ALWAYS
+    regular = production.production_execution_defaults_v1()
+    assert regular.artifact.persist is ArtifactPersistMode.NEVER
+
     artifact = _artifact()
     failure = ArtifactPersistenceOutcome(
         status=ArtifactPersistenceStatus.FAILED,

@@ -67,6 +67,9 @@ from comparo.application.production_execution import (
 )
 from comparo.application.production_execution import execute_production as execute_production
 from comparo.application.production_execution import (
+    persisted_production_execution_defaults_v1 as persisted_production_execution_defaults_v1,
+)
+from comparo.application.production_execution import (
     production_execution_defaults_v1 as production_execution_defaults_v1,
 )
 from comparo.application.project_workspace import ProjectResourceSummary as ProjectResourceSummary
@@ -189,6 +192,7 @@ __all__ = (
     "inspect_project_plan",
     "inspect_project_workspace",
     "list_report_archive",
+    "persisted_production_execution_defaults_v1",
     "plan_project",
     "preflight_runtime_capabilities",
     "prepare_project_plan",
