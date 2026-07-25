@@ -35,6 +35,12 @@ from comparo.application.preflight import ProjectPlanResult as ProjectPlanResult
 from comparo.application.preflight import ProjectPreparationResult as ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan as inspect_project_plan
 from comparo.application.preflight import prepare_project_plan as prepare_project_plan
+from comparo.application.runtime_capabilities import (
+    RuntimeCapabilityPreflightResult as RuntimeCapabilityPreflightResult,
+)
+from comparo.application.runtime_capabilities import (
+    preflight_runtime_capabilities as preflight_runtime_capabilities,
+)
 
 __all__ = (
     "ApplicationDiagnostic",
@@ -51,6 +57,7 @@ __all__ = (
     "ProjectPlanRequest",
     "ProjectPlanResult",
     "ProjectPreparationResult",
+    "RuntimeCapabilityPreflightResult",
     "SecurityCheck",
     "build_environment_snapshots",
     "build_invocation",
@@ -61,6 +68,7 @@ __all__ = (
     "inspect_policy_diagnostic",
     "inspect_project_plan",
     "plan_project",
+    "preflight_runtime_capabilities",
     "prepare_project_plan",
     "read_artifact_blob",
     "render_artifact_report",
