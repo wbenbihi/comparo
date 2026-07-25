@@ -8,6 +8,8 @@ import msgspec
 import pytest
 
 from comparo.core.artifacts import ARTIFACT_API_VERSION
+from comparo.core.artifacts import ArtifactAmount
+from comparo.core.artifacts import ArtifactAmountUnit
 from comparo.core.artifacts import ArtifactAttempt
 from comparo.core.artifacts import ArtifactBlob
 from comparo.core.artifacts import ArtifactBudget
@@ -19,6 +21,7 @@ from comparo.core.artifacts import ArtifactCompletion
 from comparo.core.artifacts import ArtifactCompletionKind
 from comparo.core.artifacts import ArtifactCoordinate
 from comparo.core.artifacts import ArtifactCoverageIssue
+from comparo.core.artifacts import ArtifactDecimal
 from comparo.core.artifacts import ArtifactDefinition
 from comparo.core.artifacts import ArtifactEvidence
 from comparo.core.artifacts import ArtifactExchange
@@ -30,6 +33,7 @@ from comparo.core.artifacts import ArtifactFactOutcome
 from comparo.core.artifacts import ArtifactField
 from comparo.core.artifacts import ArtifactGate
 from comparo.core.artifacts import ArtifactGateVerdict
+from comparo.core.artifacts import ArtifactInteger
 from comparo.core.artifacts import ArtifactMetadata
 from comparo.core.artifacts import ArtifactMetric
 from comparo.core.artifacts import ArtifactNamedValue
@@ -44,8 +48,6 @@ from comparo.core.artifacts import ArtifactTiming
 from comparo.core.artifacts import RunArtifact
 from comparo.core.artifacts.model import is_artifact_fact
 from comparo.core.domain.values import BytesValue
-from comparo.core.domain.values import JsonDecimal
-from comparo.core.domain.values import JsonInteger
 
 
 def _definition(kind: str, resource_id: str) -> ArtifactDefinition:
@@ -93,7 +95,7 @@ def _fact(engine: ArtifactFactEngine, outcome: ArtifactFactOutcome) -> ArtifactF
                 values=(
                     ArtifactNamedValue(
                         name="actual",
-                        value=JsonDecimal(value=Decimal("1.5")),
+                        value=ArtifactDecimal(value=str(Decimal("1.5"))),
                     ),
                 ),
             ),
@@ -116,6 +118,7 @@ def _artifact() -> RunArtifact:
             cookies=(),
             body=request_capture,
         ),
+        request_omission=None,
         response=ArtifactResponse(
             status=200,
             protocol="HTTP/2",
@@ -123,6 +126,7 @@ def _artifact() -> RunArtifact:
             trailers=(),
             body=response_capture,
         ),
+        response_omission=None,
         failure=None,
         timings=(ArtifactTiming(name="total", nanoseconds=10, reason=None),),
     )
@@ -133,7 +137,7 @@ def _artifact() -> RunArtifact:
         environment=_definition("Environment", "staging"),
         cell_id="cell-0",
         trial_id="trial-0",
-        coordinates=(ArtifactCoordinate(axis="tenant", value=JsonInteger(value=1)),),
+        coordinates=(ArtifactCoordinate(axis="tenant", value=ArtifactInteger(value=1)),),
         outcome=ArtifactExecutionOutcome.OBSERVED,
         failure=None,
         timings=(ArtifactTiming(name="total", nanoseconds=10, reason=None),),
@@ -202,8 +206,8 @@ def _artifact() -> RunArtifact:
             ArtifactBudget(
                 resource="executions",
                 scope="run",
-                limit=2,
-                used=1,
+                limit=ArtifactAmount(unit=ArtifactAmountUnit.COUNT, numerator=2),
+                used=ArtifactAmount(unit=ArtifactAmountUnit.COUNT, numerator=1),
                 exhausted=False,
             ),
         ),
@@ -314,10 +318,10 @@ def test_artifact_rejects_noncanonical_or_dangling_records() -> None:
 
 
 def test_safe_value_contract_rejects_live_non_json_payloads() -> None:
-    with pytest.raises(TypeError, match="exact JsonValue"):
+    with pytest.raises(TypeError, match="exact ArtifactValue"):
         ArtifactNamedValue(name="actual", value=BytesValue(value=b"secret"))  # type: ignore[arg-type]
 
-    with pytest.raises(TypeError, match="exact JsonValue"):
+    with pytest.raises(TypeError, match="exact ArtifactValue"):
         ArtifactCoordinate(axis="tenant", value=BytesValue(value=b"secret"))  # type: ignore[arg-type]
 
 
@@ -337,4 +341,10 @@ def test_coverage_and_budget_shapes_are_explicit() -> None:
             reason=ArtifactOmissionReason.REDACTION_FAILED,
         )
     with pytest.raises(ValueError, match="exhaustion"):
-        ArtifactBudget(resource="bytes", scope="run", limit=1, used=1, exhausted=False)
+        ArtifactBudget(
+            resource="bytes",
+            scope="run",
+            limit=ArtifactAmount(unit=ArtifactAmountUnit.BYTES, numerator=1),
+            used=ArtifactAmount(unit=ArtifactAmountUnit.BYTES, numerator=1),
+            exhausted=False,
+        )

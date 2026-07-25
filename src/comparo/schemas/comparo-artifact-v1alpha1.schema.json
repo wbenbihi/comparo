@@ -1,0 +1,1557 @@
+{
+  "$defs": {
+    "ArtifactAmount": {
+      "additionalProperties": false,
+      "description": "One exact non-negative budget amount without lossy unit conversion.",
+      "properties": {
+        "denominator": {
+          "default": 1,
+          "type": "integer"
+        },
+        "numerator": {
+          "type": "integer"
+        },
+        "unit": {
+          "$ref": "#/$defs/ArtifactAmountUnit"
+        }
+      },
+      "required": [
+        "unit",
+        "numerator"
+      ],
+      "title": "ArtifactAmount",
+      "type": "object"
+    },
+    "ArtifactAmountUnit": {
+      "description": "Exact units retained for resource-budget accounting.",
+      "enum": [
+        "bytes",
+        "count",
+        "nanoseconds",
+        "ratio"
+      ],
+      "title": "ArtifactAmountUnit"
+    },
+    "ArtifactArray": {
+      "additionalProperties": false,
+      "description": "An ordered exact JSON array.",
+      "properties": {
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ArtifactNull"
+              },
+              {
+                "$ref": "#/$defs/ArtifactBoolean"
+              },
+              {
+                "$ref": "#/$defs/ArtifactInteger"
+              },
+              {
+                "$ref": "#/$defs/ArtifactDecimal"
+              },
+              {
+                "$ref": "#/$defs/ArtifactString"
+              },
+              {
+                "$ref": "#/$defs/ArtifactArray"
+              },
+              {
+                "$ref": "#/$defs/ArtifactObject"
+              }
+            ],
+            "discriminator": {
+              "mapping": {
+                "array": "#/$defs/ArtifactArray",
+                "boolean": "#/$defs/ArtifactBoolean",
+                "decimal": "#/$defs/ArtifactDecimal",
+                "integer": "#/$defs/ArtifactInteger",
+                "null": "#/$defs/ArtifactNull",
+                "object": "#/$defs/ArtifactObject",
+                "string": "#/$defs/ArtifactString"
+              },
+              "propertyName": "type"
+            }
+          },
+          "type": "array"
+        },
+        "type": {
+          "enum": [
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "items"
+      ],
+      "title": "ArtifactArray",
+      "type": "object"
+    },
+    "ArtifactAttempt": {
+      "additionalProperties": false,
+      "description": "One ordered redirect-containing attempt.",
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "exchanges": {
+          "items": {
+            "$ref": "#/$defs/ArtifactExchange"
+          },
+          "type": "array"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactFailure"
+            }
+          ],
+          "default": null
+        },
+        "terminal_pre_send_omission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactOmissionReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "terminal_pre_send_request": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactRequest"
+            }
+          ],
+          "default": null
+        },
+        "timings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ArtifactTiming"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "exchanges"
+      ],
+      "title": "ArtifactAttempt",
+      "type": "object"
+    },
+    "ArtifactBlob": {
+      "additionalProperties": false,
+      "description": "Content-addressed sanitized blob metadata without any storage locator.",
+      "properties": {
+        "byte_count": {
+          "type": "integer"
+        },
+        "media_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "byte_count"
+      ],
+      "title": "ArtifactBlob",
+      "type": "object"
+    },
+    "ArtifactBoolean": {
+      "additionalProperties": false,
+      "description": "An exact JSON Boolean.",
+      "properties": {
+        "type": {
+          "enum": [
+            "boolean"
+          ]
+        },
+        "value": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "ArtifactBoolean",
+      "type": "object"
+    },
+    "ArtifactBudget": {
+      "additionalProperties": false,
+      "description": "One effective budget and its final value-free accounting snapshot.",
+      "properties": {
+        "exhausted": {
+          "type": "boolean"
+        },
+        "limit": {
+          "$ref": "#/$defs/ArtifactAmount"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "used": {
+          "$ref": "#/$defs/ArtifactAmount"
+        }
+      },
+      "required": [
+        "resource",
+        "scope",
+        "limit",
+        "used",
+        "exhausted"
+      ],
+      "title": "ArtifactBudget",
+      "type": "object"
+    },
+    "ArtifactCapture": {
+      "additionalProperties": false,
+      "description": "Truthful sanitized capture state for one body or evidence source.",
+      "properties": {
+        "blob": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactBlob"
+            }
+          ]
+        },
+        "extent": {
+          "$ref": "#/$defs/ArtifactCaptureExtent"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactOmissionReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "redaction_count": {
+          "default": 0,
+          "type": "integer"
+        },
+        "source_byte_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_state": {
+          "$ref": "#/$defs/ArtifactSourceCaptureState"
+        }
+      },
+      "required": [
+        "source_state",
+        "extent",
+        "source_byte_count",
+        "blob"
+      ],
+      "title": "ArtifactCapture",
+      "type": "object"
+    },
+    "ArtifactCaptureExtent": {
+      "description": "Truthful persistence extent of one authored or observed source.",
+      "enum": [
+        "complete",
+        "omitted",
+        "partial"
+      ],
+      "title": "ArtifactCaptureExtent"
+    },
+    "ArtifactComparison": {
+      "additionalProperties": false,
+      "description": "One terminal directed comparison and its sanitized diff facts.",
+      "properties": {
+        "baseline_execution_id": {
+          "type": "string"
+        },
+        "candidate_execution_id": {
+          "type": "string"
+        },
+        "cell_id": {
+          "type": "string"
+        },
+        "comparison_id": {
+          "type": "string"
+        },
+        "diffs": {
+          "items": {
+            "$ref": "#/$defs/ArtifactFact"
+          },
+          "type": "array"
+        },
+        "ordinal": {
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ArtifactComparisonOutcome"
+        },
+        "subject": {
+          "$ref": "#/$defs/ArtifactDefinition"
+        },
+        "trial_id": {
+          "type": "string"
+        },
+        "unavailable_execution_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "ordinal",
+        "comparison_id",
+        "subject",
+        "cell_id",
+        "trial_id",
+        "baseline_execution_id",
+        "candidate_execution_id",
+        "outcome",
+        "unavailable_execution_ids",
+        "diffs"
+      ],
+      "title": "ArtifactComparison",
+      "type": "object"
+    },
+    "ArtifactComparisonOutcome": {
+      "description": "Terminal directed comparison states.",
+      "enum": [
+        "evaluated",
+        "incomplete"
+      ],
+      "title": "ArtifactComparisonOutcome"
+    },
+    "ArtifactCompletion": {
+      "additionalProperties": false,
+      "description": "One terminal lifecycle state with only structured reasons and codes.",
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "instant_unix_nanoseconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactCompletionKind"
+        },
+        "reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "kind",
+        "instant_unix_nanoseconds"
+      ],
+      "title": "ArtifactCompletion",
+      "type": "object"
+    },
+    "ArtifactCompletionKind": {
+      "description": "Terminal run lifecycle states retained independently from the gate.",
+      "enum": [
+        "cancelled",
+        "complete",
+        "internal-error",
+        "partial",
+        "rejected"
+      ],
+      "title": "ArtifactCompletionKind"
+    },
+    "ArtifactCoordinate": {
+      "additionalProperties": false,
+      "description": "One sanitized Matrix coordinate used to produce a planned cell.",
+      "properties": {
+        "axis": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactNull"
+            },
+            {
+              "$ref": "#/$defs/ArtifactBoolean"
+            },
+            {
+              "$ref": "#/$defs/ArtifactInteger"
+            },
+            {
+              "$ref": "#/$defs/ArtifactDecimal"
+            },
+            {
+              "$ref": "#/$defs/ArtifactString"
+            },
+            {
+              "$ref": "#/$defs/ArtifactArray"
+            },
+            {
+              "$ref": "#/$defs/ArtifactObject"
+            }
+          ],
+          "discriminator": {
+            "mapping": {
+              "array": "#/$defs/ArtifactArray",
+              "boolean": "#/$defs/ArtifactBoolean",
+              "decimal": "#/$defs/ArtifactDecimal",
+              "integer": "#/$defs/ArtifactInteger",
+              "null": "#/$defs/ArtifactNull",
+              "object": "#/$defs/ArtifactObject",
+              "string": "#/$defs/ArtifactString"
+            },
+            "propertyName": "type"
+          }
+        }
+      },
+      "required": [
+        "axis",
+        "value"
+      ],
+      "title": "ArtifactCoordinate",
+      "type": "object"
+    },
+    "ArtifactCoverageIssue": {
+      "additionalProperties": false,
+      "description": "One source that was omitted or only partially persisted.",
+      "properties": {
+        "execution_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extent": {
+          "$ref": "#/$defs/ArtifactCaptureExtent"
+        },
+        "reason": {
+          "$ref": "#/$defs/ArtifactOmissionReason"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "extent",
+        "reason"
+      ],
+      "title": "ArtifactCoverageIssue",
+      "type": "object"
+    },
+    "ArtifactDecimal": {
+      "additionalProperties": false,
+      "description": "An exact finite JSON decimal retained as canonical text.",
+      "properties": {
+        "type": {
+          "enum": [
+            "decimal"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "ArtifactDecimal",
+      "type": "object"
+    },
+    "ArtifactDefinition": {
+      "additionalProperties": false,
+      "description": "Safe canonical identity and fingerprint of one authored definition.",
+      "properties": {
+        "fingerprint": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "namespace",
+        "kind",
+        "resource_id",
+        "fingerprint"
+      ],
+      "title": "ArtifactDefinition",
+      "type": "object"
+    },
+    "ArtifactEvidence": {
+      "additionalProperties": false,
+      "description": "Bounded sanitized evidence retained for one pure fact.",
+      "properties": {
+        "fact_id": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "values": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ArtifactNamedValue"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "fact_id",
+        "outcome",
+        "location"
+      ],
+      "title": "ArtifactEvidence",
+      "type": "object"
+    },
+    "ArtifactExchange": {
+      "additionalProperties": false,
+      "description": "One sanitized request and terminal response or failure.",
+      "properties": {
+        "exchange_id": {
+          "type": "string"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactFailure"
+            }
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactRequest"
+            }
+          ]
+        },
+        "request_omission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactOmissionReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactResponse"
+            }
+          ]
+        },
+        "response_omission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactOmissionReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timings": {
+          "items": {
+            "$ref": "#/$defs/ArtifactTiming"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "exchange_id",
+        "request",
+        "request_omission",
+        "response",
+        "response_omission",
+        "failure",
+        "timings"
+      ],
+      "title": "ArtifactExchange",
+      "type": "object"
+    },
+    "ArtifactExecution": {
+      "additionalProperties": false,
+      "description": "One terminal Environment execution and its sanitized assertion facts.",
+      "properties": {
+        "assertions": {
+          "items": {
+            "$ref": "#/$defs/ArtifactFact"
+          },
+          "type": "array"
+        },
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactAttempt"
+          },
+          "type": "array"
+        },
+        "cell_id": {
+          "type": "string"
+        },
+        "coordinates": {
+          "items": {
+            "$ref": "#/$defs/ArtifactCoordinate"
+          },
+          "type": "array"
+        },
+        "environment": {
+          "$ref": "#/$defs/ArtifactDefinition"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactFailure"
+            }
+          ]
+        },
+        "ordinal": {
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ArtifactExecutionOutcome"
+        },
+        "subject": {
+          "$ref": "#/$defs/ArtifactDefinition"
+        },
+        "timings": {
+          "items": {
+            "$ref": "#/$defs/ArtifactTiming"
+          },
+          "type": "array"
+        },
+        "trial_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ordinal",
+        "execution_id",
+        "subject",
+        "environment",
+        "cell_id",
+        "trial_id",
+        "coordinates",
+        "outcome",
+        "failure",
+        "timings",
+        "attempts",
+        "assertions"
+      ],
+      "title": "ArtifactExecution",
+      "type": "object"
+    },
+    "ArtifactExecutionOutcome": {
+      "description": "Terminal Environment execution states.",
+      "enum": [
+        "blocked",
+        "cancelled",
+        "observed",
+        "unavailable"
+      ],
+      "title": "ArtifactExecutionOutcome"
+    },
+    "ArtifactFact": {
+      "additionalProperties": false,
+      "description": "One sanitized assertion or diff aggregate with exact bounded evidence.",
+      "properties": {
+        "application_id": {
+          "type": "string"
+        },
+        "counts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "effective_rule_id": {
+          "type": "string"
+        },
+        "engine": {
+          "$ref": "#/$defs/ArtifactFactEngine"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/ArtifactEvidence"
+          },
+          "type": "array"
+        },
+        "evidence_omitted": {
+          "type": "integer"
+        },
+        "fact_id": {
+          "type": "string"
+        },
+        "issues": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ArtifactFailure"
+          },
+          "type": "array"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ArtifactFactOutcome"
+        },
+        "rule": {
+          "$ref": "#/$defs/ArtifactDefinition"
+        },
+        "rule_id": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/ArtifactSeverity"
+        }
+      },
+      "required": [
+        "fact_id",
+        "application_id",
+        "engine",
+        "rule",
+        "rule_id",
+        "effective_rule_id",
+        "severity",
+        "outcome",
+        "counts",
+        "coverage",
+        "evidence",
+        "evidence_omitted"
+      ],
+      "title": "ArtifactFact",
+      "type": "object"
+    },
+    "ArtifactFactEngine": {
+      "description": "Pure engines from which artifact facts originate.",
+      "enum": [
+        "assertion",
+        "diff"
+      ],
+      "title": "ArtifactFactEngine"
+    },
+    "ArtifactFactOutcome": {
+      "description": "Closed reporter-facing fact outcomes across both pure engines.",
+      "enum": [
+        "drifted",
+        "equivalent",
+        "error",
+        "incomplete",
+        "not-evaluated",
+        "satisfied",
+        "skipped",
+        "unavailable",
+        "violated"
+      ],
+      "title": "ArtifactFactOutcome"
+    },
+    "ArtifactFailure": {
+      "additionalProperties": false,
+      "description": "Structured failure safe for persistence and presentation.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "retryable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "code"
+      ],
+      "title": "ArtifactFailure",
+      "type": "object"
+    },
+    "ArtifactField": {
+      "additionalProperties": false,
+      "description": "One ordered sanitized HTTP field occurrence.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "redacted": {
+          "default": false,
+          "type": "boolean"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "ArtifactField",
+      "type": "object"
+    },
+    "ArtifactGate": {
+      "additionalProperties": false,
+      "description": "A gate verdict and its auditable coverage inputs, independent of completion.",
+      "properties": {
+        "assessments": {
+          "items": {
+            "$ref": "#/$defs/ArtifactGateCounts"
+          },
+          "type": "array"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactDefinition"
+            }
+          ]
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ArtifactGateVerdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "profile",
+        "reasons",
+        "coverage",
+        "assessments"
+      ],
+      "title": "ArtifactGate",
+      "type": "object"
+    },
+    "ArtifactGateCounts": {
+      "additionalProperties": false,
+      "description": "One severity's exact actual and allowed gate dimensions.",
+      "properties": {
+        "actual": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "allowed": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/ArtifactSeverity"
+        }
+      },
+      "required": [
+        "severity",
+        "actual",
+        "allowed"
+      ],
+      "title": "ArtifactGateCounts",
+      "type": "object"
+    },
+    "ArtifactGateVerdict": {
+      "description": "Persistable gate verdicts that never collapse absence into success.",
+      "enum": [
+        "failed",
+        "not-requested",
+        "passed"
+      ],
+      "title": "ArtifactGateVerdict"
+    },
+    "ArtifactInteger": {
+      "additionalProperties": false,
+      "description": "An arbitrary-precision exact JSON integer.",
+      "properties": {
+        "type": {
+          "enum": [
+            "integer"
+          ]
+        },
+        "value": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "ArtifactInteger",
+      "type": "object"
+    },
+    "ArtifactMetadata": {
+      "additionalProperties": false,
+      "description": "Version and occurrence identity fixed before rendering or persistence.",
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "configuration_api_version": {
+          "type": "string"
+        },
+        "created_unix_nanoseconds": {
+          "type": "integer"
+        },
+        "credential_catalog_version": {
+          "default": "comparo.credentials/v1alpha1",
+          "type": "string"
+        },
+        "invocation_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "sanitizer_version": {
+          "default": "comparo.sanitizer/v1alpha1",
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "run_id",
+        "invocation_id",
+        "created_unix_nanoseconds",
+        "tool_name",
+        "tool_version",
+        "configuration_api_version"
+      ],
+      "title": "ArtifactMetadata",
+      "type": "object"
+    },
+    "ArtifactMetric": {
+      "additionalProperties": false,
+      "description": "One named non-negative exact count.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "ArtifactMetric",
+      "type": "object"
+    },
+    "ArtifactNamedValue": {
+      "additionalProperties": false,
+      "description": "One named exact JSON value that has crossed sanitization.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactNull"
+            },
+            {
+              "$ref": "#/$defs/ArtifactBoolean"
+            },
+            {
+              "$ref": "#/$defs/ArtifactInteger"
+            },
+            {
+              "$ref": "#/$defs/ArtifactDecimal"
+            },
+            {
+              "$ref": "#/$defs/ArtifactString"
+            },
+            {
+              "$ref": "#/$defs/ArtifactArray"
+            },
+            {
+              "$ref": "#/$defs/ArtifactObject"
+            }
+          ],
+          "discriminator": {
+            "mapping": {
+              "array": "#/$defs/ArtifactArray",
+              "boolean": "#/$defs/ArtifactBoolean",
+              "decimal": "#/$defs/ArtifactDecimal",
+              "integer": "#/$defs/ArtifactInteger",
+              "null": "#/$defs/ArtifactNull",
+              "object": "#/$defs/ArtifactObject",
+              "string": "#/$defs/ArtifactString"
+            },
+            "propertyName": "type"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "ArtifactNamedValue",
+      "type": "object"
+    },
+    "ArtifactNull": {
+      "additionalProperties": false,
+      "description": "The exact JSON null value.",
+      "properties": {
+        "type": {
+          "enum": [
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ArtifactNull",
+      "type": "object"
+    },
+    "ArtifactObject": {
+      "additionalProperties": false,
+      "description": "An ordered exact JSON object with unique member names.",
+      "properties": {
+        "members": {
+          "items": {
+            "$ref": "#/$defs/ArtifactObjectMember"
+          },
+          "type": "array"
+        },
+        "type": {
+          "enum": [
+            "object"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "members"
+      ],
+      "title": "ArtifactObject",
+      "type": "object"
+    },
+    "ArtifactObjectMember": {
+      "additionalProperties": false,
+      "description": "One ordered exact JSON object member.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactNull"
+            },
+            {
+              "$ref": "#/$defs/ArtifactBoolean"
+            },
+            {
+              "$ref": "#/$defs/ArtifactInteger"
+            },
+            {
+              "$ref": "#/$defs/ArtifactDecimal"
+            },
+            {
+              "$ref": "#/$defs/ArtifactString"
+            },
+            {
+              "$ref": "#/$defs/ArtifactArray"
+            },
+            {
+              "$ref": "#/$defs/ArtifactObject"
+            }
+          ],
+          "discriminator": {
+            "mapping": {
+              "array": "#/$defs/ArtifactArray",
+              "boolean": "#/$defs/ArtifactBoolean",
+              "decimal": "#/$defs/ArtifactDecimal",
+              "integer": "#/$defs/ArtifactInteger",
+              "null": "#/$defs/ArtifactNull",
+              "object": "#/$defs/ArtifactObject",
+              "string": "#/$defs/ArtifactString"
+            },
+            "propertyName": "type"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "ArtifactObjectMember",
+      "type": "object"
+    },
+    "ArtifactOmissionReason": {
+      "description": "Value-free reasons sanitized capture could not be persisted completely.",
+      "enum": [
+        "budget-exceeded",
+        "cancelled",
+        "decode-failed",
+        "policy",
+        "redaction-failed",
+        "source-incomplete",
+        "source-unavailable",
+        "storage-failed"
+      ],
+      "title": "ArtifactOmissionReason"
+    },
+    "ArtifactProvenance": {
+      "additionalProperties": false,
+      "description": "Safe reproducibility identities retained independently of live configuration.",
+      "properties": {
+        "artifact_profile": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactDefinition"
+            }
+          ]
+        },
+        "configuration_fingerprint": {
+          "type": "string"
+        },
+        "execution_policy": {
+          "$ref": "#/$defs/ArtifactDefinition"
+        },
+        "ordering": {
+          "type": "string"
+        },
+        "plan_fingerprint": {
+          "type": "string"
+        },
+        "project": {
+          "$ref": "#/$defs/ArtifactDefinition"
+        },
+        "redaction_profile": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactDefinition"
+            }
+          ]
+        }
+      },
+      "required": [
+        "project",
+        "execution_policy",
+        "artifact_profile",
+        "redaction_profile",
+        "configuration_fingerprint",
+        "plan_fingerprint",
+        "ordering"
+      ],
+      "title": "ArtifactProvenance",
+      "type": "object"
+    },
+    "ArtifactRequest": {
+      "additionalProperties": false,
+      "description": "Sanitized wire request representation.",
+      "properties": {
+        "body": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactCapture"
+            }
+          ]
+        },
+        "cookies": {
+          "items": {
+            "$ref": "#/$defs/ArtifactField"
+          },
+          "type": "array"
+        },
+        "headers": {
+          "items": {
+            "$ref": "#/$defs/ArtifactField"
+          },
+          "type": "array"
+        },
+        "method": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "url",
+        "headers",
+        "cookies",
+        "body"
+      ],
+      "title": "ArtifactRequest",
+      "type": "object"
+    },
+    "ArtifactResponse": {
+      "additionalProperties": false,
+      "description": "Sanitized observed response without transport-owned locators.",
+      "properties": {
+        "body": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactCapture"
+            }
+          ]
+        },
+        "headers": {
+          "items": {
+            "$ref": "#/$defs/ArtifactField"
+          },
+          "type": "array"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        },
+        "trailers": {
+          "items": {
+            "$ref": "#/$defs/ArtifactField"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "protocol",
+        "headers",
+        "trailers",
+        "body"
+      ],
+      "title": "ArtifactResponse",
+      "type": "object"
+    },
+    "ArtifactSeverity": {
+      "description": "Normalized severity retained without importing live gate types.",
+      "enum": [
+        "blocking",
+        "info",
+        "warning"
+      ],
+      "title": "ArtifactSeverity"
+    },
+    "ArtifactSourceCaptureState": {
+      "description": "Truth about the transient source before artifact policy is applied.",
+      "enum": [
+        "budget-exceeded",
+        "cancelled",
+        "complete",
+        "content-decoding-failed",
+        "explicitly-truncated",
+        "idle-timeout",
+        "policy-omitted",
+        "read-failed",
+        "remote-truncated",
+        "storage-failed"
+      ],
+      "title": "ArtifactSourceCaptureState"
+    },
+    "ArtifactString": {
+      "additionalProperties": false,
+      "description": "An exact JSON string after sanitization.",
+      "properties": {
+        "type": {
+          "enum": [
+            "string"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "ArtifactString",
+      "type": "object"
+    },
+    "ArtifactSummary": {
+      "additionalProperties": false,
+      "description": "Precomputed exact outcome tallies consumed without reporter reinterpretation.",
+      "properties": {
+        "assertions": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "comparisons": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "diffs": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        },
+        "executions": {
+          "items": {
+            "$ref": "#/$defs/ArtifactMetric"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "executions",
+        "comparisons",
+        "assertions",
+        "diffs"
+      ],
+      "title": "ArtifactSummary",
+      "type": "object"
+    },
+    "ArtifactTiming": {
+      "additionalProperties": false,
+      "description": "One exact timing value or explicit non-measurement reason.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "nanoseconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "nanoseconds",
+        "reason"
+      ],
+      "title": "ArtifactTiming",
+      "type": "object"
+    },
+    "RunArtifact": {
+      "additionalProperties": false,
+      "description": "A complete safe manifest from which persistence and all reporters derive.",
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "blobs": {
+          "items": {
+            "$ref": "#/$defs/ArtifactBlob"
+          },
+          "type": "array"
+        },
+        "budgets": {
+          "items": {
+            "$ref": "#/$defs/ArtifactBudget"
+          },
+          "type": "array"
+        },
+        "comparisons": {
+          "items": {
+            "$ref": "#/$defs/ArtifactComparison"
+          },
+          "type": "array"
+        },
+        "completion": {
+          "$ref": "#/$defs/ArtifactCompletion"
+        },
+        "coverage_issues": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ArtifactCoverageIssue"
+          },
+          "type": "array"
+        },
+        "executions": {
+          "items": {
+            "$ref": "#/$defs/ArtifactExecution"
+          },
+          "type": "array"
+        },
+        "gate": {
+          "$ref": "#/$defs/ArtifactGate"
+        },
+        "metadata": {
+          "$ref": "#/$defs/ArtifactMetadata"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ArtifactProvenance"
+        },
+        "resources": {
+          "items": {
+            "$ref": "#/$defs/ArtifactDefinition"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/ArtifactSummary"
+        }
+      },
+      "required": [
+        "api_version",
+        "metadata",
+        "provenance",
+        "completion",
+        "gate",
+        "summary",
+        "executions",
+        "comparisons",
+        "resources",
+        "budgets",
+        "blobs"
+      ],
+      "title": "RunArtifact",
+      "type": "object"
+    }
+  },
+  "$id": "https://comparo.dev/schemas/comparo-artifact-v1alpha1.schema.json",
+  "$ref": "#/$defs/RunArtifact",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

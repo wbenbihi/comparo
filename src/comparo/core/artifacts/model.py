@@ -26,7 +26,7 @@ from comparo.core.artifacts.lifecycle import ArtifactGate
 
 
 @final
-class ArtifactCoverageIssue(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactCoverageIssue(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One source that was omitted or only partially persisted."""
 
     source: str
@@ -46,7 +46,7 @@ class ArtifactCoverageIssue(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class RunArtifact(msgspec.Struct, frozen=True, kw_only=True):
+class RunArtifact(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """A complete safe manifest from which persistence and all reporters derive."""
 
     api_version: str
@@ -114,7 +114,7 @@ def _artifact_captures(artifact: RunArtifact) -> tuple[ArtifactCapture, ...]:
     for execution in artifact.executions:
         for attempt in execution.attempts:
             for exchange in attempt.exchanges:
-                if exchange.request.body is not None:
+                if exchange.request is not None and exchange.request.body is not None:
                     captures.append(exchange.request.body)
                 if exchange.response is not None and exchange.response.body is not None:
                     captures.append(exchange.response.body)

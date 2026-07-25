@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import final
 
 import msgspec
@@ -124,8 +125,17 @@ class ArtifactOmissionReason(DomainStrEnum):
     CANCELLED = "cancelled"
 
 
+class ArtifactAmountUnit(DomainStrEnum):
+    """Exact units retained for resource-budget accounting."""
+
+    COUNT = "count"
+    BYTES = "bytes"
+    NANOSECONDS = "nanoseconds"
+    RATIO = "ratio"
+
+
 @final
-class ArtifactDefinition(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactDefinition(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Safe canonical identity and fingerprint of one authored definition."""
 
     namespace: str
@@ -138,14 +148,14 @@ class ArtifactDefinition(msgspec.Struct, frozen=True, kw_only=True):
         for value, label, maximum in (
             (self.namespace, "definition namespace", 63),
             (self.kind, "definition kind", 63),
-            (self.resource_id, "definition resource ID", 63),
+            (self.resource_id, "definition resource ID", 255),
             (self.fingerprint, "definition fingerprint", 128),
         ):
             require_text(value, label=label, maximum=maximum)
 
 
 @final
-class ArtifactMetadata(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactMetadata(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Version and occurrence identity fixed before rendering or persistence."""
 
     artifact_id: str
@@ -176,7 +186,7 @@ class ArtifactMetadata(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Safe reproducibility identities retained independently of live configuration."""
 
     project: ArtifactDefinition
@@ -209,7 +219,7 @@ class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactMetric(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactMetric(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One named non-negative exact count."""
 
     name: str
@@ -222,24 +232,50 @@ class ArtifactMetric(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactBudget(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactAmount(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """One exact non-negative budget amount without lossy unit conversion."""
+
+    unit: ArtifactAmountUnit
+    numerator: int
+    denominator: int = 1
+
+    def __post_init__(self) -> None:
+        """Require a reduced-shape positive denominator and unit coherence."""
+        if type(self.unit) is not ArtifactAmountUnit:
+            raise TypeError("artifact amount unit must be typed")
+        require_count(self.numerator, label="artifact amount numerator")
+        if type(self.denominator) is not int or self.denominator <= 0:
+            raise ValueError("artifact amount denominator must be a positive integer")
+        if self.unit is not ArtifactAmountUnit.RATIO and self.denominator != 1:
+            raise ValueError("non-ratio artifact amounts require denominator one")
+
+    @property
+    def fraction(self) -> Fraction:
+        """Return the exact comparison value without exposing a wire dependency."""
+        return Fraction(self.numerator, self.denominator)
+
+
+@final
+class ArtifactBudget(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One effective budget and its final value-free accounting snapshot."""
 
     resource: str
     scope: str
-    limit: int
-    used: int
+    limit: ArtifactAmount
+    used: ArtifactAmount
     exhausted: bool
 
     def __post_init__(self) -> None:
         """Require a bounded identity and coherent non-negative accounting."""
         require_text(self.resource, label="artifact budget resource", maximum=127)
         require_text(self.scope, label="artifact budget scope", maximum=255)
-        require_count(self.limit, label="artifact budget limit")
-        require_count(self.used, label="artifact budget used amount")
+        if type(self.limit) is not ArtifactAmount or type(self.used) is not ArtifactAmount:
+            raise TypeError("artifact budget amounts must be typed")
+        if self.limit.unit is not self.used.unit:
+            raise ValueError("artifact budget amounts must use one unit")
         if type(self.exhausted) is not bool:
             raise TypeError("artifact budget exhausted marker must be bool")
-        if self.exhausted != (self.used >= self.limit):
+        if self.exhausted != (self.used.fraction >= self.limit.fraction):
             raise ValueError("artifact budget exhaustion must match its accounting")
 
 
@@ -253,7 +289,7 @@ def require_metrics(metrics: object, *, label: str) -> None:
 
 
 @final
-class ArtifactBlob(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactBlob(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Content-addressed sanitized blob metadata without any storage locator."""
 
     sha256: str
@@ -274,7 +310,7 @@ class ArtifactBlob(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactCapture(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactCapture(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Truthful sanitized capture state for one body or evidence source."""
 
     source_state: ArtifactSourceCaptureState
@@ -314,7 +350,7 @@ def _validate_capture_shape(capture: ArtifactCapture) -> None:
 
 
 @final
-class ArtifactFailure(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactFailure(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Structured failure safe for persistence and presentation."""
 
     stage: str

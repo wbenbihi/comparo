@@ -19,40 +19,40 @@ from comparo.core.artifacts.common import require_metrics
 from comparo.core.artifacts.common import require_text
 from comparo.core.artifacts.http import ArtifactAttempt
 from comparo.core.artifacts.http import ArtifactTiming
-from comparo.core.domain.values import JsonValue
-from comparo.core.domain.values import is_json_value
+from comparo.core.artifacts.values import ArtifactValue
+from comparo.core.artifacts.values import is_artifact_value
 
 
 @final
-class ArtifactNamedValue(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactNamedValue(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One named exact JSON value that has crossed sanitization."""
 
     name: str
-    value: JsonValue
+    value: ArtifactValue
 
     def __post_init__(self) -> None:
         """Exclude every live or dynamically typed payload from artifact evidence."""
         require_text(self.name, label="artifact value name", maximum=63)
-        if not is_json_value(self.value):
-            raise TypeError("artifact named value must contain an exact JsonValue")
+        if not is_artifact_value(self.value):
+            raise TypeError("artifact named value must contain an exact ArtifactValue")
 
 
 @final
-class ArtifactCoordinate(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactCoordinate(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One sanitized Matrix coordinate used to produce a planned cell."""
 
     axis: str
-    value: JsonValue
+    value: ArtifactValue
 
     def __post_init__(self) -> None:
         """Require a bounded axis identity and exact safe value."""
         require_text(self.axis, label="artifact Matrix axis", maximum=127)
-        if not is_json_value(self.value):
-            raise TypeError("artifact Matrix coordinate must contain an exact JsonValue")
+        if not is_artifact_value(self.value):
+            raise TypeError("artifact Matrix coordinate must contain an exact ArtifactValue")
 
 
 @final
-class ArtifactEvidence(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactEvidence(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Bounded sanitized evidence retained for one pure fact."""
 
     fact_id: str
@@ -75,7 +75,7 @@ class ArtifactEvidence(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactFact(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactFact(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One sanitized assertion or diff aggregate with exact bounded evidence."""
 
     fact_id: str
@@ -123,7 +123,7 @@ class ArtifactFact(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactExecution(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactExecution(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One terminal Environment execution and its sanitized assertion facts."""
 
     ordinal: int
@@ -172,7 +172,7 @@ class ArtifactExecution(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactComparison(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactComparison(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One terminal directed comparison and its sanitized diff facts."""
 
     ordinal: int
@@ -214,7 +214,7 @@ class ArtifactComparison(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactSummary(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactSummary(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """Precomputed exact outcome tallies consumed without reporter reinterpretation."""
 
     executions: tuple[ArtifactMetric, ...]

@@ -16,7 +16,7 @@ from comparo.core.artifacts.common import require_text
 
 
 @final
-class ArtifactCompletion(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactCompletion(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One terminal lifecycle state with only structured reasons and codes."""
 
     kind: ArtifactCompletionKind
@@ -44,7 +44,7 @@ class ArtifactCompletion(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactGateCounts(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactGateCounts(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """One severity's exact actual and allowed gate dimensions."""
 
     severity: ArtifactSeverity
@@ -62,7 +62,7 @@ class ArtifactGateCounts(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ArtifactGate(msgspec.Struct, frozen=True, kw_only=True):
+class ArtifactGate(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
     """A gate verdict and its auditable coverage inputs, independent of completion."""
 
     verdict: ArtifactGateVerdict
