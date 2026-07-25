@@ -185,13 +185,15 @@ def prepare_project_plan(request: ProjectPlanRequest) -> ProjectPreparationResul
         project=PreparedProjectPlan(
             prepared=planned.prepared,
             policy=cast("CompiledExecutionPolicy", policy),
-            project_root=_project_root(request.config),
+            project_root=resolve_project_root(request.config),
         )
     )
 
 
-def _project_root(config: Path) -> Path:
+def resolve_project_root(config: Path) -> Path:
     """Resolve the caller-selected Project root independently from authored data paths."""
+    if not isinstance(config, Path):
+        raise TypeError("project root selection requires a Path")
     selected = config if config.is_dir() else config.parent
     return selected.resolve()
 
@@ -215,4 +217,5 @@ __all__ = (
     "ProjectPreparationResult",
     "inspect_project_plan",
     "prepare_project_plan",
+    "resolve_project_root",
 )

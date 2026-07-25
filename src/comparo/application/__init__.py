@@ -50,6 +50,7 @@ from comparo.application.preflight import ProjectPlanResult as ProjectPlanResult
 from comparo.application.preflight import ProjectPreparationResult as ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan as inspect_project_plan
 from comparo.application.preflight import prepare_project_plan as prepare_project_plan
+from comparo.application.preflight import resolve_project_root as resolve_project_root
 from comparo.application.production_execution import (
     ProductionExecutionFailure as ProductionExecutionFailure,
 )
@@ -201,6 +202,7 @@ __all__ = (
     "read_artifact_blob",
     "render_artifact_report",
     "render_prepared_requests",
+    "resolve_project_root",
     "run_security_checks",
     "start_execution_session",
     "verify_artifact",

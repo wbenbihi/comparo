@@ -18,6 +18,7 @@ from comparo.application.preflight import ProjectPlanResult
 from comparo.application.preflight import ProjectPreparationResult
 from comparo.application.preflight import inspect_project_plan
 from comparo.application.preflight import prepare_project_plan
+from comparo.application.preflight import resolve_project_root
 from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS
 from comparo.core.planning.models import PreparedRun
 from comparo.core.policy import CompiledExecutionPolicy
@@ -323,3 +324,12 @@ def test_execution_preflight_products_reject_untyped_or_contradictory_state(
         ProjectPreparationResult()
     with pytest.raises(ValueError, match="exactly"):
         ProjectPreparationResult(project=project, diagnostics=(diagnostic,))
+
+
+def test_project_root_resolution_is_public_typed_and_config_relative(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert resolve_project_root(project) == project.resolve()
+    assert resolve_project_root(project / "comparo.yaml") == project.resolve()
+    with pytest.raises(TypeError, match="requires a Path"):
+        resolve_project_root(cast("Path", object()))
