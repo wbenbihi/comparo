@@ -28,6 +28,16 @@ from comparo.application.compare import ComparePrepareRequest as ComparePrepareR
 from comparo.application.compare import CompareService as CompareService
 from comparo.application.compare import CompareServiceError as CompareServiceError
 from comparo.application.compare import CompareServiceErrorCode as CompareServiceErrorCode
+from comparo.application.curl_export import CurlDialect as CurlDialect
+from comparo.application.curl_export import CurlExport as CurlExport
+from comparo.application.curl_export import CurlExportError as CurlExportError
+from comparo.application.curl_export import CurlExportErrorCode as CurlExportErrorCode
+from comparo.application.curl_export import CurlExportLimits as CurlExportLimits
+from comparo.application.curl_export import CurlExportRequest as CurlExportRequest
+from comparo.application.curl_export import CurlExportWarning as CurlExportWarning
+from comparo.application.curl_export import export_artifact_curl as export_artifact_curl
+from comparo.application.diagnostic_catalog import DiagnosticPresentation as DiagnosticPresentation
+from comparo.application.diagnostic_catalog import present_diagnostic as present_diagnostic
 from comparo.application.diagnostics import SecurityCheck as SecurityCheck
 from comparo.application.diagnostics import run_security_checks as run_security_checks
 from comparo.application.environment_binding import (
@@ -219,6 +229,14 @@ __all__ = (
     "CompareServiceError",
     "CompareServiceErrorCode",
     "ComparisonResultRow",
+    "CurlDialect",
+    "CurlExport",
+    "CurlExportError",
+    "CurlExportErrorCode",
+    "CurlExportLimits",
+    "CurlExportRequest",
+    "CurlExportWarning",
+    "DiagnosticPresentation",
     "EnvironmentBindingResult",
     "EnvironmentResponseClassification",
     "EnvironmentValueOverride",
@@ -304,6 +322,7 @@ __all__ = (
     "clipboard_summary",
     "environment_value_override",
     "execute_production",
+    "export_artifact_curl",
     "initialize_project_artifact_root",
     "inline_value_override",
     "inspect_artifact",
@@ -321,6 +340,7 @@ __all__ = (
     "plan_report_retention",
     "preflight_runtime_capabilities",
     "prepare_project_plan",
+    "present_diagnostic",
     "production_execution_defaults_v1",
     "project_results",
     "query_report_archive",
