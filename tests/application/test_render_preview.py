@@ -30,7 +30,9 @@ from comparo.application.render_preview import RenderedRequestPreview
 from comparo.application.render_preview import RenderPreviewRequest
 from comparo.application.render_preview import RenderPreviewResult
 from comparo.application.render_preview import RenderPreviewSettings
+from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RequestBodyOmissionReason
+from comparo.application.render_preview import render_prepared_request_window
 from comparo.application.render_preview import render_prepared_requests
 from comparo.core.artifacts.common import ARTIFACT_REDACTION_MARKER
 from comparo.core.artifacts.policy import SanitizationLimits
@@ -230,6 +232,37 @@ def test_resolves_every_environment_offline_in_canonical_order(
     assert all(item.headers == expected_headers for item in first.previews)
     assert all(item.cookies == () and item.body == _body() for item in first.previews)
     assert len({item.execution_id for item in first.previews}) == 2
+
+
+def test_windowed_preview_resolves_only_the_requested_canonical_page(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = RenderPreviewRequest(project=project, settings=_settings())
+
+    first = asyncio.run(
+        render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=request,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+    )
+    second = asyncio.run(
+        render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=request,
+                start_ordinal=cast("int", first.next_ordinal),
+                maximum_previews=1,
+            )
+        )
+    )
+
+    assert first.diagnostics == second.diagnostics == ()
+    assert first.total_executions == second.total_executions == 2
+    assert tuple(item.ordinal for item in first.previews) == (0,)
+    assert tuple(item.ordinal for item in second.previews) == (1,)
+    assert first.next_ordinal == 1
+    assert second.next_ordinal is None
 
 
 def test_secret_values_are_absent_from_every_returned_product(tmp_path: Path) -> None:

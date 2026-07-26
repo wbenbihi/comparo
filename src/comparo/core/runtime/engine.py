@@ -43,6 +43,7 @@ from comparo.core.runtime.models import ObservedExecution
 from comparo.core.runtime.models import RunResult
 from comparo.core.runtime.models import RuntimeEvent
 from comparo.core.runtime.models import RuntimeEventKind
+from comparo.core.runtime.models import RuntimeOccurrenceOutcome
 from comparo.core.runtime.ports import EvaluationPreparation
 from comparo.core.runtime.ports import ExecutionDriver
 from comparo.core.runtime.ports import RuntimeEventSink
@@ -198,6 +199,11 @@ async def _evaluate_comparisons(
                 run_id=prepared.plan.run_id,
                 kind=RuntimeEventKind.COMPARISON_FINISHED,
                 comparison_id=work.comparison_id,
+                outcome=(
+                    RuntimeOccurrenceOutcome.INCOMPLETE
+                    if type(outcome) is IncompleteComparison
+                    else RuntimeOccurrenceOutcome.EVALUATED
+                ),
             )
         )
         sequence += 1

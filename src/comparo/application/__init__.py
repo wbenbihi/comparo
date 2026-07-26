@@ -1,5 +1,8 @@
 """Framework-neutral application services shared by CLI and future frontends."""
 
+from comparo.application.artifacts import ArtifactBodyMessage as ArtifactBodyMessage
+from comparo.application.artifacts import ArtifactBodyReference as ArtifactBodyReference
+from comparo.application.artifacts import ArtifactBodyWindow as ArtifactBodyWindow
 from comparo.application.artifacts import ArtifactInspection as ArtifactInspection
 from comparo.application.artifacts import ArtifactOperationError as ArtifactOperationError
 from comparo.application.artifacts import ArtifactReadLimits as ArtifactReadLimits
@@ -8,6 +11,7 @@ from comparo.application.artifacts import (
 )
 from comparo.application.artifacts import inspect_artifact as inspect_artifact
 from comparo.application.artifacts import read_artifact_blob as read_artifact_blob
+from comparo.application.artifacts import read_artifact_body_window as read_artifact_body_window
 from comparo.application.artifacts import render_artifact_report as render_artifact_report
 from comparo.application.artifacts import (
     validate_existing_artifact_root as validate_existing_artifact_root,
@@ -33,10 +37,19 @@ from comparo.application.environment_binding import (
     build_environment_snapshots as build_environment_snapshots,
 )
 from comparo.application.execution_session import (
+    DEFAULT_EXECUTION_SESSION_LIMITS_V1 as DEFAULT_EXECUTION_SESSION_LIMITS_V1,
+)
+from comparo.application.execution_session import ExecutionFinalSummary as ExecutionFinalSummary
+from comparo.application.execution_session import (
     ExecutionProgressSnapshot as ExecutionProgressSnapshot,
 )
 from comparo.application.execution_session import ExecutionSession as ExecutionSession
+from comparo.application.execution_session import ExecutionSessionLimits as ExecutionSessionLimits
 from comparo.application.execution_session import ExecutionSessionPhase as ExecutionSessionPhase
+from comparo.application.execution_session import LiveOccurrenceKind as LiveOccurrenceKind
+from comparo.application.execution_session import LiveOccurrenceProgress as LiveOccurrenceProgress
+from comparo.application.execution_session import LiveOccurrenceState as LiveOccurrenceState
+from comparo.application.execution_session import LiveProgressEvent as LiveProgressEvent
 from comparo.application.execution_session import start_execution_session as start_execution_session
 from comparo.application.inspection import ApplicationDiagnostic as ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection as PlanInspection
@@ -123,7 +136,16 @@ from comparo.application.render_preview import RenderPreviewRequest as RenderPre
 from comparo.application.render_preview import RenderPreviewResult as RenderPreviewResult
 from comparo.application.render_preview import RenderPreviewSettings as RenderPreviewSettings
 from comparo.application.render_preview import (
+    RenderPreviewWindowRequest as RenderPreviewWindowRequest,
+)
+from comparo.application.render_preview import (
+    RenderPreviewWindowResult as RenderPreviewWindowResult,
+)
+from comparo.application.render_preview import (
     RequestBodyOmissionReason as RequestBodyOmissionReason,
+)
+from comparo.application.render_preview import (
+    render_prepared_request_window as render_prepared_request_window,
 )
 from comparo.application.render_preview import render_prepared_requests as render_prepared_requests
 from comparo.application.report_archive import ReportArchiveEntry as ReportArchiveEntry
@@ -158,9 +180,13 @@ from comparo.policy import DEFAULT_POLICY_LOAD_LIMITS as DEFAULT_POLICY_LOAD_LIM
 from comparo.policy import PolicyLoadLimits as PolicyLoadLimits
 
 __all__ = (
+    "DEFAULT_EXECUTION_SESSION_LIMITS_V1",
     "DEFAULT_POLICY_LOAD_LIMITS",
     "DEFAULT_PROJECT_LOAD_LIMITS",
     "ApplicationDiagnostic",
+    "ArtifactBodyMessage",
+    "ArtifactBodyReference",
+    "ArtifactBodyWindow",
     "ArtifactInspection",
     "ArtifactOperationError",
     "ArtifactReadLimits",
@@ -179,13 +205,19 @@ __all__ = (
     "EnvironmentBindingResult",
     "EnvironmentResponseClassification",
     "EnvironmentValueOverride",
+    "ExecutionFinalSummary",
     "ExecutionProgressSnapshot",
     "ExecutionResultRow",
     "ExecutionSession",
+    "ExecutionSessionLimits",
     "ExecutionSessionPhase",
     "ExecutionSettingsInspection",
     "InlineValueOverride",
     "InvocationBuildError",
+    "LiveOccurrenceKind",
+    "LiveOccurrenceProgress",
+    "LiveOccurrenceState",
+    "LiveProgressEvent",
     "MatrixOverride",
     "PlanClipboardSummary",
     "PlanInspection",
@@ -212,6 +244,8 @@ __all__ = (
     "RenderPreviewRequest",
     "RenderPreviewResult",
     "RenderPreviewSettings",
+    "RenderPreviewWindowRequest",
+    "RenderPreviewWindowResult",
     "RenderedBodyOmission",
     "RenderedCookie",
     "RenderedHeader",
@@ -262,7 +296,9 @@ __all__ = (
     "production_execution_defaults_v1",
     "project_results",
     "read_artifact_blob",
+    "read_artifact_body_window",
     "render_artifact_report",
+    "render_prepared_request_window",
     "render_prepared_requests",
     "resolve_project_root",
     "run_security_checks",

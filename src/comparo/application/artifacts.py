@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from collections.abc import AsyncIterable
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
@@ -15,6 +16,7 @@ from comparo.adapters.artifacts import LocalArtifactStoreError
 from comparo.adapters.artifacts import open_local_artifact_bundle
 from comparo.adapters.artifacts import read_local_artifact_bundle
 from comparo.core.artifacts.common import ArtifactBlob
+from comparo.core.artifacts.common import ArtifactCapture
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.policy import ArtifactLimits
 from comparo.core.artifacts.policy import SanitizationLimits
@@ -32,6 +34,7 @@ class ArtifactOperationErrorCode(StrEnum):
     INVALID_LIMIT = "invalid-limit"
     ARTIFACT_UNAVAILABLE = "artifact-unavailable"
     BLOB_NOT_FOUND = "blob-not-found"
+    BODY_NOT_FOUND = "body-not-found"
     OUTPUT_LIMIT_EXCEEDED = "output-limit-exceeded"
     REPORT_FAILED = "report-failed"
     ROOT_UNAVAILABLE = "root-unavailable"
@@ -105,6 +108,75 @@ class ArtifactInspection(msgspec.Struct, frozen=True, kw_only=True):
     blobs: int
     blob_bytes: int
     coverage_issues: int
+
+
+class ArtifactBodyMessage(StrEnum):
+    """The sanitized HTTP message body selected for inspection."""
+
+    REQUEST = "request"
+    RESPONSE = "response"
+
+
+@final
+class ArtifactBodyReference(msgspec.Struct, frozen=True, kw_only=True):
+    """Stable artifact HTTP coordinates for one request or response body."""
+
+    execution_id: str
+    attempt_id: str
+    exchange_id: str
+    message: ArtifactBodyMessage
+
+    def __post_init__(self) -> None:
+        """Require bounded structural identifiers and one typed message side."""
+        if any(
+            type(value) is not str or not value or len(value) > 64
+            for value in (self.execution_id, self.attempt_id, self.exchange_id)
+        ):
+            raise ValueError("artifact body coordinates must be bounded non-empty text")
+        if type(self.message) is not ArtifactBodyMessage:
+            raise TypeError("artifact body message must be typed")
+
+
+@final
+class ArtifactBodyWindow(msgspec.Struct, frozen=True, kw_only=True):
+    """One authenticated bounded byte window plus truthful capture metadata."""
+
+    reference: ArtifactBodyReference
+    source_state: str
+    extent: str
+    reason: str | None
+    media_type: str | None
+    total_bytes: int | None
+    offset: int
+    content: bytes
+    next_offset: int | None
+    redaction_count: int
+
+    def __post_init__(self) -> None:
+        """Require coherent availability, byte range, and continuation metadata."""
+        if type(self.reference) is not ArtifactBodyReference:
+            raise TypeError("artifact body window requires a typed reference")
+        if any(type(value) is not str or not value for value in (self.source_state, self.extent)):
+            raise ValueError("artifact body capture labels must be non-empty text")
+        if self.reason is not None and (type(self.reason) is not str or not self.reason):
+            raise ValueError("artifact body omission reason must be non-empty text or absent")
+        if self.media_type is not None and type(self.media_type) is not str:
+            raise TypeError("artifact body media type must be text or absent")
+        if self.total_bytes is not None and (
+            type(self.total_bytes) is not int or self.total_bytes < 0
+        ):
+            raise ValueError("artifact body total must be non-negative or absent")
+        if type(self.offset) is not int or self.offset < 0 or type(self.content) is not bytes:
+            raise ValueError("artifact body window requires a non-negative offset and bytes")
+        if self.next_offset is not None and (
+            type(self.next_offset) is not int
+            or self.next_offset <= self.offset
+            or self.total_bytes is None
+            or self.next_offset >= self.total_bytes
+        ):
+            raise ValueError("artifact body continuation must name a remaining byte")
+        if type(self.redaction_count) is not int or self.redaction_count < 0:
+            raise ValueError("artifact body redaction count must be non-negative")
 
 
 def initialize_project_artifact_root(project_root: Path, selected: Path) -> Path:
@@ -320,6 +392,117 @@ async def read_artifact_blob(
     return payload
 
 
+async def read_artifact_body_window(
+    root: Path,
+    bundle_id: str,
+    reference: ArtifactBodyReference,
+    limits: ArtifactReadLimits,
+    *,
+    offset: int,
+    maximum_output_bytes: int,
+) -> ArtifactBodyWindow:
+    """Authenticate a bundle and read one body range selected by result coordinates."""
+    if type(reference) is not ArtifactBodyReference:
+        raise TypeError("artifact body reading requires ArtifactBodyReference")
+    if type(offset) is not int or offset < 0:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
+    if type(maximum_output_bytes) is not int or maximum_output_bytes < 1:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
+    try:
+        with open_local_artifact_bundle(root, bundle_id, limits=_limits(limits)) as bundle:
+            capture = _find_body_capture(bundle.artifact, reference)
+            blob = capture.blob
+            if blob is None:
+                if offset:
+                    raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
+                return ArtifactBodyWindow(
+                    reference=reference,
+                    source_state=capture.source_state.value,
+                    extent=capture.extent.value,
+                    reason=None if capture.reason is None else capture.reason.value,
+                    media_type=None,
+                    total_bytes=None,
+                    offset=0,
+                    content=b"",
+                    next_offset=None,
+                    redaction_count=capture.redaction_count,
+                )
+            if offset > blob.byte_count:
+                raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
+            content = await _read_blob_window(
+                bundle.read(blob),
+                offset=offset,
+                maximum_output_bytes=maximum_output_bytes,
+            )
+            consumed = offset + len(content)
+            return ArtifactBodyWindow(
+                reference=reference,
+                source_state=capture.source_state.value,
+                extent=capture.extent.value,
+                reason=None if capture.reason is None else capture.reason.value,
+                media_type=blob.media_type,
+                total_bytes=blob.byte_count,
+                offset=offset,
+                content=content,
+                next_offset=consumed if consumed < blob.byte_count else None,
+                redaction_count=capture.redaction_count,
+            )
+    except ArtifactOperationError:
+        raise
+    except LocalArtifactStoreError as error:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE) from error
+
+
+async def _read_blob_window(
+    chunks: AsyncIterable[bytes],
+    *,
+    offset: int,
+    maximum_output_bytes: int,
+) -> bytes:
+    output = bytearray()
+    position = 0
+    async for chunk in chunks:
+        if type(chunk) is not bytes:
+            raise TypeError("artifact body source chunks must be bytes")
+        end = position + len(chunk)
+        if end > offset and len(output) < maximum_output_bytes:
+            start_in_chunk = max(0, offset - position)
+            remaining = maximum_output_bytes - len(output)
+            output.extend(chunk[start_in_chunk : start_in_chunk + remaining])
+        position = end
+    return bytes(output)
+
+
+def _find_body_capture(
+    artifact: RunArtifact,
+    reference: ArtifactBodyReference,
+) -> ArtifactCapture:
+    execution = next(
+        (item for item in artifact.executions if item.execution_id == reference.execution_id),
+        None,
+    )
+    if execution is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.BODY_NOT_FOUND)
+    attempt = next(
+        (item for item in execution.attempts if item.attempt_id == reference.attempt_id),
+        None,
+    )
+    if attempt is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.BODY_NOT_FOUND)
+    exchange = next(
+        (item for item in attempt.exchanges if item.exchange_id == reference.exchange_id),
+        None,
+    )
+    if exchange is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.BODY_NOT_FOUND)
+    message = (
+        exchange.request if reference.message is ArtifactBodyMessage.REQUEST else exchange.response
+    )
+    if message is None or message.body is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.BODY_NOT_FOUND)
+    return message.body
+
+
 def _find_blob(artifact: RunArtifact, sha256: str) -> ArtifactBlob:
     if type(sha256) is not str:
         raise ArtifactOperationError(ArtifactOperationErrorCode.BLOB_NOT_FOUND)
@@ -348,6 +531,9 @@ def _limits(value: ArtifactReadLimits) -> ArtifactLimits:
 
 
 __all__ = (
+    "ArtifactBodyMessage",
+    "ArtifactBodyReference",
+    "ArtifactBodyWindow",
     "ArtifactInspection",
     "ArtifactOperationError",
     "ArtifactOperationErrorCode",
@@ -355,6 +541,7 @@ __all__ = (
     "initialize_project_artifact_root",
     "inspect_artifact",
     "read_artifact_blob",
+    "read_artifact_body_window",
     "render_artifact_report",
     "validate_existing_artifact_root",
     "validate_project_artifact_root",

@@ -9,12 +9,15 @@ from typing import cast
 import pytest
 
 from comparo.adapters.artifacts import LocalArtifactBundleSink
+from comparo.application.artifacts import ArtifactBodyMessage
+from comparo.application.artifacts import ArtifactBodyReference
 from comparo.application.artifacts import ArtifactOperationError
 from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.application.artifacts import ArtifactReadLimits
 from comparo.application.artifacts import initialize_project_artifact_root
 from comparo.application.artifacts import inspect_artifact
 from comparo.application.artifacts import read_artifact_blob
+from comparo.application.artifacts import read_artifact_body_window
 from comparo.application.artifacts import render_artifact_report
 from comparo.application.artifacts import verify_artifact
 from comparo.core.artifacts.model import RunArtifact
@@ -137,6 +140,78 @@ def test_blob_read_returns_only_explicit_sanitized_blob(tmp_path: Path) -> None:
             )
         )
         assert payload in expected[blob.byte_count]
+
+
+def test_body_windows_use_result_coordinates_and_truthful_continuations(
+    tmp_path: Path,
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    reference = ArtifactBodyReference(
+        execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id,
+        exchange_id=exchange.exchange_id,
+        message=ArtifactBodyMessage.RESPONSE,
+    )
+
+    first = asyncio.run(
+        read_artifact_body_window(
+            root,
+            "artifact-0",
+            reference,
+            _limits(),
+            offset=0,
+            maximum_output_bytes=3,
+        )
+    )
+    second = asyncio.run(
+        read_artifact_body_window(
+            root,
+            "artifact-0",
+            reference,
+            _limits(),
+            offset=first.next_offset or 0,
+            maximum_output_bytes=3,
+        )
+    )
+
+    assert first.content == b"rig"
+    assert first.total_bytes == 5
+    assert first.next_offset == 3
+    assert second.content == b"ht"
+    assert second.next_offset is None
+    assert first.media_type == "text/plain"
+    assert first.source_state == "complete"
+    assert first.extent == "complete"
+
+
+def test_body_window_rejects_unknown_coordinates_without_leaking_values(
+    tmp_path: Path,
+) -> None:
+    root, _artifact = _bundle(tmp_path)
+    reference = ArtifactBodyReference(
+        execution_id="unknown",
+        attempt_id="unknown",
+        exchange_id="unknown",
+        message=ArtifactBodyMessage.REQUEST,
+    )
+
+    with pytest.raises(ArtifactOperationError) as caught:
+        asyncio.run(
+            read_artifact_body_window(
+                root,
+                "artifact-0",
+                reference,
+                _limits(),
+                offset=0,
+                maximum_output_bytes=1,
+            )
+        )
+
+    assert caught.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
+    assert "unknown" not in str(caught.value)
 
 
 @pytest.mark.parametrize(

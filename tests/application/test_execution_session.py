@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from uuid import uuid4
+from uuid import uuid5
 
 import msgspec
 import pytest
@@ -21,6 +21,7 @@ from comparo.core.domain.primitives import Count
 from comparo.core.runtime import RecordingEventSink
 from comparo.core.runtime.models import RuntimeEvent
 from comparo.core.runtime.models import RuntimeEventKind
+from comparo.core.runtime.models import RuntimeOccurrenceOutcome
 from tests.application.test_production_execution import _request
 
 
@@ -45,7 +46,12 @@ def _event(
     kind: RuntimeEventKind,
 ) -> RuntimeEvent:
     execution = (
-        EnvironmentExecutionId(value=uuid4())
+        EnvironmentExecutionId(
+            value=uuid5(
+                request.project.prepared.plan.run_id.value,
+                f"test-execution:{0 if sequence < 4 else 1}",
+            )
+        )
         if kind
         in {
             RuntimeEventKind.EXECUTION_QUEUED,
@@ -55,7 +61,9 @@ def _event(
         else None
     )
     comparison = (
-        ComparisonId(value=uuid4()) if kind is RuntimeEventKind.COMPARISON_FINISHED else None
+        ComparisonId(value=uuid5(request.project.prepared.plan.run_id.value, "test-comparison"))
+        if kind is RuntimeEventKind.COMPARISON_FINISHED
+        else None
     )
     return RuntimeEvent(
         sequence=Count(value=sequence),
@@ -63,6 +71,13 @@ def _event(
         kind=kind,
         execution_id=execution,
         comparison_id=comparison,
+        outcome=(
+            RuntimeOccurrenceOutcome.OBSERVED
+            if kind is RuntimeEventKind.EXECUTION_FINISHED
+            else RuntimeOccurrenceOutcome.EVALUATED
+            if kind is RuntimeEventKind.COMPARISON_FINISHED
+            else None
+        ),
     )
 
 
@@ -113,6 +128,15 @@ def test_session_coalesces_safe_runtime_progress_and_returns_result(
         assert final.last_event_kind is RuntimeEventKind.RUN_FINISHED
         assert final.last_execution_id is not None
         assert final.last_comparison_id is not None
+        assert len(final.occurrences) == 3
+        assert all(
+            item.state is sessions.LiveOccurrenceState.FINISHED for item in final.occurrences
+        )
+        assert {item.outcome for item in final.occurrences} == {
+            RuntimeOccurrenceOutcome.OBSERVED,
+            RuntimeOccurrenceOutcome.EVALUATED,
+        }
+        assert final.recent_events[-1].kind is RuntimeEventKind.RUN_FINISHED
         assert not session.cancel()
         await session.close()
 
@@ -236,6 +260,42 @@ def test_mailbox_rejects_invalid_inputs() -> None:
         with pytest.raises(ValueError, match="at least -1"):
             await mailbox.after(-2)
         mailbox.transition(sessions.ExecutionSessionPhase.PREPARING)
+
+    asyncio.run(scenario())
+
+
+def test_live_projection_is_bounded_and_measures_occurrence_elapsed_time(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        request = _request(tmp_path)
+        ticks = iter((10, 20, 35, 40, 50, 60))
+        mailbox = sessions._ProgressMailbox(
+            sessions.ExecutionProgressSnapshot(
+                revision=0,
+                run_id="run",
+                phase=sessions.ExecutionSessionPhase.PREPARING,
+                total_executions=2,
+                total_comparisons=0,
+            ),
+            limits=sessions.ExecutionSessionLimits(
+                maximum_occurrences=1,
+                maximum_recent_events=2,
+            ),
+            clock=lambda: next(ticks),
+        )
+        await mailbox.emit(_event(request, 0, RuntimeEventKind.RUN_STARTED))
+        await mailbox.emit(_event(request, 1, RuntimeEventKind.EXECUTION_QUEUED))
+        await mailbox.emit(_event(request, 2, RuntimeEventKind.EXECUTION_STARTED))
+        await mailbox.emit(_event(request, 3, RuntimeEventKind.EXECUTION_FINISHED))
+        assert mailbox.snapshot.occurrences[0].elapsed_nanoseconds == 5
+        await mailbox.emit(_event(request, 4, RuntimeEventKind.EXECUTION_QUEUED))
+
+        snapshot = mailbox.snapshot
+        assert len(snapshot.occurrences) == 1
+        assert snapshot.omitted_occurrences == 1
+        assert len(snapshot.recent_events) == 2
+        assert snapshot.occurrences[0].state is sessions.LiveOccurrenceState.QUEUED
 
     asyncio.run(scenario())
 

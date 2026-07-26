@@ -26,6 +26,7 @@ from comparo.core.domain.scopes import TrialScope
 from comparo.core.planning.iteration import iter_plan_trials
 from comparo.core.planning.models import PreparedRun
 from comparo.core.resolution.control import RunCancellation
+from comparo.core.runtime.models import BlockedExecution
 from comparo.core.runtime.models import CancelledExecution
 from comparo.core.runtime.models import ExecutionOutcome
 from comparo.core.runtime.models import ExecutionRecord
@@ -33,6 +34,7 @@ from comparo.core.runtime.models import ExecutionWork
 from comparo.core.runtime.models import ObservedExecution
 from comparo.core.runtime.models import RuntimeEvent
 from comparo.core.runtime.models import RuntimeEventKind
+from comparo.core.runtime.models import RuntimeOccurrenceOutcome
 from comparo.core.runtime.models import UnavailableExecution
 from comparo.core.runtime.models import is_execution_outcome
 from comparo.core.runtime.ports import ExecutionDriver
@@ -92,6 +94,9 @@ class _EventEmitter:
         kind: RuntimeEventKind,
         *,
         execution_id: EnvironmentExecutionId | None = None,
+        outcome: RuntimeOccurrenceOutcome | None = None,
+        failure_stage: DiagnosticStage | None = None,
+        failure_code: DiagnosticCode | None = None,
     ) -> None:
         """Allocate and deliver one event atomically relative to other emitters."""
         async with self._lock:
@@ -100,6 +105,9 @@ class _EventEmitter:
                 run_id=self._run_id,
                 kind=kind,
                 execution_id=execution_id,
+                outcome=outcome,
+                failure_stage=failure_stage,
+                failure_code=failure_code,
             )
             self._sequence += 1
             await self._sink.emit(event)
@@ -305,9 +313,13 @@ async def _consume(
             records[work.ordinal.value] = ExecutionRecord(work=work, outcome=outcome)
             if fail_fast and type(outcome) is not CancelledExecution and _execution_failed(outcome):
                 cancellation.cancel(CancellationSource.EXECUTION_POLICY)
+            failure_stage, failure_code = _event_failure(outcome)
             await emitter.emit(
                 RuntimeEventKind.EXECUTION_FINISHED,
                 execution_id=work.scope.execution_id,
+                outcome=_event_outcome(outcome),
+                failure_stage=failure_stage,
+                failure_code=failure_code,
             )
         finally:
             ledger.finished()
@@ -417,3 +429,22 @@ def _execution_failed(outcome: ExecutionOutcome) -> bool:
     if terminal.pre_send is not None:
         return True
     return terminal.exchanges[-1].failure is not None
+
+
+def _event_outcome(outcome: ExecutionOutcome) -> RuntimeOccurrenceOutcome:
+    return {
+        ObservedExecution: RuntimeOccurrenceOutcome.OBSERVED,
+        UnavailableExecution: RuntimeOccurrenceOutcome.UNAVAILABLE,
+        BlockedExecution: RuntimeOccurrenceOutcome.BLOCKED,
+        CancelledExecution: RuntimeOccurrenceOutcome.CANCELLED,
+    }[type(outcome)]
+
+
+def _event_failure(
+    outcome: ExecutionOutcome,
+) -> tuple[DiagnosticStage | None, DiagnosticCode | None]:
+    if type(outcome) is UnavailableExecution:
+        return outcome.stage, outcome.code
+    if type(outcome) is BlockedExecution:
+        return outcome.stage, outcome.code
+    return None, None

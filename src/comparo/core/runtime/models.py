@@ -267,6 +267,17 @@ class RuntimeEventKind(DomainStrEnum):
     RUN_FINISHED = "run-finished"
 
 
+class RuntimeOccurrenceOutcome(DomainStrEnum):
+    """Safe terminal occurrence classes exposed to progress observers."""
+
+    OBSERVED = "observed"
+    UNAVAILABLE = "unavailable"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
+    EVALUATED = "evaluated"
+    INCOMPLETE = "incomplete"
+
+
 @final
 class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
     """A sequenced progress notification carrying only safe runtime identities."""
@@ -276,8 +287,11 @@ class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
     kind: RuntimeEventKind
     execution_id: EnvironmentExecutionId | None = None
     comparison_id: ComparisonId | None = None
+    outcome: RuntimeOccurrenceOutcome | None = None
+    failure_stage: DiagnosticStage | None = None
+    failure_code: DiagnosticCode | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901 - closed event-shape validation
         """Require the coordinate dictated by the exact event kind."""
         if type(self.sequence) is not Count or type(self.run_id) is not RunId:
             raise TypeError("runtime event requires a Count sequence and RunId")
@@ -297,6 +311,22 @@ class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("runtime event comparison coordinate contradicts its kind")
         if self.comparison_id is not None and type(self.comparison_id) is not ComparisonId:
             raise TypeError("runtime event comparison ID must be ComparisonId")
+        if self.outcome is not None and type(self.outcome) is not RuntimeOccurrenceOutcome:
+            raise TypeError("runtime event occurrence outcome must be typed or absent")
+        terminal_occurrence = self.kind in {
+            RuntimeEventKind.EXECUTION_FINISHED,
+            RuntimeEventKind.COMPARISON_FINISHED,
+        }
+        if self.outcome is not None and not terminal_occurrence:
+            raise ValueError("runtime event outcome requires a terminal occurrence")
+        if (self.failure_stage is None) is not (self.failure_code is None):
+            raise ValueError("runtime event failure stage and code must be supplied together")
+        if self.failure_stage is not None and type(self.failure_stage) is not DiagnosticStage:
+            raise TypeError("runtime event failure stage must be typed")
+        if self.failure_code is not None and type(self.failure_code) is not DiagnosticCode:
+            raise TypeError("runtime event failure code must be typed")
+        if self.failure_code is not None and self.kind is not RuntimeEventKind.EXECUTION_FINISHED:
+            raise ValueError("runtime event failure is valid only for a finished execution")
 
 
 @final
