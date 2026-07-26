@@ -2,7 +2,12 @@
 
 Date: 2026-07-26
 Target viewport: 160 columns × 52 rows
-Status: proposal for approval; no TUI implementation has started
+Status: approved; implementation in progress
+
+The authoritative visual and interaction specification is the
+[TUI v2 design contract](design/tui-v2/README.md). The generated screenshots in that contract are
+the primary visual and information-design source. The clickable mockup is incomplete and may be
+used only as a limited interaction reference. The rejected current TUI is never a source of truth.
 
 ## Outcome
 
