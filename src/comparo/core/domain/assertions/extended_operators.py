@@ -14,6 +14,7 @@ from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.http.media_types import MediaType
 from comparo.core.domain.http.media_types import MediaTypeTokenValue
 from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Fingerprint
@@ -25,7 +26,7 @@ class CompiledSchema(msgspec.Struct, frozen=True, kw_only=True):
     """A pinned schema identity, never a live remote-fetch instruction."""
 
     fingerprint: Fingerprint
-    resource: DefinitionRef | None = None
+    resource: DefinitionRef | InlineDefinitionRef | None = None
     remote_uri: NamedCapabilityTarget | None = None
 
     def __post_init__(self) -> None:
@@ -34,11 +35,17 @@ class CompiledSchema(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("schema fingerprint must be a Fingerprint")
         if (self.resource is None) == (self.remote_uri is None):
             raise ValueError("compiled schema requires exactly one source coordinate")
-        if self.resource is not None and (
-            type(self.resource) is not DefinitionRef
-            or self.resource.identity.kind is not ResourceKind.SCHEMA
-        ):
-            raise ValueError("local schema must reference a Schema resource")
+        if self.resource is not None:
+            reusable = (
+                type(self.resource) is DefinitionRef
+                and self.resource.identity.kind is ResourceKind.SCHEMA
+            )
+            inline = (
+                type(self.resource) is InlineDefinitionRef
+                and self.resource.kind is ResourceKind.SCHEMA
+            )
+            if not reusable and not inline:
+                raise ValueError("local schema must identify a reusable or inline Schema")
         if self.remote_uri is not None and (
             type(self.remote_uri) is not NamedCapabilityTarget
             or self.remote_uri.kind is not CapabilityTargetKind.SCHEMA_SOURCE

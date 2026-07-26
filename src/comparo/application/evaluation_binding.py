@@ -24,6 +24,12 @@ from comparo.application.evaluation_diffs import compile_reducer
 from comparo.application.evaluation_diffs import compile_transforms
 from comparo.application.evaluation_selectors import InvalidSelectorError
 from comparo.application.evaluation_selectors import compile_selector
+from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
+from comparo.application.schema_validation import PreparedSchema
+from comparo.application.schema_validation import PreparedSchemaCatalog
+from comparo.application.schema_validation import SchemaValidationLimits
+from comparo.application.schema_validation import prepare_local_schema
+from comparo.application.schema_validation import schema_operator
 from comparo.core.assertions.accounting import AssertionBudgets
 from comparo.core.assertions.accounting import assertion_budget_operations
 from comparo.core.assertions.engine import AssertionControl
@@ -32,6 +38,7 @@ from comparo.core.assertions.inputs import PreparedExpression as PreparedAsserti
 from comparo.core.assertions.inputs import PreparedOperandError as AssertionOperandError
 from comparo.core.assertions.inputs import PreparedOperandReady as AssertionOperandReady
 from comparo.core.assertions.inputs import PreparedOperandUnavailable as AssertionOperandUnavailable
+from comparo.core.assertions.inputs import PreparedPredicate
 from comparo.core.assertions.inputs import required_expressions as required_assertion_expressions
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalObject
@@ -51,6 +58,9 @@ from comparo.core.diffs.inputs import PreparedOperandError as DiffOperandError
 from comparo.core.diffs.inputs import PreparedOperandReady as DiffOperandReady
 from comparo.core.diffs.inputs import PreparedOperandUnavailable as DiffOperandUnavailable
 from comparo.core.diffs.inputs import required_expressions as required_diff_expressions
+from comparo.core.domain.assertions.extended_operators import SchemaOperator
+from comparo.core.domain.assertions.operators import AssertionOperatorIdentity
+from comparo.core.domain.assertions.operators import AssertionOperatorKind
 from comparo.core.domain.assertions.operators import operator_uses_match_predicate
 from comparo.core.domain.assertions.rules import AssertionApplication
 from comparo.core.domain.assertions.rules import AssertionRuleDefinition
@@ -97,7 +107,9 @@ from comparo.core.domain.gates.types import GateSeverity
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EffectiveRuleId
 from comparo.core.domain.identity import InlineDefinitionOrigin
+from comparo.core.domain.identity import InlineFragment
 from comparo.core.domain.identity import ResourceIdentity
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RuleApplicationId
 from comparo.core.domain.identity import RuleId
 from comparo.core.domain.metadata import Metadata
@@ -109,6 +121,11 @@ from comparo.core.domain.provenance import SourceLocation
 from comparo.core.domain.scopes import ComparisonBudgetScope
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.selectors.model import CompiledSelector
+from comparo.core.domain.selectors.paths import NoPath
+from comparo.core.domain.selectors.results import SelectionPartial
+from comparo.core.domain.selectors.results import SelectionReady
+from comparo.core.domain.selectors.selector_semantics import derive_selector_capabilities
+from comparo.core.domain.selectors.selector_semantics import derive_selector_output_contract
 from comparo.core.domain.selectors.sources import STREAM_SELECTOR_SOURCES
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectorSource
@@ -139,6 +156,7 @@ from comparo.core.selection import SelectionBudgets
 from comparo.core.selection import SelectionCancellation
 from comparo.core.selection import SelectionControl
 from comparo.core.selection import SelectionSnapshotRequirements
+from comparo.core.selection import select
 from comparo.core.selection import selection_budget_operations
 
 _PROFILE_EMPTY = DiagnosticCode(value="evaluation.profile.empty")
@@ -150,6 +168,7 @@ _RULE_ID = DiagnosticCode(value="evaluation.rule.id-invalid")
 _RULE_DUPLICATE = DiagnosticCode(value="evaluation.rule.id-duplicate")
 _SELECTOR = DiagnosticCode(value="evaluation.selector.unsupported")
 _OPERATOR = DiagnosticCode(value="evaluation.operator.unsupported")
+_SCHEMA = DiagnosticCode(value="evaluation.schema.invalid")
 _GATE = DiagnosticCode(value="evaluation.gate.unsupported")
 _GATE_MULTIPLE = DiagnosticCode(value="evaluation.gate.multiple")
 _INLINE_GATE = DiagnosticCode(value="evaluation.gate.inline-unsupported")
@@ -423,6 +442,7 @@ class ConfigurationEvaluationPreparation:
         "_gate",
         "_limits",
         "_prepared",
+        "_schemas",
         "_snapshot_requirements",
         "_subjects",
     )
@@ -435,6 +455,7 @@ class ConfigurationEvaluationPreparation:
         limits: EvaluationRuleLimits,
         subjects: tuple[_SubjectRules, ...],
         gate: CompiledGateProfile | None,
+        schemas: PreparedSchemaCatalog,
     ) -> None:
         """Bind one admitted run, its context, finite limits, rules, and optional gate."""
         if type(prepared) is not PreparedRun or type(context) is not RunContext:
@@ -445,6 +466,8 @@ class ConfigurationEvaluationPreparation:
             raise TypeError("configuration evaluation subjects must be an immutable typed tuple")
         if gate is not None and type(gate) is not CompiledGateProfile:
             raise TypeError("configuration evaluation gate must be compiled")
+        if type(schemas) is not PreparedSchemaCatalog:
+            raise TypeError("configuration evaluation schemas must be prepared")
         if context.run.run_id != prepared.plan.run_id:
             raise ValueError("configuration evaluation context belongs to another run")
         self._prepared = prepared
@@ -452,6 +475,7 @@ class ConfigurationEvaluationPreparation:
         self._limits = limits
         self._subjects = subjects
         self._gate = gate
+        self._schemas = schemas
         self._snapshot_requirements = _snapshot_requirements(subjects)
 
     @property
@@ -476,6 +500,7 @@ class ConfigurationEvaluationPreparation:
         rules = self._rules(record.work.subject).assertions
         calls: list[AssertionCall] = []
         for rule in rules:
+            control = _assertion_control(prepared, self._context, self._limits)
             expressions: list[PreparedAssertionExpression] = []
             for index, expression in enumerate(required_assertion_expressions(rule)):
                 expressions.append(
@@ -492,6 +517,12 @@ class ConfigurationEvaluationPreparation:
                         ),
                     )
                 )
+            predicates = _schema_predicates(
+                self._schemas,
+                rule,
+                record.outcome,
+                control.selection,
+            )
             application = AssertionApplication(
                 application_id=RuleApplicationId(
                     value=uuid5(
@@ -513,8 +544,9 @@ class ConfigurationEvaluationPreparation:
                         rule_fingerprint=rule.fingerprint,
                         environment_execution_id=record.work.scope.execution_id,
                         expressions=tuple(expressions),
+                        predicates=predicates,
                     ),
-                    control=_assertion_control(prepared, self._context, self._limits),
+                    control=control,
                 )
             )
         return tuple(calls)
@@ -617,13 +649,16 @@ def bind_configuration_evaluation(
     prepared: PreparedRun,
     context: RunContext,
     limits: EvaluationRuleLimits,
+    schema_limits: SchemaValidationLimits = DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
 ) -> EvaluationBindingResult:
     """Lower every requested profile or reject the whole run before effects begin."""
     if type(prepared) is not PreparedRun or type(context) is not RunContext:
         raise TypeError("evaluation binding requires PreparedRun and RunContext")
     if type(limits) is not EvaluationRuleLimits:
         raise TypeError("evaluation binding requires EvaluationRuleLimits")
-    subject_rules, gate, problems = _compile_configuration(prepared)
+    if type(schema_limits) is not SchemaValidationLimits:
+        raise TypeError("evaluation binding requires SchemaValidationLimits")
+    subject_rules, gate, schemas, problems = _compile_configuration(prepared, schema_limits)
     if problems.diagnostics:
         return EvaluationBindingResult(
             diagnostics=tuple(problems.diagnostics),
@@ -636,15 +671,21 @@ def bind_configuration_evaluation(
             limits=limits,
             subjects=subject_rules,
             gate=gate,
+            schemas=schemas,
         )
     )
 
 
-def preflight_configuration_evaluation(prepared: PreparedRun) -> EvaluationPreflightResult:
+def preflight_configuration_evaluation(
+    prepared: PreparedRun,
+    schema_limits: SchemaValidationLimits = DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
+) -> EvaluationPreflightResult:
     """Compile all selected rules and the exact gate formula without acquiring effects."""
     if type(prepared) is not PreparedRun:
         raise TypeError("evaluation preflight requires PreparedRun")
-    subject_rules, gate, problems = _compile_configuration(prepared)
+    if type(schema_limits) is not SchemaValidationLimits:
+        raise TypeError("evaluation preflight requires SchemaValidationLimits")
+    subject_rules, gate, _schemas, problems = _compile_configuration(prepared, schema_limits)
     if problems.diagnostics:
         return EvaluationPreflightResult(
             diagnostics=tuple(problems.diagnostics),
@@ -664,25 +705,58 @@ def preflight_configuration_evaluation(prepared: PreparedRun) -> EvaluationPrefl
 
 def _compile_configuration(
     prepared: PreparedRun,
-) -> tuple[tuple[_SubjectRules, ...], CompiledGateProfile | None, _Problems]:
+    schema_limits: SchemaValidationLimits,
+) -> tuple[
+    tuple[_SubjectRules, ...],
+    CompiledGateProfile | None,
+    PreparedSchemaCatalog,
+    _Problems,
+]:
     problems = _Problems()
+    schema_entries: list[PreparedSchema] = []
     subject_rules = tuple(
-        _compile_subject(prepared.project, subject, problems)
+        _compile_subject(
+            prepared.project,
+            subject,
+            schema_entries,
+            schema_limits,
+            problems,
+        )
         for subject in prepared.effective.subjects
     )
     gate = _compile_gate(prepared, subject_rules, problems)
-    return subject_rules, gate, problems
+    schemas = PreparedSchemaCatalog(
+        entries=tuple(
+            item
+            for index, item in enumerate(schema_entries)
+            if item.compiled not in tuple(previous.compiled for previous in schema_entries[:index])
+        ),
+        limits=schema_limits,
+    )
+    return subject_rules, gate, schemas, problems
 
 
 def _compile_subject(
     project: CompiledProject,
     subject: EffectiveSubject,
+    schema_entries: list[PreparedSchema],
+    schema_limits: SchemaValidationLimits,
     problems: _Problems,
 ) -> _SubjectRules:
-    assertions = tuple(
+    profile_assertions = tuple(
         rule
         for handle in subject.profiles.assertions
         for rule in _compile_assertion_profile(_profile(project, handle, problems), problems)
+    )
+    schema_assertion = _compile_response_schema(
+        project,
+        subject,
+        schema_entries,
+        schema_limits,
+        problems,
+    )
+    assertions = (
+        profile_assertions if schema_assertion is None else (*profile_assertions, schema_assertion)
     )
     diffs = tuple(
         rule
@@ -692,6 +766,92 @@ def _compile_subject(
     _require_unique_rules(assertions, problems, project, subject.profiles.assertions)
     _require_unique_rules(diffs, problems, project, subject.profiles.diffs)
     return _SubjectRules(subject=subject.definition, assertions=assertions, diffs=diffs)
+
+
+def _compile_response_schema(
+    project: CompiledProject,
+    subject: EffectiveSubject,
+    entries: list[PreparedSchema],
+    limits: SchemaValidationLimits,
+    problems: _Problems,
+) -> CompiledAssertionRule | None:
+    """Lower a Request responseSchema into one ordinary implicit assertion rule."""
+    if subject.definition.identity.kind is not ResourceKind.REQUEST:
+        return None
+    resource = project.find(
+        subject.definition.identity.kind,
+        subject.definition.identity.resource_id,
+    )
+    if resource is None or resource.definition != subject.definition:
+        problems.add(_PROFILE_MISSING, project.project)
+        return None
+    binding = object_member(_spec(resource), "responseSchema")
+    if binding is None:
+        return None
+    try:
+        prepared = prepare_local_schema(project, subject.definition, binding, limits)
+        operator = schema_operator(prepared)
+        entries.append(prepared)
+        selector = _response_schema_selector(resource)
+        rule_id = RuleId(value="comparo-response-schema")
+        return CompiledAssertionRule(
+            definition=AssertionRuleDefinition(
+                origin=InlineDefinitionOrigin(
+                    owner=subject.definition.identity,
+                    fragment=InlineFragment(value="#response-schema-assertion"),
+                ),
+                rule_id=rule_id,
+            ),
+            effective_id=EffectiveRuleId(value=rule_id.value),
+            fingerprint=_fingerprint(
+                "comparo.response-schema-rule.v1",
+                subject.definition.fingerprint.digest.hex_value,
+                prepared.compiled.fingerprint.digest.hex_value,
+            ),
+            metadata=Metadata(
+                name="Response schema",
+                description="Validate the JSON response against the configured schema.",
+                tags=("schema",),
+            ),
+            severity=Severity.BLOCKING,
+            selector=selector,
+            operator_id=AssertionOperatorIdentity(
+                namespace="comparo.core",
+                kind=AssertionOperatorKind.CONFORMS_TO,
+                version="1",
+            ),
+            operator=operator,
+            quantifier=Quantifier.ONE,
+            completeness=CompletenessRequirement.COMPLETE,
+        )
+    except (TypeError, ValueError):
+        problems.add(
+            _SCHEMA,
+            resource,
+            field="responseSchema",
+            family=EvaluationCapabilityFamily.ASSERTION_OPERATOR,
+            alias="conformsTo",
+        )
+        return None
+
+
+def _response_schema_selector(resource: CompiledResource) -> CompiledSelector:
+    """Build the exact whole-response JSON selector used by implicit schema checks."""
+    path = NoPath()
+    source = SelectorSource.RESPONSE_BODY
+    view = BodyViewKind.JSON
+    capabilities = derive_selector_capabilities(source, path)
+    return CompiledSelector(
+        fingerprint=_fingerprint(
+            "comparo.response-schema-selector.v1",
+            resource.definition.fingerprint.digest.hex_value,
+        ),
+        source=source,
+        path=path,
+        capabilities=capabilities,
+        output=derive_selector_output_contract(source, path, view),
+        body_view=view,
+    )
 
 
 def _profile(
@@ -1350,6 +1510,33 @@ async def _assertion_operand(
     if type(result) in {Error, Blocked}:
         return AssertionOperandError(code=_RESOLUTION_ERROR)
     raise TypeError("resolution returned an unsupported outcome")
+
+
+def _schema_predicates(
+    schemas: PreparedSchemaCatalog,
+    rule: CompiledAssertionRule,
+    observed: ObservedExecution,
+    control: SelectionControl,
+) -> tuple[PreparedPredicate, ...]:
+    """Prepare pinned schema results for the matches the pure engine will evaluate."""
+    if type(rule.operator) is not SchemaOperator:
+        return ()
+    selected = select(observed.snapshot, rule.selector, control).result
+    if type(selected) is SelectionReady:  # noqa: SIM114 -- exact-type branches narrow for mypy
+        matches = selected.matches
+    elif type(selected) is SelectionPartial:
+        matches = selected.matches
+    else:
+        return ()
+    return tuple(
+        schemas.predicate(
+            rule.operator,
+            match,
+            observed.observation.execution_id,
+            rule.selector.fingerprint,
+        )
+        for match in matches
+    )
 
 
 async def _diff_operands(

@@ -149,6 +149,7 @@ def production_execution_settings(
         streams=streams,
         ordinary=ordinary,
         evaluation=defaults.evaluation,
+        schemas=defaults.schemas,
         artifact=artifact,
         artifact_io_chunk_size=defaults.artifact_io_chunk_size,
     )

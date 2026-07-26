@@ -149,7 +149,7 @@ def test_non_null_or_resolvable_request_bodies_are_admitted(body: str) -> None:
     assert body not in msgspec.json.encode(result).decode()
 
 
-def test_response_schema_is_rejected_without_loading_remote_content() -> None:
+def test_response_schema_passes_effect_free_runtime_capability_scan() -> None:
     result = preflight_runtime_capabilities(
         _prepared_project(
             request=(
@@ -159,8 +159,8 @@ def test_response_schema_is_rejected_without_loading_remote_content() -> None:
         )
     )
 
-    assert _codes(result) == ("runtime.capability.response-schema-unsupported",)
-    assert _paths(result) == (("responseSchema",),)
+    assert result.supported
+    assert result.diagnostics == ()
 
 
 @pytest.mark.parametrize(

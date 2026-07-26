@@ -101,6 +101,7 @@ def _prepared(
     assertion_topology: bool = False,
     assertion_profile_fields: str = "",
     diff_profile_fields: str = "",
+    response_schema: str | None = None,
 ) -> PreparedRun:
     attachments: list[str] = []
     resources: list[str] = []
@@ -135,6 +136,7 @@ def _prepared(
             attachments.append("gate: {$use: strict}")
             resources.append(document("GateProfile", "strict", gate))
     suffix = ", " + ", ".join(attachments) if attachments else ""
+    schema = "" if response_schema is None else f", responseSchema: {response_schema}"
     topology = (
         "environments: [{$use: staging}]"
         if assertion_topology
@@ -148,7 +150,11 @@ def _prepared(
         ),
         document("Environment", "staging", "{baseUrl: 'https://staging.example'}"),
         document("Environment", "prod", "{baseUrl: 'https://prod.example'}"),
-        document("Request", "check", "{request: {method: GET, endpoint: /check}}"),
+        document(
+            "Request",
+            "check",
+            f"{{request: {{method: GET, endpoint: /check}}{schema}}}",
+        ),
         *resources,
     )
     result = plan_run(project, invocation(), authority())
@@ -444,6 +450,33 @@ def test_gate_profile_compiles_explicit_dimensions_and_thresholds() -> None:
     assert gate.thresholds[0].error_rules.value == 7
 
 
+def test_inline_response_schema_compiles_as_an_implicit_assertion() -> None:
+    outcome = _bind(
+        _prepared(
+            response_schema="{type: object, required: [ok], properties: {ok: {type: boolean}}}"
+        )
+    )
+
+    preparation = outcome.preparation
+    assert preparation is not None
+    rules = preparation._subjects[0].assertions
+    assert tuple(rule.effective_id.value for rule in rules) == ("comparo-response-schema",)
+    assert rules[0].operator_id.kind.value == "conforms-to"
+    assert rules[0].selector.body_view is BodyViewKind.JSON
+    assert len(preparation._schemas.entries) == 1
+
+
+def test_invalid_and_remote_response_schemas_fail_closed_before_http() -> None:
+    invalid = _bind(_prepared(response_schema="{type: unsupported}"))
+    remote = _bind(
+        _prepared(response_schema="{$use: 'https://schemas.example.test/response.json'}")
+    )
+
+    assert _codes(invalid) == ("evaluation.schema.invalid",)
+    assert _codes(remote) == ("evaluation.schema.invalid",)
+    assert invalid.rejected[0].alias == "conformsTo"
+
+
 def test_assertion_topology_does_not_require_impossible_diff_coverage() -> None:
     outcome = _bind(
         _prepared(
@@ -560,6 +593,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
     valid = cast("binding.ConfigurationEvaluationPreparation", _bind(prepared).preparation)
     limits = _limits()
     subjects = valid._subjects
+    schemas = valid._schemas
 
     with pytest.raises(TypeError, match="PreparedRun and RunContext"):
         binding.ConfigurationEvaluationPreparation(
@@ -568,6 +602,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             limits=limits,
             subjects=subjects,
             gate=None,
+            schemas=schemas,
         )
     with pytest.raises(TypeError, match="PreparedRun and RunContext"):
         binding.ConfigurationEvaluationPreparation(
@@ -576,6 +611,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             limits=limits,
             subjects=subjects,
             gate=None,
+            schemas=schemas,
         )
     with pytest.raises(TypeError, match="EvaluationRuleLimits"):
         binding.ConfigurationEvaluationPreparation(
@@ -584,6 +620,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             limits=cast("binding.EvaluationRuleLimits", object()),
             subjects=subjects,
             gate=None,
+            schemas=schemas,
         )
     with pytest.raises(TypeError, match="subjects"):
         binding.ConfigurationEvaluationPreparation(
@@ -592,6 +629,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             limits=limits,
             subjects=cast("tuple[binding._SubjectRules, ...]", (object(),)),
             gate=None,
+            schemas=schemas,
         )
     with pytest.raises(TypeError, match="gate"):
         binding.ConfigurationEvaluationPreparation(
@@ -600,6 +638,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             limits=limits,
             subjects=subjects,
             gate=cast("CompiledGateProfile", object()),
+            schemas=schemas,
         )
 
     mismatched = _context(prepared)
@@ -611,6 +650,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             limits=limits,
             subjects=subjects,
             gate=None,
+            schemas=schemas,
         )
 
 

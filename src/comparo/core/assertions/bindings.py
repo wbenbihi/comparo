@@ -14,6 +14,8 @@ from comparo.core.domain.capabilities import CapabilityTargetKind
 from comparo.core.domain.capabilities import NamedCapabilityTarget
 from comparo.core.domain.http.media_types import MediaType
 from comparo.core.domain.identity import BodyId
+from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import ViewId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
@@ -161,11 +163,21 @@ def _update_schema_operator(digest: _Digest, operator: SchemaOperator) -> None:
         resource = schema.resource
         if resource is None:  # pragma: no cover - CompiledSchema invariant
             raise ValueError("compiled schema lost its source identity")
-        _update_text(digest.update, "resource")
-        _update_text(digest.update, resource.identity.namespace.value)
-        _update_text(digest.update, resource.identity.kind.value)
-        _update_text(digest.update, resource.identity.resource_id.value)
-        _update_text(digest.update, resource.fingerprint.digest.hex_value)
+        if type(resource) is DefinitionRef:
+            _update_text(digest.update, "resource")
+            _update_text(digest.update, resource.identity.namespace.value)
+            _update_text(digest.update, resource.identity.kind.value)
+            _update_text(digest.update, resource.identity.resource_id.value)
+            _update_text(digest.update, resource.fingerprint.digest.hex_value)
+        elif type(resource) is InlineDefinitionRef:
+            _update_text(digest.update, "inline")
+            _update_text(digest.update, resource.origin.owner.namespace.value)
+            _update_text(digest.update, resource.origin.owner.kind.value)
+            _update_text(digest.update, resource.origin.owner.resource_id.value)
+            _update_text(digest.update, resource.origin.fragment.value)
+            _update_text(digest.update, resource.fingerprint.digest.hex_value)
+        else:  # pragma: no cover - CompiledSchema invariant
+            raise TypeError("compiled schema source has an unsupported identity")
     for value in (
         operator.default_dialect.identifier,
         operator.validator.identifier,

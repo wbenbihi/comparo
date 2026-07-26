@@ -26,7 +26,6 @@ _PLAN_INCONSISTENT = DiagnosticCode(value="runtime.capability.plan-inconsistent"
 _SCENARIO = DiagnosticCode(value="runtime.capability.scenario-unsupported")
 _ENVIRONMENT_OVERLAY = DiagnosticCode(value="runtime.capability.environment-overlay-unsupported")
 _REQUEST_FIELD = DiagnosticCode(value="runtime.capability.request-field-unsupported")
-_RESPONSE_SCHEMA = DiagnosticCode(value="runtime.capability.response-schema-unsupported")
 _SAFETY_PROFILE = DiagnosticCode(value="runtime.capability.safety-profile-unsupported")
 _REDACTION_PROFILE = DiagnosticCode(value="runtime.capability.redaction-profile-unsupported")
 _ARTIFACT_PROFILE = DiagnosticCode(value="runtime.capability.artifact-profile-unsupported")
@@ -143,8 +142,6 @@ def _request_capabilities(
         for member in spec.members
         if member.name not in _REQUEST_RESOURCE_FIELDS
     )
-    if object_member(spec, "responseSchema") is not None:
-        diagnostics.append(_diagnostic(_RESPONSE_SCHEMA, resource, "responseSchema"))
     request = object_member(spec, "request")
     if type(request) is not ObjectExpr:
         diagnostics.append(_diagnostic(_PLAN_INCONSISTENT, resource, "request"))

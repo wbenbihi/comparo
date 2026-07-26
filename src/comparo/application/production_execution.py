@@ -59,6 +59,8 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import inspect_diagnostic
 from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
+from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
+from comparo.application.schema_validation import SchemaValidationLimits
 from comparo.core.artifacts.capture import ArtifactCapturingDriver
 from comparo.core.artifacts.common import ArtifactGateVerdict
 from comparo.core.artifacts.compiler import ArtifactCompilationStatus
@@ -175,6 +177,7 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
             derived_bytes=16 * 1024 * 1024,
             pairs=100_000,
         ),
+        schemas=DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
         artifact=ArtifactPolicy(
             persist=ArtifactPersistMode.NEVER,
             unsafe_source=UnsafeSourceBehavior.OMIT,
@@ -212,6 +215,7 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
     streams: StreamDecodingLimits
     ordinary: OrdinaryResponseDecodeLimits
     evaluation: EvaluationRuleLimits
+    schemas: SchemaValidationLimits
     artifact: ArtifactPolicy
     artifact_io_chunk_size: PositiveCount
 
@@ -227,6 +231,7 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
             (self.streams, StreamDecodingLimits),
             (self.ordinary, OrdinaryResponseDecodeLimits),
             (self.evaluation, EvaluationRuleLimits),
+            (self.schemas, SchemaValidationLimits),
             (self.artifact, ArtifactPolicy),
             (self.artifact_io_chunk_size, PositiveCount),
         )
@@ -439,6 +444,7 @@ async def _execute_with_resources(
         request.project.prepared,
         context,
         request.settings.evaluation,
+        request.settings.schemas,
     )
     if evaluation.diagnostics:
         return _failure(

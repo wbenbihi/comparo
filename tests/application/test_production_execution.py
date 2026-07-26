@@ -103,7 +103,13 @@ def _request(
     )
 
 
-def _evaluated_project(root: Path, *, base_url: str) -> PreparedProjectPlan:
+def _evaluated_project(
+    root: Path,
+    *,
+    base_url: str,
+    response_schema: str | None = None,
+) -> PreparedProjectPlan:
+    schema = "" if response_schema is None else f", responseSchema: {response_schema}"
     compiled = compile_project(
         document(
             "Project",
@@ -114,7 +120,11 @@ def _evaluated_project(root: Path, *, base_url: str) -> PreparedProjectPlan:
         ),
         document("Environment", "staging", f"{{baseUrl: '{base_url}'}}"),
         document("Environment", "prod", f"{{baseUrl: '{base_url}'}}"),
-        document("Request", "check", "{request: {method: GET, endpoint: /check}}"),
+        document(
+            "Request",
+            "check",
+            f"{{request: {{method: GET, endpoint: /check}}{schema}}}",
+        ),
         document(
             "AssertionProfile",
             "status-assertions",
@@ -366,6 +376,53 @@ def test_production_root_executes_http_evaluation_and_transient_artifact(
             if response_value is not None
         )
         assert len(artifact.blobs) == 1
+
+    asyncio.run(scenario())
+
+
+def test_response_schema_is_validated_as_an_ordinary_gated_assertion(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        entity = b'{"ok":"not-a-boolean","message":"hello"}'
+        response = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(entity)}\r\n".encode("ascii")
+            + b"Connection: keep-alive\r\n\r\n"
+            + entity
+        )
+        server = await _start_loopback_server(response)
+        request = production.ProductionExecutionRequest(
+            project=_evaluated_project(
+                tmp_path,
+                base_url=f"http://127.0.0.1:{server.port}",
+                response_schema=(
+                    "{type: object, required: [ok], properties: {ok: {type: boolean}}}"
+                ),
+            ),
+            settings=production.production_execution_defaults_v1(),
+            ambient_environment={},
+            artifact_root=None,
+            approve_mutations=False,
+            tool_version="test",
+        )
+        try:
+            result = await production.execute_production(request)
+        finally:
+            await server.close()
+
+        assert result.diagnostics == ()
+        artifact = result.artifact
+        assert artifact is not None
+        assert artifact.gate.verdict is ArtifactGateVerdict.FAILED
+        assert all(len(execution.assertions) == 3 for execution in artifact.executions)
+        schema_facts = tuple(
+            assertion
+            for execution in artifact.executions
+            for assertion in execution.assertions
+            if assertion.effective_rule_id == "comparo-response-schema"
+        )
+        assert len(schema_facts) == 2
+        assert all(fact.outcome is ArtifactFactOutcome.VIOLATED for fact in schema_facts)
 
     asyncio.run(scenario())
 

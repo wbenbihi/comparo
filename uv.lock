@@ -183,6 +183,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
     { name = "httpcore", extra = ["asyncio", "http2"] },
+    { name = "jsonschema" },
     { name = "msgspec" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -194,7 +195,6 @@ dev = [
     { name = "hatchling" },
     { name = "hypothesis" },
     { name = "import-linter" },
-    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -208,6 +208,7 @@ dev = [
 requires-dist = [
     { name = "cyclopts", specifier = ">=4.20,<5" },
     { name = "httpcore", extras = ["asyncio", "http2"], specifier = ">=1.0.9,<2" },
+    { name = "jsonschema", specifier = ">=4.24,<5" },
     { name = "msgspec", specifier = ">=0.21.1,<1" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "rich", specifier = ">=14.1,<15" },
@@ -219,7 +220,6 @@ dev = [
     { name = "hatchling", specifier = "==1.27.0" },
     { name = "hypothesis", specifier = ">=6.135.0" },
     { name = "import-linter", specifier = ">=2.1.0" },
-    { name = "jsonschema", specifier = ">=4.24.0" },
     { name = "mypy", specifier = ">=1.14.0" },
     { name = "pre-commit", specifier = ">=4.0.0" },
     { name = "pytest", specifier = ">=8.3.0" },

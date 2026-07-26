@@ -198,7 +198,7 @@ def test_extended_operator_fields_reject_untyped_direct_construction() -> None:
             fingerprint=cast("Fingerprint", "bad"),
             remote_uri=remote_uri,
         )
-    with pytest.raises(ValueError, match="Schema resource"):
+    with pytest.raises(ValueError, match="reusable or inline Schema"):
         CompiledSchema(
             fingerprint=_fingerprint(),
             resource=DefinitionRef(
