@@ -6,6 +6,8 @@ deterministic planner, run-scoped value/secrets boundary, bounded runtime, produ
 sanitized artifact/reporting boundary, migrated local CLI, and component-based terminal UI. The
 authoritative current documents are:
 
+- [Core/backend codebase golden reference](codebase/README.md) — current implementation truth,
+  end-to-end pipelines, module catalog, contributor workflow, and replacement-TUI capability audit
 - [Core domain foundation](core-domain-foundation.md)
 - [Selector language](selector-language.md)
 - [Pure evaluation kernel](core-evaluation-kernel.md)
@@ -26,7 +28,9 @@ authoritative current documents are:
 
 Documents explicitly labelled as historical or exploratory describe the quarantined prototype or
 future product surfaces. They are retained as design input, not as runnable commands or
-compatibility promises. The current tree has a `comparo/v1alpha1` compiler, injected run-resolution
+compatibility promises. The codebase golden reference distinguishes capabilities that are merely
+modeled or compiled from capabilities wired through the current production composition and safe
+application APIs. The current tree has a `comparo/v1alpha1` compiler, injected run-resolution
 ports, fake and production HTTP execution paths, sanitized artifacts, atomic POSIX local
 persistence, pure JSON/JUnit/SARIF/Markdown reporters, and a shared production execution
 composition used by `run`, `diff`, `exec`, and the TUI Compare workspace. The public plugin host,

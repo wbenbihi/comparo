@@ -68,6 +68,7 @@ Explorer, Compare, and Report journeys.
 The refactor is built from an immutable, framework-independent domain center. Configuration,
 networking, persistence, CLI, and TUI concerns are adapters around that core.
 
+- [Core/backend codebase golden reference](https://github.com/wbenbihi/comparo/blob/main/docs/codebase/README.md)
 - [Core refactor roadmap](https://github.com/wbenbihi/comparo/blob/main/docs/core-refactor-roadmap.md)
 - [Immutable core domain foundation](https://github.com/wbenbihi/comparo/blob/main/docs/core-domain-foundation.md)
 - [Shared selector language](https://github.com/wbenbihi/comparo/blob/main/docs/selector-language.md)
