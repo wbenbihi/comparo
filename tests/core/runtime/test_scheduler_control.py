@@ -18,10 +18,12 @@ from comparo.core.domain.primitives import PositiveCount
 from comparo.core.planning.models import PreparedRun
 from comparo.core.planning.planner import plan_run
 from comparo.core.resolution.control import RunCancellation
+from comparo.core.runtime import BlockedExecution
 from comparo.core.runtime import NoEvaluationPreparation
 from comparo.core.runtime import NullEventSink
 from comparo.core.runtime import UnavailableExecution
 from comparo.core.runtime import run_prepared
+from comparo.core.runtime import scheduling as scheduling_module
 from comparo.core.runtime.models import CancelledExecution
 from comparo.core.runtime.models import ExecutionOutcome
 from comparo.core.runtime.models import ExecutionWork
@@ -77,6 +79,15 @@ class BlockingDriver:
         """Require all active work to unwind before closure."""
         assert self.active == 0
         self.closed = True
+
+
+def test_blocked_scheduler_event_retains_value_free_failure_coordinates() -> None:
+    stage = DiagnosticStage.AUTHORIZATION
+    code = DiagnosticCode(value="runtime.test.blocked")
+    assert scheduling_module._event_failure(BlockedExecution(stage=stage, code=code)) == (
+        stage,
+        code,
+    )
 
 
 def _replan(prepared: PreparedRun, *, fail_fast: bool) -> PreparedRun:

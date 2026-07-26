@@ -9,6 +9,8 @@ from uuid import UUID
 import msgspec
 import pytest
 
+from comparo.core.configuration.canonical import CanonicalMember
+from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.expressions import ObjectExpressionMember
@@ -342,6 +344,10 @@ def test_provider_rejects_invalid_context_calls_and_non_request_subjects() -> No
         ConfigurationRequestProvider(object(), context)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="PreparedRun and RunContext"):
         ConfigurationRequestProvider(prepared, object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="finalizer must implement finalize"):
+        ConfigurationRequestProvider(
+            prepared, context, cast("preparation.RequestFinalizer", object())
+        )
     object.__setattr__(context, "_run", RunScope(run_id=RunId(value=UUID(int=902))))
     with pytest.raises(ValueError, match="another run"):
         ConfigurationRequestProvider(prepared, context)
@@ -364,6 +370,69 @@ def test_provider_rejects_invalid_context_calls_and_non_request_subjects() -> No
     asyncio.run(provider.close())
     asyncio.run(scenario_context.sanitization_snapshot())
     asyncio.run(scenario_context.close())
+
+
+def test_provider_maps_unexpected_finalizer_failures_without_exposing_details() -> None:
+    class ExplodingFinalizer:
+        async def finalize(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("secret-adapter-detail")
+
+    async def scenario() -> RequestPreparationFailure:
+        prepared = _prepared("{request: {method: GET, endpoint: /}}")
+        context = _context(prepared)
+        provider = ConfigurationRequestProvider(
+            prepared,
+            context,
+            cast("preparation.RequestFinalizer", ExplodingFinalizer()),
+        )
+        work = next(iter_execution_work(prepared))
+        try:
+            result = await provider.prepare(work, _attempt_scope(work, 0))
+            assert type(result) is RequestPreparationFailure
+            return result
+        finally:
+            await provider.close()
+            await context.close()
+
+    outcome = asyncio.run(scenario()).outcome
+    assert type(outcome) is UnavailableExecution
+    assert outcome.code.value == "runtime.request.materialization-failed"
+
+
+def test_environment_resolution_propagates_field_failure_and_rejects_non_json_tls() -> None:
+    missing = _prepared(
+        "{request: {method: GET, endpoint: /}}",
+        base_url="'https://api.test', headers: {x: '${env.MISSING}'}",
+    )
+    missing_result = asyncio.run(_prepare(missing))
+    assert type(missing_result) is RequestPreparationFailure
+
+    async def invalid_tls() -> RequestPreparationFailure:
+        prepared = _prepared("{request: {method: GET, endpoint: /}}")
+        environment = prepared.project.find(ResourceKind.ENVIRONMENT, ResourceId(value="dev"))
+        assert environment is not None
+        spec = cast("CanonicalObject", environment.spec)
+        base_url = next(member.value for member in spec.members if member.name == "baseUrl")
+        invalid_spec = CanonicalObject(
+            members=(*spec.members, CanonicalMember(name="tls", value=base_url))
+        )
+        invalid_environment = msgspec.structs.replace(environment, spec=invalid_spec)
+        context = _context(prepared)
+        work = next(iter_execution_work(prepared))
+        try:
+            result = await preparation._resolve_environment(
+                context,
+                prepared,
+                invalid_environment,
+                work,
+                _attempt_scope(work, 0),
+            )
+            assert type(result) is RequestPreparationFailure
+            return result
+        finally:
+            await context.close()
+
+    assert type(asyncio.run(invalid_tls())) is RequestPreparationFailure
 
 
 def test_resolution_failures_map_to_value_free_execution_outcomes() -> None:
@@ -539,6 +608,22 @@ def test_url_and_header_helpers_cover_root_ipv6_and_invalid_shapes() -> None:
     assert preparation._host("2001:db8::1").value == "2001:db8::1"
     assert preparation._host("Example.TEST").value == "example.test"
     assert preparation._join_url("https://api.test/", "/v1") == "https://api.test/v1"
+    with pytest.raises(ValueError, match="base URL cannot contain"):
+        preparation._join_url("https://api.test/?query=forbidden", "/v1")
+    missing_method = preparation._routing({}, {}, "https://api.test")
+    assert type(missing_method) is RequestPreparationFailure
+    missing_outcome = cast("UnavailableExecution", missing_method.outcome)
+    assert missing_outcome.code.value == "runtime.request.shape-invalid"
+    request_auth = JsonString(value="request-auth")
+    selected_auth, selected_origins = preparation._effective_authentication(
+        {"auth": request_auth},
+        {"auth": (TaintOriginId(value="test/request-auth"),)},
+        {"auth": JsonString(value="environment-auth")},
+        {},
+        same_origin=True,
+    )
+    assert selected_auth == request_auth
+    assert selected_origins
     assert lower_headers(None, (), provenance).fields == ()
     with pytest.raises(ValueError, match="absolute HTTP"):
         preparation._absolute_url("relative", (), provenance)

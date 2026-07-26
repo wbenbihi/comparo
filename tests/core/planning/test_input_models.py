@@ -11,6 +11,7 @@ from comparo.core.domain.budgets import BudgetResource
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import MatrixBindingId
+from comparo.core.domain.identity import MatrixCaseId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
@@ -23,10 +24,17 @@ from comparo.core.domain.overrides import SetValue
 from comparo.core.domain.planning_inputs import AssertionTopology
 from comparo.core.domain.planning_inputs import ComparisonTopology
 from comparo.core.domain.planning_inputs import ComparisonTopologyEdit
+from comparo.core.domain.planning_inputs import InvocationEnvironmentValue
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.planning_inputs import InvocationValueOverlay
 from comparo.core.domain.planning_inputs import MatrixSelection
 from comparo.core.domain.planning_inputs import PlanningBudgetValue
+from comparo.core.domain.planning_profiles import InvocationProfileOverrides
 from comparo.core.domain.primitives import PositiveCount
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.value_references import SymbolPath
+from comparo.core.domain.values import JsonString
 from tests.core.planning.conftest import authority
 from tests.core.planning.conftest import invocation
 from tests.core.planning.conftest import policy_definition
@@ -40,6 +48,11 @@ def test_matrix_and_topology_inputs_reject_ambiguous_construction() -> None:
         msgspec.structs.replace(selection, binding="left")
     with pytest.raises(TypeError, match="ResourceId"):
         msgspec.structs.replace(selection, matrix="cases")
+    with pytest.raises(TypeError, match="MatrixCaseId tuple"):
+        msgspec.structs.replace(selection, cases=cast("tuple[MatrixCaseId, ...]", [object()]))
+    case = MatrixCaseId(value="one")
+    with pytest.raises(ValueError, match="unique"):
+        msgspec.structs.replace(selection, cases=(case, case))
     with pytest.raises(TypeError, match="baseline"):
         ComparisonTopology(
             baseline=cast("ResourceId", "dev"),
@@ -165,6 +178,87 @@ def test_run_invocation_validates_edit_item_types_and_duplicate_value_scopes(
     overlay = InvocationValueOverlay(variables=variables)
     with pytest.raises(ValueError, match="unique Environment"):
         msgspec.structs.replace(valid, values=(overlay, overlay))
+
+
+def test_invocation_environment_values_and_request_edits_are_closed(
+    comparison_project: CompiledProject,
+) -> None:
+    environment_value = InvocationEnvironmentValue(
+        environment=ResourceId(value="dev"),
+        symbol=SymbolPath(segments=("TOKEN",)),
+        value=SensitiveValue(
+            JsonString(value="secret"),
+            origins=(TaintOriginId(value="test/invocation-environment"),),
+        ),
+    )
+    with pytest.raises(TypeError, match="ResourceId"):
+        msgspec.structs.replace(environment_value, environment=object())
+    with pytest.raises(ValueError, match="one segment"):
+        msgspec.structs.replace(
+            environment_value,
+            symbol=SymbolPath(segments=("TOKEN", "nested")),
+        )
+    with pytest.raises(TypeError, match="sealed JsonString"):
+        msgspec.structs.replace(environment_value, value=JsonString(value="raw"))
+
+    project_spec = cast("CanonicalObject", comparison_project.project.spec)
+    expression = cast(
+        "ValueExpression",
+        next(member.value for member in project_spec.members if member.name == "variables"),
+    )
+    request_edit = InvocationRequestEdit(
+        subject=ResourceId(value="chat"),
+        method=expression,
+    )
+    with pytest.raises(TypeError, match="subject ResourceId"):
+        msgspec.structs.replace(request_edit, subject=object())
+    with pytest.raises(ValueError, match="at least one field"):
+        InvocationRequestEdit(subject=ResourceId(value="chat"))
+    with pytest.raises(TypeError, match="ValueExpression"):
+        msgspec.structs.replace(request_edit, method=object())
+
+    valid = invocation()
+    with pytest.raises(TypeError, match="profile overrides"):
+        msgspec.structs.replace(valid, profiles=object())
+    with pytest.raises(TypeError, match="Environment values"):
+        msgspec.structs.replace(valid, environment_values=object())
+    with pytest.raises(ValueError, match="coordinates must be unique"):
+        msgspec.structs.replace(
+            valid,
+            environment_values=(environment_value, environment_value),
+        )
+    with pytest.raises(TypeError, match="Request edits"):
+        msgspec.structs.replace(valid, requests=object())
+    with pytest.raises(ValueError, match="unique subjects"):
+        msgspec.structs.replace(valid, requests=(request_edit, request_edit))
+
+
+def test_invocation_profile_overrides_reject_cross_kind_values() -> None:
+    profiles = InvocationProfileOverrides()
+    with pytest.raises(TypeError, match="gate profile"):
+        msgspec.structs.replace(profiles, gate=SetValue(value=MatrixBindingId(value="wrong")))
+    with pytest.raises(TypeError, match="assertion profile selection"):
+        msgspec.structs.replace(profiles, assertions=object())
+    with pytest.raises(TypeError, match="selection identities"):
+        msgspec.structs.replace(
+            profiles,
+            assertions=CollectionOverridePlan(
+                base=ReplaceBase(items=(cast("ResourceId", MatrixBindingId(value="wrong")),))
+            ),
+        )
+    with pytest.raises(TypeError, match="set values"):
+        msgspec.structs.replace(
+            profiles,
+            assertions=CollectionOverridePlan(
+                base=KeepBase(),
+                set_items=(
+                    KeyedSet(
+                        identity=ResourceId(value="named"),
+                        item=cast("ResourceId", MatrixBindingId(value="wrong")),
+                    ),
+                ),
+            ),
+        )
 
 
 def test_planning_authority_requires_exact_complete_nonduplicated_authority() -> None:

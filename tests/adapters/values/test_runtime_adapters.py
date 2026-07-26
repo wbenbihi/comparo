@@ -29,6 +29,7 @@ from comparo.adapters.values import SafeYamlValueDecoder
 from comparo.adapters.values import SecureGenerator
 from comparo.adapters.values import SystemRunClock
 from comparo.adapters.values import YamlValueLimits
+from comparo.adapters.values import environment as environment_module
 from comparo.core.domain.expression_types import FileTrim
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import NamespaceId
@@ -393,6 +394,53 @@ async def test_environment_snapshot_fails_closed_on_policy_safety_and_budgets(
             _snapshot_request(denied_policy, files=(_file_source("large.env"),))
         )
         assert denied.error is EnvironmentSnapshotErrorCode.CAPABILITY_DENIED
+
+
+@_async_test
+async def test_environment_snapshot_rejects_failed_ambient_capture(tmp_path: Path) -> None:
+    policy = trusted_local_policy()
+    limits = EnvironmentSourceLimits(maximum_entries=PositiveCount(value=1))
+    with PinnedProjectFiles(tmp_path) as project_files:
+        builder = RunEnvironmentSnapshotBuilder(
+            project_files,
+            policy,
+            ambient=(("FIRST", "one"), ("SECOND", "two")),
+            limits=limits,
+        )
+        result = await builder.build(_snapshot_request(policy, inherit_process=True))
+    assert result.error is EnvironmentSnapshotErrorCode.BUDGET_EXCEEDED
+
+
+def test_ambient_capture_rejects_malformed_duplicate_and_untyped_inputs() -> None:
+    policy = trusted_local_policy()
+    authority = policy.values.ambient_environment
+    with pytest.raises(TypeError, match="exact pairs"):
+        environment_module._capture_ambient(
+            cast("tuple[tuple[str, str], ...]", (("ONLY",),)),
+            authority,
+            EnvironmentSourceLimits(),
+        )
+    with pytest.raises(ValueError, match="names must be unique"):
+        environment_module._capture_ambient(
+            (("DUPLICATE", "one"), ("DUPLICATE", "two")),
+            authority,
+            EnvironmentSourceLimits(),
+        )
+    with pytest.raises(TypeError, match="source must be a mapping"):
+        environment_module.capture_ambient_environment(
+            cast("dict[str, str]", object()),
+            policy,
+        )
+    with pytest.raises(TypeError, match="requires CompiledExecutionPolicy"):
+        environment_module.capture_ambient_environment(
+            {}, cast("CompiledExecutionPolicy", object())
+        )
+    with pytest.raises(TypeError, match="requires EnvironmentSourceLimits"):
+        environment_module.capture_ambient_environment(
+            {},
+            policy,
+            limits=cast("EnvironmentSourceLimits", object()),
+        )
 
 
 @_async_test

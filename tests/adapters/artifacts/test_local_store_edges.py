@@ -6,6 +6,7 @@ import asyncio
 import ctypes
 import errno
 import os
+import re
 import stat
 import sys
 import threading
@@ -22,8 +23,11 @@ import pytest
 from comparo.adapters.artifacts import local as local_module
 from comparo.adapters.artifacts.local import LocalArtifactBundleSink
 from comparo.adapters.artifacts.local import LocalArtifactStoreError
+from comparo.adapters.artifacts.local import list_local_artifact_bundle_ids
 from comparo.adapters.artifacts.local import open_local_artifact_bundle
 from comparo.adapters.artifacts.local import read_local_artifact_bundle
+from comparo.adapters.artifacts.local import restore_local_artifact_bundle
+from comparo.adapters.artifacts.local import trash_local_artifact_bundle
 from comparo.core.artifacts.codec import ArtifactCodecError
 from comparo.core.artifacts.codec import ArtifactCodecErrorCode
 from comparo.core.artifacts.codec import encode_run_artifact
@@ -247,6 +251,48 @@ def test_persist_preflight_and_transaction_free_failure_paths(
         asyncio.run(sink.persist(artifact, blobs, _limits()))
     sink.close()
     assert not tuple(root.iterdir())
+
+
+def test_persist_rechecks_adapter_owned_bundle_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _secure_root(tmp_path / "root")
+    artifact, blobs = asyncio.run(_stored_artifact())
+    sink = LocalArtifactBundleSink(root)
+    monkeypatch.setattr(local_module, "_BUNDLE_ID", re.compile("never-matches"))
+
+    outcome = asyncio.run(sink.persist(artifact, blobs, _limits()))
+
+    assert _failure_code(outcome) is ArtifactStoreErrorCode.INVALID_ARTIFACT
+    sink.close()
+
+
+def test_local_bundles_move_to_recoverable_trash_and_map_failures(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "archive")
+    artifact, bundle = _persisted(root)
+
+    trash_local_artifact_bundle(root, artifact.metadata.artifact_id)
+    assert not bundle.exists()
+    assert (root / ".trash" / artifact.metadata.artifact_id).is_dir()
+    assert list_local_artifact_bundle_ids(root, maximum_entries=1) == ()
+    restore_local_artifact_bundle(root, artifact.metadata.artifact_id)
+    assert bundle.is_dir()
+
+    with pytest.raises(LocalArtifactStoreError) as invalid:
+        trash_local_artifact_bundle(Path("relative"), artifact.metadata.artifact_id)
+    assert invalid.value.code is ArtifactStoreErrorCode.ROOT_UNSAFE
+
+    with pytest.raises(LocalArtifactStoreError) as missing:
+        trash_local_artifact_bundle(root, "missing-bundle")
+    assert missing.value.code is ArtifactStoreErrorCode.IO_FAILED
+
+    unsafe = root / "unsafe-bundle"
+    unsafe.mkdir(mode=0o777)
+    unsafe.chmod(0o777)
+    with pytest.raises(LocalArtifactStoreError) as unsafe_bundle:
+        trash_local_artifact_bundle(root, unsafe.name)
+    assert unsafe_bundle.value.code is ArtifactStoreErrorCode.ROOT_UNSAFE
 
 
 def test_close_during_persist_cannot_invalidate_the_transaction_root(tmp_path: Path) -> None:

@@ -49,6 +49,7 @@ from comparo.core.domain.selectors.selector_semantics import (
 from comparo.core.domain.selectors.selector_semantics import _whole_source_kinds
 from comparo.core.domain.selectors.selector_semantics import derive_path_capabilities
 from comparo.core.domain.selectors.selector_semantics import derive_selector_capabilities
+from comparo.core.domain.selectors.selector_semantics import derive_selector_output_contract
 from comparo.core.domain.selectors.sources import BodyViewKind
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
@@ -260,3 +261,27 @@ def test_json_body_whole_source_kind_requires_explicit_view_defensively() -> Non
     with pytest.raises(ValueError, match="explicit view"):
         _whole_source_kinds(SelectorSource.RESPONSE_BODY, NoPath(), None)
     assert _whole_source_kinds(SelectorSource.RESPONSE_BODY, NoPath(), BodyViewKind.JSON)
+
+
+def test_selector_output_contract_rejects_untyped_inputs_and_preserves_unknowns() -> None:
+    with pytest.raises(TypeError, match="typed source and path"):
+        derive_selector_output_contract(cast("SelectorSource", object()), NoPath(), None)
+    with pytest.raises(TypeError, match="typed body view"):
+        derive_selector_output_contract(
+            SelectorSource.RESPONSE_STATUS,
+            NoPath(),
+            cast("BodyViewKind", object()),
+        )
+    with pytest.raises(TypeError, match="typed occurrence"):
+        derive_selector_output_contract(
+            SelectorSource.RESPONSE_STATUS,
+            NoPath(),
+            None,
+            cast("ObservationOccurrenceSelector", object()),
+        )
+    contract = derive_selector_output_contract(
+        SelectorSource.STREAM_TIMINGS,
+        NoPath(),
+        None,
+    )
+    assert contract.kinds == (ValueKind.UNKNOWN,)

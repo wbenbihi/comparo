@@ -9,8 +9,11 @@ from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import CompiledProject
 from comparo.core.domain.budgets import BudgetResource
 from comparo.core.domain.expressions import ValueExpression
+from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import MatrixBindingId
+from comparo.core.domain.identity import MatrixCaseId
 from comparo.core.domain.identity import ResourceId
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.overrides import Clear
 from comparo.core.domain.overrides import ClearBase
 from comparo.core.domain.overrides import CollectionOverridePlan
@@ -20,11 +23,20 @@ from comparo.core.domain.overrides import ReplaceBase
 from comparo.core.domain.overrides import SetValue
 from comparo.core.domain.planning_inputs import AssertionTopology
 from comparo.core.domain.planning_inputs import ComparisonTopologyEdit
+from comparo.core.domain.planning_inputs import InvocationEnvironmentValue
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.planning_inputs import InvocationValueOverlay
 from comparo.core.domain.planning_inputs import MatrixSelection
+from comparo.core.domain.planning_profiles import InvocationProfileOverrides
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.value_references import SymbolPath
+from comparo.core.domain.values import JsonString
+from comparo.core.planning import binding as binding_module
 from comparo.core.planning import iter_plan_cells
 from comparo.core.planning import iter_plan_trials
 from comparo.core.planning import plan_run
+from comparo.core.planning._errors import PlanningError
 from tests.core.planning.conftest import authority
 from tests.core.planning.conftest import compile_project
 from tests.core.planning.conftest import document
@@ -265,6 +277,148 @@ def test_duplicate_subject_and_matrix_bindings_are_diagnostics(
     )
     assert duplicate_matrix.prepared is None
     assert duplicate_matrix.diagnostics[0].code.value == "planning.matrix.binding-duplicate"
+
+
+def test_invocation_request_environment_and_matrix_targets_fail_closed(
+    comparison_project: CompiledProject,
+) -> None:
+    project_spec = cast("CanonicalObject", comparison_project.project.spec)
+    expression = cast(
+        "ValueExpression",
+        next(member.value for member in project_spec.members if member.name == "variables"),
+    )
+    unselected_request = plan_run(
+        comparison_project,
+        invocation(
+            requests=(
+                InvocationRequestEdit(
+                    subject=ResourceId(value="other"),
+                    method=expression,
+                ),
+            )
+        ),
+        authority(),
+    )
+    assert unselected_request.diagnostics[0].code.value == (
+        "planning.request-edit.subject-not-selected"
+    )
+
+    unselected_environment = plan_run(
+        comparison_project,
+        invocation(
+            environment_values=(
+                InvocationEnvironmentValue(
+                    environment=ResourceId(value="other"),
+                    symbol=SymbolPath(segments=("TOKEN",)),
+                    value=SensitiveValue(
+                        JsonString(value="secret"),
+                        origins=(TaintOriginId(value="test/planning-environment"),),
+                    ),
+                ),
+            )
+        ),
+        authority(),
+    )
+    assert unselected_environment.diagnostics[0].code.value == (
+        "planning.environment-value.environment-not-selected"
+    )
+
+    missing_case = plan_run(
+        comparison_project,
+        invocation(
+            matrices=CollectionOverridePlan(
+                base=ReplaceBase(
+                    items=(
+                        MatrixSelection(
+                            binding=MatrixBindingId(value="locales"),
+                            matrix=ResourceId(value="locales"),
+                            cases=(MatrixCaseId(value="missing"),),
+                        ),
+                    )
+                )
+            )
+        ),
+        authority(),
+    )
+    assert missing_case.diagnostics[0].code.value == "planning.matrix.case-not-found"
+
+
+def test_request_edits_reject_scenario_subjects_before_runtime() -> None:
+    scenario_project = _minimal_project(
+        "{subjects: [{$use: Scenario/flow}], environments: [{$use: dev}]}",
+        document("Environment", "dev", "{baseUrl: 'https://dev.example'}"),
+        document("Scenario", "flow", "{steps: []}"),
+    )
+    environment = scenario_project.find(ResourceKind.ENVIRONMENT, ResourceId(value="dev"))
+    assert environment is not None
+    project_spec = cast("CanonicalObject", environment.spec)
+    expression = cast(
+        "ValueExpression",
+        next(member.value for member in project_spec.members if member.name == "baseUrl"),
+    )
+    scenario = scenario_project.find(ResourceKind.SCENARIO, ResourceId(value="flow"))
+    assert scenario is not None
+    edit = InvocationRequestEdit(
+        subject=ResourceId(value="flow"),
+        method=expression,
+    )
+    with pytest.raises(PlanningError) as captured:
+        binding_module._validate_request_edit_targets((edit,), (scenario,))
+    assert captured.value.code.value == "planning.request-edit.subject-kind-invalid"
+
+
+def test_profile_override_operations_cover_clear_set_and_invalid_single_edits(
+    comparison_project: CompiledProject,
+) -> None:
+    profiles = InvocationProfileOverrides(
+        assertions=CollectionOverridePlan(
+            base=ClearBase(),
+            set_items=(
+                KeyedSet(
+                    identity=ResourceId(value="common-assertions"),
+                    item=ResourceId(value="base-assertions"),
+                ),
+            ),
+        ),
+        gate=Clear(),
+    )
+    result = plan_run(
+        comparison_project,
+        invocation(profiles=profiles),
+        authority(),
+    )
+    assert result.prepared is not None
+    assertions = result.prepared.effective.subjects[0].profiles.assertions
+    assert len(assertions) == 1
+    assert type(assertions[0]) is DefinitionRef
+    assert assertions[0].identity.resource_id == ResourceId(value="base-assertions")
+
+    gate_project = _minimal_project(
+        "{subjects: [{$use: Request/check}], environments: [{$use: dev}]}",
+        document("Environment", "dev", "{baseUrl: 'https://dev.example'}"),
+        document("GateProfile", "strict", "{}"),
+        document("Request", "check", "{request: {method: GET, endpoint: /}}"),
+    )
+    selected_gate = plan_run(
+        gate_project,
+        invocation(
+            profiles=InvocationProfileOverrides(gate=SetValue(value=ResourceId(value="strict")))
+        ),
+        authority(),
+    )
+    assert selected_gate.prepared is not None
+    assert selected_gate.prepared.effective.subjects[0].profiles.gate is not None
+
+    owner = comparison_project.find(ResourceKind.REQUEST, ResourceId(value="chat"))
+    assert owner is not None
+    with pytest.raises(TypeError, match="single profile edit"):
+        binding_module._edit_single_profile(
+            comparison_project,
+            None,
+            object(),
+            ResourceKind.GATE_PROFILE,
+            owner,
+        )
 
 
 def test_comparison_topology_edits_fail_closed_when_incoherent(

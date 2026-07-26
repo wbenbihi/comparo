@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from comparo.core.domain.http.auth import ApiKeyAuthentication
+from comparo.core.domain.http.auth import BasicAuthentication
 from comparo.core.domain.http.auth import BearerAuthentication
+from comparo.core.domain.http.auth import NoAuthentication
 from comparo.core.domain.http.bodies import BytesBody
 from comparo.core.domain.http.bodies import FormBody
 from comparo.core.domain.http.bodies import JsonBody
@@ -228,3 +230,257 @@ def test_stream_mode_is_explicitly_limited_to_v1_auto_detection() -> None:
 
     with pytest.raises(ValueError, match="stream mode must declare only protocol: auto"):
         validate_stream_mode(_object(protocol=_text("sse")))
+
+    with pytest.raises(ValueError, match="stream mode must be auto"):
+        validate_stream_mode(_text("sse"))
+
+
+def test_lowering_rejects_uncontained_credentials_and_supports_all_auth_forms() -> None:
+    origins = (TaintOriginId(value="test/auth-branches"),)
+
+    with pytest.raises(ValueError, match="cookie values must be sensitivity-contained"):
+        lower_cookies(_object(session=_text("secret")), (), _provenance())
+    assert type(lower_authentication(_object(type=_text("none")), ())) is NoAuthentication
+    with pytest.raises(ValueError, match="sensitivity-contained"):
+        lower_authentication(_object(bearer=_text("secret")), ())
+
+    basic = lower_authentication(
+        _object(
+            basic=_object(
+                username=_text("user"),
+                password=_text("secret"),
+            )
+        ),
+        origins,
+    )
+    assert type(basic) is BasicAuthentication
+    query_key = lower_authentication(
+        _object(
+            type=_text("apiKey"),
+            **{"in": _text("query")},
+            name=_text("key"),
+            value=_text("secret"),
+        ),
+        origins,
+    )
+    cookie_key = lower_authentication(
+        _object(
+            type=_text("apiKey"),
+            **{"in": _text("cookie")},
+            name=_text("key"),
+            value=_text("secret"),
+        ),
+        origins,
+    )
+    assert type(query_key) is ApiKeyAuthentication
+    assert type(cookie_key) is ApiKeyAuthentication
+
+    with pytest.raises(ValueError, match="authentication type is unsupported"):
+        lower_authentication(_object(type=_text("digest")), origins)
+    with pytest.raises(ValueError, match="placement must be header, query, or cookie"):
+        lower_authentication(
+            _object(
+                type=_text("apiKey"),
+                **{"in": _text("body")},
+                name=_text("key"),
+                value=_text("secret"),
+            ),
+            origins,
+        )
+    with pytest.raises(ValueError, match="authentication type is unsupported"):
+        lower_authentication(_object(custom=_text("secret")), origins)
+
+
+def test_body_lowering_rejects_every_malformed_variant() -> None:
+    with pytest.raises(TypeError, match="JSON body requires a JsonValue"):
+        lower_body(BytesValue(value=b"raw"), _text("json"), (), multipart_boundary="boundary")
+    with pytest.raises(TypeError, match="bytes body requires explicit bytes output"):
+        lower_body(_text("raw"), _text("bytes"), (), multipart_boundary="boundary")
+    with pytest.raises(ValueError, match="request body type is unsupported"):
+        lower_body(_text("raw"), _text("xml"), (), multipart_boundary="boundary")
+    with pytest.raises(ValueError, match="ordered entry requires value"):
+        lower_body(
+            _array(_object(name=_text("missing"))),
+            _text("form"),
+            (),
+            multipart_boundary="boundary",
+        )
+    with pytest.raises(TypeError, match="headers must be an object or ordered entry array"):
+        lower_headers(_text("invalid"), (), _provenance())
+    with pytest.raises(TypeError, match="headers must be an object"):
+        lower_headers(_array(_text("invalid")), (), _provenance())
+
+    malformed_multipart = (
+        (_object(parts=_text("invalid")), TypeError, "ordered array"),
+        (
+            _object(parts=_array(_object(type=_text("binary"), name=_text("part")))),
+            ValueError,
+            "typed file",
+        ),
+        (
+            _object(
+                parts=_array(
+                    _object(
+                        type=_text("file"),
+                        name=_text("part"),
+                        mediaType=_text("text/plain"),
+                        encoding=_text("hex"),
+                    )
+                )
+            ),
+            ValueError,
+            "explicitly be base64",
+        ),
+        (
+            _object(
+                parts=_array(
+                    _object(
+                        type=_text("file"),
+                        name=_text("part"),
+                        mediaType=_text("text/plain"),
+                        encoding=_text("base64"),
+                        value=_text("!invalid!"),
+                    )
+                )
+            ),
+            ValueError,
+            "base64 is invalid",
+        ),
+        (
+            _object(
+                parts=_array(
+                    _object(
+                        type=_text("text"),
+                        name=_text("part"),
+                        mediaType=_text("text/plain; charset=utf-8"),
+                        value=_text("value"),
+                    )
+                )
+            ),
+            ValueError,
+            "future structured form",
+        ),
+    )
+    for value, error, match in malformed_multipart:
+        with pytest.raises(error, match=match):
+            lower_body(value, _text("multipart"), (), multipart_boundary="boundary")
+
+
+def test_policy_lowering_covers_defaults_variants_and_invalid_shapes() -> None:
+    defaulted = lower_request_policies(None, None, None, None, None, ())
+    assert defaulted.timeouts.connect == defaulted.timeouts.execution_total
+
+    with pytest.raises(ValueError, match="explicit unit"):
+        lower_request_policies(_text("1"), None, None, None, None, ())
+    with pytest.raises(ValueError, match="unknown phase"):
+        lower_request_policies(_object(unknown=_text("1s")), None, None, None, None, ())
+    with pytest.raises(TypeError, match="conditions must be an array"):
+        lower_request_policies(
+            None,
+            _object(maxAttempts=JsonInteger(value=2), conditions=_text("failure")),
+            None,
+            None,
+            None,
+            (),
+        )
+
+    fixed = lower_request_policies(
+        None,
+        _object(
+            maxAttempts=JsonInteger(value=2),
+            conditions=_array(_text("connect-failure")),
+            backoff=_object(type=_text("fixed"), delay=_text("1ms")),
+            mutation=_object(type=_text("idempotency-key"), header=_text("Idempotency-Key")),
+        ),
+        None,
+        None,
+        None,
+        (),
+    )
+    assert fixed.retries.max_attempts.value == 2
+
+    no_backoff = lower_request_policies(
+        None,
+        _object(
+            maxAttempts=JsonInteger(value=1),
+            conditions=_array(),
+            backoff=_object(type=_text("none")),
+            mutation=_object(type=_text("none")),
+        ),
+        None,
+        None,
+        None,
+        (),
+    )
+    assert no_backoff.retries.max_attempts.value == 1
+    no_mutation = lower_request_policies(
+        None,
+        _object(maxAttempts=JsonInteger(value=1), conditions=_array()),
+        None,
+        None,
+        None,
+        (),
+    )
+    assert no_mutation.retries.max_attempts.value == 1
+
+    for field, value, match in (
+        (
+            "backoff",
+            _object(type=_text("linear")),
+            "backoff type is unsupported",
+        ),
+        (
+            "mutation",
+            _object(type=_text("unsafe")),
+            "mutation retry type is unsupported",
+        ),
+    ):
+        retry_values: dict[str, JsonValue] = {
+            "maxAttempts": JsonInteger(value=1),
+            "conditions": _array(),
+            field: value,
+        }
+        with pytest.raises(ValueError, match=match):
+            lower_request_policies(None, _object(**retry_values), None, None, None, ())
+
+    with pytest.raises(TypeError, match="retry maximum must be an integer"):
+        lower_request_policies(
+            None,
+            _object(maxAttempts=_text("1"), conditions=_array()),
+            None,
+            None,
+            None,
+            (),
+        )
+    with pytest.raises(TypeError, match="policy flag must be boolean"):
+        lower_request_policies(
+            None,
+            None,
+            _object(maxHops=JsonInteger(value=1), allowCrossOrigin=_text("yes")),
+            None,
+            None,
+            (),
+        )
+
+
+def test_proxy_lowering_rejects_unsafe_urls_and_unsupported_authentication() -> None:
+    origins = (TaintOriginId(value="test/proxy-errors"),)
+    invalid_proxies = (
+        (_object(url=_text("relative")), "absolute HTTP"),
+        (_object(url=_text("https://user@example.test")), "only scheme and authority"),
+        (
+            _object(
+                url=_text("https://example.test"),
+                auth=_object(
+                    type=_text("apiKey"),
+                    **{"in": _text("header")},
+                    name=_text("x-key"),
+                    value=_text("secret"),
+                ),
+            ),
+            "supports none, basic, or bearer",
+        ),
+    )
+    for proxy, match in invalid_proxies:
+        with pytest.raises(ValueError, match=match):
+            lower_request_policies(None, None, None, None, proxy, origins)

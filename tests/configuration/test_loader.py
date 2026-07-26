@@ -249,6 +249,12 @@ def test_loader_boundary_models_reject_untyped_mutable_values(tmp_path: Path) ->
         SourceCatalogEntry(source_id=cast("SourceId", "entry"), path=path)
     with pytest.raises(TypeError, match="absolute Path"):
         SourceCatalogEntry(source_id=source_id, path=Path("relative"))
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        SourceCatalogEntry(source_id=source_id, path=path, sha256="Z" * 64, byte_count=1)
+    with pytest.raises(ValueError, match="non-negative"):
+        SourceCatalogEntry(source_id=source_id, path=path, sha256="0" * 64, byte_count=-1)
+    with pytest.raises(ValueError, match="revision metadata must be complete"):
+        SourceCatalogEntry(source_id=source_id, path=path, sha256="0" * 64)
     catalog = (SourceCatalogEntry(source_id=source_id, path=path),)
     with pytest.raises(TypeError, match="entry"):
         ProjectSourceSet(entry_source=cast("SourceId", "entry"))
@@ -273,6 +279,12 @@ def test_loader_boundary_models_reject_untyped_mutable_values(tmp_path: Path) ->
         LoadedCompilation(
             compilation=CompilationResult(),
             catalog=cast("tuple[SourceCatalogEntry, ...]", [catalog[0]]),
+        )
+    with pytest.raises(TypeError, match="documents"):
+        LoadedCompilation(
+            compilation=CompilationResult(),
+            catalog=catalog,
+            documents=cast("tuple[ParsedDocument, ...]", [object()]),
         )
     with pytest.raises(TypeError, match="must be a Path"):
         load_project_sources(cast("Path", "config"))
@@ -476,3 +488,139 @@ def test_loader_bounds_explicit_directories_before_reading_every_file(tmp_path: 
     assert "configuration.source.limit-exceeded" in {
         diagnostic.code.value for diagnostic in bounded.diagnostics
     }
+
+
+def test_loader_reports_directory_io_and_constrained_parse_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_id = SourceId(value="test-source")
+
+    def fail_scan(_path: Path) -> object:
+        raise OSError
+
+    monkeypatch.setattr("comparo.configuration.loader.os.scandir", fail_scan)
+    scanned = loader_module._scan_directory(tmp_path, loader_module._DiscoveryBudget(1))
+    assert scanned.invalid
+    monkeypatch.undo()
+
+    source = tmp_path / "many.yaml"
+    source.write_text("one: 1\n---\ntwo: 2\n---\nthree: 3\n", encoding="utf-8")
+    constrained = loader_module._read(
+        source,
+        source_id,
+        DEFAULT_PROJECT_LOAD_LIMITS.yaml,
+        remaining_bytes=1_000,
+        remaining_documents=1,
+        remaining_nodes=1_000,
+        remaining_resources=1,
+    )
+    assert constrained.diagnostics[0].code.value == "configuration.source.aggregate-limit-exceeded"
+
+    original_parser = parse_yaml_source
+
+    def ignore_effective_limits(
+        *,
+        source_id: SourceId,
+        text: str,
+        limits: YamlParseLimits,
+    ) -> object:
+        del limits
+        return original_parser(source_id=source_id, text=text)
+
+    monkeypatch.setattr(loader_module, "parse_yaml_source", ignore_effective_limits)
+    post_parse = loader_module._read(
+        source,
+        source_id,
+        DEFAULT_PROJECT_LOAD_LIMITS.yaml,
+        remaining_bytes=1_000,
+        remaining_documents=1,
+        remaining_nodes=1_000,
+        remaining_resources=1,
+    )
+    assert post_parse.diagnostics[0].code.value == "configuration.source.aggregate-limit-exceeded"
+
+    monkeypatch.setattr(
+        loader_module,
+        "_scan_directory",
+        lambda *_args, **_kwargs: loader_module._ScannedDirectory(invalid=True),
+    )
+    invalid_directory = loader_module._directory_files(
+        tmp_path,
+        1,
+        loader_module._DiscoveryBudget(1),
+        set(),
+    )
+    assert invalid_directory.invalid
+
+
+def test_loader_fails_closed_when_explicit_directory_discovery_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_id = SourceId(value="entry-config")
+    diagnostics: list[ConfigurationDiagnostic] = []
+    invalid = loader_module._DirectoryDiscovery(invalid=True)
+    assert not loader_module._admit_directory_discovery(invalid, [], diagnostics, source_id)
+    assert diagnostics[-1].code.value == "configuration.source.discovery-invalid"
+
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    monkeypatch.setattr(loader_module, "_directory_files", lambda *_args, **_kwargs: invalid)
+    admitted = loader_module._admit_explicit_source(
+        explicit,
+        root=tmp_path,
+        authorizer=None,
+        candidates=[],
+        seen=set(),
+        diagnostics=diagnostics,
+        source_id=source_id,
+        maximum=1,
+        budget=loader_module._DiscoveryBudget(1),
+    )
+    assert admitted is None
+
+    monkeypatch.setattr(loader_module, "_admit_explicit_source", lambda *_args, **_kwargs: None)
+    discovered = loader_module._discover_candidates(
+        root=tmp_path,
+        entry=tmp_path / "comparo.yaml",
+        data_root_name="missing",
+        includes=("**/*.yaml",),
+        excludes=(),
+        explicit=(explicit,),
+        authorizer=None,
+        diagnostics=diagnostics,
+        source_id=source_id,
+        maximum=1,
+        maximum_discovery_entries=1,
+    )
+    assert discovered == ()
+
+
+def test_loader_descends_into_directories_and_stops_explicit_capacity(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    source = nested / "source.yaml"
+    source.write_text("value: true\n", encoding="utf-8")
+    discovered = loader_module._directory_files(
+        tmp_path,
+        2,
+        loader_module._DiscoveryBudget(4),
+        set(),
+    )
+    assert discovered.files == (source,)
+
+    diagnostics: list[ConfigurationDiagnostic] = []
+    admitted = loader_module._admit_explicit_source(
+        source,
+        root=tmp_path,
+        authorizer=None,
+        candidates=[tmp_path / "already-admitted.yaml"],
+        seen=set(),
+        diagnostics=diagnostics,
+        source_id=SourceId(value="entry-config"),
+        maximum=1,
+        budget=loader_module._DiscoveryBudget(1),
+    )
+    assert not admitted
+    assert diagnostics[-1].code.value == "configuration.source.limit-exceeded"

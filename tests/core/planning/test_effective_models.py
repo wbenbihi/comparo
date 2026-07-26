@@ -6,17 +6,21 @@ from uuid import UUID
 import msgspec
 import pytest
 
+from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import CompiledProject
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.diagnostics import DiagnosticStage
+from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
 from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import InlineFragment
+from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import TrialId
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.planning import iter_plan_cells
@@ -123,6 +127,22 @@ def test_matrix_and_subject_effective_models_validate_closed_structure(
     for changes, error, message in subject_cases:
         with pytest.raises(error, match=message):
             msgspec.structs.replace(subject, **changes)
+    with pytest.raises(TypeError, match="Request edit must be typed"):
+        msgspec.structs.replace(subject, request_edit=object())
+    request_resource = comparison_project.find(ResourceKind.REQUEST, ResourceId(value="chat"))
+    assert request_resource is not None
+    request_spec = cast("CanonicalObject", request_resource.spec)
+    request_expression = next(
+        member.value for member in request_spec.members if member.name == "request"
+    )
+    with pytest.raises(ValueError, match="target its definition"):
+        msgspec.structs.replace(
+            subject,
+            request_edit=InvocationRequestEdit(
+                subject=ResourceId(value="other"),
+                method=cast("ValueExpression", request_expression),
+            ),
+        )
 
 
 def test_effective_profiles_accept_inline_handles_and_reject_kind_confusion(

@@ -106,6 +106,12 @@ class _Resolver:
         self.closed += 1
 
 
+def test_network_address_classification_rejects_non_ip_hosts() -> None:
+    with pytest.raises(TypeError, match="requires an IP host"):
+        preparation_module.network_address_class(cast("IpHost", DnsHost(value="example.test")))
+    assert preparation_module.network_address_class(Ipv4Host(value="8.8.8.8")).value == "public"
+
+
 def _policy(
     *,
     hosts: tuple[DnsHost, ...] = (),

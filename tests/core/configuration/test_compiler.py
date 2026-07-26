@@ -19,6 +19,8 @@ from comparo.core.configuration.compiler import compile_v1alpha1
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.models import MappingNode
 from comparo.core.configuration.sensitivity import redact_url_credentials
+from comparo.core.configuration.sensitivity import sensitive_source_spans
+from comparo.core.configuration.sensitivity import source_entry_is_sensitive
 from comparo.core.configuration.v1alpha1.ast import V1Alpha1FrontendResult
 from comparo.core.configuration.v1alpha1.frontend import parse_v1alpha1_documents
 from comparo.core.domain.expressions import LiteralExpr
@@ -609,6 +611,39 @@ def test_fingerprint_redacts_structured_credential_entries() -> None:
         "query": {"api_key": {"sensitive": True}, "public": "visible"},
     }
     assert redact_url_credentials("https://example.test/?token") == ("https://example.test/?token")
+
+
+def test_structured_sensitive_arrays_and_incomplete_source_roots_are_safe() -> None:
+    compiled = _compile(
+        _valid_project()
+        + "---\n"
+        + _document(
+            "Request",
+            "structured-auth",
+            "{request: {method: GET, endpoint: /, headers: "
+            "[{name: authorization, value: array-secret}]}}",
+        )
+    )
+    assert compiled.project is not None
+    assert source_entry_is_sensitive(
+        "values",
+        context="environment-env",
+        credential_name=None,
+    )
+
+    scalar = parse_yaml_source(source_id=_SOURCE, text="plain").documents[0].root
+    incomplete = parse_yaml_source(source_id=_SOURCE, text="{kind: Request}").documents[0].root
+    inherited_sequence = (
+        parse_yaml_source(
+            source_id=_SOURCE,
+            text="kind: Value\nspec:\n  - secret\n",
+        )
+        .documents[0]
+        .root
+    )
+    assert sensitive_source_spans(scalar) == ()
+    assert sensitive_source_spans(incomplete) == ()
+    assert sensitive_source_spans(inherited_sequence)
 
 
 def test_compiled_wire_credentials_never_retain_authored_canaries_as_public_values() -> None:

@@ -32,6 +32,7 @@ from comparo.core.runtime import RequestPreparationFailure
 from comparo.core.runtime import RunResult
 from comparo.core.runtime import RuntimeEvent
 from comparo.core.runtime import RuntimeEventKind
+from comparo.core.runtime import RuntimeOccurrenceOutcome
 from comparo.core.runtime import UnavailableExecution
 from comparo.core.runtime import run_prepared
 from comparo.core.runtime.models import is_execution_outcome
@@ -267,6 +268,57 @@ def test_events_and_run_result_reject_ambiguous_coordinates(runtime_result: RunR
             run_id=run_id,
             kind=RuntimeEventKind.COMPARISON_FINISHED,
             comparison_id=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="occurrence outcome"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.EXECUTION_FINISHED,
+            execution_id=execution_id,
+            outcome=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="terminal occurrence"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.EXECUTION_STARTED,
+            execution_id=execution_id,
+            outcome=RuntimeOccurrenceOutcome.OBSERVED,
+        )
+    with pytest.raises(ValueError, match="supplied together"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.EXECUTION_FINISHED,
+            execution_id=execution_id,
+            failure_stage=DiagnosticStage.TRANSPORT,
+        )
+    with pytest.raises(TypeError, match="failure stage"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.EXECUTION_FINISHED,
+            execution_id=execution_id,
+            failure_stage=object(),  # type: ignore[arg-type]
+            failure_code=DiagnosticCode(value="runtime.test"),
+        )
+    with pytest.raises(TypeError, match="failure code"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.EXECUTION_FINISHED,
+            execution_id=execution_id,
+            failure_stage=DiagnosticStage.TRANSPORT,
+            failure_code=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="only for a finished execution"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.COMPARISON_FINISHED,
+            comparison_id=comparison_id,
+            failure_stage=DiagnosticStage.TRANSPORT,
+            failure_code=DiagnosticCode(value="runtime.test"),
         )
 
     with pytest.raises(TypeError, match="RunId"):
