@@ -84,7 +84,7 @@ class TuiCoordinator:
         self.compare_progress: ExecutionProgressSnapshot | None = None
         self.compare_result: ResultProjection | None = None
         self.compare_diagnostics: tuple[ApplicationDiagnostic, ...] = ()
-        self._prepared_approve_mutations: bool | None = None
+        self._prepared_controls: TuiExecutionControls | None = None
         self.session: ExecutionSession | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._slot_tasks: dict[TuiOperationSlot, asyncio.Task[None]] = {}
@@ -108,7 +108,7 @@ class TuiCoordinator:
         return (
             self.compare_handle is not None
             and self.compare_plan is not None
-            and self._prepared_approve_mutations is not None
+            and self._prepared_controls is not None
         )
 
     def begin(self) -> None:
@@ -243,7 +243,7 @@ class TuiCoordinator:
         self.compare_surface = CompareSurface.PREPARE
         self.compare_handle = None
         self.compare_plan = None
-        self._prepared_approve_mutations = None
+        self._prepared_controls = None
         self.compare_progress = None
         self.compare_result = None
         self.compare_diagnostics = ()
@@ -262,8 +262,13 @@ class TuiCoordinator:
         await self._discard_prepared()
         self._reset_preparation()
         await self._changed(WorkspaceId.COMPARE)
+        controls = TuiExecutionControls(
+            settings=self._controls.settings,
+            approve_mutations=submitted.approve_mutations,
+            tool_version=self._controls.tool_version,
+        )
         try:
-            prepared = await self._backend.prepare_compare(submitted)
+            prepared = await self._backend.prepare_compare(submitted, controls)
         except Exception as error:  # noqa: BLE001 - sever backend exception provenance
             if self._closing or revision != self._compare_revision:
                 return
@@ -276,33 +281,28 @@ class TuiCoordinator:
             if prepared.handle is not None:
                 await self._discard_handle(prepared.handle)
             return
-        if prepared.handle is None or prepared.inspection is None:
+        if prepared.handle is None or prepared.review is None:
             self.compare_diagnostics = prepared.diagnostics
         else:
             self.compare_handle = prepared.handle
-            self.compare_plan = prepared.inspection
-            self._prepared_approve_mutations = submitted.approve_mutations
+            self.compare_plan = prepared.review.plan
+            self._prepared_controls = controls
         await self._changed(WorkspaceId.COMPARE)
 
     async def start_compare(self) -> None:
         """Consume the exact admitted handle and supervise one execution session."""
         handle = self.compare_handle
         plan = self.compare_plan
-        approve_mutations = self._prepared_approve_mutations
-        if handle is None or plan is None or approve_mutations is None or self.session is not None:
+        controls = self._prepared_controls
+        if handle is None or plan is None or controls is None or self.session is not None:
             return
         self.compare_handle = None
-        self._prepared_approve_mutations = None
+        self._prepared_controls = None
         self.compare_surface = CompareSurface.RUNNING
         self.compare_progress = None
         self.compare_diagnostics = ()
         await self._changed(WorkspaceId.COMPARE)
         try:
-            controls = TuiExecutionControls(
-                settings=self._controls.settings,
-                approve_mutations=approve_mutations,
-                tool_version=self._controls.tool_version,
-            )
             session = await self._backend.start_compare(handle, controls)
         except Exception as error:  # noqa: BLE001 - sever backend exception provenance
             self.compare_surface = CompareSurface.PREPARE
@@ -441,7 +441,7 @@ class TuiCoordinator:
         self.compare_progress = None
         self.compare_result = None
         self.compare_diagnostics = ()
-        self._prepared_approve_mutations = None
+        self._prepared_controls = None
 
     def _task_finished(self, slot: TuiOperationSlot, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)

@@ -26,11 +26,18 @@ from comparo.application.execution_session import ExecutionSession
 from comparo.application.execution_session import ExecutionSessionPhase
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import EnvironmentPairInspection
+from comparo.application.inspection import PlanArtifactAuthorityInspection
 from comparo.application.inspection import PlanCardinalityInspection
+from comparo.application.inspection import PlanHttpAuthorityInspection
 from comparo.application.inspection import PlanInspection
 from comparo.application.inspection import PlanSliceInspection
+from comparo.application.inspection import PlanValidationInspection
+from comparo.application.inspection import PlanValueAuthorityInspection
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import SourceCoordinate
+from comparo.application.plan_review import PlanReviewInspection
+from comparo.application.plan_review import inspect_execution_settings
+from comparo.application.plan_review import inspect_runtime_limits
 from comparo.application.production_execution import ProductionExecutionFailure
 from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionResult
@@ -287,6 +294,31 @@ def _plan() -> PlanInspection:
         ),
         budgets=(),
         provenance=(),
+        validation=PlanValidationInspection(assertion_rules=0, diff_rules=0, gate=None),
+        http_authority=PlanHttpAuthorityInspection(
+            allowed_schemes=("https",),
+            allowed_methods=("GET",),
+            allowed_hosts=("api.example.test",),
+            allowed_ports=(443,),
+            allow_any_host=False,
+            allow_any_port=False,
+            require_mutation_approval=True,
+        ),
+        value_authority=PlanValueAuthorityInspection(
+            ambient_environment_names=(),
+            allow_any_ambient_environment=False,
+            allow_project_files=False,
+            remote_schema_sources=(),
+            allow_any_remote_schemas=False,
+            secret_egress=(),
+            allow_any_secret_egress=False,
+        ),
+        artifact_authority=PlanArtifactAuthorityInspection(
+            allow_sanitized_persistence=False,
+            root_count=0,
+            selected_root_present=False,
+            selected_root_authorized=False,
+        ),
     )
 
 
@@ -426,7 +458,11 @@ class _FakeBackend:
             raise RuntimeError(_CANARY)
         return _project_result()
 
-    async def prepare_compare(self, draft: CompareDraft) -> ComparePreparationResult:
+    async def prepare_compare(
+        self,
+        draft: CompareDraft,
+        controls: TuiExecutionControls,
+    ) -> ComparePreparationResult:
         self.calls.append(f"prepare:{draft.mode.value}")
         self.prepared_drafts.append(draft)
         self._before("prepare")
@@ -438,7 +474,13 @@ class _FakeBackend:
             raise RuntimeError(_CANARY)
         return self.preparation or ComparePreparationResult(
             handle=ComparePreparationHandle(value="prepared-handle"),
-            inspection=_plan(),
+            review=PlanReviewInspection(
+                plan=_plan(),
+                runtime=inspect_runtime_limits(controls.settings),
+                execution=inspect_execution_settings(controls.settings, None),
+                mutation_approved=controls.approve_mutations,
+                tool_version=controls.tool_version,
+            ),
         )
 
     async def start_compare(

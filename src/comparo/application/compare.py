@@ -9,16 +9,21 @@ from uuid import uuid4
 
 import msgspec
 
+from comparo.application.evaluation_binding import preflight_configuration_evaluation
 from comparo.application.execution_session import ExecutionSession
 from comparo.application.execution_session import start_execution_session
 from comparo.application.inspection import ApplicationDiagnostic
-from comparo.application.inspection import PlanInspection
+from comparo.application.inspection import inspect_diagnostic
 from comparo.application.inspection import inspect_plan
+from comparo.application.plan_review import PlanReviewInspection
+from comparo.application.plan_review import inspect_execution_settings
+from comparo.application.plan_review import inspect_runtime_limits
 from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import prepare_project_plan
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionSettings
+from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 
 _HANDLE_ALLOCATION_ATTEMPTS = 8
 
@@ -36,6 +41,8 @@ class CompareServiceErrorCode(StrEnum):
 
     CLOSED = "closed"
     HANDLE_UNKNOWN = "handle-unknown"
+    PREPARATION_MISMATCH = "preparation-mismatch"
+    PREPARATION_BLOCKED = "preparation-blocked"
 
 
 class CompareServiceError(RuntimeError):
@@ -64,49 +71,8 @@ class ComparePreparationHandle(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ComparePrepareRequest(msgspec.Struct, frozen=True, kw_only=True):
-    """One typed Compare intention paired with the shared project-planning request."""
-
-    intent: CompareIntent
-    project: ProjectPlanRequest
-
-    def __post_init__(self) -> None:
-        """Require a closed intention and one exact shared planning request."""
-        if type(self.intent) is not CompareIntent:
-            raise TypeError("Compare preparation intent must be typed")
-        if type(self.project) is not ProjectPlanRequest:
-            raise TypeError("Compare preparation project request must be typed")
-
-
-@final
-class ComparePreparationResult(msgspec.Struct, frozen=True, kw_only=True):
-    """Exactly one safe handle/inspection pair or value-free diagnostics."""
-
-    handle: ComparePreparationHandle | None = None
-    inspection: PlanInspection | None = None
-    diagnostics: tuple[ApplicationDiagnostic, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Keep retained-plan success and diagnostic rejection structurally disjoint."""
-        if self.handle is not None and type(self.handle) is not ComparePreparationHandle:
-            raise TypeError("Compare preparation result handle must be typed")
-        if self.inspection is not None and type(self.inspection) is not PlanInspection:
-            raise TypeError("Compare preparation result inspection must be typed")
-        if type(self.diagnostics) is not tuple or any(
-            type(item) is not ApplicationDiagnostic for item in self.diagnostics
-        ):
-            raise TypeError("Compare preparation diagnostics must be immutable and typed")
-        successful = self.handle is not None and self.inspection is not None
-        if successful and not self.diagnostics:
-            return
-        if self.handle is None and self.inspection is None and self.diagnostics:
-            return
-        raise ValueError("Compare preparation requires exactly success or diagnostics")
-
-
-@final
 class CompareExecutionControls(msgspec.Struct, frozen=True, kw_only=True):
-    """Frontend-owned effect and persistence choices applied only after preparation."""
+    """Frontend-owned effect and persistence choices bound to one preparation."""
 
     settings: ProductionExecutionSettings
     artifact_root: Path | None
@@ -114,11 +80,13 @@ class CompareExecutionControls(msgspec.Struct, frozen=True, kw_only=True):
     tool_version: str
 
     def __post_init__(self) -> None:
-        """Validate effectful choices before consuming a prepared handle."""
+        """Validate effectful choices before preparing or consuming a handle."""
         if type(self.settings) is not ProductionExecutionSettings:
             raise TypeError("Compare execution settings must be typed")
         if self.artifact_root is not None and not isinstance(self.artifact_root, Path):
-            raise TypeError("Compare artifact root must be a Path or None")
+            raise TypeError("Compare artifact root must be a Path or absent")
+        if self.artifact_root is not None and not self.artifact_root.is_absolute():
+            raise ValueError("Compare artifact root must be resolved and absolute")
         if type(self.approve_mutations) is not bool:
             raise TypeError("Compare mutation approval must be bool")
         if (
@@ -127,6 +95,50 @@ class CompareExecutionControls(msgspec.Struct, frozen=True, kw_only=True):
             or len(self.tool_version) > 64
         ):
             raise ValueError("Compare tool version must be bounded non-empty text")
+
+
+@final
+class ComparePrepareRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """One typed Compare intention, project request, and exact start controls."""
+
+    intent: CompareIntent
+    project: ProjectPlanRequest
+    controls: CompareExecutionControls
+
+    def __post_init__(self) -> None:
+        """Require a closed intention and one exact shared planning request."""
+        if type(self.intent) is not CompareIntent:
+            raise TypeError("Compare preparation intent must be typed")
+        if type(self.project) is not ProjectPlanRequest:
+            raise TypeError("Compare preparation project request must be typed")
+        if type(self.controls) is not CompareExecutionControls:
+            raise TypeError("Compare preparation controls must be typed")
+
+
+@final
+class ComparePreparationResult(msgspec.Struct, frozen=True, kw_only=True):
+    """Exactly one safe handle/review pair or value-free diagnostics."""
+
+    handle: ComparePreparationHandle | None = None
+    review: PlanReviewInspection | None = None
+    diagnostics: tuple[ApplicationDiagnostic, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Keep retained-plan success and diagnostic rejection structurally disjoint."""
+        if self.handle is not None and type(self.handle) is not ComparePreparationHandle:
+            raise TypeError("Compare preparation result handle must be typed")
+        if self.review is not None and type(self.review) is not PlanReviewInspection:
+            raise TypeError("Compare preparation result review must be typed")
+        if type(self.diagnostics) is not tuple or any(
+            type(item) is not ApplicationDiagnostic for item in self.diagnostics
+        ):
+            raise TypeError("Compare preparation diagnostics must be immutable and typed")
+        successful = self.handle is not None and self.review is not None
+        if successful and not self.diagnostics:
+            return
+        if self.handle is None and self.review is None and self.diagnostics:
+            return
+        raise ValueError("Compare preparation requires exactly success or diagnostics")
 
 
 @final
@@ -140,7 +152,7 @@ class CompareService:
         if type(maximum_outstanding) is not int or maximum_outstanding < 1:
             raise ValueError("Compare outstanding preparation limit must be a positive integer")
         self._maximum_outstanding = maximum_outstanding
-        self._prepared: dict[ComparePreparationHandle, PreparedProjectPlan] = {}
+        self._prepared: dict[ComparePreparationHandle, _PreparedComparison] = {}
         self._closed = False
 
     @property
@@ -170,16 +182,20 @@ class CompareService:
             return _rejected("compare.preparation.internal")
         if outcome.project is None:
             return ComparePreparationResult(diagnostics=outcome.diagnostics)
-        topology = _effective_topology_diagnostic(request.intent, outcome.project)
-        if topology is not None:
-            return ComparePreparationResult(diagnostics=(topology,))
+        admitted = _admit_review(request, outcome.project)
+        if isinstance(admitted, tuple):
+            return ComparePreparationResult(diagnostics=admitted)
         handle = self._allocate_handle()
         if handle is None:
             return _rejected("compare.preparation.handle-unavailable")
-        self._prepared[handle] = outcome.project
+        self._prepared[handle] = _PreparedComparison(
+            project=outcome.project,
+            controls=request.controls,
+            review=admitted,
+        )
         return ComparePreparationResult(
             handle=handle,
-            inspection=inspect_plan(outcome.project.prepared),
+            review=admitted,
         )
 
     def start(
@@ -192,14 +208,11 @@ class CompareService:
             raise TypeError("Compare start handle must be typed")
         if type(controls) is not CompareExecutionControls:
             raise TypeError("Compare start controls must be typed")
-        if self._closed:
-            raise CompareServiceError(CompareServiceErrorCode.CLOSED)
-        project = self._prepared.pop(handle, None)
-        if project is None:
-            raise CompareServiceError(CompareServiceErrorCode.HANDLE_UNKNOWN)
+        prepared = self._validate_start(handle, controls)
+        del self._prepared[handle]
         return start_execution_session(
             ProductionExecutionRequest(
-                project=project,
+                project=prepared.project,
                 settings=controls.settings,
                 ambient_environment=None,
                 artifact_root=controls.artifact_root,
@@ -207,6 +220,18 @@ class CompareService:
                 tool_version=controls.tool_version,
             )
         )
+
+    def validate_start(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+    ) -> None:
+        """Validate exact start authority without consuming the preparation or causing effects."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare start handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare start controls must be typed")
+        self._validate_start(handle, controls)
 
     def discard(self, handle: ComparePreparationHandle) -> bool:
         """Release one unused prepared plan and report whether it was retained."""
@@ -226,6 +251,39 @@ class CompareService:
                 return handle
         return None
 
+    def _validate_start(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+    ) -> _PreparedComparison:
+        if self._closed:
+            raise CompareServiceError(CompareServiceErrorCode.CLOSED)
+        prepared = self._prepared.get(handle)
+        if prepared is None:
+            raise CompareServiceError(CompareServiceErrorCode.HANDLE_UNKNOWN)
+        if controls != prepared.controls:
+            raise CompareServiceError(CompareServiceErrorCode.PREPARATION_MISMATCH)
+        if not prepared.review.execution_allowed:
+            raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BLOCKED)
+        return prepared
+
+
+@final
+class _PreparedComparison(msgspec.Struct, frozen=True, kw_only=True):
+    """One retained admitted project bound to every inspected execution control."""
+
+    project: PreparedProjectPlan
+    controls: CompareExecutionControls
+    review: PlanReviewInspection
+
+    def __post_init__(self) -> None:
+        if type(self.project) is not PreparedProjectPlan:
+            raise TypeError("prepared comparison project must be typed")
+        if type(self.controls) is not CompareExecutionControls:
+            raise TypeError("prepared comparison controls must be typed")
+        if type(self.review) is not PlanReviewInspection:
+            raise TypeError("prepared comparison review must be typed")
+
 
 def _intent_request_diagnostic(request: ComparePrepareRequest) -> ApplicationDiagnostic | None:
     selected_profile = request.project.options.execution_profile is not None
@@ -234,6 +292,36 @@ def _intent_request_diagnostic(request: ComparePrepareRequest) -> ApplicationDia
     if request.intent is not CompareIntent.EXECUTION_PROFILE and selected_profile:
         return _diagnostic("compare.intent.ad-hoc-profile-forbidden")
     return None
+
+
+def _admit_review(
+    request: ComparePrepareRequest,
+    project: PreparedProjectPlan,
+) -> PlanReviewInspection | tuple[ApplicationDiagnostic, ...]:
+    topology = _effective_topology_diagnostic(request.intent, project)
+    if topology is not None:
+        return (topology,)
+    capabilities = preflight_runtime_capabilities(project)
+    if not capabilities.supported:
+        return tuple(inspect_diagnostic(item) for item in capabilities.diagnostics)
+    evaluation = preflight_configuration_evaluation(project.prepared)
+    if not evaluation.supported:
+        return tuple(inspect_diagnostic(item) for item in evaluation.diagnostics)
+    return PlanReviewInspection(
+        plan=inspect_plan(
+            project.prepared,
+            project.policy,
+            evaluation,
+            request.controls.artifact_root,
+        ),
+        runtime=inspect_runtime_limits(request.controls.settings),
+        execution=inspect_execution_settings(
+            request.controls.settings,
+            request.controls.artifact_root,
+        ),
+        mutation_approved=request.controls.approve_mutations,
+        tool_version=request.controls.tool_version,
+    )
 
 
 def _effective_topology_diagnostic(

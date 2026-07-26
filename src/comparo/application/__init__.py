@@ -9,6 +9,12 @@ from comparo.application.artifacts import (
 from comparo.application.artifacts import inspect_artifact as inspect_artifact
 from comparo.application.artifacts import read_artifact_blob as read_artifact_blob
 from comparo.application.artifacts import render_artifact_report as render_artifact_report
+from comparo.application.artifacts import (
+    validate_existing_artifact_root as validate_existing_artifact_root,
+)
+from comparo.application.artifacts import (
+    validate_project_artifact_root as validate_project_artifact_root,
+)
 from comparo.application.artifacts import verify_artifact as verify_artifact
 from comparo.application.compare import CompareExecutionControls as CompareExecutionControls
 from comparo.application.compare import CompareIntent as CompareIntent
@@ -40,6 +46,16 @@ from comparo.application.inspection import (
 from comparo.application.inspection import inspect_diagnostic as inspect_diagnostic
 from comparo.application.inspection import inspect_plan as inspect_plan
 from comparo.application.inspection import inspect_policy_diagnostic as inspect_policy_diagnostic
+from comparo.application.plan_review import (
+    ExecutionSettingsInspection as ExecutionSettingsInspection,
+)
+from comparo.application.plan_review import PlanClipboardSummary as PlanClipboardSummary
+from comparo.application.plan_review import PlanReviewInspection as PlanReviewInspection
+from comparo.application.plan_review import RuntimeLimitInspection as RuntimeLimitInspection
+from comparo.application.plan_review import RuntimeLimitsInspection as RuntimeLimitsInspection
+from comparo.application.plan_review import clipboard_summary as clipboard_summary
+from comparo.application.plan_review import inspect_execution_settings as inspect_execution_settings
+from comparo.application.plan_review import inspect_runtime_limits as inspect_runtime_limits
 from comparo.application.planning import BudgetOverride as BudgetOverride
 from comparo.application.planning import InvocationBuildError as InvocationBuildError
 from comparo.application.planning import MatrixOverride as MatrixOverride
@@ -105,6 +121,7 @@ from comparo.application.report_archive import ReportArchiveError as ReportArchi
 from comparo.application.report_archive import ReportArchiveErrorCode as ReportArchiveErrorCode
 from comparo.application.report_archive import ReportArchiveLimits as ReportArchiveLimits
 from comparo.application.report_archive import ReportArchiveListing as ReportArchiveListing
+from comparo.application.report_archive import ReportArchiveResource as ReportArchiveResource
 from comparo.application.report_archive import list_report_archive as list_report_archive
 from comparo.application.results import ComparisonResultRow as ComparisonResultRow
 from comparo.application.results import ExecutionResultRow as ExecutionResultRow
@@ -149,9 +166,12 @@ __all__ = (
     "ExecutionResultRow",
     "ExecutionSession",
     "ExecutionSessionPhase",
+    "ExecutionSettingsInspection",
     "InvocationBuildError",
     "MatrixOverride",
+    "PlanClipboardSummary",
     "PlanInspection",
+    "PlanReviewInspection",
     "PlanningOptions",
     "PolicyLoadLimits",
     "PreparedProjectPlan",
@@ -182,6 +202,7 @@ __all__ = (
     "ReportArchiveErrorCode",
     "ReportArchiveLimits",
     "ReportArchiveListing",
+    "ReportArchiveResource",
     "RequestBodyOmissionReason",
     "ResultCrossLink",
     "ResultEntity",
@@ -191,19 +212,24 @@ __all__ = (
     "ResultRelation",
     "ResultSummary",
     "RuntimeCapabilityPreflightResult",
+    "RuntimeLimitInspection",
+    "RuntimeLimitsInspection",
     "SecurityCheck",
     "ValueResourceOverride",
     "build_environment_snapshots",
     "build_invocation",
+    "clipboard_summary",
     "execute_production",
     "initialize_project_artifact_root",
     "inspect_artifact",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",
+    "inspect_execution_settings",
     "inspect_plan",
     "inspect_policy_diagnostic",
     "inspect_project_plan",
     "inspect_project_workspace",
+    "inspect_runtime_limits",
     "list_report_archive",
     "persisted_production_execution_defaults_v1",
     "plan_project",
@@ -217,5 +243,7 @@ __all__ = (
     "resolve_project_root",
     "run_security_checks",
     "start_execution_session",
+    "validate_existing_artifact_root",
+    "validate_project_artifact_root",
     "verify_artifact",
 )

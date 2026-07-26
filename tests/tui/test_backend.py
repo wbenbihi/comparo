@@ -235,7 +235,7 @@ def test_project_load_runs_off_loop_with_launch_owned_sources(
     asyncio.run(scenario())
 
 
-def test_successful_project_load_initializes_relative_archive_under_project_root(
+def test_successful_project_load_treats_missing_relative_archive_as_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -251,19 +251,9 @@ def test_successful_project_load_initializes_relative_archive_under_project_root
         monkeypatch.setattr(backend_module, "inspect_project_workspace", lambda _request: result)
         assert await backend.load_project() is result
         archive = project_root / ".comparo" / "artifacts"
-        assert archive.is_dir()
-        assert archive.stat().st_mode & 0o077 == 0
-
-        listing = ReportArchiveListing(entries=(), failures=())
-        captured: list[Path] = []
-
-        def list_reports(root: Path, _limits: ReportArchiveLimits) -> ReportArchiveListing:
-            captured.append(root)
-            return listing
-
-        monkeypatch.setattr(backend_module, "list_report_archive", list_reports)
-        assert await backend.list_reports() is listing
-        assert captured == [archive.resolve()]
+        assert not archive.exists()
+        assert await backend.list_reports() == ReportArchiveListing(entries=(), failures=())
+        assert not archive.exists()
         await backend.close()
 
     asyncio.run(scenario())
@@ -391,7 +381,7 @@ def test_prepare_maps_every_draft_and_creates_fresh_occurrence_ids(
         monkeypatch.setattr(backend_module, "uuid4", lambda: next(identifiers))
         monkeypatch.setattr(CompareService, "prepare", prepare)
         caller = threading.get_ident()
-        assert await backend.prepare_compare(draft) == _prepare_failure()
+        assert await backend.prepare_compare(draft, _controls()) == _prepare_failure()
         request, worker = captured[0]
         assert request.intent is intent
         assert request.project.options == options
@@ -406,14 +396,22 @@ def test_prepare_maps_every_draft_and_creates_fresh_occurrence_ids(
     asyncio.run(scenario())
 
 
-def test_start_consumes_typed_handle_on_loop_and_uses_launch_artifact_root(
+def test_start_consumes_typed_handle_on_loop_and_uses_exact_no_persist_controls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
         backend = _backend(tmp_path)
         sentinel = cast("ExecutionSession", object())
+        validated: list[tuple[ComparePreparationHandle, CompareExecutionControls]] = []
         captured: list[tuple[ComparePreparationHandle, CompareExecutionControls, int]] = []
+
+        def validate_start(
+            _service: CompareService,
+            handle: ComparePreparationHandle,
+            controls: CompareExecutionControls,
+        ) -> None:
+            validated.append((handle, controls))
 
         def start(
             _service: CompareService,
@@ -423,6 +421,7 @@ def test_start_consumes_typed_handle_on_loop_and_uses_launch_artifact_root(
             captured.append((handle, controls, threading.get_ident()))
             return sentinel
 
+        monkeypatch.setattr(CompareService, "validate_start", validate_start)
         monkeypatch.setattr(CompareService, "start", start)
         caller = threading.get_ident()
         assert await backend.start_compare(_HANDLE, _controls()) is sentinel
@@ -430,9 +429,10 @@ def test_start_consumes_typed_handle_on_loop_and_uses_launch_artifact_root(
         assert handle is _HANDLE
         assert execution_thread == caller
         assert controls.settings == _controls().settings
-        assert controls.artifact_root == _launch(tmp_path).artifact_root.resolve()
+        assert controls.artifact_root is None
         assert not controls.approve_mutations
         assert controls.tool_version == "test"
+        assert validated == [(_HANDLE, controls)]
         await backend.close()
 
     asyncio.run(scenario())
@@ -465,10 +465,10 @@ def test_start_contains_and_maps_compare_failures(
     async def scenario() -> None:
         backend = _backend(tmp_path)
 
-        def start(*_args: object) -> ExecutionSession:
+        def validate_start(*_args: object) -> None:
             raise failure
 
-        monkeypatch.setattr(CompareService, "start", start)
+        monkeypatch.setattr(CompareService, "validate_start", validate_start)
         with pytest.raises(TuiBackendError) as caught:
             await backend.start_compare(_HANDLE, _controls())
         assert caught.value.code is expected
@@ -663,7 +663,8 @@ def test_backend_contains_project_and_prepare_failures(
                     mode=CompareMode.ASSERTIONS,
                     subjects=("ping",),
                     environments=("staging",),
-                )
+                ),
+                _controls(),
             )
         assert prepare.value.code is TuiBackendErrorCode.COMPARE_PREPARE_FAILED
         _assert_value_free(prepare.value)
@@ -732,7 +733,7 @@ def test_close_is_idempotent_contains_failure_and_rejects_later_work(
 @pytest.mark.parametrize(
     "operation",
     [
-        lambda backend: backend.prepare_compare(cast("CompareDraft", object())),
+        lambda backend: backend.prepare_compare(cast("CompareDraft", object()), _controls()),
         lambda backend: backend.start_compare(
             cast("ComparePreparationHandle", object()),
             _controls(),
@@ -800,6 +801,14 @@ def test_tui_launch_request_rejects_invalid_values(changes: dict[str, object]) -
     values.update(changes)
     with pytest.raises(TypeError):
         TuiLaunchRequest(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("artifact_root", [Path(), Path(".."), Path("../reports")])
+def test_tui_launch_request_rejects_non_descendant_relative_artifact_roots(
+    artifact_root: Path,
+) -> None:
+    with pytest.raises(ValueError, match="descendant path"):
+        TuiLaunchRequest(artifact_root=artifact_root)
 
 
 @pytest.mark.parametrize(

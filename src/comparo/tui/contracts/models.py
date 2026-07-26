@@ -65,6 +65,11 @@ class TuiLaunchRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("TUI policy must be a Path or None")
         if not isinstance(self.artifact_root, Path):
             raise TypeError("TUI artifact root must be a Path")
+        if not self.artifact_root.is_absolute() and (
+            not self.artifact_root.parts
+            or any(part in {"", ".", ".."} for part in self.artifact_root.parts)
+        ):
+            raise ValueError("TUI relative artifact root must be a non-empty descendant path")
         if type(self.limits) is not TuiLaunchLimits:
             raise TypeError("TUI launch limits must be TuiLaunchLimits")
 

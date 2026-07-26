@@ -22,7 +22,7 @@ from comparo.application.compare import CompareService
 from comparo.application.compare import CompareServiceError
 from comparo.application.compare import CompareServiceErrorCode
 from comparo.application.inspection import ApplicationDiagnostic
-from comparo.application.inspection import PlanInspection
+from comparo.application.plan_review import PlanReviewInspection
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.production_execution import ProductionExecutionFailure
@@ -102,6 +102,7 @@ def _request(
     return ComparePrepareRequest(
         intent=intent,
         project=_project_request(config, options),
+        controls=_controls(),
     )
 
 
@@ -171,8 +172,9 @@ def test_compare_prepares_every_supported_intent_without_exposing_retained_plan(
     result = service.prepare(_request(_write_project(tmp_path), intent, options))
 
     assert result.handle is not None
-    assert result.inspection is not None
-    assert result.inspection.cardinality.comparisons == comparisons
+    assert result.review is not None
+    assert result.review.plan.cardinality.comparisons == comparisons
+    assert result.review.plan.http_authority is not None
     assert not result.diagnostics
     assert service.outstanding == 1
     assert "project" not in ComparePreparationResult.__struct_fields__
@@ -225,7 +227,7 @@ def test_compare_owns_intent_and_effective_topology_validation(
         _request(_write_project(tmp_path), intent, options)
     )
     assert result.handle is None
-    assert result.inspection is None
+    assert result.review is None
     assert tuple(item.code for item in result.diagnostics) == (code,)
 
 
@@ -241,16 +243,52 @@ def test_compare_start_consumes_the_exact_prepared_handle(
         service = CompareService(maximum_outstanding=1)
         prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
         assert prepared.handle is not None
-        assert prepared.inspection is not None
+        assert prepared.review is not None
 
         session = service.start(prepared.handle, _controls())
         assert service.outstanding == 0
-        assert session.run_id == prepared.inspection.run_id
+        assert session.run_id == prepared.review.plan.run_id
         assert await session.result() == _failure()
         assert session.done
         with pytest.raises(CompareServiceError) as captured:
             service.start(prepared.handle, _controls())
         assert captured.value.code is CompareServiceErrorCode.HANDLE_UNKNOWN
+
+    asyncio.run(scenario())
+
+
+def test_compare_start_rejects_an_artifact_root_not_shown_by_the_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async def execute(_request: object) -> ProductionExecutionResult:
+            return _failure()
+
+        monkeypatch.setattr(execution_session, "execute_production", execute)
+        service = CompareService(maximum_outstanding=1)
+        inspected_root = (tmp_path / "inspected").resolve()
+        different_root = (tmp_path / "different").resolve()
+        request = _assertion_request(_write_project(tmp_path))
+        request = msgspec.structs.replace(
+            request,
+            controls=msgspec.structs.replace(request.controls, artifact_root=inspected_root),
+        )
+        prepared = service.prepare(request)
+        assert prepared.handle is not None
+        controls = msgspec.structs.replace(_controls(), artifact_root=different_root)
+
+        with pytest.raises(CompareServiceError) as captured:
+            service.start(prepared.handle, controls)
+        assert captured.value.code is CompareServiceErrorCode.PREPARATION_MISMATCH
+        assert service.outstanding == 1
+
+        session = service.start(
+            prepared.handle,
+            msgspec.structs.replace(_controls(), artifact_root=inspected_root),
+        )
+        assert service.outstanding == 0
+        assert await session.result() == _failure()
 
     asyncio.run(scenario())
 
@@ -336,11 +374,22 @@ def test_compare_prepare_request_rejects_untyped_values(tmp_path: Path) -> None:
         PlanningOptions(subjects=("ping",), environments=("staging",)),
     )
     with pytest.raises(TypeError, match="intent"):
-        ComparePrepareRequest(intent=cast("CompareIntent", "assertion"), project=project)
+        ComparePrepareRequest(
+            intent=cast("CompareIntent", "assertion"),
+            project=project,
+            controls=_controls(),
+        )
     with pytest.raises(TypeError, match="project request"):
         ComparePrepareRequest(
             intent=CompareIntent.ASSERTION,
             project=cast("ProjectPlanRequest", object()),
+            controls=_controls(),
+        )
+    with pytest.raises(TypeError, match="controls"):
+        ComparePrepareRequest(
+            intent=CompareIntent.ASSERTION,
+            project=project,
+            controls=cast("CompareExecutionControls", object()),
         )
 
 
@@ -349,12 +398,12 @@ def test_compare_preparation_result_rejects_invalid_state(tmp_path: Path) -> Non
         _assertion_request(_write_project(tmp_path))
     )
     assert prepared.handle is not None
-    assert prepared.inspection is not None
+    assert prepared.review is not None
     diagnostic = ApplicationDiagnostic(code="test", severity="error", stage="invocation")
     with pytest.raises(TypeError, match="handle"):
         ComparePreparationResult(handle=cast("ComparePreparationHandle", object()))
-    with pytest.raises(TypeError, match="inspection"):
-        ComparePreparationResult(inspection=cast("PlanInspection", object()))
+    with pytest.raises(TypeError, match="review"):
+        ComparePreparationResult(review=cast("PlanReviewInspection", object()))
     with pytest.raises(TypeError, match="diagnostics"):
         ComparePreparationResult(diagnostics=cast("tuple[ApplicationDiagnostic, ...]", []))
     with pytest.raises(TypeError, match="diagnostics"):
@@ -362,10 +411,10 @@ def test_compare_preparation_result_rejects_invalid_state(tmp_path: Path) -> Non
     invalid_results: tuple[Callable[[], ComparePreparationResult], ...] = (
         lambda: ComparePreparationResult(),
         lambda: ComparePreparationResult(handle=prepared.handle),
-        lambda: ComparePreparationResult(inspection=prepared.inspection),
+        lambda: ComparePreparationResult(review=prepared.review),
         lambda: ComparePreparationResult(
             handle=prepared.handle,
-            inspection=prepared.inspection,
+            review=prepared.review,
             diagnostics=(diagnostic,),
         ),
     )

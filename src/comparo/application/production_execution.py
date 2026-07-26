@@ -177,13 +177,17 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
 
 
 def persisted_production_execution_defaults_v1() -> ProductionExecutionSettings:
-    """Return the versioned production defaults with sanitized persistence enabled."""
+    """Return persistence defaults that conservatively omit unclassified response bodies."""
     defaults = production_execution_defaults_v1()
     artifact = msgspec.structs.replace(
         defaults.artifact,
         persist=ArtifactPersistMode.ALWAYS,
     )
-    return msgspec.structs.replace(defaults, artifact=artifact)
+    transport = msgspec.structs.replace(
+        defaults.transport,
+        classification=ResponseClassification(body=Sensitivity.SENSITIVE),
+    )
+    return msgspec.structs.replace(defaults, artifact=artifact, transport=transport)
 
 
 @final

@@ -110,6 +110,7 @@ def test_session_coalesces_safe_runtime_progress_and_returns_result(
         assert final.finished_comparisons == 1
         assert final.active_executions == 0
         assert final.runtime_sequence == 8
+        assert final.last_event_kind is RuntimeEventKind.RUN_FINISHED
         assert final.last_execution_id is not None
         assert final.last_comparison_id is not None
         assert not session.cancel()
@@ -152,6 +153,35 @@ def test_session_uses_explicit_user_cancellation(
     asyncio.run(scenario())
 
 
+def test_unexpected_execution_failure_closes_progress_before_result_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async def execute(_owned: ProductionExecutionRequest) -> ProductionExecutionResult:
+            raise RuntimeError("test execution failure")
+
+        monkeypatch.setattr(sessions, "execute_production", execute)
+        session = sessions.start_execution_session(_request(tmp_path))
+
+        snapshots = await asyncio.wait_for(
+            _collect_updates(session),
+            timeout=1,
+        )
+        with pytest.raises(RuntimeError, match="test execution failure"):
+            await session.result()
+
+        assert session.done
+        assert snapshots[-1].phase is sessions.ExecutionSessionPhase.FINISHED
+
+    async def _collect_updates(
+        session: sessions.ExecutionSession,
+    ) -> tuple[sessions.ExecutionProgressSnapshot, ...]:
+        return tuple([snapshot async for snapshot in session.updates()])
+
+    asyncio.run(scenario())
+
+
 def test_session_rejects_invalid_ownership_and_progress_values(
     tmp_path: Path,
 ) -> None:
@@ -182,6 +212,7 @@ def test_session_rejects_invalid_ownership_and_progress_values(
         ({"finished_comparisons": 2}, "exceeds the plan"),
         ({"runtime_sequence": -1}, "event sequence"),
         ({"last_execution_id": ""}, "occurrence IDs"),
+        ({"last_event_kind": "run-started"}, "event kind"),
     )
     for changes, message in replacements:
         with pytest.raises((TypeError, ValueError), match=message):

@@ -45,6 +45,7 @@ class ExecutionProgressSnapshot(msgspec.Struct, frozen=True, kw_only=True):
     runtime_sequence: int | None = None
     last_execution_id: str | None = None
     last_comparison_id: str | None = None
+    last_event_kind: RuntimeEventKind | None = None
 
     def __post_init__(self) -> None:
         """Reject malformed or contradictory progress counters."""
@@ -69,6 +70,11 @@ def _validate_progress_identity(snapshot: ExecutionProgressSnapshot) -> None:
     for value in (snapshot.last_execution_id, snapshot.last_comparison_id):
         if value is not None and (type(value) is not str or not value):
             raise ValueError("progress occurrence IDs must be non-empty text or absent")
+    if (
+        snapshot.last_event_kind is not None
+        and type(snapshot.last_event_kind) is not RuntimeEventKind
+    ):
+        raise TypeError("progress event kind must be RuntimeEventKind or absent")
 
 
 def _validate_progress_counters(snapshot: ExecutionProgressSnapshot) -> None:
@@ -151,6 +157,7 @@ class _ProgressMailbox:
                 runtime_sequence=event.sequence.value,
                 last_execution_id=last_execution,
                 last_comparison_id=last_comparison,
+                last_event_kind=event.kind,
             )
         )
 
@@ -270,6 +277,9 @@ class ExecutionSession:
             result = await execute_production(request)
         except asyncio.CancelledError:
             self._mailbox.close(ExecutionSessionPhase.CANCELLED)
+            raise
+        except Exception:
+            self._mailbox.close(ExecutionSessionPhase.FINISHED)
             raise
         self._mailbox.close(
             ExecutionSessionPhase.CANCELLED

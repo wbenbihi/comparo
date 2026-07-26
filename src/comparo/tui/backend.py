@@ -36,6 +36,8 @@ from comparo.application import inspect_project_workspace
 from comparo.application import list_report_archive
 from comparo.application import project_results
 from comparo.application import resolve_project_root
+from comparo.application import validate_existing_artifact_root
+from comparo.application import validate_project_artifact_root
 from comparo.application import verify_artifact
 from comparo.tui.contracts.launch import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
 from comparo.tui.contracts.launch import tui_launch_limits_defaults_v1
@@ -75,19 +77,23 @@ class ProductionTuiBackend:
     """Own one launch configuration and stateful Compare preparation service."""
 
     _artifact_root: Path | None
+    _artifact_candidate: Path | None
     _closed: bool
     _compare: CompareService
     _compare_lock: asyncio.Lock
     _launch: TuiLaunchRequest
+    _project_root: Path | None
     _report_limits: ReportArchiveLimits
     _root_lock: asyncio.Lock
 
     __slots__ = (
+        "_artifact_candidate",
         "_artifact_root",
         "_closed",
         "_compare",
         "_compare_lock",
         "_launch",
+        "_project_root",
         "_report_limits",
         "_root_lock",
     )
@@ -115,13 +121,15 @@ class ProductionTuiBackend:
             )
             compare = CompareService(maximum_outstanding=maximum)
             if launch.artifact_root.is_absolute():
-                artifact_root = launch.artifact_root.resolve(strict=True)
+                artifact_root = validate_existing_artifact_root(launch.artifact_root)
         except Exception:  # noqa: BLE001 - constructor errors may contain local paths
             failure = TuiBackendErrorCode.INVALID_REQUEST
         if failure is not None or compare is None:
             raise TuiBackendError(TuiBackendErrorCode.INVALID_REQUEST)
         self._launch = launch
         self._artifact_root = artifact_root
+        self._artifact_candidate = artifact_root
+        self._project_root = None
         self._report_limits = (
             launch.limits.report_archive if report_limits is None else report_limits
         )
@@ -143,21 +151,29 @@ class ProductionTuiBackend:
             _fixed_failure(TuiBackendErrorCode.PROJECT_LOAD_FAILED),
         )
         if result.snapshot is not None:
-            await self._initialize_artifact_root()
+            await self._discover_artifact_root()
         return result
 
-    async def prepare_compare(self, draft: CompareDraft) -> ComparePreparationResult:
+    async def prepare_compare(
+        self,
+        draft: CompareDraft,
+        controls: TuiExecutionControls,
+    ) -> ComparePreparationResult:
         """Translate one draft and retain its admitted plan behind an opaque handle."""
-        if type(draft) is not CompareDraft:
+        if type(draft) is not CompareDraft or type(controls) is not TuiExecutionControls:
             raise TuiBackendError(TuiBackendErrorCode.INVALID_REQUEST)
         async with self._compare_lock:
             self._require_open()
             return await _safe_thread_call(
-                partial(self._prepare_compare, draft),
+                partial(self._prepare_compare, draft, controls),
                 _fixed_failure(TuiBackendErrorCode.COMPARE_PREPARE_FAILED),
             )
 
-    def _prepare_compare(self, draft: CompareDraft) -> ComparePreparationResult:
+    def _prepare_compare(
+        self,
+        draft: CompareDraft,
+        controls: TuiExecutionControls,
+    ) -> ComparePreparationResult:
         """Build fresh occurrence identities and invoke the blocking preparation facade."""
         options: PlanningOptions = draft.planning_options()
         request = ComparePrepareRequest(
@@ -171,6 +187,12 @@ class ProductionTuiBackend:
                 run_id=uuid4(),
                 load_limits=self._launch.limits.project_load,
                 policy_load_limits=self._launch.limits.policy_load,
+            ),
+            controls=CompareExecutionControls(
+                settings=controls.settings,
+                artifact_root=self._execution_artifact_root(controls.settings),
+                approve_mutations=controls.approve_mutations,
+                tool_version=controls.tool_version,
             ),
         )
         return self._compare.prepare(request)
@@ -188,17 +210,27 @@ class ProductionTuiBackend:
             raise TuiBackendError(TuiBackendErrorCode.INVALID_REQUEST)
         async with self._compare_lock:
             self._require_open()
-            artifact_root = self._require_artifact_root(TuiBackendErrorCode.COMPARE_START_FAILED)
+            application_controls = CompareExecutionControls(
+                settings=controls.settings,
+                artifact_root=self._execution_artifact_root(controls.settings),
+                approve_mutations=controls.approve_mutations,
+                tool_version=controls.tool_version,
+            )
+            _safe_call(
+                partial(self._compare.validate_start, handle, application_controls),
+                _compare_start_failure,
+            )
+            try:
+                await self._initialize_authorized_artifact_root(controls.settings)
+            except Exception:
+                with suppress(Exception):
+                    self._compare.discard(handle)
+                raise
             return _safe_call(
                 partial(
                     self._compare.start,
                     handle,
-                    CompareExecutionControls(
-                        settings=controls.settings,
-                        artifact_root=artifact_root,
-                        approve_mutations=controls.approve_mutations,
-                        tool_version=controls.tool_version,
-                    ),
+                    application_controls,
                 ),
                 _compare_start_failure,
             )
@@ -217,6 +249,12 @@ class ProductionTuiBackend:
     async def list_reports(self) -> ReportArchiveListing:
         """List authenticated report summaries under explicit archive read ceilings."""
         self._require_open()
+        if (
+            self._artifact_root is None
+            and self._artifact_candidate is not None
+            and not self._artifact_candidate.exists()
+        ):
+            return ReportArchiveListing(entries=(), failures=())
         artifact_root = self._require_artifact_root(TuiBackendErrorCode.REPORT_LIST_UNAVAILABLE)
         return await _safe_thread_call(
             partial(
@@ -247,19 +285,64 @@ class ProductionTuiBackend:
         )
         return project_results(artifact)
 
-    async def _initialize_artifact_root(self) -> None:
-        if self._artifact_root is not None:
+    async def _discover_artifact_root(self) -> None:
+        if self._project_root is not None:
             return
         async with self._root_lock:
             project_root = resolve_project_root(self._launch.config)
-            self._artifact_root = await _safe_thread_call(
-                partial(
-                    initialize_project_artifact_root,
-                    project_root,
-                    self._launch.artifact_root,
-                ),
-                _fixed_failure(TuiBackendErrorCode.PROJECT_LOAD_FAILED),
-            )
+            self._project_root = project_root
+            if self._artifact_candidate is not None:
+                return
+            try:
+                selected = self._launch.artifact_root
+                if (
+                    selected.is_absolute()
+                    or not selected.parts
+                    or any(part in {"", ".", ".."} for part in selected.parts)
+                ):
+                    return
+                candidate = (project_root / selected).resolve(strict=False)
+                candidate.relative_to(project_root)
+                self._artifact_candidate = candidate
+                if candidate.exists() and candidate.is_dir():
+                    try:
+                        self._artifact_root = await _safe_thread_call(
+                            partial(
+                                validate_project_artifact_root,
+                                project_root,
+                                selected,
+                            ),
+                            _fixed_failure(TuiBackendErrorCode.REPORT_LIST_UNAVAILABLE),
+                        )
+                    except TuiBackendError:
+                        self._artifact_candidate = None
+            except (OSError, ValueError):
+                return
+
+    async def _initialize_authorized_artifact_root(
+        self,
+        settings: ProductionExecutionSettings,
+    ) -> None:
+        """Create a relative root only after the exact prepared policy review allows Start."""
+        if settings.artifact.persist.value == "never" or self._artifact_root is not None:
+            return
+        if self._project_root is None or self._artifact_candidate is None:
+            raise TuiBackendError(TuiBackendErrorCode.COMPARE_START_FAILED)
+        initialized = await _safe_thread_call(
+            partial(
+                initialize_project_artifact_root,
+                self._project_root,
+                self._launch.artifact_root,
+            ),
+            _fixed_failure(TuiBackendErrorCode.COMPARE_START_FAILED),
+        )
+        if initialized != self._artifact_candidate:
+            raise TuiBackendError(TuiBackendErrorCode.COMPARE_START_FAILED)
+        self._artifact_root = initialized
+
+    def _execution_artifact_root(self, settings: ProductionExecutionSettings) -> Path | None:
+        """Return storage authority only when the exact run controls enable persistence."""
+        return self._artifact_candidate if settings.artifact.persist.value != "never" else None
 
     def _require_artifact_root(self, code: TuiBackendErrorCode) -> Path:
         if self._artifact_root is None:

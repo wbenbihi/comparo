@@ -54,8 +54,9 @@ class TuiBackend(Protocol):
     async def prepare_compare(
         self,
         draft: CompareDraft,
+        controls: TuiExecutionControls,
     ) -> ComparePreparationResult:
-        """Compile the draft and retain its exact admitted plan behind an opaque handle."""
+        """Compile the draft and exact execution controls behind an opaque handle."""
         ...
 
     async def start_compare(
