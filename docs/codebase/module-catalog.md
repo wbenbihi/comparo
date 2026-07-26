@@ -97,7 +97,7 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `sensitivity`, `credentials` | Sealed taint-carrying values and mandatory sensitive HTTP field catalogs |
 | `expressions`, `expression_types`, `expression_analysis` | Typed unresolved expression tree and static dependency/scope analysis |
 | `scopes`, `lifecycle` | Run/cell/trial/Environment/execution/step/attempt coordinates and completion/cancellation |
-| `overrides`, `planning_inputs`, `planning` | Typed edit plans, frontend invocation, effective topology, plan records, and cardinality |
+| `overrides`, `planning_inputs`, `planning_profiles`, `planning` | Typed edit plans, frontend invocation and profile overrides, effective topology, plan records, and cardinality |
 | `budget_contracts`, `budget_origins`, `budgets` | Budget dimensions, authority/default/configuration origins, ledgers, exhaustion, and usage |
 | `capabilities` | Namespaced/versioned capability identity and preparation contracts |
 | `analysis`, `analysis_types`, `analysis_results`, `analysis_usage`, `analysis_budget_validation` | Separately authorized external-analysis request/result/usage seam; no plugin host implementation |

@@ -24,6 +24,7 @@ from comparo.core.domain.overrides import KeepBase
 from comparo.core.domain.overrides import ReplaceBase
 from comparo.core.domain.overrides import ScalarOverride
 from comparo.core.domain.overrides import SetValue
+from comparo.core.domain.planning_profiles import InvocationProfileOverrides
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import is_sensitive_value
@@ -233,40 +234,6 @@ class InvocationRequestEdit(msgspec.Struct, frozen=True, kw_only=True):
         )
 
 
-def _default_profile_collection() -> CollectionOverridePlan[ResourceId, ResourceId]:
-    return CollectionOverridePlan(base=KeepBase())
-
-
-@final
-class InvocationProfileOverrides(msgspec.Struct, frozen=True, kw_only=True):
-    """Typed profile edits shared across every selected invocation subject."""
-
-    assertions: CollectionOverridePlan[ResourceId, ResourceId] = _default_profile_collection()
-    diffs: CollectionOverridePlan[ResourceId, ResourceId] = _default_profile_collection()
-    gate: ScalarOverride[ResourceId] = Inherit()
-    safety: CollectionOverridePlan[ResourceId, ResourceId] = _default_profile_collection()
-    redaction: ScalarOverride[ResourceId] = Inherit()
-    artifacts: ScalarOverride[ResourceId] = Inherit()
-
-    def __post_init__(self) -> None:
-        """Require field-specific collection and scalar override operations."""
-        for label, edit in (
-            ("assertion profile", self.assertions),
-            ("diff profile", self.diffs),
-            ("safety profile", self.safety),
-        ):
-            _validate_resource_edit(edit, label=label)
-        for label, scalar_edit in (
-            ("gate profile", self.gate),
-            ("redaction profile", self.redaction),
-            ("artifact profile", self.artifacts),
-        ):
-            if type(scalar_edit) not in {Inherit, Clear} and not (
-                type(scalar_edit) is SetValue and type(scalar_edit.value) is ResourceId
-            ):
-                raise TypeError(f"{label} override must inherit, clear, or set a ResourceId")
-
-
 def _default_matrix_edit() -> CollectionOverridePlan[MatrixBindingId, MatrixSelection]:
     return CollectionOverridePlan(base=KeepBase())
 
@@ -288,7 +255,7 @@ class RunInvocation(msgspec.Struct, frozen=True, kw_only=True):
     values: tuple[InvocationValueOverlay, ...] = ()
     environment_values: tuple[InvocationEnvironmentValue, ...] = ()
     requests: tuple[InvocationRequestEdit, ...] = ()
-    profiles: InvocationProfileOverrides = msgspec.field(default_factory=InvocationProfileOverrides)
+    profiles: InvocationProfileOverrides = InvocationProfileOverrides()
 
     def __post_init__(self) -> None:
         """Validate the closed override surface without consulting external state."""

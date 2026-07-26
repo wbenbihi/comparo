@@ -34,11 +34,11 @@ from comparo.core.domain.planning_inputs import AssertionTopology
 from comparo.core.domain.planning_inputs import ComparisonTopology
 from comparo.core.domain.planning_inputs import ComparisonTopologyEdit
 from comparo.core.domain.planning_inputs import InheritTopology
-from comparo.core.domain.planning_inputs import InvocationProfileOverrides
 from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.planning_inputs import MatrixSelection
 from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import RunInvocation
+from comparo.core.domain.planning_profiles import InvocationProfileOverrides
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.values import JsonBoolean
