@@ -1260,6 +1260,17 @@
         "execution_policy": {
           "$ref": "#/$defs/ArtifactDefinition"
         },
+        "execution_profile": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactDefinition"
+            }
+          ],
+          "default": null
+        },
         "ordering": {
           "type": "string"
         },

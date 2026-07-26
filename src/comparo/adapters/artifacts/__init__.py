@@ -6,6 +6,8 @@ from comparo.adapters.artifacts.local import LocalArtifactStoreError
 from comparo.adapters.artifacts.local import list_local_artifact_bundle_ids
 from comparo.adapters.artifacts.local import open_local_artifact_bundle
 from comparo.adapters.artifacts.local import read_local_artifact_bundle
+from comparo.adapters.artifacts.local import restore_local_artifact_bundle
+from comparo.adapters.artifacts.local import trash_local_artifact_bundle
 from comparo.adapters.artifacts.memory import InMemorySanitizedBlobStore
 from comparo.adapters.artifacts.memory import SanitizedBlobStoreError
 from comparo.adapters.artifacts.spool import PosixSanitizedBlobSpool
@@ -24,4 +26,6 @@ __all__ = (
     "list_local_artifact_bundle_ids",
     "open_local_artifact_bundle",
     "read_local_artifact_bundle",
+    "restore_local_artifact_bundle",
+    "trash_local_artifact_bundle",
 )

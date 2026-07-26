@@ -156,8 +156,25 @@ from comparo.application.report_archive import ReportArchiveError as ReportArchi
 from comparo.application.report_archive import ReportArchiveErrorCode as ReportArchiveErrorCode
 from comparo.application.report_archive import ReportArchiveLimits as ReportArchiveLimits
 from comparo.application.report_archive import ReportArchiveListing as ReportArchiveListing
+from comparo.application.report_archive import ReportArchivePage as ReportArchivePage
+from comparo.application.report_archive import ReportArchiveQuery as ReportArchiveQuery
 from comparo.application.report_archive import ReportArchiveResource as ReportArchiveResource
 from comparo.application.report_archive import list_report_archive as list_report_archive
+from comparo.application.report_archive import query_report_archive as query_report_archive
+from comparo.application.report_retention import (
+    ReportRetentionCandidate as ReportRetentionCandidate,
+)
+from comparo.application.report_retention import ReportRetentionError as ReportRetentionError
+from comparo.application.report_retention import (
+    ReportRetentionErrorCode as ReportRetentionErrorCode,
+)
+from comparo.application.report_retention import ReportRetentionFailure as ReportRetentionFailure
+from comparo.application.report_retention import ReportRetentionOutcome as ReportRetentionOutcome
+from comparo.application.report_retention import ReportRetentionPlan as ReportRetentionPlan
+from comparo.application.report_retention import ReportRetentionPolicy as ReportRetentionPolicy
+from comparo.application.report_retention import apply_report_retention as apply_report_retention
+from comparo.application.report_retention import plan_report_retention as plan_report_retention
+from comparo.application.report_retention import restore_report as restore_report
 from comparo.application.results import ComparisonResultRow as ComparisonResultRow
 from comparo.application.results import ExecutionResultRow as ExecutionResultRow
 from comparo.application.results import ResultCrossLink as ResultCrossLink
@@ -256,7 +273,16 @@ __all__ = (
     "ReportArchiveErrorCode",
     "ReportArchiveLimits",
     "ReportArchiveListing",
+    "ReportArchivePage",
+    "ReportArchiveQuery",
     "ReportArchiveResource",
+    "ReportRetentionCandidate",
+    "ReportRetentionError",
+    "ReportRetentionErrorCode",
+    "ReportRetentionFailure",
+    "ReportRetentionOutcome",
+    "ReportRetentionPlan",
+    "ReportRetentionPolicy",
     "RequestBodyOmissionReason",
     "RequestOverride",
     "ResultCrossLink",
@@ -271,6 +297,7 @@ __all__ = (
     "RuntimeLimitsInspection",
     "SecurityCheck",
     "ValueResourceOverride",
+    "apply_report_retention",
     "bind_execution_profiles",
     "build_environment_snapshots",
     "build_invocation",
@@ -291,16 +318,19 @@ __all__ = (
     "list_report_archive",
     "persisted_production_execution_defaults_v1",
     "plan_project",
+    "plan_report_retention",
     "preflight_runtime_capabilities",
     "prepare_project_plan",
     "production_execution_defaults_v1",
     "project_results",
+    "query_report_archive",
     "read_artifact_blob",
     "read_artifact_body_window",
     "render_artifact_report",
     "render_prepared_request_window",
     "render_prepared_requests",
     "resolve_project_root",
+    "restore_report",
     "run_security_checks",
     "start_execution_session",
     "validate_existing_artifact_root",

@@ -46,6 +46,7 @@ from comparo.core.domain.gates.model import GateEvaluation
 from comparo.core.domain.gates.model import GateRuleCounts
 from comparo.core.domain.gates.model import GateVerdict
 from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.lifecycle import RunCancelled
 from comparo.core.domain.lifecycle import RunComplete
 from comparo.core.domain.lifecycle import RunInternalError
@@ -187,6 +188,7 @@ def _compile(
         configuration_fingerprint=_configuration_fingerprint(prepared),
         plan_fingerprint=prepared.plan.fingerprint.digest.hex_value,
         ordering=prepared.plan.ordering.value,
+        execution_profile=_execution_profile(prepared),
     )
     gate = _gate(result.gate)
     resources = _resources(prepared, executions, comparisons, provenance, gate)
@@ -487,6 +489,16 @@ def _single_profile(prepared: PreparedRun, *, artifact: bool) -> ArtifactDefinit
     return _profile_definition(next(iter(handles)))
 
 
+def _execution_profile(prepared: PreparedRun) -> ArtifactDefinition | None:
+    selected = prepared.invocation.execution_profile
+    if selected is None:
+        return None
+    resource = prepared.project.find(ResourceKind.EXECUTION_PROFILE, selected)
+    if resource is None:  # pragma: no cover - admitted planner invariant
+        raise ValueError("artifact execution profile is unavailable")
+    return _definition(resource.definition)
+
+
 def _configuration_fingerprint(prepared: PreparedRun) -> str:
     definitions = (
         prepared.project.project.definition,
@@ -517,6 +529,7 @@ def _resources(
     gate: ArtifactGate,
 ) -> tuple[ArtifactDefinition, ...]:
     optional_references = (
+        provenance.execution_profile,
         provenance.artifact_profile,
         provenance.redaction_profile,
         gate.profile,

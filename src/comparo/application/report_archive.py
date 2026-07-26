@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from base64 import urlsafe_b64decode
+from base64 import urlsafe_b64encode
+from binascii import Error as Base64Error
 from enum import StrEnum
 from pathlib import Path
 from typing import final
@@ -25,6 +28,7 @@ class ReportArchiveErrorCode(StrEnum):
     """Closed whole-archive failure classes safe for frontend presentation."""
 
     INVALID_LIMIT = "invalid-limit"
+    INVALID_CURSOR = "invalid-cursor"
     ARCHIVE_UNAVAILABLE = "archive-unavailable"
     BUDGET_EXCEEDED = "budget-exceeded"
 
@@ -89,6 +93,10 @@ class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
     blobs: int
     blob_bytes: int
     coverage_issues: int
+    duration_nanoseconds: int | None = None
+    execution_profile: ReportArchiveResource | None = None
+    adverse_assertions: int = 0
+    adverse_diffs: int = 0
 
     def __post_init__(self) -> None:
         """Require an immutable, scalar-only, non-negative listing product."""
@@ -124,9 +132,19 @@ class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
             self.blobs,
             self.blob_bytes,
             self.coverage_issues,
+            self.adverse_assertions,
+            self.adverse_diffs,
         )
         if any(type(value) is not int or value < 0 for value in counts):
             raise ValueError("report archive entry counts must be non-negative integers")
+        if self.duration_nanoseconds is not None and (
+            type(self.duration_nanoseconds) is not int or self.duration_nanoseconds < 0
+        ):
+            raise ValueError("report archive duration must be non-negative or absent")
+        if self.execution_profile is not None and (
+            type(self.execution_profile) is not ReportArchiveResource
+        ):
+            raise TypeError("report archive execution profile must be a resource or absent")
 
 
 @final
@@ -169,10 +187,78 @@ class ReportArchiveListing(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("report archive valid and invalid entries must be disjoint")
 
 
+@final
+class ReportArchiveQuery(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-owned filters and stable continuation for one archive page."""
+
+    page_size: int
+    cursor: str | None = None
+    text: str | None = None
+    completion: str | None = None
+    gate: str | None = None
+    subject: ReportArchiveResource | None = None
+    environment: ReportArchiveResource | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded passive filters without embedding filesystem coordinates."""
+        if type(self.page_size) is not int or self.page_size < 1:
+            raise ReportArchiveError(ReportArchiveErrorCode.INVALID_LIMIT)
+        for value, label, maximum in (
+            (self.cursor, "cursor", 1024),
+            (self.text, "query text", 256),
+            (self.completion, "completion", 64),
+            (self.gate, "gate", 64),
+        ):
+            if value is not None and (type(value) is not str or not value or len(value) > maximum):
+                raise ValueError(f"report archive {label} must be bounded text or absent")
+        for resource in (self.subject, self.environment):
+            if resource is not None and type(resource) is not ReportArchiveResource:
+                raise TypeError("report archive resource filters must be typed or absent")
+
+
+@final
+class ReportArchivePage(msgspec.Struct, frozen=True, kw_only=True):
+    """One authenticated result window and continuation over its stable sort key."""
+
+    entries: tuple[ReportArchiveEntry, ...]
+    failures: tuple[ReportArchiveEntryFailure, ...]
+    matched_entries: int
+    next_cursor: str | None
+
+    def __post_init__(self) -> None:
+        """Reuse listing invariants and require truthful page metadata."""
+        ReportArchiveListing(entries=self.entries, failures=self.failures)
+        if type(self.matched_entries) is not int or self.matched_entries < len(self.entries):
+            raise ValueError("report archive matched count contradicts the page")
+        if self.next_cursor is not None and (
+            type(self.next_cursor) is not str or not self.next_cursor
+        ):
+            raise TypeError("report archive continuation must be text or absent")
+
+
 def list_report_archive(root: Path, limits: ReportArchiveLimits) -> ReportArchiveListing:
     """Authenticate every bounded bundle candidate and return compact safe summaries."""
     if type(limits) is not ReportArchiveLimits:
         raise ReportArchiveError(ReportArchiveErrorCode.INVALID_LIMIT)
+    page = query_report_archive(
+        root,
+        limits,
+        ReportArchiveQuery(page_size=limits.maximum_entries),
+    )
+    return ReportArchiveListing(entries=page.entries, failures=page.failures)
+
+
+def query_report_archive(
+    root: Path,
+    limits: ReportArchiveLimits,
+    query: ReportArchiveQuery,
+) -> ReportArchivePage:
+    """Authenticate a bounded archive, filter safe rows, and return one stable page."""
+    if type(limits) is not ReportArchiveLimits:
+        raise ReportArchiveError(ReportArchiveErrorCode.INVALID_LIMIT)
+    if type(query) is not ReportArchiveQuery or query.page_size > limits.maximum_entries:
+        raise ReportArchiveError(ReportArchiveErrorCode.INVALID_LIMIT)
+    after = _decode_cursor(query.cursor)
     bundle_ids: tuple[str, ...] = ()
     archive_failure: ReportArchiveErrorCode | None = None
     try:
@@ -204,7 +290,18 @@ def list_report_archive(root: Path, limits: ReportArchiveLimits) -> ReportArchiv
                 )
             )
     entries.sort(key=lambda item: (-item.created_unix_nanoseconds, item.bundle_id))
-    return ReportArchiveListing(entries=tuple(entries), failures=tuple(failures))
+    matched = tuple(item for item in entries if _matches(item, query))
+    remaining = matched
+    if after is not None:
+        remaining = tuple(item for item in matched if _sort_key(item) > after)
+    page = remaining[: query.page_size]
+    next_cursor = _encode_cursor(page[-1]) if len(remaining) > len(page) and page else None
+    return ReportArchivePage(
+        entries=page,
+        failures=tuple(failures),
+        matched_entries=len(matched),
+        next_cursor=next_cursor,
+    )
 
 
 def _entry(bundle_id: str, artifact: RunArtifact) -> ReportArchiveEntry:
@@ -238,7 +335,88 @@ def _entry(bundle_id: str, artifact: RunArtifact) -> ReportArchiveEntry:
         blobs=len(artifact.blobs),
         blob_bytes=sum(item.byte_count for item in artifact.blobs),
         coverage_issues=len(artifact.coverage_issues),
+        duration_nanoseconds=_duration(artifact),
+        execution_profile=_archive_resource(artifact.provenance.execution_profile),
+        adverse_assertions=sum(
+            item.outcome.value not in {"satisfied", "skipped"}
+            for execution in artifact.executions
+            for item in execution.assertions
+        ),
+        adverse_diffs=sum(
+            item.outcome.value not in {"equivalent", "skipped"}
+            for comparison in artifact.comparisons
+            for item in comparison.diffs
+        ),
     )
+
+
+def _duration(artifact: RunArtifact) -> int | None:
+    finished = artifact.completion.instant_unix_nanoseconds
+    started = artifact.metadata.created_unix_nanoseconds
+    if finished is None or finished < started:
+        return None
+    return finished - started
+
+
+def _archive_resource(value: object) -> ReportArchiveResource | None:
+    from comparo.core.artifacts.common import ArtifactDefinition
+
+    if value is None:
+        return None
+    if type(value) is not ArtifactDefinition:  # pragma: no cover - artifact invariant
+        raise TypeError("archive resource projection requires ArtifactDefinition")
+    return ReportArchiveResource(namespace=value.namespace, resource_id=value.resource_id)
+
+
+def _matches(entry: ReportArchiveEntry, query: ReportArchiveQuery) -> bool:
+    if query.completion is not None and entry.completion != query.completion:
+        return False
+    if query.gate is not None and entry.gate != query.gate:
+        return False
+    if query.subject is not None and query.subject not in entry.subjects:
+        return False
+    if query.environment is not None and query.environment not in entry.environments:
+        return False
+    if query.text is None:
+        return True
+    needle = query.text.casefold()
+    values = (
+        entry.bundle_id,
+        entry.run_id,
+        entry.invocation_id,
+        *(f"{item.namespace}/{item.resource_id}" for item in entry.subjects),
+        *(f"{item.namespace}/{item.resource_id}" for item in entry.environments),
+    )
+    if entry.execution_profile is not None:
+        profile = entry.execution_profile
+        values = (*values, f"{profile.namespace}/{profile.resource_id}")
+    return any(needle in value.casefold() for value in values)
+
+
+def _sort_key(entry: ReportArchiveEntry) -> tuple[int, str]:
+    return (-entry.created_unix_nanoseconds, entry.bundle_id)
+
+
+def _encode_cursor(entry: ReportArchiveEntry) -> str:
+    payload = msgspec.json.encode((entry.created_unix_nanoseconds, entry.bundle_id))
+    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(value: str | None) -> tuple[int, str] | None:
+    if value is None:
+        return None
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        created, bundle_id = msgspec.json.decode(
+            urlsafe_b64decode(padded.encode("ascii")),
+            type=tuple[int, str],
+        )
+        require_stable_token(bundle_id, label="report cursor bundle ID", maximum=255)
+        if created < 0:
+            raise ValueError
+        return (-created, bundle_id)
+    except (Base64Error, ValueError, TypeError, UnicodeError, msgspec.DecodeError):
+        raise ReportArchiveError(ReportArchiveErrorCode.INVALID_CURSOR) from None
 
 
 def _archive_error_code(code: ArtifactStoreErrorCode) -> ReportArchiveErrorCode:
@@ -272,6 +450,9 @@ __all__ = (
     "ReportArchiveErrorCode",
     "ReportArchiveLimits",
     "ReportArchiveListing",
+    "ReportArchivePage",
+    "ReportArchiveQuery",
     "ReportArchiveResource",
     "list_report_archive",
+    "query_report_archive",
 )

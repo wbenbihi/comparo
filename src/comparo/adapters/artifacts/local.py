@@ -493,6 +493,58 @@ def list_local_artifact_bundle_ids(
     raise LocalArtifactStoreError(failure)
 
 
+def trash_local_artifact_bundle(root: Path, bundle_id: str) -> None:
+    """Move one bundle into the private recoverable trash namespace."""
+    _move_local_artifact_bundle(root, bundle_id, restore=False)
+
+
+def restore_local_artifact_bundle(root: Path, bundle_id: str) -> None:
+    """Restore one recoverably trashed bundle to the active archive."""
+    _move_local_artifact_bundle(root, bundle_id, restore=True)
+
+
+def _move_local_artifact_bundle(root: Path, bundle_id: str, *, restore: bool) -> None:
+    if (
+        not isinstance(root, Path)
+        or not root.is_absolute()
+        or type(bundle_id) is not str
+        or _BUNDLE_ID.fullmatch(bundle_id) is None
+    ):
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
+    root_fd = -1
+    trash_fd = -1
+    source_fd = -1
+    try:
+        root_fd = os.open(root, _DIRECTORY_FLAGS)
+        _validate_root_fd(root_fd)
+        if not restore:
+            with suppress(FileExistsError):
+                os.mkdir(".trash", mode=0o700, dir_fd=root_fd)
+        trash_fd = os.open(".trash", _DIRECTORY_FLAGS, dir_fd=root_fd)
+        _validate_bundle_fd(trash_fd)
+        source_parent = trash_fd if restore else root_fd
+        destination_parent = root_fd if restore else trash_fd
+        source_fd = os.open(bundle_id, _DIRECTORY_FLAGS, dir_fd=source_parent)
+        _validate_bundle_fd(source_fd)
+        _atomic_rename_between_noreplace(
+            source_parent,
+            bundle_id,
+            destination_parent,
+            bundle_id,
+        )
+        os.fsync(source_parent)
+        os.fsync(destination_parent)
+    except LocalArtifactStoreError:
+        raise
+    except OSError:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+    finally:
+        for descriptor in (source_fd, trash_fd, root_fd):
+            if descriptor >= 0:
+                with suppress(OSError):
+                    os.close(descriptor)
+
+
 def _list_local_artifact_bundle_ids(
     root: Path,
     *,
@@ -511,6 +563,8 @@ def _list_local_artifact_bundle_ids(
         scanned = 0
         with os.scandir(root_fd) as entries:
             for entry in entries:
+                if entry.name == ".trash":
+                    continue
                 scanned += 1
                 if scanned > maximum_entries:
                     raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
@@ -847,6 +901,15 @@ def _platform_name() -> str:
 
 
 def _atomic_rename_noreplace(root_fd: int, source: str, destination: str) -> None:
+    _atomic_rename_between_noreplace(root_fd, source, root_fd, destination)
+
+
+def _atomic_rename_between_noreplace(
+    source_fd: int,
+    source: str,
+    destination_fd: int,
+    destination: str,
+) -> None:
     library = ctypes.CDLL(None, use_errno=True)
     source_bytes = os.fsencode(source)
     destination_bytes = os.fsencode(destination)
@@ -860,7 +923,13 @@ def _atomic_rename_noreplace(root_fd: int, source: str, destination: str) -> Non
             ctypes.c_uint,
         ]
         function.restype = ctypes.c_int
-        result = function(root_fd, source_bytes, root_fd, destination_bytes, 0x00000004)
+        result = function(
+            source_fd,
+            source_bytes,
+            destination_fd,
+            destination_bytes,
+            0x00000004,
+        )
     elif sys.platform.startswith("linux"):
         function = library.renameat2
         function.argtypes = [
@@ -871,7 +940,13 @@ def _atomic_rename_noreplace(root_fd: int, source: str, destination: str) -> Non
             ctypes.c_uint,
         ]
         function.restype = ctypes.c_int
-        result = function(root_fd, source_bytes, root_fd, destination_bytes, 0x00000001)
+        result = function(
+            source_fd,
+            source_bytes,
+            destination_fd,
+            destination_bytes,
+            0x00000001,
+        )
     else:  # pragma: no cover - constructor rejects unsupported platforms
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.UNSUPPORTED_PLATFORM)
     if result != 0:

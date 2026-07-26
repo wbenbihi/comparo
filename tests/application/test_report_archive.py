@@ -18,8 +18,16 @@ from comparo.application.report_archive import ReportArchiveError
 from comparo.application.report_archive import ReportArchiveErrorCode
 from comparo.application.report_archive import ReportArchiveLimits
 from comparo.application.report_archive import ReportArchiveListing
+from comparo.application.report_archive import ReportArchiveQuery
 from comparo.application.report_archive import ReportArchiveResource
 from comparo.application.report_archive import list_report_archive
+from comparo.application.report_archive import query_report_archive
+from comparo.application.report_retention import ReportRetentionError
+from comparo.application.report_retention import ReportRetentionErrorCode
+from comparo.application.report_retention import ReportRetentionPolicy
+from comparo.application.report_retention import apply_report_retention
+from comparo.application.report_retention import plan_report_retention
+from comparo.application.report_retention import restore_report
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
 from tests.adapters.artifacts.test_local_store import _secure_root
@@ -115,6 +123,105 @@ def test_archive_retains_each_typed_invalid_entry_and_keeps_valid_ones(tmp_path:
     )
     rendered = "".join(str(item) for item in listing.failures)
     assert "attacker-secret" not in rendered
+
+
+def test_archive_query_pages_stably_and_filters_only_safe_metadata(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "archive")
+    artifact, blobs = asyncio.run(_stored_artifact())
+    for bundle_id, created in (("oldest", 10), ("middle", 20), ("newest", 30)):
+        _persist(root, _renamed(artifact, bundle_id, created), blobs)
+    limits = ReportArchiveLimits(maximum_entries=3, artifact=_limits())
+
+    first = query_report_archive(root, limits, ReportArchiveQuery(page_size=2))
+    second = query_report_archive(
+        root,
+        limits,
+        ReportArchiveQuery(page_size=2, cursor=first.next_cursor),
+    )
+    subject = first.entries[0].subjects[0]
+    filtered = query_report_archive(
+        root,
+        limits,
+        ReportArchiveQuery(
+            page_size=3,
+            text=subject.resource_id,
+            subject=subject,
+            completion=artifact.completion.kind.value,
+        ),
+    )
+
+    assert tuple(item.bundle_id for item in first.entries) == ("newest", "middle")
+    assert first.matched_entries == 3
+    assert first.next_cursor is not None
+    assert tuple(item.bundle_id for item in second.entries) == ("oldest",)
+    assert second.next_cursor is None
+    assert tuple(item.bundle_id for item in filtered.entries) == (
+        "newest",
+        "middle",
+        "oldest",
+    )
+
+
+def test_archive_query_rejects_untrusted_or_oversized_continuations(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "archive")
+    limits = ReportArchiveLimits(maximum_entries=2, artifact=_limits())
+
+    with pytest.raises(ReportArchiveError) as cursor:
+        query_report_archive(
+            root,
+            limits,
+            ReportArchiveQuery(page_size=1, cursor="not-a-cursor"),
+        )
+    assert cursor.value.code is ReportArchiveErrorCode.INVALID_CURSOR
+
+    with pytest.raises(ReportArchiveError) as page:
+        query_report_archive(root, limits, ReportArchiveQuery(page_size=3))
+    assert page.value.code is ReportArchiveErrorCode.INVALID_LIMIT
+
+
+def test_retention_is_reviewed_recoverable_and_keeps_newest_reports(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "archive")
+    artifact, blobs = asyncio.run(_stored_artifact())
+    _persist(root, _renamed(artifact, "older", 10), blobs)
+    _persist(root, _renamed(artifact, "newer", 20), blobs)
+    archive_limits = ReportArchiveLimits(maximum_entries=2, artifact=_limits())
+    plan = plan_report_retention(
+        root,
+        archive_limits,
+        ReportRetentionPolicy(keep_newest=1, maximum_actions=1),
+    )
+
+    assert tuple(item.bundle_id for item in plan.candidates) == ("older",)
+    outcome = apply_report_retention(root, _limits(), plan)
+    assert outcome.trashed_bundle_ids == ("older",)
+    assert outcome.failures == ()
+    assert tuple(item.bundle_id for item in list_report_archive(root, archive_limits).entries) == (
+        "newer",
+    )
+    assert (root / ".trash" / "older").is_dir()
+
+    restored = restore_report(root, "older", _limits())
+    assert restored.metadata.artifact_id == "older"
+    assert tuple(item.bundle_id for item in list_report_archive(root, archive_limits).entries) == (
+        "newer",
+        "older",
+    )
+
+
+def test_retention_refuses_to_silently_truncate_its_action_plan(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "archive")
+    artifact, blobs = asyncio.run(_stored_artifact())
+    _persist(root, _renamed(artifact, "older", 10), blobs)
+    _persist(root, _renamed(artifact, "newer", 20), blobs)
+
+    with pytest.raises(ReportRetentionError) as caught:
+        plan_report_retention(
+            root,
+            ReportArchiveLimits(maximum_entries=2, artifact=_limits()),
+            ReportRetentionPolicy(keep_newest=0, maximum_actions=1),
+        )
+
+    assert caught.value.code is ReportRetentionErrorCode.BUDGET_EXCEEDED
 
 
 def test_archive_whole_listing_failures_are_closed_and_value_free(tmp_path: Path) -> None:

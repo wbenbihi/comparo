@@ -229,6 +229,7 @@ class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
     configuration_fingerprint: str
     plan_fingerprint: str
     ordering: str
+    execution_profile: ArtifactDefinition | None = None
 
     def __post_init__(self) -> None:
         """Require project, operator authority, and exact plan semantics."""
@@ -237,6 +238,7 @@ class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
         if type(self.execution_policy) is not ArtifactDefinition:
             raise TypeError("artifact provenance requires an ExecutionPolicy definition")
         for profile, label in (
+            (self.execution_profile, "ExecutionProfile"),
             (self.artifact_profile, "ArtifactProfile"),
             (self.redaction_profile, "RedactionProfile"),
         ):
