@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Callable
 from collections.abc import Coroutine
 from functools import wraps
-from pathlib import Path
 from pathlib import PurePath
 from typing import ClassVar
 from typing import cast
@@ -136,7 +135,6 @@ def _project_result() -> ProjectWorkspaceResult:
         sources=(
             ProjectSourceSummary(
                 source_id="project.yaml",
-                path=str(Path("/project.yaml")),
                 entry=True,
                 resources=(project.coordinate, *(item.coordinate for item in resources)),
             ),

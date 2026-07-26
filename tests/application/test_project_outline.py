@@ -8,10 +8,10 @@ from typing import cast
 import msgspec
 import pytest
 
-from comparo.application.inspection import ResourceCoordinate
 from comparo.application.project_outline import ProjectOutlineField
 from comparo.application.project_outline import ProjectRelationship
 from comparo.application.project_outline import ProjectResourceOutline
+from comparo.application.project_outline import ResourceIdentityCoordinate
 from comparo.application.project_outline import outline_resource
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalMember
@@ -199,6 +199,17 @@ def test_outline_projects_every_supported_shape_without_values_or_locations() ->
             ),
             CanonicalMember(name="method", value=_literal(JsonString(value="POST"), provenance)),
             CanonicalMember(
+                name="endpoint",
+                value=_literal(
+                    JsonString(value="/private?api_key=endpoint-secret"),
+                    provenance,
+                ),
+            ),
+            CanonicalMember(
+                name="selector",
+                value=_literal(JsonString(value="$.signed.selector-secret"), provenance),
+            ),
+            CanonicalMember(
                 name="payload", value=_literal(JsonString(value="concealed"), provenance)
             ),
             CanonicalMember(name="binary", value=_literal(BytesValue(value=b"abc"), provenance)),
@@ -231,23 +242,27 @@ def test_outline_projects_every_supported_shape_without_values_or_locations() ->
     projected = outline_resource(owner, spec)
     values = {field.path: field.value for field in projected.fields}
 
-    assert values[()] == "object · 26 members"
+    assert values[()] == "object · 28 members"
     assert values[("canonical-array",)] == "array · 2 members"
     assert values[("inline",)] == "inline Schema"
     assert values[("remote",)] == "remote schema (URI concealed)"
     assert values[("authorization",)] == "* REDACTED"
     assert values[("raw-file",)] == "$file as bytes (path concealed)"
     assert values[("converted-file",)] == "$file as string (path concealed)"
-    assert values[("method",)] == "POST"
+    assert values[("method",)] == "<string · 4 chars>"
+    assert values[("endpoint",)].startswith("<string · ")
+    assert values[("selector",)].startswith("<string · ")
     assert values[("payload",)] == "<string · 9 chars>"
     assert values[("binary",)] == "<bytes · 3 bytes>"
     assert values[("literal-array",)] == "array · 1 members"
     assert values[("literal-object",)] == "object · 1 members"
-    assert values[("amount",)] == "1.25"
+    assert values[("amount",)] == "<number>"
     assert values[("password-hint",)] == "* REDACTED"
     assert "never-render-this" not in repr(projected)
     assert "private-path" not in repr(projected)
     assert "schema.json" not in repr(projected)
+    assert "endpoint-secret" not in repr(projected)
+    assert "selector-secret" not in repr(projected)
     assert {(item.target.kind, item.origin) for item in projected.relationships} == {
         (ResourceKind.ENVIRONMENT.value, "composition"),
         (ResourceKind.ENVIRONMENT.value, "link"),
@@ -258,12 +273,73 @@ def test_outline_projects_every_supported_shape_without_values_or_locations() ->
     assert unknown.fields[0].category == "structure"
 
 
+def test_outline_never_treats_arbitrary_payload_leaf_names_or_scalars_as_safe() -> None:
+    owner = _identity(ResourceKind.REQUEST, "payload-safety")
+    spec = CanonicalObject(
+        members=(
+            CanonicalMember(
+                name="request",
+                value=CanonicalObject(
+                    members=(
+                        CanonicalMember(name="method", value=JsonString(value="POST")),
+                        CanonicalMember(
+                            name="body",
+                            value=JsonObject(
+                                members=(
+                                    JsonObjectMember(
+                                        name="name",
+                                        value=JsonString(value="John Doe"),
+                                    ),
+                                    JsonObjectMember(
+                                        name="id",
+                                        value=JsonString(value="customer-123"),
+                                    ),
+                                    JsonObjectMember(name="pin", value=JsonInteger(value=1234)),
+                                )
+                            ),
+                        ),
+                    )
+                ),
+            ),
+        )
+    )
+
+    projected = outline_resource(owner, spec)
+    values = {field.path: field.value for field in projected.fields}
+    assert values[("request", "method")] == "POST"
+    assert values[("request", "body", "name")] == "<string · 8 chars>"
+    assert values[("request", "body", "id")] == "<string · 12 chars>"
+    assert values[("request", "body", "pin")] == "<integer>"
+    assert "John Doe" not in repr(projected)
+    assert "customer-123" not in repr(projected)
+    assert "1234" not in repr(projected)
+
+
+def test_outline_never_exposes_request_shaped_value_payloads() -> None:
+    canary = "value-method-secret-canary"
+    owner = _identity(ResourceKind.VALUE, "request-shaped-secret")
+    spec = CanonicalObject(
+        members=(
+            CanonicalMember(
+                name="request",
+                value=CanonicalObject(
+                    members=(CanonicalMember(name="method", value=JsonString(value=canary)),)
+                ),
+            ),
+        )
+    )
+
+    projected = outline_resource(owner, spec)
+    values = {field.path: field.value for field in projected.fields}
+    assert values[("request", "method")] == f"<string · {len(canary)} chars>"
+    assert canary not in repr(projected)
+
+
 def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
-    coordinate = ResourceCoordinate(
+    coordinate = ResourceIdentityCoordinate(
         namespace="local",
         kind=ResourceKind.ENVIRONMENT.value,
         resource_id="baseline",
-        fingerprint="",
     )
     field = ProjectOutlineField(
         path=("request",),
@@ -288,7 +364,7 @@ def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
     for relationship_changes, relationship_error, relationship_message in (
         ({"path": cast("tuple[str, ...]", ["environment"])}, TypeError, "path"),
         ({"path": cast("tuple[str, ...]", (1,))}, TypeError, "path"),
-        ({"target": cast("ResourceCoordinate", object())}, TypeError, "target"),
+        ({"target": cast("ResourceIdentityCoordinate", object())}, TypeError, "target"),
         ({"origin": ""}, ValueError, "origin"),
         ({"origin": cast("str", 1)}, ValueError, "origin"),
     ):

@@ -13,6 +13,7 @@ from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import SourceCoordinate
 from comparo.application.project_outline import ProjectRelationship
 from comparo.application.project_outline import ProjectResourceOutline
+from comparo.application.project_outline import ResourceIdentityCoordinate
 from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.project_workspace import ProjectSourceSummary
 from comparo.application.project_workspace import ProjectWorkspaceRequest
@@ -95,7 +96,6 @@ def _source(
 ) -> ProjectSourceSummary:
     return ProjectSourceSummary(
         source_id=source_id,
-        path=str(Path.cwd() / "comparo.yaml"),
         entry=entry,
         resources=resources,
     )
@@ -129,7 +129,7 @@ def test_workspace_projects_only_safe_resource_metadata_and_source_membership(
     assert set(outcome.sources[1].resources) == {
         resource.coordinate for resource in snapshot.resources
     }
-    assert all(Path(source.path).is_absolute() for source in outcome.sources)
+    assert "path" not in ProjectSourceSummary.__struct_fields__
     assert "spec" not in ProjectResourceSummary.__struct_fields__
     encoded = msgspec.json.encode(outcome).decode()
     assert _SECRET_CANARY not in encoded
@@ -269,7 +269,11 @@ def test_consumer_projection_ignores_relationships_outside_the_snapshot() -> Non
             relationships=(
                 ProjectRelationship(
                     path=("request", "body"),
-                    target=_coordinate("Value", "external"),
+                    target=ResourceIdentityCoordinate(
+                        namespace="local",
+                        kind="Value",
+                        resource_id="external",
+                    ),
                     origin="$use",
                 ),
             ),
@@ -284,9 +288,6 @@ def test_consumer_projection_ignores_relationships_outside_the_snapshot() -> Non
     [
         ({"source_id": 1}, TypeError, "ID"),
         ({"source_id": ""}, ValueError, "ID"),
-        ({"path": Path("relative")}, TypeError, "path"),
-        ({"path": ""}, ValueError, "path"),
-        ({"path": "relative"}, ValueError, "path"),
         ({"entry": 1}, TypeError, "entry"),
         ({"resources": []}, TypeError, "resources"),
         ({"resources": (object(),)}, TypeError, "resources"),
@@ -300,7 +301,6 @@ def test_source_summary_rejects_invalid_state(
 ) -> None:
     values: dict[str, object] = {
         "source_id": "source",
-        "path": str(Path.cwd() / "source.yaml"),
         "entry": False,
         "resources": (),
     }

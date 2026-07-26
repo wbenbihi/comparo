@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
-from pathlib import Path
 from typing import cast
 
 import msgspec
@@ -138,7 +137,6 @@ def _project_result() -> ProjectWorkspaceResult:
         sources=(
             ProjectSourceSummary(
                 source_id="project.yaml",
-                path=str(Path("/project.yaml")),
                 entry=True,
                 resources=(project.coordinate, *(item.coordinate for item in resources)),
             ),

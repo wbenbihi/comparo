@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import cast
 from typing import final
 
 import msgspec
 
-from comparo.application.inspection import ResourceCoordinate
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import InlineResource
@@ -27,6 +25,7 @@ from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import SensitiveLiteralExpr
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceIdentity
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import ExactValue
@@ -38,24 +37,7 @@ from comparo.core.domain.values import JsonNull
 from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
 
-_SAFE_STRING_FIELDS = frozenset(
-    {
-        "after",
-        "combine",
-        "comparator",
-        "completeness",
-        "endpoint",
-        "format",
-        "id",
-        "method",
-        "name",
-        "operator",
-        "quantifier",
-        "selector",
-        "severity",
-        "type",
-    }
-)
+_SAFE_EXACT_SCALAR_PATHS = frozenset({("request", "method")})
 _SECRET_FIELD_PARTS = frozenset(
     {"authorization", "cookie", "credential", "key", "password", "secret", "token"}
 )
@@ -82,18 +64,35 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ResourceIdentityCoordinate(msgspec.Struct, frozen=True, kw_only=True):
+    """One resource identity without pretending a provenance entry carries a revision."""
+
+    namespace: str
+    kind: str
+    resource_id: str
+
+    def __post_init__(self) -> None:
+        """Require a complete bounded resource identity."""
+        if any(
+            type(item) is not str or not item or len(item) > 255
+            for item in (self.namespace, self.kind, self.resource_id)
+        ):
+            raise ValueError("resource identity coordinate must be bounded non-empty text")
+
+
+@final
 class ProjectRelationship(msgspec.Struct, frozen=True, kw_only=True):
     """One resource dependency without values or filesystem coordinates."""
 
     path: tuple[str, ...]
-    target: ResourceCoordinate
+    target: ResourceIdentityCoordinate
     origin: str
 
     def __post_init__(self) -> None:
         """Require a typed target and safe structural origin."""
         if type(self.path) is not tuple or any(type(part) is not str for part in self.path):
             raise TypeError("project relationship path must be an immutable text tuple")
-        if type(self.target) is not ResourceCoordinate:
+        if type(self.target) is not ResourceIdentityCoordinate:
             raise TypeError("project relationship target must be typed")
         if type(self.origin) is not str or not self.origin:
             raise ValueError("project relationship origin must be non-empty text")
@@ -246,11 +245,11 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
                 )
         return
     if type(node) is LiteralExpr:
-        _field(fields, path, _exact_preview(node.value, path), "literal")
+        _field(fields, path, _exact_preview(node.value, path, owner), "literal")
         _provenance_relationships(node.provenance.entries, path, relationships, owner)
         return
     if type(node) in {JsonNull, JsonBoolean, JsonInteger, JsonDecimal, JsonString, BytesValue}:
-        _field(fields, path, _exact_preview(cast("ExactValue", node), path), "literal")
+        _field(fields, path, _exact_preview(cast("ExactValue", node), path, owner), "literal")
         return
     _field(fields, path, type(node).__name__, "structure")
 
@@ -290,19 +289,23 @@ def _field(
     )
 
 
-def _exact_preview(value: ExactValue, path: tuple[str, ...]) -> str:
+def _exact_preview(
+    value: ExactValue,
+    path: tuple[str, ...],
+    owner: ResourceIdentity,
+) -> str:
     if _sensitive_path(path):
         return "* REDACTED"
     if type(value) is JsonNull:
         return "null"
     if type(value) is JsonBoolean:
-        return "true" if value.value else "false"
+        return "<boolean>"
     if type(value) is JsonInteger:
-        return str(value.value)
+        return "<integer>"
     if type(value) is JsonDecimal:
-        return _decimal_text(value.value)
+        return "<number>"
     if type(value) is JsonString:
-        if path and path[-1] in _SAFE_STRING_FIELDS:
+        if _safe_exact_scalar_path(owner, path):
             return value.value
         return f"<string · {len(value.value)} chars>"
     if type(value) is BytesValue:
@@ -312,8 +315,8 @@ def _exact_preview(value: ExactValue, path: tuple[str, ...]) -> str:
     return f"object · {len(value.members)} members"
 
 
-def _decimal_text(value: Decimal) -> str:
-    return format(value, "f")
+def _safe_exact_scalar_path(owner: ResourceIdentity, path: tuple[str, ...]) -> bool:
+    return owner.kind is ResourceKind.REQUEST and path in _SAFE_EXACT_SCALAR_PATHS
 
 
 def _sensitive_path(path: tuple[str, ...]) -> bool:
@@ -330,11 +333,10 @@ def _provenance_relationships(
         resource = entry.resource
         if resource is None or resource == owner:
             continue
-        coordinate = ResourceCoordinate(
+        coordinate = ResourceIdentityCoordinate(
             namespace=resource.namespace.value,
             kind=resource.kind.value,
             resource_id=resource.resource_id.value,
-            fingerprint="",
         )
         key = (coordinate.namespace, coordinate.kind, coordinate.resource_id)
         relationships.setdefault(
@@ -350,11 +352,10 @@ def _relationship(
     origin: str,
 ) -> None:
     identity = target.identity
-    coordinate = ResourceCoordinate(
+    coordinate = ResourceIdentityCoordinate(
         namespace=identity.namespace.value,
         kind=identity.kind.value,
         resource_id=identity.resource_id.value,
-        fingerprint=target.fingerprint.digest.hex_value,
     )
     key = (coordinate.namespace, coordinate.kind, coordinate.resource_id)
     relationships.setdefault(
@@ -367,5 +368,6 @@ __all__ = (
     "ProjectOutlineField",
     "ProjectRelationship",
     "ProjectResourceOutline",
+    "ResourceIdentityCoordinate",
     "outline_resource",
 )

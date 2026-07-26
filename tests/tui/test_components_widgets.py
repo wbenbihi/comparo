@@ -44,6 +44,7 @@ from comparo.application.inspection import SourceCoordinate
 from comparo.application.project_outline import ProjectOutlineField
 from comparo.application.project_outline import ProjectRelationship
 from comparo.application.project_outline import ProjectResourceOutline
+from comparo.application.project_outline import ResourceIdentityCoordinate
 from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.report_archive import ReportArchiveEntry
 from comparo.application.results import ComparisonResultRow
@@ -210,9 +211,14 @@ def _outline(
 
 
 def _relationship() -> ProjectRelationship:
+    target = _resource("Environment", "staging").coordinate
     return ProjectRelationship(
         path=("environment",),
-        target=_resource("Environment", "staging").coordinate,
+        target=ResourceIdentityCoordinate(
+            namespace=target.namespace,
+            kind=target.kind,
+            resource_id=target.resource_id,
+        ),
         origin="link",
     )
 

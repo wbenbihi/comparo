@@ -13,6 +13,7 @@ from comparo.application.inspection import SourceCoordinate
 from comparo.application.inspection import inspect_configuration_diagnostic
 from comparo.application.project_outline import ProjectRelationship
 from comparo.application.project_outline import ProjectResourceOutline
+from comparo.application.project_outline import ResourceIdentityCoordinate
 from comparo.application.project_outline import outline_resource
 from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS
 from comparo.configuration.loader import ProjectLoadLimits
@@ -71,23 +72,18 @@ class ProjectResourceSummary(msgspec.Struct, frozen=True, kw_only=True):
 
 @final
 class ProjectSourceSummary(msgspec.Struct, frozen=True, kw_only=True):
-    """One discovered local source and the safe resource coordinates compiled from it."""
+    """One logical source identity and the safe resource coordinates compiled from it."""
 
     source_id: str
-    path: str
     entry: bool
     resources: tuple[ResourceCoordinate, ...] = ()
 
     def __post_init__(self) -> None:
-        """Require an absolute catalog path and unique immutable resource membership."""
+        """Require a logical ID and unique immutable resource membership."""
         if type(self.source_id) is not str:
             raise TypeError("project source summary ID must be text")
         if not self.source_id:
             raise ValueError("project source summary ID must be non-empty text")
-        if type(self.path) is not str:
-            raise TypeError("project source summary path must be text")
-        if not self.path or not Path(self.path).is_absolute():
-            raise ValueError("project source summary path must be absolute non-empty text")
         if type(self.entry) is not bool:
             raise TypeError("project source summary entry marker must be bool")
         if type(self.resources) is not tuple or any(
@@ -122,6 +118,16 @@ class ProjectWorkspaceSnapshot(msgspec.Struct, frozen=True, kw_only=True):
         ):
             raise TypeError("project workspace resources must be an immutable typed tuple")
         coordinates = tuple(resource.coordinate for resource in self.resources)
+        all_summaries = (self.project, *self.resources)
+        if any(item.coordinate.namespace != self.namespace for item in all_summaries):
+            raise ValueError("project workspace resources must use the snapshot namespace")
+        if any(
+            relationship.target.namespace != self.namespace
+            for item in all_summaries
+            if item.outline is not None
+            for relationship in item.outline.relationships
+        ):
+            raise ValueError("project workspace relationships must use the snapshot namespace")
         if any(item.kind == ResourceKind.PROJECT.value for item in coordinates):
             raise ValueError("project workspace resources cannot contain Project")
         if len(set(coordinates)) != len(coordinates):
@@ -260,7 +266,11 @@ def _with_consumers(
             inverse.setdefault(index, []).append(
                 ProjectRelationship(
                     path=relationship.path,
-                    target=owner.coordinate,
+                    target=ResourceIdentityCoordinate(
+                        namespace=owner.coordinate.namespace,
+                        kind=owner.coordinate.kind,
+                        resource_id=owner.coordinate.resource_id,
+                    ),
                     origin="used-by",
                 )
             )
@@ -318,16 +328,14 @@ def _source_summaries(
     catalog: tuple[SourceCatalogEntry, ...],
     resources: tuple[ProjectResourceSummary, ...],
 ) -> tuple[ProjectSourceSummary, ...]:
+    resources_by_source: dict[str, list[ResourceCoordinate]] = {}
+    for resource in resources:
+        resources_by_source.setdefault(resource.source.source, []).append(resource.coordinate)
     return tuple(
         ProjectSourceSummary(
             source_id=item.source_id.value,
-            path=str(item.path),
             entry=index == 0,
-            resources=tuple(
-                resource.coordinate
-                for resource in resources
-                if resource.source.source == item.source_id.value
-            ),
+            resources=tuple(resources_by_source.get(item.source_id.value, ())),
         )
         for index, item in enumerate(catalog)
     )

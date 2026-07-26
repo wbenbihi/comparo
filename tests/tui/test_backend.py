@@ -108,7 +108,6 @@ def _project_success(tmp_path: Path) -> ProjectWorkspaceResult:
         sources=(
             ProjectSourceSummary(
                 source_id="project.yaml",
-                path=str((tmp_path / "project" / "comparo.yaml").resolve()),
                 entry=True,
                 resources=(coordinate,),
             ),
