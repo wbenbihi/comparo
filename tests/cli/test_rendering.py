@@ -183,7 +183,7 @@ def test_bridge_applies_every_caller_limit_and_stays_offline(
     )
     assert result.previews == (_preview(),)
     application = captured[0]
-    assert application.ambient_environment is None
+    assert application.ambient_environment == ()
     settings = application.settings
     assert settings.files.maximum_bytes.value == 2
     assert settings.files.maximum_path_bytes.value == 3

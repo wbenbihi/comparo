@@ -7,7 +7,6 @@ import json
 import re
 from decimal import Decimal
 from typing import cast
-from urllib.parse import unquote_plus
 
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalMember
@@ -29,6 +28,10 @@ from comparo.core.configuration.models import MappingNode
 from comparo.core.configuration.models import ScalarNode
 from comparo.core.configuration.models import SequenceNode
 from comparo.core.configuration.models import SourceSpan
+from comparo.core.configuration.sensitivity import child_sensitivity_context
+from comparo.core.configuration.sensitivity import redact_url_credentials
+from comparo.core.configuration.sensitivity import source_entry_is_sensitive
+from comparo.core.configuration.sensitivity import structured_credential_name
 from comparo.core.configuration.v1alpha1.ast import V1Alpha1FrontendResult
 from comparo.core.configuration.v1alpha1.ast import V1Alpha1Resource
 from comparo.core.configuration.v1alpha1.frontend import API_VERSION
@@ -129,7 +132,7 @@ def _seal_url_credentials(expression: ValueExpression) -> ValueExpression:
     if (
         type(expression) is LiteralExpr
         and type(expression.value) is JsonString
-        and _redact_url_credentials(expression.value.value) != expression.value.value
+        and redact_url_credentials(expression.value.value) != expression.value.value
     ):
         return seal_expression_literals(expression)
     return expression
@@ -198,7 +201,7 @@ def _fingerprint_scalar(
     if type(value) is Decimal:
         return {"decimal": str(value.normalize())}
     if context == "url" and type(value) is str:
-        return _redact_url_credentials(value)
+        return redact_url_credentials(value)
     return value
 
 
@@ -214,19 +217,19 @@ def _fingerprint_node(
         return _fingerprint_scalar(node.value, context=context)
     if type(node) is SequenceNode:
         return [_fingerprint_node(item, context=context) for item in node.items]
-    credential_name = _structured_credential_name(node, context=context)
+    credential_name = structured_credential_name(node, context=context)
     return {
         entry.name: (
             _fingerprint_sensitive_shape(entry.value)
             if context == "environment-env" and entry.name == "values"
             else _fingerprint_node(
                 entry.value,
-                redact=_fingerprint_entry_is_sensitive(
+                redact=source_entry_is_sensitive(
                     entry.name,
                     context=context,
                     credential_name=credential_name,
                 ),
-                context=_fingerprint_context(entry.name, parent=context),
+                context=child_sensitivity_context(entry.name, parent=context),
             )
         )
         for entry in sorted(node.entries, key=lambda item: item.name)
@@ -252,62 +255,6 @@ def _fingerprint_sensitive_shape(node: ConfigurationNode) -> object:
             for entry in sorted(node.entries, key=lambda item: item.name)
         },
     }
-
-
-def _fingerprint_context(name: str, *, parent: str | None = None) -> str | None:
-    if parent == "environment-spec" and name == "env":
-        return "environment-env"
-    if name in {"headers", "query", "cookies", "auth"}:
-        return name
-    if name in {"url", "endpoint", "baseUrl"}:
-        return "url"
-    return None
-
-
-def _structured_credential_name(node: MappingNode, *, context: str | None) -> str | None:
-    if context not in {"headers", "query"}:
-        return None
-    entries = {entry.name: entry.value for entry in node.entries}
-    name = entries.get("name", entries.get("key"))
-    if type(name) is not ScalarNode or type(name.value) is not str:
-        return None
-    return name.value.casefold()
-
-
-def _fingerprint_entry_is_sensitive(
-    name: str,
-    *,
-    context: str | None,
-    credential_name: str | None,
-) -> bool:
-    normalized = name.casefold()
-    if name in {"secrets", "cookies", "auth"} or context in {"cookies", "auth"}:
-        return True
-    if context == "headers":
-        return normalized in MANDATORY_SENSITIVE_HEADER_NAMES or (
-            name == "value" and credential_name in MANDATORY_SENSITIVE_HEADER_NAMES
-        )
-    if context == "query":
-        return normalized in MANDATORY_SENSITIVE_QUERY_NAMES or (
-            name == "value" and credential_name in MANDATORY_SENSITIVE_QUERY_NAMES
-        )
-    return False
-
-
-def _redact_url_credentials(value: str) -> str:
-    head, separator, remainder = value.partition("?")
-    if not separator:
-        return value
-    query, fragment_separator, fragment = remainder.partition("#")
-    redacted: list[str] = []
-    for parameter in query.split("&"):
-        encoded_name, equals, encoded_value = parameter.partition("=")
-        name = unquote_plus(encoded_name).casefold()
-        if equals and name in MANDATORY_SENSITIVE_QUERY_NAMES:
-            encoded_value = "<sensitive>"
-        redacted.append(encoded_name + equals + encoded_value)
-    suffix = fragment_separator + fragment if fragment_separator else ""
-    return head + separator + "&".join(redacted) + suffix
 
 
 def _definition(

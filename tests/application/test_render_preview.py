@@ -144,7 +144,7 @@ def _render(
             RenderPreviewRequest(
                 project=project,
                 settings=_settings() if settings is None else settings,
-                ambient_environment=ambient,
+                ambient_environment=None if ambient is None else tuple(sorted(ambient.items())),
             )
         )
     )
@@ -386,17 +386,17 @@ def test_public_contracts_reject_untyped_or_ambiguous_state(tmp_path: Path) -> N
         RenderPreviewRequest(project=cast("PreparedProjectPlan", object()), settings=settings)
     with pytest.raises(TypeError, match="RenderPreviewSettings"):
         RenderPreviewRequest(project=project, settings=cast("RenderPreviewSettings", object()))
-    with pytest.raises(TypeError, match="Mapping"):
+    with pytest.raises(TypeError, match="immutable text pairs"):
         RenderPreviewRequest(
             project=project,
             settings=settings,
             ambient_environment=cast("Any", []),
         )
-    with pytest.raises(TypeError, match="exact strings"):
+    with pytest.raises(TypeError, match="immutable text pairs"):
         RenderPreviewRequest(
             project=project,
             settings=settings,
-            ambient_environment=cast("Any", {"GOOD": object()}),
+            ambient_environment=cast("Any", (("GOOD", object()),)),
         )
     with pytest.raises(TypeError, match="RenderPreviewRequest"):
         asyncio.run(render_prepared_requests(cast("RenderPreviewRequest", object())))

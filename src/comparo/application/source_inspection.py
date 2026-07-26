@@ -20,26 +20,9 @@ from comparo.application.project_workspace import ProjectWorkspaceRequest
 from comparo.configuration.loader import SourceCatalogEntry
 from comparo.configuration.loader import compile_project_path
 from comparo.core.configuration.canonical import CompiledResource
-from comparo.core.configuration.models import ConfigurationNode
-from comparo.core.configuration.models import MappingNode
 from comparo.core.configuration.models import ParsedDocument
-from comparo.core.configuration.models import ScalarNode
-from comparo.core.configuration.models import SequenceNode
 from comparo.core.configuration.models import SourceSpan
-
-_SENSITIVE_FIELD_PARTS = frozenset(
-    {
-        "apikey",
-        "authorization",
-        "cookie",
-        "credential",
-        "key",
-        "password",
-        "secret",
-        "secrets",
-        "token",
-    }
-)
+from comparo.core.configuration.sensitivity import sensitive_source_spans
 
 
 class SourceViewMode(StrEnum):
@@ -222,7 +205,7 @@ class EffectiveResourceWindow(msgspec.Struct, frozen=True, kw_only=True):
 
 
 def inspect_project_source(request: SourceInspectionRequest) -> SourceWindow:
-    """Read one pinned source revision and mask authored secret-bearing values by default."""
+    """Read one pinned revision and apply compiler-aligned source masking by default."""
     if type(request) is not SourceInspectionRequest:
         raise SourceInspectionError(SourceInspectionErrorCode.INVALID_REQUEST)
     loaded = compile_project_path(
@@ -248,7 +231,10 @@ def inspect_project_source(request: SourceInspectionRequest) -> SourceWindow:
         raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_UNAVAILABLE) from None
     redactions = 0
     if request.mode is SourceViewMode.MASKED:
-        text, redactions = _mask_source(text, loaded.documents, request.source_id)
+        if loaded.compilation.project is None:
+            text, redactions = _mask_unparsed_source(text)
+        else:
+            text, redactions = _mask_source(text, loaded.documents, request.source_id)
     window, returned, total, next_line, truncated = _line_window(
         text,
         start_line=request.start_line,
@@ -367,12 +353,17 @@ def _mask_source(
     spans: list[SourceSpan] = []
     for document in documents:
         if document.root.span.start.source_id.value == source_id:
-            _sensitive_spans(document.root, spans, inherited=False)
-    if not spans:
-        return text, 0
+            spans.extend(sensitive_source_spans(document.root))
     offsets = _line_offsets(text)
     masked = list(text)
-    ranges = sorted({_span_range(span, offsets, len(text)) for span in spans})
+    ranges = sorted(
+        {
+            *(_span_range(span, offsets, len(text)) for span in spans),
+            *_yaml_comment_ranges(text),
+        }
+    )
+    if not ranges:
+        return text, 0
     for start, end in ranges:
         for index in range(start, end):
             if not masked[index].isspace():
@@ -380,31 +371,48 @@ def _mask_source(
     return "".join(masked), len(ranges)
 
 
-def _sensitive_spans(
-    node: ConfigurationNode,
-    spans: list[SourceSpan],
-    *,
-    inherited: bool,
-) -> None:
-    if inherited:
-        spans.append(node.span)
-        return
-    if type(node) is MappingNode:
-        for entry in node.entries:
-            sensitive = _sensitive_name(entry.name)
-            _sensitive_spans(entry.value, spans, inherited=sensitive)
-        return
-    if type(node) is SequenceNode:
-        for item in node.items:
-            _sensitive_spans(item, spans, inherited=False)
-        return
-    if type(node) is ScalarNode and type(node.value) is str and "${secrets." in node.value:
-        spans.append(node.span)
+def _mask_unparsed_source(text: str) -> tuple[str, int]:
+    """Fail closed when hostile or invalid YAML cannot provide trustworthy typed spans."""
+    masked = "".join(character if character.isspace() else "*" for character in text)
+    return masked, int(masked != text)
 
 
-def _sensitive_name(name: str) -> bool:
-    normalized = "".join(character.casefold() for character in name if character.isalnum())
-    return any(part in normalized for part in _SENSITIVE_FIELD_PARTS)
+def _yaml_comment_ranges(text: str) -> tuple[tuple[int, int], ...]:  # noqa: C901
+    """Locate unquoted YAML comments so masked views never disclose comment payloads."""
+    ranges: list[tuple[int, int]] = []
+    single_quoted = False
+    double_quoted = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        character = text[index]
+        if character == "\n":
+            single_quoted = False
+            double_quoted = False
+            escaped = False
+        elif double_quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                double_quoted = False
+        elif single_quoted:
+            if character == "'":
+                if index + 1 < len(text) and text[index + 1] == "'":
+                    index += 1
+                else:
+                    single_quoted = False
+        elif character == '"':
+            double_quoted = True
+        elif character == "'":
+            single_quoted = True
+        elif character == "#":
+            end = text.find("\n", index)
+            ranges.append((index + 1, len(text) if end < 0 else end))
+            index = len(text) if end < 0 else end - 1
+        index += 1
+    return tuple(ranges)
 
 
 def _line_offsets(text: str) -> tuple[int, ...]:

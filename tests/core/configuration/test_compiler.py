@@ -18,6 +18,7 @@ from comparo.core.configuration.canonical import RemoteSchema
 from comparo.core.configuration.compiler import compile_v1alpha1
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.models import MappingNode
+from comparo.core.configuration.sensitivity import redact_url_credentials
 from comparo.core.configuration.v1alpha1.ast import V1Alpha1FrontendResult
 from comparo.core.configuration.v1alpha1.frontend import parse_v1alpha1_documents
 from comparo.core.domain.expressions import LiteralExpr
@@ -607,9 +608,7 @@ def test_fingerprint_redacts_structured_credential_entries() -> None:
         ],
         "query": {"api_key": {"sensitive": True}, "public": "visible"},
     }
-    assert compiler._redact_url_credentials("https://example.test/?token") == (
-        "https://example.test/?token"
-    )
+    assert redact_url_credentials("https://example.test/?token") == ("https://example.test/?token")
 
 
 def test_compiled_wire_credentials_never_retain_authored_canaries_as_public_values() -> None:

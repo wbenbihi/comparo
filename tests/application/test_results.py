@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
 from typing import cast
 
 import msgspec
 import pytest
 
+from comparo.application import result_analysis as analysis_module
+from comparo.application.result_analysis import AnalysisProjection
 from comparo.application.result_analysis import ResultProjectionWindow
 from comparo.application.result_analysis import project_fields
 from comparo.application.result_analysis import project_issues
@@ -273,3 +276,74 @@ def test_analysis_window_pins_a_selected_aggregate_beyond_the_visible_prefix() -
     assert visible.total >= 2
     assert visible.omitted == visible.total - 1
     assert visible.items[0].path == "z.last.path"
+
+
+def test_analysis_contracts_reject_invalid_windows_counts_and_inputs() -> None:
+    for maximum in (0, -1, cast("int", True)):
+        with pytest.raises(ValueError, match="positive integer"):
+            ResultProjectionWindow(maximum_items=maximum)
+
+    valid = AnalysisProjection(items=("visible",), total=1, omitted=0)
+    with pytest.raises(TypeError, match="immutable"):
+        msgspec.structs.replace(valid, items=cast("tuple[str, ...]", ["visible"]))
+    for changes in ({"total": -1}, {"omitted": cast("int", True)}):
+        with pytest.raises(ValueError, match="non-negative integers"):
+            msgspec.structs.replace(valid, **changes)
+    with pytest.raises(ValueError, match="conserve"):
+        msgspec.structs.replace(valid, total=2)
+
+    projection = project_results(_artifact())
+    window = ResultProjectionWindow(maximum_items=1)
+    for projector in (
+        project_issues,
+        project_requests,
+        project_rules,
+        project_fields,
+        project_timeline,
+    ):
+        with pytest.raises(TypeError, match="requires ResultProjection"):
+            projector(cast("Any", object()), window)
+        with pytest.raises(TypeError, match="requires ResultProjectionWindow"):
+            projector(projection, cast("Any", object()))
+        with pytest.raises(TypeError, match="reference must be typed"):
+            projector(projection, window, cast("Any", object()))
+
+
+def test_analysis_window_ignores_an_unknown_selected_reference() -> None:
+    projection = project_results(_artifact())
+    selected = ResultReference(entity=ResultEntity.ASSERTION, result_id="not-retained")
+
+    result = project_fields(
+        projection,
+        ResultProjectionWindow(maximum_items=1),
+        selected_reference=selected,
+    )
+
+    assert len(result.items) == min(1, result.total)
+
+
+def test_analysis_window_defensively_conserves_when_selection_has_no_visible_prefix() -> None:
+    selected = ResultReference(entity=ResultEntity.ASSERTION, result_id="selected")
+
+    class AdversarialItems:
+        """Iterable whose slice changes between selection and lookup."""
+
+        def __getitem__(self, _selection: object) -> tuple[ResultReference, ...]:
+            return ()
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter((selected,))
+
+        def __len__(self) -> int:
+            return 1
+
+    result = analysis_module._window(
+        cast("tuple[ResultReference, ...]", AdversarialItems()),
+        ResultProjectionWindow(maximum_items=1),
+        selected,
+        lambda item, reference: item == reference,
+    )
+
+    assert result.items == ()
+    assert result.total == 1
+    assert result.omitted == 1

@@ -24,6 +24,7 @@ from comparo.core.diffs.inputs import PreparedOperandError as DiffOperandError
 from comparo.core.diffs.inputs import PreparedOperandReady as DiffOperandReady
 from comparo.core.diffs.inputs import PreparedOperandUnavailable as DiffOperandUnavailable
 from comparo.core.domain.assertions.extended_operators import DigestOperator
+from comparo.core.domain.assertions.extended_operators import SchemaOperator
 from comparo.core.domain.assertions.regex import RegexOperator
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticCode
@@ -663,6 +664,79 @@ def test_inline_response_schema_compiles_as_an_implicit_assertion() -> None:
     assert rules[0].operator_id.kind.value == "conforms-to"
     assert rules[0].selector.body_view is BodyViewKind.JSON
     assert len(preparation._schemas.entries) == 1
+
+
+@pytest.mark.parametrize(
+    "response_schema",
+    [
+        "{$ref: 'file:///tmp/schema.json'}",
+        "{$ref: 'HTTP://schemas.example.test/schema.json'}",
+        "{$ref: './schema.json'}",
+        "{$dynamicRef: 'https://schemas.example.test/schema.json'}",
+        "{$recursiveRef: 'https://schemas.example.test/schema.json'}",
+    ],
+)
+def test_external_schema_references_are_denied_for_every_supported_reference_keyword(
+    response_schema: str,
+) -> None:
+    outcome = _bind(_prepared(response_schema=response_schema))
+
+    assert outcome.preparation is None
+    assert _codes(outcome) == ("evaluation.schema.invalid",)
+
+
+def test_local_schema_fragments_resolve_without_an_external_registry() -> None:
+    prepared = _prepared(
+        response_schema="{$defs: {payload: {type: string}}, $ref: '#/$defs/payload'}"
+    )
+    evaluation = cast("binding.ConfigurationEvaluationPreparation", _bind(prepared).preparation)
+    rule = evaluation._subjects[0].assertions[0]
+    execution_id = EnvironmentExecutionId(value=UUID(int=43_001))
+
+    predicate = evaluation._schemas.predicate(
+        cast("SchemaOperator", rule.operator),
+        SelectionMatch(
+            value=JsonString(value="safe"),
+            location=JsonLocation(
+                environment_execution_id=execution_id,
+                source=SelectorSource.RESPONSE_BODY,
+                view_id=ViewId(value=UUID(int=43_002)),
+                pointer=JsonPointer(value=""),
+                body_view=BodyViewKind.JSON,
+            ),
+        ),
+        execution_id,
+        rule.selector.fingerprint,
+    )
+
+    assert predicate.outcome is PreparedPredicateOutcome.SATISFIED
+
+
+def test_missing_local_schema_fragment_becomes_a_value_free_predicate_error() -> None:
+    prepared = _prepared(response_schema="{$ref: '#/$defs/missing'}")
+    evaluation = cast("binding.ConfigurationEvaluationPreparation", _bind(prepared).preparation)
+    rule = evaluation._subjects[0].assertions[0]
+    execution_id = EnvironmentExecutionId(value=UUID(int=43_101))
+
+    predicate = evaluation._schemas.predicate(
+        cast("SchemaOperator", rule.operator),
+        SelectionMatch(
+            value=JsonString(value="safe"),
+            location=JsonLocation(
+                environment_execution_id=execution_id,
+                source=SelectorSource.RESPONSE_BODY,
+                view_id=ViewId(value=UUID(int=43_102)),
+                pointer=JsonPointer(value=""),
+                body_view=BodyViewKind.JSON,
+            ),
+        ),
+        execution_id,
+        rule.selector.fingerprint,
+    )
+
+    assert predicate.outcome is PreparedPredicateOutcome.ERROR
+    assert predicate.code is not None
+    assert predicate.code.value == "schema.document.invalid"
 
 
 def test_invalid_and_unprepared_remote_response_schemas_fail_closed_before_http() -> None:

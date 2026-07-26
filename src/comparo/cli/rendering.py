@@ -7,6 +7,7 @@ from uuid import UUID
 from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.adapters.values import LocalFileLimits
 from comparo.adapters.values import YamlValueLimits
+from comparo.application.environment_binding import capture_process_environment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
@@ -110,7 +111,10 @@ async def render_cli_request(
         RenderPreviewRequest(
             project=prepared.project,
             settings=settings,
-            ambient_environment=None,
+            ambient_environment=capture_process_environment(
+                prepared.project,
+                settings.environment,
+            ),
         )
     )
 

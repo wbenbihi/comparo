@@ -155,23 +155,59 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
         )
         raise CurlExportError(code) from None
 
-    parts = [
-        "curl",
+    parts: list[str] = []
+    used = len(prefix)
+    used = _append(parts, "curl", used, request.export_limits.maximum_command_characters)
+    used = _append(
+        parts,
         "--no-progress-meter",
-        "--request",
-        _quote(captured.method),
-        "--url",
-        _quote(captured.url),
-    ]
+        used,
+        request.export_limits.maximum_command_characters,
+    )
+    used = _append(parts, "--request", used, request.export_limits.maximum_command_characters)
+    used = _append_quoted(
+        parts,
+        captured.method,
+        used,
+        request.export_limits.maximum_command_characters,
+    )
+    used = _append(parts, "--url", used, request.export_limits.maximum_command_characters)
+    used = _append_quoted(
+        parts,
+        captured.url,
+        used,
+        request.export_limits.maximum_command_characters,
+    )
     for field in captured.headers:
-        parts.extend(("--header", _quote(f"{field.name}: {field.value}")))
+        used = _append(parts, "--header", used, request.export_limits.maximum_command_characters)
+        used = _append_quoted(
+            parts,
+            f"{field.name}: {field.value}",
+            used,
+            request.export_limits.maximum_command_characters,
+        )
     for cookie in captured.cookies:
-        parts.extend(("--cookie", _quote(f"{cookie.name}={cookie.value}")))
+        used = _append(parts, "--cookie", used, request.export_limits.maximum_command_characters)
+        used = _append_quoted(
+            parts,
+            f"{cookie.name}={cookie.value}",
+            used,
+            request.export_limits.maximum_command_characters,
+        )
     if body_argument is not None:
-        parts.extend(("--data-binary", body_argument))
+        used = _append(
+            parts,
+            "--data-binary",
+            used,
+            request.export_limits.maximum_command_characters,
+        )
+        _append(
+            parts,
+            body_argument,
+            used,
+            request.export_limits.maximum_command_characters,
+        )
     command = prefix + " ".join(parts)
-    if len(command) > request.export_limits.maximum_command_characters:
-        raise CurlExportError(CurlExportErrorCode.OUTPUT_LIMIT_EXCEEDED)
     redactions = sum(field.redacted for field in captured.headers) + len(captured.cookies)
     if captured.body is not None:
         redactions += captured.body.redaction_count
@@ -259,7 +295,30 @@ async def _body(
             False,
             (CurlExportWarning.BODY_NOT_TEXT, CurlExportWarning.BODY_FILE_REQUIRED),
         )
+    prefix_size = len("printf '%s'  | ") + _quoted_length(text)
+    if prefix_size > request.export_limits.maximum_command_characters:
+        raise CurlExportError(CurlExportErrorCode.OUTPUT_LIMIT_EXCEEDED)
     return f"printf '%s' {_quote(text)} | ", _quote("@-"), True, True, ()
+
+
+def _append(parts: list[str], value: str, used: int, maximum: int) -> int:
+    additional = len(value) + int(bool(parts))
+    if used + additional > maximum:
+        raise CurlExportError(CurlExportErrorCode.OUTPUT_LIMIT_EXCEEDED)
+    parts.append(value)
+    return used + additional
+
+
+def _append_quoted(parts: list[str], value: str, used: int, maximum: int) -> int:
+    additional = _quoted_length(value) + int(bool(parts))
+    if used + additional > maximum:
+        raise CurlExportError(CurlExportErrorCode.OUTPUT_LIMIT_EXCEEDED)
+    parts.append(_quote(value))
+    return used + additional
+
+
+def _quoted_length(value: str) -> int:
+    return len(value) + 2 + 4 * value.count("'")
 
 
 def _quote(value: str) -> str:

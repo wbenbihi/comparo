@@ -201,10 +201,29 @@ floor remains enabled regardless of `backstop`. `SafetyProfile.classification` a
 classification is applied only to that Environment, while common safety profiles apply to every
 selected Environment.
 
+`SafetyProfile.schemas` is the project-side restriction for public response Schemas. Absence means
+the profile adds no restriction. A present empty mapping denies every remote Schema; otherwise use
+exact query-free HTTP(S) root-document URIs or an explicit wildcard:
+
+```yaml
+schemas:
+  sources:
+    - https://schemas.example.test/chat-response.json
+```
+
+```yaml
+schemas:
+  allowAny: true
+```
+
+`allowAny: true` cannot be combined with `sources`. Multiple selected SafetyProfiles intersect;
+they never grant authority absent from the operator's ExecutionPolicy.
+
 Complete response bodies are public-by-default capture sources and pass through the same-run
 mandatory sanitizer before entering detached artifact blobs. Declared secrets and their known wire
 derivatives are still masked. A SafetyProfile may classify a body as sensitive, in which case the
 safe default omits it rather than pretending that arbitrary application data can be sanitized.
-Retention policies, interrupted-staging discovery and cleanup commands, archives, encryption at
-rest, Windows storage, and historical artifact conversion remain explicit future capabilities;
-none is silently approximated by this module.
+Authenticated archive query, reviewed retention planning, recoverable trash moves, and verified
+restore are implemented. Retention preflights every candidate before moving any bundle. Trash does
+not reclaim disk space; permanent purge, encryption at rest, Windows storage, and historical
+artifact conversion remain explicit future capabilities and are not silently approximated.

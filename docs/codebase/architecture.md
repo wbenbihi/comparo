@@ -149,8 +149,10 @@ The following must not cross into presentation code:
 - `CompiledProject` or authored YAML nodes as an informal inspection shortcut.
 
 Raw-source support is a deliberate separate service because a project may contain literal secrets.
-Masked mode is the default; exact mode is explicit, revision-pinned, bounded, and marked unsafe for
-implicit retention. Loader paths and AST internals still do not cross the frontend boundary.
+Masked mode is the default and shares the compiler's authored-sensitivity classifier; comments are
+masked and invalid YAML masks all non-whitespace. Exact mode is explicit, revision-pinned, bounded,
+and marked unsafe for implicit retention. Loader paths and AST internals still do not cross the
+frontend boundary.
 
 ### Persistence
 
@@ -160,6 +162,9 @@ directories, no-follow checks, content digests, bounded reads, and atomic writes
 authenticate marker, manifest, and results metadata; `verify_artifact` additionally reads every
 blob. Retention creates a fingerprinted plan, re-verifies candidates, and moves them to a private
 recoverable trash namespace instead of deleting them.
+
+Trash preserves restoration and therefore does not reclaim filesystem space. Permanent purge is a
+separate destructive capability and is not currently implemented.
 
 The local persistence adapter is POSIX-specific. Windows persistence is not currently supported.
 

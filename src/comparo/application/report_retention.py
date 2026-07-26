@@ -166,7 +166,7 @@ def apply_report_retention(
     """Re-verify every plan coordinate and move matching bundles to private trash."""
     if type(plan) is not ReportRetentionPlan or plan.fingerprint != _fingerprint(plan.candidates):
         raise ReportRetentionError(ReportRetentionErrorCode.PLAN_MISMATCH)
-    trashed: list[str] = []
+    verified: list[ReportRetentionCandidate] = []
     failures: list[ReportRetentionFailure] = []
     for candidate in plan.candidates:
         try:
@@ -176,8 +176,7 @@ def apply_report_retention(
                 or artifact.metadata.created_unix_nanoseconds != candidate.created_unix_nanoseconds
             ):
                 raise ReportRetentionError(ReportRetentionErrorCode.PLAN_MISMATCH)
-            trash_local_artifact_bundle(root, candidate.bundle_id)
-            trashed.append(candidate.bundle_id)
+            verified.append(candidate)
         except ReportRetentionError:
             raise
         except ArtifactOperationError:
@@ -187,6 +186,13 @@ def apply_report_retention(
                     code=ArtifactStoreErrorCode.IO_FAILED,
                 )
             )
+        except LocalArtifactStoreError as error:
+            failures.append(ReportRetentionFailure(bundle_id=candidate.bundle_id, code=error.code))
+    trashed: list[str] = []
+    for candidate in verified:
+        try:
+            trash_local_artifact_bundle(root, candidate.bundle_id)
+            trashed.append(candidate.bundle_id)
         except LocalArtifactStoreError as error:
             failures.append(ReportRetentionFailure(bundle_id=candidate.bundle_id, code=error.code))
     return ReportRetentionOutcome(

@@ -46,6 +46,9 @@ from comparo.application.environment_binding import (
 from comparo.application.environment_binding import (
     build_environment_snapshots as build_environment_snapshots,
 )
+from comparo.application.environment_binding import (
+    capture_process_environment as capture_process_environment,
+)
 from comparo.application.execution_session import (
     DEFAULT_EXECUTION_SESSION_LIMITS_V1 as DEFAULT_EXECUTION_SESSION_LIMITS_V1,
 )
@@ -136,6 +139,7 @@ from comparo.application.profile_binding import (
     EnvironmentResponseClassification as EnvironmentResponseClassification,
 )
 from comparo.application.profile_binding import ProfileBindingResult as ProfileBindingResult
+from comparo.application.profile_binding import RemoteSchemaRestriction as RemoteSchemaRestriction
 from comparo.application.profile_binding import bind_execution_profiles as bind_execution_profiles
 from comparo.application.project_workspace import ProjectResourceSummary as ProjectResourceSummary
 from comparo.application.project_workspace import ProjectSourceSummary as ProjectSourceSummary
@@ -323,6 +327,7 @@ __all__ = (
     "ProjectWorkspaceRequest",
     "ProjectWorkspaceResult",
     "ProjectWorkspaceSnapshot",
+    "RemoteSchemaRestriction",
     "RenderPreviewRequest",
     "RenderPreviewResult",
     "RenderPreviewSettings",
@@ -378,6 +383,7 @@ __all__ = (
     "bind_execution_profiles",
     "build_environment_snapshots",
     "build_invocation",
+    "capture_process_environment",
     "clipboard_summary",
     "environment_value_override",
     "execute_production",

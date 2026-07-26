@@ -24,6 +24,7 @@ from comparo.adapters.values import ProjectFileValueProvider
 from comparo.adapters.values import RunEnvironmentSnapshotBuilder
 from comparo.adapters.values import SafeYamlValueDecoder
 from comparo.adapters.values import YamlValueLimits
+from comparo.adapters.values import capture_ambient_environment
 from comparo.adapters.values._filesystem import ConfinedReadCode
 from comparo.adapters.values._filesystem import ConfinedReadResult
 from comparo.adapters.values._filesystem import _path_parts
@@ -253,6 +254,39 @@ def test_environment_builder_constructor_and_ambient_allowlist(tmp_path: Path) -
         result = asyncio.run(builder.build(_snapshot_request(restricted, inherit_process=True)))
         assert result.snapshot is not None
         assert tuple(item.symbol.segments[0] for item in result.snapshot.entries) == ("ONLY",)
+
+
+def test_ambient_capture_is_immutable_direct_and_incrementally_bounded() -> None:
+    policy = trusted_local_policy()
+    restricted = msgspec.structs.replace(
+        policy,
+        values=msgspec.structs.replace(
+            policy.values,
+            ambient_environment=AmbientEnvironmentPolicy(names=("ONLY",), allow_any=False),
+        ),
+    )
+    source = {"ONLY": "yes", "IGNORED": "x" * 100_000}
+
+    assert capture_ambient_environment(source, restricted) == (("ONLY", "yes"),)
+
+    with pytest.raises(ValueError, match="configured limits"):
+        capture_ambient_environment(
+            {"ONLY": "toolong"},
+            restricted,
+            limits=EnvironmentSourceLimits(maximum_value_bytes=ByteCount(value=3)),
+        )
+    with pytest.raises(ValueError, match="configured limits"):
+        capture_ambient_environment(
+            {"A": "1", "B": "2"},
+            policy,
+            limits=EnvironmentSourceLimits(maximum_entries=PositiveCount(value=1)),
+        )
+    with pytest.raises(ValueError, match="configured limits"):
+        capture_ambient_environment(
+            {"A": "12", "B": "34"},
+            policy,
+            limits=EnvironmentSourceLimits(maximum_total_bytes=ByteCount(value=5)),
+        )
 
 
 def test_environment_builder_maps_closed_and_entry_budgets(tmp_path: Path) -> None:

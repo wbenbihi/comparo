@@ -33,7 +33,7 @@ The remaining product gaps are deliberate scope decisions, not hidden presentati
 | Discover sources and resources | Supported | `inspect_project_workspace` | Deterministic, bounded, with metadata, tags, descriptions, fingerprints, and source coordinates |
 | Show dependency and consumer graph | Supported | `ProjectRelationship` | Includes links/composition and inverse `used-by` edges |
 | Show raw authored YAML | Supported | `inspect_project_source` | Line/byte bounded and content-fingerprint pinned |
-| Show YAML without disclosed secrets | Supported | `SourceViewMode.MASKED` | Default mode; structurally masks secret-bearing authored spans |
+| Show YAML without disclosed secrets | Supported | `SourceViewMode.MASKED` | Default mode; uses the compiler's sensitivity classifier, masks comment payloads, and masks all non-whitespace when invalid YAML has no trustworthy spans |
 | Show exact authored YAML | Supported, explicit trust | `SourceViewMode.TRUSTED_EXACT` | Output declares `contains_unmasked_values`; do not log, index, or retain it implicitly |
 | Detect source changes | Supported | `expected_sha256` | A changed source fails with a closed `source-changed` code |
 | Show effective compiled structure | Supported | `inspect_effective_resource` | Fingerprint-exact, value-safe, paged fields and relationships |
@@ -77,7 +77,7 @@ must use the typed invocation surface so normal precedence, provenance, policy, 
 | JSON/text/binary response capture | Supported | Full body capture by default within caller-owned storage/capture limits |
 | SSE and JSON `data` | Supported | Bounded stream snapshots and configured auto/JSON semantics |
 | Local response JSON Schema | Supported | Compiled, prepared, validated, and emitted as ordinary gated assertion facts |
-| Remote public JSON Schema | Supported with authority | Fetch/cache/redirect/media/size limits plus Safety/ExecutionPolicy authorization |
+| Remote public JSON Schema | Supported with authority | Fresh route-pinned root-document GET with no redirects; exact Safety/ExecutionPolicy intersection plus document-count, per-document, aggregate-byte, and batch deadlines. External nested references are denied; local fragments work. Cache, integrity pins, and transitive fetching are not implemented. |
 | Assertion operation catalog | Supported | Equality, membership, ordering, tolerance, strings, keys, length/cardinality, regex, media, digest, decode, and schema operations |
 | Semantic diff pipelines | Supported | Selectors, project/exclude/normalize/shape/map/filter/sort/stream transforms, reducers, singular/ordered/keyed/set/multiset pairing, and typed comparators |
 | Environment-specific ignored fields | Supported | Use `exclude` or `project` transforms before comparison |
@@ -123,7 +123,7 @@ bodies produce a typed warning and non-executable file placeholder rather than f
 | Notes | Supported in full artifact | `RunArtifact.annotations.notes` | Kept out of compact rows by design |
 | Open and verify | Supported | `verify_artifact` | Hashes every declared blob before full use |
 | Export JSON/JUnit/SARIF/Markdown | Supported | `render_artifact_report` | Caller-bounded output |
-| Retention/pruning | Supported, recoverable | `plan_report_retention` / `apply_report_retention` | Reviewed fingerprinted plan, re-verification, private trash namespace |
+| Retention/archive removal | Supported, recoverable | `plan_report_retention` / `apply_report_retention` | Reviewed fingerprinted plan, full preflight before mutation, re-verification, private trash namespace. Moving to trash does not reclaim filesystem space. |
 | Restore | Supported | `restore_report` | Restored bundle is authenticated; failed verification rolls it back to trash |
 | Run historical intent again | Deferred | artifacts retain safe provenance, not every live input | Comparo is not traffic replay; a future “run again” must deliberately reconstruct a new invocation |
 
@@ -135,6 +135,9 @@ bodies produce a typed warning and non-executable file placeholder rather than f
   exceptions, and filesystem paths do not enter widget state.
 - Project limits are caller-owned settings and policy ceilings. Versioned defaults are
   replaceable operational defaults, not schema-wide maximums.
+- Parent-process values are copied into one bounded immutable tuple before asynchronous execution,
+  and only when a selected Environment declares `inheritProcess`. A request carrying `None` or an
+  empty tuple does not perform a later ambient read.
 - Exact source mode is the only intentional authored-secret disclosure surface. Masked source,
   masked resolution, request preview, artifacts, archive rows, cURL, and reports are separate safe
   projections.

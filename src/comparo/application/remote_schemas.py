@@ -21,6 +21,7 @@ from comparo.application.schema_validation import RemoteSchemaDocuments
 from comparo.core.configuration.canonical import RemoteSchema
 from comparo.core.domain.capabilities import CapabilityTargetKind
 from comparo.core.domain.capabilities import NamedCapabilityTarget
+from comparo.core.domain.http.fields import HttpMethod
 from comparo.core.domain.http.url import DnsHost
 from comparo.core.domain.http.url import HttpHost
 from comparo.core.domain.http.url import HttpPort
@@ -31,7 +32,10 @@ from comparo.core.domain.http.url import Ipv6Host
 from comparo.core.domain.http.url import NetworkDestination
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Duration
+from comparo.core.domain.primitives import PositiveCount
 from comparo.core.policy import CompiledExecutionPolicy
+
+_GET = HttpMethod(value="GET")
 
 
 class RemoteSchemaFailureCode(StrEnum):
@@ -43,7 +47,9 @@ class RemoteSchemaFailureCode(StrEnum):
     DNS_FAILED = "dns-failed"
     NETWORK_FAILED = "network-failed"
     STATUS_REJECTED = "status-rejected"
+    DOCUMENT_LIMIT_EXCEEDED = "document-limit-exceeded"
     SIZE_EXCEEDED = "size-exceeded"
+    AGGREGATE_SIZE_EXCEEDED = "aggregate-size-exceeded"
     EMPTY = "empty"
 
 
@@ -66,26 +72,44 @@ class RemoteSchemaFetchLimits(msgspec.Struct, frozen=True, kw_only=True):
     """Caller-owned transfer and deadline limits for public schemas."""
 
     maximum_document_bytes: ByteCount
+    maximum_documents: PositiveCount
+    maximum_total_bytes: ByteCount
     connect_timeout: Duration
     read_timeout: Duration
     total_timeout: Duration
+    batch_timeout: Duration
 
     def __post_init__(self) -> None:
         """Require typed positive deadlines and one non-zero document bound."""
-        if type(self.maximum_document_bytes) is not ByteCount:
-            raise TypeError("remote schema size limit must be ByteCount")
-        if self.maximum_document_bytes.value < 1:
-            raise ValueError("remote schema size limit must be positive")
-        for value in (self.connect_timeout, self.read_timeout, self.total_timeout):
+        if (
+            type(self.maximum_document_bytes) is not ByteCount
+            or type(self.maximum_total_bytes) is not ByteCount
+        ):
+            raise TypeError("remote schema size limits must be ByteCount")
+        if type(self.maximum_documents) is not PositiveCount:
+            raise TypeError("remote schema document limit must be PositiveCount")
+        if self.maximum_document_bytes.value < 1 or self.maximum_total_bytes.value < 1:
+            raise ValueError("remote schema size limits must be positive")
+        if self.maximum_document_bytes.value > self.maximum_total_bytes.value:
+            raise ValueError("remote schema document size cannot exceed its aggregate limit")
+        for value in (
+            self.connect_timeout,
+            self.read_timeout,
+            self.total_timeout,
+            self.batch_timeout,
+        ):
             if type(value) is not Duration or value.nanoseconds < 1:
                 raise ValueError("remote schema deadlines must be positive Duration values")
 
 
 DEFAULT_REMOTE_SCHEMA_FETCH_LIMITS_V1 = RemoteSchemaFetchLimits(
     maximum_document_bytes=ByteCount(value=8 * 1024 * 1024),
+    maximum_documents=PositiveCount(value=64),
+    maximum_total_bytes=ByteCount(value=64 * 1024 * 1024),
     connect_timeout=Duration(nanoseconds=10_000_000_000),
     read_timeout=Duration(nanoseconds=30_000_000_000),
     total_timeout=Duration(nanoseconds=60_000_000_000),
+    batch_timeout=Duration(nanoseconds=120_000_000_000),
 )
 
 
@@ -123,13 +147,22 @@ class RemoteSchemaLoader:
             )
         )
         try:
-            entries = [
-                RemoteSchemaDocument(
-                    uri=schema.uri,
-                    payload=await self._load_one(schema, policy),
-                )
-                for schema in unique
-            ]
+            if len(unique) > self._limits.maximum_documents.value:
+                raise RemoteSchemaLoadError(RemoteSchemaFailureCode.DOCUMENT_LIMIT_EXCEEDED)
+            entries: list[RemoteSchemaDocument] = []
+            total_bytes = 0
+            try:
+                async with asyncio.timeout(_seconds(self._limits.batch_timeout)):
+                    for schema in unique:
+                        payload = await self._load_one(schema, policy)
+                        total_bytes += len(payload)
+                        if total_bytes > self._limits.maximum_total_bytes.value:
+                            raise RemoteSchemaLoadError(
+                                RemoteSchemaFailureCode.AGGREGATE_SIZE_EXCEEDED
+                            )
+                        entries.append(RemoteSchemaDocument(uri=schema.uri, payload=payload))
+            except TimeoutError as error:
+                raise RemoteSchemaLoadError(RemoteSchemaFailureCode.NETWORK_FAILED) from error
         finally:
             await self._resolver.close()
         return RemoteSchemaDocuments(entries=tuple(entries))
@@ -149,7 +182,8 @@ class RemoteSchemaLoader:
         scheme, host, port = _destination(schema.uri)
         http = policy.http
         if (
-            scheme not in http.allowed_schemes
+            _GET not in http.allowed_methods
+            or scheme not in http.allowed_schemes
             or (not http.allow_any_host and host not in http.allowed_hosts)
             or (not http.allow_any_port and port not in http.allowed_ports)
         ):

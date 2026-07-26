@@ -183,7 +183,8 @@ ordering, exact resource accounting, and a secret-free plan fingerprint. It stil
 value resolution, DNS, or HTTP.
 
 `render` resolves request values and produces an all-or-nothing sanitized preview. It may read
-explicit project files, declared Environment dotenv files, and caller-provided ambient values, but
+explicit project files, declared Environment dotenv files, and the policy-authorized bounded
+process snapshot captured at command admission, but
 it does not resolve hosts or use the network. Routing fields whose safe representation cannot be
 proved are rejected rather than redacted into a misleading executable preview.
 
@@ -279,22 +280,16 @@ Completion generation writes only to stdout and never modifies shell startup fil
 
 ## Current executable subset
 
-The `comparo/v1alpha1` compiler and planner intentionally model capabilities beyond the first
-production adapter. `run`, `diff`, and `exec` currently execute only this fail-closed subset:
+`run`, `diff`, and `exec` execute Request subjects with the compiled request/Environment HTTP
+surface, typed request bodies, redirects/retries/deadlines, ordinary and SSE responses, local and
+authorized remote response Schemas, the built-in assertion and semantic-diff catalogs, gates, and
+Safety/Redaction/Artifact profiles. Remote Schema root documents are fetched fresh without
+redirects under exact Safety/ExecutionPolicy authority and bounded count, byte, and batch limits;
+external nested schema references are denied.
 
-- `Request` subjects; `Scenario` execution is deferred;
-- request `method`, `endpoint` or `url`, `headers`, `query`, and an absent/null body;
-- Environment `baseUrl`, declared dotenv files, `variables`, and `secrets`;
-- equality assertions (`equals`, `notEquals`);
-- exact or ignored binary diffs (`exact`, `ignore`);
-- the selectors and gate form accepted by the current evaluation preflight;
-- ordinary HTTP responses and the implemented streaming/SSE observation model.
-
-The production preflight currently rejects non-null request bodies, response Schema validation,
-Environment overlays outside the supported fields, `SafetyProfile`, `RedactionProfile`, and
-`ArtifactProfile` binding, unsupported assertion/diff operators, and scenarios. The compiler may
-accept those resource shapes so the language can evolve coherently, but execution never silently
-ignores them.
+`Scenario` resources are representable but rejected by production capability preflight. The same
+fail-closed rule applies to recognized future directives and capability identifiers that have no
+installed implementation; execution never silently ignores them.
 
 WebSocket, gRPC, browser automation, public plugins, and effectful analysis such as an LLM judge
 are not part of this executable subset. Browser automation is outside Comparo's product scope;

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable
 from typing import final
+from urllib.parse import urlsplit
 
 import msgspec
 
@@ -89,12 +90,40 @@ class EnvironmentResponseClassification(msgspec.Struct, frozen=True, kw_only=Tru
 
 
 @final
+class RemoteSchemaRestriction(msgspec.Struct, frozen=True, kw_only=True):
+    """Project-requested remote Schema restriction intersected across SafetyProfiles."""
+
+    sources: tuple[str, ...] = ()
+    allow_any: bool = True
+
+    def __post_init__(self) -> None:
+        """Require canonical exact HTTP(S) sources or one unambiguous wildcard."""
+        if type(self.sources) is not tuple or any(
+            type(source) is not str or not _safe_schema_uri(source) for source in self.sources
+        ):
+            raise TypeError("remote Schema restrictions require exact safe HTTP(S) sources")
+        if self.sources != tuple(sorted(set(self.sources))):
+            raise ValueError("remote Schema restriction sources must be unique and canonical")
+        if type(self.allow_any) is not bool:
+            raise TypeError("remote Schema allowAny must be bool")
+        if self.allow_any and self.sources:
+            raise ValueError("remote Schema allowAny cannot retain redundant sources")
+
+    def allows(self, uri: str) -> bool:
+        """Return whether this project restriction admits one exact source URI."""
+        if type(uri) is not str:
+            raise TypeError("remote Schema restriction lookup requires a URI string")
+        return self.allow_any or uri in self.sources
+
+
+@final
 class BoundExecutionProfiles(msgspec.Struct, frozen=True, kw_only=True):
     """Effective project restrictions ready for production composition."""
 
     artifact: ArtifactPolicy
     redaction: RedactionPolicy
     responses: tuple[EnvironmentResponseClassification, ...]
+    remote_schemas: RemoteSchemaRestriction = RemoteSchemaRestriction()
 
     def __post_init__(self) -> None:
         """Require an immutable typed composition product."""
@@ -104,6 +133,8 @@ class BoundExecutionProfiles(msgspec.Struct, frozen=True, kw_only=True):
             type(item) is not EnvironmentResponseClassification for item in self.responses
         ):
             raise TypeError("bound response classifications must be immutable and typed")
+        if type(self.remote_schemas) is not RemoteSchemaRestriction:
+            raise TypeError("bound remote Schema restrictions must be typed")
 
     def classification_for(self, environment: DefinitionRef) -> ResponseClassification:
         """Return the exact classification for one selected Environment."""
@@ -156,6 +187,7 @@ def bind_execution_profiles(
     redaction = _redaction_policy(resources.redaction, problems)
     artifact_policy = _artifact_policy(resources.artifact, artifact, problems)
     responses = _response_classifications(prepared, resources.safety, response, problems)
+    remote_schemas = _remote_schema_restriction(resources.safety, problems)
     if problems:
         return ProfileBindingResult(diagnostics=tuple(problems))
     return ProfileBindingResult(
@@ -163,6 +195,7 @@ def bind_execution_profiles(
             artifact=artifact_policy,
             redaction=redaction,
             responses=responses,
+            remote_schemas=remote_schemas,
         )
     )
 
@@ -410,6 +443,66 @@ def _response_classifications(
     return tuple(result)
 
 
+def _remote_schema_restriction(
+    safety: tuple[tuple[DefinitionHandle, ProfileResource], ...],
+    problems: list[Diagnostic],
+) -> RemoteSchemaRestriction:
+    effective = RemoteSchemaRestriction()
+    for _handle, profile in safety:
+        value = object_member(_spec(profile), "schemas")
+        if value is None:
+            continue
+        fields = _object_fields(value)
+        if fields is None or not set(fields) <= {"allowAny", "sources"}:
+            problems.append(_problem(_PROFILE_SHAPE, profile, "schemas"))
+            continue
+        allow_any = _literal_bool(fields.get("allowAny"))
+        sources = _literal_texts(fields["sources"]) if "sources" in fields else ()
+        if ("allowAny" in fields and allow_any is None) or sources is None:
+            problems.append(_problem(_PROFILE_SHAPE, profile, "schemas"))
+            continue
+        requested_allow_any = allow_any is True
+        try:
+            requested = RemoteSchemaRestriction(
+                sources=tuple(sorted(set(sources))),
+                allow_any=requested_allow_any,
+            )
+        except (TypeError, ValueError):
+            problems.append(_problem(_PROFILE_SHAPE, profile, "schemas"))
+            continue
+        effective = _intersect_schema_restrictions(effective, requested)
+    return effective
+
+
+def _intersect_schema_restrictions(
+    left: RemoteSchemaRestriction,
+    right: RemoteSchemaRestriction,
+) -> RemoteSchemaRestriction:
+    if left.allow_any:
+        return right
+    if right.allow_any:
+        return left
+    return RemoteSchemaRestriction(
+        sources=tuple(sorted(set(left.sources).intersection(right.sources))),
+        allow_any=False,
+    )
+
+
+def _safe_schema_uri(uri: str) -> bool:
+    try:
+        parsed = urlsplit(uri)
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
+
+
 def _classification(
     profile: ProfileResource,
     base: ResponseClassification,
@@ -647,5 +740,6 @@ __all__ = (
     "BoundExecutionProfiles",
     "EnvironmentResponseClassification",
     "ProfileBindingResult",
+    "RemoteSchemaRestriction",
     "bind_execution_profiles",
 )

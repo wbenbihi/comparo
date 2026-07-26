@@ -79,6 +79,12 @@ catalog with SHA-256 and byte counts. Filesystem paths never enter frontend DTOs
 reads reopen the logical source with no-follow semantics, require the catalog fingerprint to
 match, and return only a caller-bounded masked or explicitly trusted exact line window.
 
+Masked source inspection uses the same sensitivity classifier as compiler fingerprinting. It
+masks complete `Value` payloads, Project secrets, Environment inline env values, auth/cookies,
+credential-shaped headers/query fields and URLs, secret interpolations, and YAML comment payloads.
+Ordinary structure such as endpoints remains readable. If parsing or compilation cannot provide
+trustworthy spans, masking fails closed by replacing every non-whitespace source character.
+
 ## 2. Invocation, precedence, and planning
 
 ```text
@@ -162,7 +168,9 @@ env:
 Env files and optional ambient values populate only the explicit `$env` namespace. They never
 mutate `os.environ`, never configure the HTTP client implicitly, and are not used unless an
 expression asks for `$env`/`${env...}`. Every selected Environment receives an isolated immutable
-snapshot.
+snapshot. CLI and interactive execution capture the policy-authorized process subset once at
+admission, within entry, per-value, and aggregate byte limits; the runtime never retains a mutable
+environment mapping for later traversal.
 
 `RunContext` resolves expressions at the run, cell, trial, Environment, execution, step, or
 attempt scope. Effectful reads are single-flight per exact source/scope key. Results are the
@@ -211,6 +219,14 @@ cookies, auth, typed bodies, stream mode, timeout, redirects, and retries. Envir
 headers/cookies/auth/timeout/TLS/proxy settings. Response schemas and Safety/Redaction/Artifact
 profiles are bound before network effects. `Scenario` remains the principal selected-resource
 rejection.
+
+Remote response Schemas are separate preparation effects. Every root URI must pass the exact
+intersection of `SafetyProfile.schemas` and operator `ExecutionPolicy` source authority, and its
+GET route must pass scheme, method, host, port, DNS-address-class, and route-pinning checks. One
+load batch is bounded by document count, per-document bytes, aggregate retained bytes, and a batch
+deadline. Documents are fetched fresh without redirects. Local JSON Schema fragment references
+work inside a fetched document; every external `$ref`, `$dynamicRef`, or `$recursiveRef` is denied.
+There is currently no transitive schema loader, cache, or integrity-pin contract.
 
 Shipped production defaults currently include:
 
@@ -334,4 +350,6 @@ compact rows. `verify_artifact` authenticates every blob before full use;
 `export_artifact_curl` serializes only authenticated sanitized request captures. Report retention
 is a two-phase reviewed plan/application workflow; application re-verifies coordinates and moves
 bundles into private recoverable trash. `restore_report` authenticates a restored bundle and rolls
-it back if verification fails.
+it back if verification fails. Trash is deliberately recoverable archive removal, not permanent
+purging: it does not reclaim disk space until a future explicit destructive purge capability is
+designed.

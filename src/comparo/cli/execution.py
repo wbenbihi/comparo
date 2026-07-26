@@ -12,6 +12,7 @@ from comparo.adapters.http import ResponseCaptureLimits
 from comparo.adapters.http import StreamDecodingLimits
 from comparo.adapters.http import TransientBodyStoreConfig
 from comparo.adapters.http.ordinary import OrdinaryResponseDecodeLimits
+from comparo.application.environment_binding import capture_process_environment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
@@ -277,7 +278,10 @@ async def execute_cli_request(
         ProductionExecutionRequest(
             project=prepared.project,
             settings=settings,
-            ambient_environment=None,
+            ambient_environment=capture_process_environment(
+                prepared.project,
+                settings.environment,
+            ),
             artifact_root=request.artifact_root,
             approve_mutations=request.approve_mutations,
             tool_version=request.tool_version,

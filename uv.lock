@@ -187,6 +187,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "msgspec" },
     { name = "pyyaml" },
+    { name = "referencing" },
     { name = "rich" },
     { name = "textual" },
 ]
@@ -213,6 +214,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.24,<5" },
     { name = "msgspec", specifier = ">=0.21.1,<1" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
+    { name = "referencing", specifier = ">=0.36,<1" },
     { name = "rich", specifier = ">=14.1,<15" },
     { name = "textual", specifier = ">=8.2.5,<9" },
 ]

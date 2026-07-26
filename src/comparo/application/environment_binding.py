@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import os
 from typing import cast
 from typing import final
 
@@ -16,6 +16,7 @@ from comparo.adapters.values import EnvironmentSnapshotRequest
 from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.adapters.values import PinnedProjectFiles
 from comparo.adapters.values import RunEnvironmentSnapshotBuilder
+from comparo.adapters.values.environment import capture_ambient_environment
 from comparo.application.preflight import PreparedProjectPlan
 from comparo.core.configuration.canonical import CompiledResource
 from comparo.core.domain.diagnostics import Diagnostic
@@ -34,7 +35,6 @@ from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
 from comparo.core.planning._canonical import object_member
 from comparo.core.planning._canonical import resource_spec
-from comparo.core.planning.models import DefinitionHandle
 from comparo.core.resolution.models import EnvironmentSnapshot
 
 _ENV_SHAPE = DiagnosticCode(value="environment.source.shape-invalid")
@@ -65,7 +65,7 @@ async def build_environment_snapshots(
     project: PreparedProjectPlan,
     files: PinnedProjectFiles,
     *,
-    ambient: Mapping[str, str] | None,
+    ambient: tuple[tuple[str, str], ...] | None,
     limits: EnvironmentSourceLimits,
 ) -> EnvironmentBindingResult:
     """Validate every selected source before reading files, then build all snapshots."""
@@ -81,7 +81,7 @@ async def build_environment_snapshots(
     builder = RunEnvironmentSnapshotBuilder(
         files,
         project.policy,
-        ambient=ambient,
+        ambient=(ambient or ()) if any(item.inherit_process for item in lowered) else (),
         limits=limits,
     )
     snapshots, failures = await _build_requests(project, builder, lowered)
@@ -90,12 +90,56 @@ async def build_environment_snapshots(
     return EnvironmentBindingResult(snapshots=snapshots)
 
 
+def capture_process_environment(
+    project: PreparedProjectPlan,
+    limits: EnvironmentSourceLimits,
+) -> tuple[tuple[str, str], ...]:
+    """Capture selected process values once, before asynchronous execution can begin."""
+    if type(project) is not PreparedProjectPlan:
+        raise TypeError("process environment capture requires PreparedProjectPlan")
+    if type(limits) is not EnvironmentSourceLimits:
+        raise TypeError("process environment capture requires EnvironmentSourceLimits")
+    lowered, _diagnostics = _lower_requests(project)
+    if not any(item.inherit_process for item in lowered):
+        return ()
+    return capture_ambient_environment(os.environ, project.policy, limits=limits)
+
+
+def validate_ambient_environment(
+    entries: tuple[tuple[str, str], ...] | None,
+    limits: EnvironmentSourceLimits,
+) -> None:
+    """Validate one already-frozen ambient snapshot before asynchronous execution starts."""
+    if entries is None:
+        return
+    if type(entries) is not tuple or any(
+        type(item) is not tuple
+        or len(item) != 2
+        or type(item[0]) is not str
+        or type(item[1]) is not str
+        for item in entries
+    ):
+        raise TypeError("ambient environment must be immutable text pairs")
+    names = tuple(item[0] for item in entries)
+    if names != tuple(sorted(set(names))):
+        raise ValueError("ambient environment names must be unique and sorted")
+    if len(entries) > limits.maximum_entries.value:
+        raise ValueError("ambient environment exceeds its entry limit")
+    total = 0
+    for name, value in entries:
+        encoded_value = value.encode("utf-8")
+        if len(encoded_value) > limits.maximum_value_bytes.value:
+            raise ValueError("ambient environment value exceeds its byte limit")
+        total += len(name.encode("utf-8")) + len(encoded_value)
+        if total > limits.maximum_total_bytes.value:
+            raise ValueError("ambient environment exceeds its aggregate byte limit")
+
+
 def _lower_requests(
     project: PreparedProjectPlan,
 ) -> tuple[tuple[EnvironmentSnapshotRequest, ...], tuple[Diagnostic, ...]]:
     lowered: list[EnvironmentSnapshotRequest] = []
     diagnostics: list[Diagnostic] = []
-    safety = _safety(project)
     for definition in project.prepared.effective.environments:
         resource = project.prepared.project.find(
             ResourceKind.ENVIRONMENT,
@@ -103,7 +147,7 @@ def _lower_requests(
         )
         if resource is None:  # pragma: no cover - planner/compiler coherence invariant
             raise RuntimeError("selected Environment is absent from the compiled project")
-        request = _lower_environment(resource, project, safety)
+        request = _lower_environment(resource, project)
         if request is None:
             diagnostics.append(_diagnostic(_ENV_SHAPE, resource))
         else:
@@ -136,7 +180,6 @@ async def _build_requests(
 def _lower_environment(
     resource: CompiledResource,
     project: PreparedProjectPlan,
-    safety: tuple[DefinitionHandle, ...],
 ) -> EnvironmentSnapshotRequest | None:
     source = object_member(resource_spec(resource), "env")
     provenance = _provenance(resource)
@@ -146,7 +189,6 @@ def _lower_environment(
                 environment=resource.definition,
                 configuration=provenance,
                 policy=project.policy.definition,
-                safety=safety,
             ),
             project,
         )
@@ -170,7 +212,6 @@ def _lower_environment(
             inherit_process=inherit.value,
             files=file_sources,
             values=inline_values,
-            safety=safety,
         ),
         project,
     )
@@ -258,15 +299,6 @@ def _with_invocation_values(
     return msgspec.structs.replace(request, values=(*retained, *invocation_values))
 
 
-def _safety(project: PreparedProjectPlan) -> tuple[DefinitionHandle, ...]:
-    result: list[DefinitionHandle] = []
-    for subject in project.prepared.effective.subjects:
-        for handle in subject.profiles.safety:
-            if handle not in result:
-                result.append(handle)
-    return tuple(result)
-
-
 def _provenance(resource: CompiledResource) -> ValueProvenance:
     return ValueProvenance(
         entries=(
@@ -299,4 +331,6 @@ def _diagnostic(code: DiagnosticCode, resource: CompiledResource) -> Diagnostic:
 __all__ = (
     "EnvironmentBindingResult",
     "build_environment_snapshots",
+    "capture_process_environment",
+    "validate_ambient_environment",
 )

@@ -96,7 +96,7 @@ def _request(
     return production.ProductionExecutionRequest(
         project=_project(root, base_url=base_url),
         settings=settings,
-        ambient_environment={},
+        ambient_environment=(),
         artifact_root=root / "artifacts",
         approve_mutations=False,
         tool_version="test",
@@ -144,6 +144,52 @@ def _evaluated_project(
             "severity: blocking, completeness: complete}]}",
         ),
         document("GateProfile", "strict", "{}"),
+    )
+    policy = trusted_local_policy()
+    planned = plan_run(
+        compiled,
+        invocation(),
+        planning_authority(policy, project_namespace=compiled.namespace),
+    )
+    assert planned.prepared is not None
+    return PreparedProjectPlan(
+        prepared=planned.prepared,
+        policy=policy,
+        project_root=root,
+    )
+
+
+def _safety_project(
+    root: Path,
+    *,
+    base_url: str,
+    safety: str,
+    response_schema: str | None = None,
+) -> PreparedProjectPlan:
+    schema = "" if response_schema is None else f", responseSchema: {response_schema}"
+    compiled = compile_project(
+        document(
+            "Project",
+            "demo",
+            "{defaults: {subjects: [{$use: Request/check}], baseline: {$use: staging}, "
+            "candidates: [{$use: prod}]}}",
+        ),
+        document(
+            "Environment",
+            "staging",
+            f"{{baseUrl: '{base_url}', safety: {{$use: SafetyProfile/strict}}}}",
+        ),
+        document(
+            "Environment",
+            "prod",
+            f"{{baseUrl: '{base_url}', safety: {{$use: SafetyProfile/strict}}}}",
+        ),
+        document(
+            "Request",
+            "check",
+            f"{{request: {{method: GET, endpoint: /check}}{schema}}}",
+        ),
+        document("SafetyProfile", "strict", safety),
     )
     policy = trusted_local_policy()
     planned = plan_run(
@@ -321,7 +367,7 @@ def test_production_root_executes_http_evaluation_and_transient_artifact(
                 base_url=f"http://127.0.0.1:{server.port}",
             ),
             settings=production.production_execution_defaults_v1(),
-            ambient_environment={},
+            ambient_environment=(),
             artifact_root=artifact_root,
             approve_mutations=False,
             tool_version="test",
@@ -400,7 +446,7 @@ def test_response_schema_is_validated_as_an_ordinary_gated_assertion(tmp_path: P
                 ),
             ),
             settings=production.production_execution_defaults_v1(),
-            ambient_environment={},
+            ambient_environment=(),
             artifact_root=None,
             approve_mutations=False,
             tool_version="test",
@@ -427,6 +473,81 @@ def test_response_schema_is_validated_as_an_ordinary_gated_assertion(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_safety_profile_denies_remote_schema_before_dns_or_http(tmp_path: Path) -> None:
+    request = production.ProductionExecutionRequest(
+        project=_safety_project(
+            tmp_path,
+            base_url="http://127.0.0.1:9",
+            safety="{schemas: {}}",
+            response_schema="{$use: 'https://schemas.example.test/response.json'}",
+        ),
+        settings=production.production_execution_defaults_v1(),
+        ambient_environment=(),
+        artifact_root=None,
+        approve_mutations=False,
+        tool_version="test",
+    )
+
+    result = asyncio.run(production.execute_production(request))
+
+    assert result.artifact is None
+    assert result.failure is not None
+    assert result.failure.kind is production.ProductionExecutionFailureKind.INVALID
+    assert tuple(item.code for item in result.diagnostics) == ("schema.remote.safety-denied",)
+
+
+def test_safety_profile_response_classification_reaches_artifact_capture(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        entity = b'{"private":"classified"}'
+        response = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(entity)}\r\n".encode("ascii")
+            + b"Connection: keep-alive\r\n\r\n"
+            + entity
+        )
+        server = await _start_loopback_server(response)
+        request = production.ProductionExecutionRequest(
+            project=_safety_project(
+                tmp_path,
+                base_url=f"http://127.0.0.1:{server.port}",
+                safety="{classification: {responseBody: sensitive}}",
+            ),
+            settings=production.production_execution_defaults_v1(),
+            ambient_environment=(),
+            artifact_root=None,
+            approve_mutations=False,
+            tool_version="test",
+        )
+        try:
+            result = await production.execute_production(request)
+        finally:
+            await server.close()
+
+        assert result.diagnostics == ()
+        assert result.artifact is not None
+        assert len(server.requests) == 2
+        captures = tuple(
+            exchange.response.body
+            for execution in result.artifact.executions
+            for attempt in execution.attempts
+            for exchange in attempt.exchanges
+            if exchange.response is not None
+        )
+        assert len(captures) == 2
+        assert all(capture is not None for capture in captures)
+        assert all(
+            capture.extent is ArtifactCaptureExtent.OMITTED
+            and capture.blob is None
+            and capture.source_byte_count is None
+            for capture in captures
+            if capture is not None
+        )
+        assert result.artifact.blobs == ()
+
+    asyncio.run(scenario())
+
+
 def test_production_root_materializes_body_auth_cookies_and_environment_defaults(
     tmp_path: Path,
 ) -> None:
@@ -441,7 +562,7 @@ def test_production_root_materializes_body_auth_cookies_and_environment_defaults
                 token=token,
             ),
             settings=production.production_execution_defaults_v1(),
-            ambient_environment={},
+            ambient_environment=(),
             artifact_root=None,
             approve_mutations=True,
             tool_version="test",
@@ -505,7 +626,7 @@ def test_assertion_only_secret_is_sanitized_before_spool_and_persistence(
                 canary=canary,
             ),
             settings=settings,
-            ambient_environment={},
+            ambient_environment=(),
             artifact_root=artifact_root,
             approve_mutations=False,
             tool_version="test",

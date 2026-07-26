@@ -117,6 +117,84 @@ def test_profile_cannot_raise_caller_persistence_or_capture_authority() -> None:
     assert not result.profiles.artifact.capture.bodies
 
 
+def test_safety_profile_remote_schema_sources_are_exact_project_restrictions() -> None:
+    prepared = _prepared(
+        document("RedactionProfile", "safe", "{}"),
+        document("ArtifactProfile", "ci", "{}"),
+        document(
+            "SafetyProfile",
+            "private",
+            "{schemas: {sources: ['https://schemas.example.test/response.json']}}",
+        ),
+    )
+    settings = persisted_production_execution_defaults_v1()
+
+    result = bind_execution_profiles(
+        prepared,
+        artifact=settings.artifact,
+        response=settings.transport.classification,
+    )
+
+    assert result.diagnostics == ()
+    assert result.profiles is not None
+    assert not result.profiles.remote_schemas.allow_any
+    assert result.profiles.remote_schemas.sources == ("https://schemas.example.test/response.json",)
+    assert result.profiles.remote_schemas.allows("https://schemas.example.test/response.json")
+    assert not result.profiles.remote_schemas.allows("https://schemas.example.test/other.json")
+
+
+def test_present_empty_schema_restriction_denies_all_while_absence_is_unrestricted() -> None:
+    settings = persisted_production_execution_defaults_v1()
+    absent = bind_execution_profiles(
+        _prepared(
+            document("RedactionProfile", "safe", "{}"),
+            document("ArtifactProfile", "ci", "{}"),
+            document("SafetyProfile", "private", "{}"),
+        ),
+        artifact=settings.artifact,
+        response=settings.transport.classification,
+    )
+    empty = bind_execution_profiles(
+        _prepared(
+            document("RedactionProfile", "safe", "{}"),
+            document("ArtifactProfile", "ci", "{}"),
+            document("SafetyProfile", "private", "{schemas: {}}"),
+        ),
+        artifact=settings.artifact,
+        response=settings.transport.classification,
+    )
+
+    assert absent.profiles is not None
+    assert absent.profiles.remote_schemas.allow_any
+    assert empty.profiles is not None
+    assert not empty.profiles.remote_schemas.allow_any
+    assert empty.profiles.remote_schemas.sources == ()
+
+
+def test_malformed_safety_schema_authority_fails_closed() -> None:
+    prepared = _prepared(
+        document("RedactionProfile", "safe", "{}"),
+        document("ArtifactProfile", "ci", "{}"),
+        document(
+            "SafetyProfile",
+            "private",
+            "{schemas: {sources: ['https://schemas.example.test/schema.json?token=secret']}}",
+        ),
+    )
+    settings = persisted_production_execution_defaults_v1()
+
+    result = bind_execution_profiles(
+        prepared,
+        artifact=settings.artifact,
+        response=settings.transport.classification,
+    )
+
+    assert result.profiles is None
+    assert tuple(item.code.value for item in result.diagnostics) == (
+        "runtime.profile.shape-invalid",
+    )
+
+
 def test_unsupported_profile_capability_fails_closed_without_payloads() -> None:
     prepared = _prepared(
         document("RedactionProfile", "safe", "{}"),

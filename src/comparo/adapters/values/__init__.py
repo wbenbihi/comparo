@@ -27,6 +27,9 @@ from comparo.adapters.values.environment import EnvironmentSourceLimits as Envir
 from comparo.adapters.values.environment import (
     RunEnvironmentSnapshotBuilder as RunEnvironmentSnapshotBuilder,
 )
+from comparo.adapters.values.environment import (
+    capture_ambient_environment as capture_ambient_environment,
+)
 from comparo.adapters.values.files import ProjectFileValueProvider as ProjectFileValueProvider
 from comparo.adapters.values.generation import SecureGenerator as SecureGenerator
 from comparo.adapters.values.yaml import DEFAULT_YAML_VALUE_LIMITS as DEFAULT_YAML_VALUE_LIMITS
@@ -54,4 +57,5 @@ __all__ = (
     "SecureGenerator",
     "SystemRunClock",
     "YamlValueLimits",
+    "capture_ambient_environment",
 )

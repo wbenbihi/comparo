@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from collections.abc import Mapping
 from typing import cast
 from typing import final
@@ -24,6 +25,7 @@ from comparo.core.domain.value_egress import ValueEgressSourceKind
 from comparo.core.domain.value_egress import value_egress_origin
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.values import JsonString
+from comparo.core.policy.models import AmbientEnvironmentPolicy
 from comparo.core.policy.models import CompiledExecutionPolicy
 from comparo.core.resolution.models import EnvironmentSnapshot
 from comparo.core.resolution.models import EnvironmentSnapshotEntry
@@ -66,6 +68,7 @@ class EnvironmentSourceLimits(msgspec.Struct, frozen=True, kw_only=True):
     maximum_total_bytes: ByteCount = ByteCount(value=8 * 1024 * 1024)
     maximum_entries: PositiveCount = PositiveCount(value=10_000)
     maximum_line_bytes: ByteCount = ByteCount(value=65_536)
+    maximum_value_bytes: ByteCount = ByteCount(value=65_536)
 
     def __post_init__(self) -> None:
         """Require exact typed budgets."""
@@ -79,6 +82,7 @@ class EnvironmentSourceLimits(msgspec.Struct, frozen=True, kw_only=True):
                 self.maximum_file_bytes,
                 self.maximum_total_bytes,
                 self.maximum_line_bytes,
+                self.maximum_value_bytes,
             )
         ):
             raise TypeError("Environment byte limits must be ByteCount")
@@ -193,14 +197,14 @@ class _DotenvResult(msgspec.Struct, frozen=True, kw_only=True):
 class RunEnvironmentSnapshotBuilder:
     """Build isolated Environment snapshots from one run-start process capture."""
 
-    __slots__ = ("_ambient", "_files", "_limits", "_policy")
+    __slots__ = ("_ambient", "_ambient_bytes", "_ambient_error", "_files", "_limits", "_policy")
 
     def __init__(
         self,
         files: PinnedProjectFiles,
         policy: CompiledExecutionPolicy,
         *,
-        ambient: Mapping[str, str] | None = None,
+        ambient: Mapping[str, str] | tuple[tuple[str, str], ...] | None = None,
         limits: EnvironmentSourceLimits = DEFAULT_ENVIRONMENT_SOURCE_LIMITS,
     ) -> None:
         """Capture authorized ambient values once and bind exact source authority."""
@@ -210,20 +214,16 @@ class RunEnvironmentSnapshotBuilder:
             raise TypeError("Environment snapshot builder requires CompiledExecutionPolicy")
         if type(limits) is not EnvironmentSourceLimits:
             raise TypeError("Environment snapshot builder requires EnvironmentSourceLimits")
-        source = os.environ if ambient is None else ambient
-        if not isinstance(source, Mapping):
-            raise TypeError("ambient environment source must be a mapping")
-        captured: list[tuple[str, str]] = []
+        source: Mapping[str, str] | tuple[tuple[str, str], ...] = (
+            os.environ if ambient is None else ambient
+        )
+        if not isinstance(source, Mapping) and type(source) is not tuple:
+            raise TypeError("ambient environment source must be a mapping or immutable pairs")
         authority = policy.values.ambient_environment
-        allowed = set(authority.names)
-        for name, value in source.items():
-            if type(name) is not str or type(value) is not str:
-                raise TypeError("ambient environment entries must contain exact strings")
-            if _ENVIRONMENT_NAME.fullmatch(name) is not None and (
-                authority.allow_any or name in allowed
-            ):
-                captured.append((name, value))
-        self._ambient = tuple(sorted(captured))
+        captured, ambient_bytes, ambient_error = _capture_ambient(source, authority, limits)
+        self._ambient = captured
+        self._ambient_bytes = ambient_bytes
+        self._ambient_error = ambient_error
         self._files = files
         self._policy = policy
         self._limits = limits
@@ -256,7 +256,12 @@ class RunEnvironmentSnapshotBuilder:
                 for name, value in self._ambient
             )
         file_names: set[str] = set()
-        load_error = await self._load_files(request.files, values, file_names)
+        load_error = await self._load_files(
+            request.files,
+            values,
+            file_names,
+            initial_bytes=self._ambient_bytes if request.inherit_process else 0,
+        )
         if load_error is not None:
             return _failure(load_error)
         for item in request.values:
@@ -286,6 +291,8 @@ class RunEnvironmentSnapshotBuilder:
     ) -> EnvironmentSnapshotErrorCode | None:
         if request.policy != self._policy.definition:
             return EnvironmentSnapshotErrorCode.POLICY_MISMATCH
+        if request.inherit_process and self._ambient_error is not None:
+            return self._ambient_error
         if request.safety:
             return EnvironmentSnapshotErrorCode.SAFETY_UNSUPPORTED
         if len(request.files) > self._limits.maximum_files.value:
@@ -299,8 +306,10 @@ class RunEnvironmentSnapshotBuilder:
         sources: tuple[EnvironmentFileSource, ...],
         values: dict[str, tuple[SnapshotValue, ValueProvenance]],
         file_names: set[str],
+        *,
+        initial_bytes: int = 0,
     ) -> EnvironmentSnapshotErrorCode | None:
-        total_bytes = 0
+        total_bytes = initial_bytes
         for source in sources:
             remaining = self._limits.maximum_total_bytes.value - total_bytes
             maximum = ByteCount(value=min(self._limits.maximum_file_bytes.value, max(0, remaining)))
@@ -317,6 +326,78 @@ class RunEnvironmentSnapshotBuilder:
             if len(values) > self._limits.maximum_entries.value:
                 return EnvironmentSnapshotErrorCode.BUDGET_EXCEEDED
         return None
+
+
+def _capture_ambient(
+    source: Mapping[str, str] | tuple[tuple[str, str], ...],
+    authority: AmbientEnvironmentPolicy,
+    limits: EnvironmentSourceLimits,
+) -> tuple[tuple[tuple[str, str], ...], int, EnvironmentSnapshotErrorCode | None]:
+    """Capture only authorized entries while enforcing count and byte ceilings incrementally."""
+    captured: list[tuple[str, str]] = []
+    total_bytes = 0
+    allowed = set(authority.names)
+    for item in _ambient_candidates(source, authority):
+        if type(item) is not tuple or len(item) != 2:
+            raise TypeError("ambient environment entries must be exact pairs")
+        name, value = item
+        if type(name) is not str or type(value) is not str:
+            raise TypeError("ambient environment entries must contain exact strings")
+        if _ENVIRONMENT_NAME.fullmatch(name) is None or (
+            not authority.allow_any and name not in allowed
+        ):
+            continue
+        encoded_name = name.encode("utf-8")
+        encoded_value = value.encode("utf-8")
+        if len(encoded_value) > limits.maximum_value_bytes.value:
+            return (), 0, EnvironmentSnapshotErrorCode.BUDGET_EXCEEDED
+        total_bytes += len(encoded_name) + len(encoded_value)
+        if (
+            len(captured) >= limits.maximum_entries.value
+            or total_bytes > limits.maximum_total_bytes.value
+        ):
+            return (), 0, EnvironmentSnapshotErrorCode.BUDGET_EXCEEDED
+        captured.append((name, value))
+    result = tuple(sorted(captured))
+    if len(result) != len({name for name, _value in result}):
+        raise ValueError("ambient environment names must be unique")
+    return result, total_bytes, None
+
+
+def _ambient_candidates(
+    source: Mapping[str, str] | tuple[tuple[str, str], ...],
+    authority: AmbientEnvironmentPolicy,
+) -> Iterable[tuple[str, str]]:
+    if type(source) is tuple:
+        return source
+    if not isinstance(source, Mapping):  # pragma: no cover - closed input union
+        raise TypeError("ambient environment source must be a mapping or immutable pairs")
+    if authority.allow_any:
+        return source.items()
+    return ((name, value) for name in authority.names if (value := source.get(name)) is not None)
+
+
+def capture_ambient_environment(
+    source: Mapping[str, str],
+    policy: CompiledExecutionPolicy,
+    *,
+    limits: EnvironmentSourceLimits = DEFAULT_ENVIRONMENT_SOURCE_LIMITS,
+) -> tuple[tuple[str, str], ...]:
+    """Freeze the policy-authorized ambient subset within the configured byte budgets."""
+    if not isinstance(source, Mapping):
+        raise TypeError("ambient environment source must be a mapping")
+    if type(policy) is not CompiledExecutionPolicy:
+        raise TypeError("ambient environment capture requires CompiledExecutionPolicy")
+    if type(limits) is not EnvironmentSourceLimits:
+        raise TypeError("ambient environment capture requires EnvironmentSourceLimits")
+    captured, _byte_count, error = _capture_ambient(
+        source,
+        policy.values.ambient_environment,
+        limits,
+    )
+    if error is not None:
+        raise ValueError("ambient environment exceeds configured limits")
+    return captured
 
 
 def _validate_snapshot_identity(request: EnvironmentSnapshotRequest) -> None:
@@ -480,4 +561,5 @@ __all__ = (
     "EnvironmentSnapshotRequest",
     "EnvironmentSourceLimits",
     "RunEnvironmentSnapshotBuilder",
+    "capture_ambient_environment",
 )

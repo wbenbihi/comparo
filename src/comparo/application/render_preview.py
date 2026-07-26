@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Mapping
 from typing import cast
 from typing import final
 from urllib.parse import quote
@@ -22,6 +21,7 @@ from comparo.adapters.values import SecureGenerator
 from comparo.adapters.values import SystemRunClock
 from comparo.adapters.values import YamlValueLimits
 from comparo.application.environment_binding import build_environment_snapshots
+from comparo.application.environment_binding import validate_ambient_environment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import inspect_diagnostic
@@ -92,7 +92,7 @@ class RenderPreviewRequest(msgspec.Struct, frozen=True, kw_only=True):
 
     project: PreparedProjectPlan
     settings: RenderPreviewSettings
-    ambient_environment: Mapping[str, str] | None = None
+    ambient_environment: tuple[tuple[str, str], ...] | None = None
 
     def __post_init__(self) -> None:
         """Validate the complete application boundary without copying live values."""
@@ -100,15 +100,7 @@ class RenderPreviewRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("render preview requires PreparedProjectPlan")
         if type(self.settings) is not RenderPreviewSettings:
             raise TypeError("render preview requires RenderPreviewSettings")
-        if self.ambient_environment is not None and not isinstance(
-            self.ambient_environment, Mapping
-        ):
-            raise TypeError("render preview ambient environment must be a Mapping or None")
-        if self.ambient_environment is not None and any(
-            type(name) is not str or type(value) is not str
-            for name, value in self.ambient_environment.items()
-        ):
-            raise TypeError("render preview ambient environment entries must be exact strings")
+        validate_ambient_environment(self.ambient_environment, self.settings.environment)
 
 
 @final

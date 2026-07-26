@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
+from decimal import Decimal
 from typing import Any
 from typing import cast
 from uuid import UUID
@@ -29,6 +30,8 @@ from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import SensitiveLiteralExpr
 from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.lifecycle import CancellationSource
+from comparo.core.domain.primitives import ByteCount
+from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import UtcInstant
 from comparo.core.domain.provenance import ValueProviderIdentity
@@ -37,17 +40,23 @@ from comparo.core.domain.scopes import ExecutionScope
 from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import SensitiveValueAccess
+from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.value_egress import CONFIGURATION_SECRET_MARKER
 from comparo.core.domain.value_egress import ValueEgressSourceKind
 from comparo.core.domain.value_egress import value_egress_origin
+from comparo.core.domain.value_kinds import ValueKind
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import Error
 from comparo.core.domain.values import JsonArray
+from comparo.core.domain.values import JsonBoolean
+from comparo.core.domain.values import JsonDecimal
 from comparo.core.domain.values import JsonInteger
+from comparo.core.domain.values import JsonNull
 from comparo.core.domain.values import JsonObject
+from comparo.core.domain.values import JsonObjectMember
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import Present
 from comparo.core.domain.values import ResolutionErrorCode
@@ -68,6 +77,7 @@ from comparo.core.resolution import ProviderUnavailable
 from comparo.core.resolution import ResolutionTarget
 from comparo.core.resolution import ResolvedForWire
 from comparo.core.resolution import RunContext
+from comparo.core.resolution import mask_resolution
 from comparo.core.resolution.models import ExternalValueRequest
 from comparo.core.resolution.models import FileReadRequest
 from comparo.core.resolution.models import ProviderOutcome
@@ -242,6 +252,112 @@ def test_live_and_masked_resolvers_share_resolution_without_secret_egress(
             assert b"hidden" not in encoded
             assert b"<masked>" in encoded
             assert "hidden" not in repr(masked)
+
+    _run(scenario())
+
+
+def test_masked_view_contracts_reject_invalid_payloads_and_engines(
+    prepared_run: PreparedRun,
+) -> None:
+    origin = TaintOriginId(value="test/masked")
+    valid = MaskedSensitiveValue(kind=ValueKind.STRING, origins=(origin,))
+    cases: tuple[dict[str, object], ...] = (
+        {"kind": ValueKind.UNKNOWN},
+        {"kind": cast("ValueKind", object())},
+        {"origins": ()},
+        {"origins": cast("tuple[TaintOriginId, ...]", [origin])},
+        {"origins": (cast("TaintOriginId", object()),)},
+        {"origins": (origin, origin)},
+        {"marker": "caller-owned"},
+    )
+    for changes in cases:
+        with pytest.raises(ValueError, match="masked sensitive value"):
+            msgspec.structs.replace(valid, **changes)
+
+    async def scenario() -> None:
+        async with _context(prepared_run) as context:
+            target = _target(prepared_run)
+            expression = LiteralExpr(
+                value=JsonString(value="public"),
+                provenance=configuration_provenance(),
+            )
+            present = cast("Present[JsonString]", await context.resolve(expression, target))
+            public = cast("MaskedPresent", mask_resolution(present))
+            assert public.sensitivity is Sensitivity.PUBLIC
+            assert public.taint_origins == ()
+            with pytest.raises(TypeError, match="resolved or explicitly masked"):
+                MaskedPresent(value=cast("Any", object()), provenance=present.provenance)
+            with pytest.raises(TypeError, match="ResolutionProvenance"):
+                MaskedPresent(value=public.value, provenance=cast("Any", object()))
+
+    _run(scenario())
+
+    for resolver in (LiveValueResolver, MaskedValueResolver):
+        with pytest.raises(TypeError, match="requires a ResolutionEngine"):
+            resolver(cast("Any", object()))
+
+
+def test_masking_preserves_public_values_and_closes_every_sensitive_value_kind(
+    prepared_run: PreparedRun,
+) -> None:
+    values = (
+        JsonNull(),
+        JsonBoolean(value=True),
+        JsonInteger(value=1),
+        JsonDecimal(value=Decimal("1.5")),
+        JsonString(value="secret"),
+        JsonArray(items=(JsonString(value="item"),)),
+        JsonObject(members=(JsonObjectMember(name="key", value=JsonString(value="value")),)),
+        BytesValue(value=b"secret"),
+        Duration(nanoseconds=1),
+        ByteCount(value=1),
+    )
+    expected = (
+        ValueKind.NULL,
+        ValueKind.BOOLEAN,
+        ValueKind.INTEGER,
+        ValueKind.NUMBER,
+        ValueKind.STRING,
+        ValueKind.ARRAY,
+        ValueKind.OBJECT,
+        ValueKind.BYTES,
+        ValueKind.DURATION,
+        ValueKind.SIZE,
+    )
+    origin = TaintOriginId(value="test/closed-kind")
+
+    async def scenario() -> None:
+        async with _context(prepared_run) as context:
+            target = _target(prepared_run)
+            template = cast(
+                "Present[Any]",
+                await context.resolve(
+                    LiteralExpr(
+                        value=JsonString(value="template"),
+                        provenance=configuration_provenance(),
+                    ),
+                    target,
+                ),
+            )
+            for value, kind in zip(values, expected, strict=True):
+                public_result = msgspec.structs.replace(template, value=value)
+                public = cast("MaskedPresent", mask_resolution(public_result))
+                assert public.value == value
+                sensitive_result = msgspec.structs.replace(
+                    public_result,
+                    value=SensitiveValue(value, origins=(origin,)),
+                )
+                masked = cast("MaskedPresent", mask_resolution(sensitive_result))
+                assert type(masked.value) is MaskedSensitiveValue
+                assert masked.value.kind is kind
+                assert masked.sensitivity is Sensitivity.SENSITIVE
+                assert masked.taint_origins == (origin,)
+                assert b"secret" not in msgspec.json.encode(masked)
+            unavailable = await context.resolve(
+                _lookup(ValueNamespace.VARIABLES, "absent", ValueScopeKind.RUN),
+                target,
+            )
+            assert mask_resolution(unavailable) is unavailable
 
     _run(scenario())
 

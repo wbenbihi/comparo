@@ -13,6 +13,8 @@ from typing import final
 
 import jsonschema  # type: ignore[import-untyped]
 import msgspec
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 
 from comparo.core.assertions.bindings import capability_implementation
 from comparo.core.assertions.bindings import operands_fingerprint
@@ -216,7 +218,19 @@ class PreparedSchemaCatalog:
                 PreparedPredicateOutcome.ERROR,
                 code=_SCHEMA_INSTANCE_LIMIT,
             )
-        violations = _violations(entry.validator, instance, self._limits)
+        try:
+            violations = _violations(entry.validator, instance, self._limits)
+        except Unresolvable:
+            return _predicate(
+                operator,
+                match,
+                execution_id,
+                selector_fingerprint,
+                selected,
+                operands,
+                PreparedPredicateOutcome.ERROR,
+                code=_SCHEMA_INVALID,
+            )
         if violations is None:
             return _predicate(
                 operator,
@@ -397,7 +411,7 @@ def _validator(schema: object) -> object:
             default=jsonschema.Draft202012Validator,
         )
         validator_type.check_schema(schema)
-        return validator_type(schema)
+        return validator_type(schema, registry=Registry())
     except jsonschema.exceptions.SchemaError as error:
         raise ValueError("JSON Schema document is invalid") from error
 
@@ -496,9 +510,10 @@ def _reject_remote_references(schema: object) -> None:
     while stack:
         current = stack.pop()
         if isinstance(current, Mapping):
-            reference = current.get("$ref")
-            if type(reference) is str and reference.startswith(("http://", "https://")):
-                raise ValueError("nested remote schema references require an explicit loader")
+            for keyword in ("$ref", "$dynamicRef", "$recursiveRef"):
+                reference = current.get(keyword)
+                if type(reference) is str and not reference.startswith("#"):
+                    raise ValueError("external schema references require an explicit loader")
             stack.extend(current.values())
         elif isinstance(current, list):
             stack.extend(current)

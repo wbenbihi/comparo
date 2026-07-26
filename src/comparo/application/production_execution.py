@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
-from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import final
@@ -56,6 +55,7 @@ from comparo.adapters.values import YamlValueLimits
 from comparo.application.digest_validation import DEFAULT_DIGEST_VALIDATION_LIMITS_V1
 from comparo.application.digest_validation import DigestValidationLimits
 from comparo.application.environment_binding import build_environment_snapshots
+from comparo.application.environment_binding import validate_ambient_environment
 from comparo.application.evaluation_binding import EvaluationRuleLimits
 from comparo.application.evaluation_binding import bind_configuration_evaluation
 from comparo.application.inspection import ApplicationDiagnostic
@@ -71,6 +71,7 @@ from comparo.application.remote_schemas import RemoteSchemaLoader
 from comparo.application.remote_schemas import RemoteSchemaLoadError
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
+from comparo.application.schema_validation import RemoteSchemaDocuments
 from comparo.application.schema_validation import SchemaValidationLimits
 from comparo.core.artifacts.capture import ArtifactCapturingDriver
 from comparo.core.artifacts.common import ArtifactCiProvenance
@@ -365,7 +366,7 @@ class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
 
     project: PreparedProjectPlan
     settings: ProductionExecutionSettings
-    ambient_environment: Mapping[str, str] | None
+    ambient_environment: tuple[tuple[str, str], ...] | None
     artifact_root: Path | None
     approve_mutations: bool
     tool_version: str
@@ -373,21 +374,13 @@ class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
     cancellation: RunCancellation | None = None
     annotations: ProductionRunAnnotations | None = None
 
-    def __post_init__(self) -> None:  # noqa: C901 - complete effect boundary validation
+    def __post_init__(self) -> None:
         """Validate primitive frontend choices without retaining any output text."""
         if type(self.project) is not PreparedProjectPlan:
             raise TypeError("production execution requires PreparedProjectPlan")
         if type(self.settings) is not ProductionExecutionSettings:
             raise TypeError("production execution requires typed settings")
-        if self.ambient_environment is not None and not isinstance(
-            self.ambient_environment, Mapping
-        ):
-            raise TypeError("production ambient environment must be a Mapping or None")
-        if self.ambient_environment is not None and any(
-            type(name) is not str or type(value) is not str
-            for name, value in self.ambient_environment.items()
-        ):
-            raise TypeError("production ambient environment entries must be exact strings")
+        validate_ambient_environment(self.ambient_environment, self.settings.environment)
         if self.artifact_root is not None and not isinstance(self.artifact_root, Path):
             raise TypeError("production artifact root must be a Path or None")
         if type(self.approve_mutations) is not bool:
@@ -568,18 +561,9 @@ async def _execute_with_resources(
         return _failure(ProductionExecutionFailureKind.INVALID, diagnostics)
     if context is None:  # pragma: no cover - preparation result invariant
         raise RuntimeError("successful context preparation omitted its context")
-    remote_documents = None
-    remote_bindings = _remote_schema_bindings(request.project.prepared)
-    if remote_bindings:
-        try:
-            remote_documents = await RemoteSchemaLoader(request.settings.remote_schemas).load(
-                remote_bindings, request.project.policy
-            )
-        except RemoteSchemaLoadError as error:
-            return _failure_code(
-                ProductionExecutionFailureKind.INVALID,
-                f"schema.remote.{error.code.value}",
-            )
+    remote_documents, remote_failure = await _load_remote_schemas(request, profiles)
+    if remote_failure is not None:
+        return _failure_code(ProductionExecutionFailureKind.INVALID, remote_failure)
     evaluation = bind_configuration_evaluation(
         request.project.prepared,
         context,
@@ -625,6 +609,25 @@ async def _execute_with_resources(
             "execution.runtime-setup-failed",
         )
     return await _run_compile_persist(request, resources, context, capture, preparation)
+
+
+async def _load_remote_schemas(
+    request: ProductionExecutionRequest,
+    profiles: BoundExecutionProfiles,
+) -> tuple[RemoteSchemaDocuments | None, str | None]:
+    bindings = _remote_schema_bindings(request.project.prepared)
+    if any(not profiles.remote_schemas.allows(binding.uri) for binding in bindings):
+        return None, "schema.remote.safety-denied"
+    if not bindings:
+        return None, None
+    try:
+        documents = await RemoteSchemaLoader(request.settings.remote_schemas).load(
+            bindings,
+            request.project.policy,
+        )
+    except RemoteSchemaLoadError as error:
+        return None, f"schema.remote.{error.code.value}"
+    return documents, None
 
 
 def _remote_schema_bindings(prepared: PreparedRun) -> tuple[RemoteSchema, ...]:

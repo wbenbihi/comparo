@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import msgspec
 
+from comparo.application.environment_binding import capture_process_environment
 from comparo.application.evaluation_binding import preflight_configuration_evaluation
 from comparo.application.execution_session import ExecutionSession
 from comparo.application.execution_session import start_execution_session
@@ -215,7 +216,10 @@ class CompareService:
             ProductionExecutionRequest(
                 project=prepared.project,
                 settings=controls.settings,
-                ambient_environment=None,
+                ambient_environment=capture_process_environment(
+                    prepared.project,
+                    controls.settings.environment,
+                ),
                 artifact_root=controls.artifact_root,
                 approve_mutations=controls.approve_mutations,
                 tool_version=controls.tool_version,

@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import cast
 
-import msgspec
 import pytest
 
 from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.adapters.values import PinnedProjectFiles
-from comparo.application import environment_binding as binding_module
 from comparo.application.environment_binding import EnvironmentBindingResult
 from comparo.application.environment_binding import build_environment_snapshots
+from comparo.application.environment_binding import capture_process_environment
 from comparo.application.planning import PlanningOptions
 from comparo.application.planning import environment_value_override
 from comparo.application.preflight import PreparedProjectPlan
@@ -59,7 +59,7 @@ def _build(
         build_environment_snapshots(
             project,
             files,
-            ambient=ambient,
+            ambient=None if ambient is None else tuple(sorted(ambient.items())),
             limits=EnvironmentSourceLimits(),
         )
     )
@@ -154,7 +154,23 @@ def test_missing_env_section_produces_empty_snapshots(tmp_path: Path) -> None:
     assert all(not item.entries for item in result.snapshots)
 
 
-def test_safety_handles_are_deduplicated_before_adapter_admission(tmp_path: Path) -> None:
+def test_process_environment_is_frozen_only_when_selected_sources_inherit_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "environ", {"TOKEN": "captured"})
+    (tmp_path / "without").mkdir()
+    (tmp_path / "with").mkdir()
+    without_inheritance = _project(tmp_path / "without", "{}")
+    with_inheritance = _project(tmp_path / "with", "{inheritProcess: true}")
+
+    assert capture_process_environment(without_inheritance, EnvironmentSourceLimits()) == ()
+    assert capture_process_environment(with_inheritance, EnvironmentSourceLimits()) == (
+        ("TOKEN", "captured"),
+    )
+
+
+def test_safety_profiles_are_bound_before_environment_adapter_admission(tmp_path: Path) -> None:
     config = _write_project(tmp_path)
     config.write_text(
         config.read_text(encoding="utf-8").replace(
@@ -172,19 +188,11 @@ def test_safety_handles_are_deduplicated_before_adapter_admission(tmp_path: Path
     )
     outcome = prepare_project_plan(_request(config))
     assert outcome.project is not None
-    subject = outcome.project.prepared.effective.subjects[0]
-    doubled_effective = msgspec.structs.replace(
-        outcome.project.prepared.effective,
-        subjects=(subject, subject),
-    )
-    doubled = msgspec.structs.replace(
-        outcome.project,
-        prepared=msgspec.structs.replace(
-            outcome.project.prepared,
-            effective=doubled_effective,
-        ),
-    )
-    assert binding_module._safety(doubled) == subject.profiles.safety
+    with PinnedProjectFiles(tmp_path.resolve()) as files:
+        result = _build(outcome.project, files)
+
+    assert result.diagnostics == ()
+    assert len(result.snapshots) == 2
 
 
 def test_environment_binding_boundaries_are_typed(tmp_path: Path) -> None:
