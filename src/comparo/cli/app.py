@@ -478,6 +478,27 @@ class _RuntimeLimitArguments:
             help="Maximum aggregate bytes retained in the run-local body store.",
         ),
     ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_transient_body_bytes
+    maximum_request_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-request-body-bytes",
+            help="Maximum serialized bytes admitted for one request body.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_request_body_bytes
+    maximum_request_json_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-request-json-depth",
+            help="Maximum nesting depth admitted for one JSON request body.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_request_json_depth
+    maximum_request_json_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-request-json-nodes",
+            help="Maximum nodes admitted for one JSON request body.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_request_json_nodes
     maximum_authorization_occurrences: Annotated[
         int,
         Parameter(
@@ -774,6 +795,9 @@ def _execution_limits(
     return CliExecutionLimits(
         body_memory_threshold_bytes=runtime.body_memory_threshold_bytes,
         maximum_transient_body_bytes=runtime.maximum_transient_body_bytes,
+        maximum_request_body_bytes=runtime.maximum_request_body_bytes,
+        maximum_request_json_depth=runtime.maximum_request_json_depth,
+        maximum_request_json_nodes=runtime.maximum_request_json_nodes,
         maximum_authorization_occurrences=runtime.maximum_authorization_occurrences,
         maximum_encoded_body_bytes=runtime.maximum_encoded_body_bytes,
         maximum_entity_body_bytes=runtime.maximum_entity_body_bytes,

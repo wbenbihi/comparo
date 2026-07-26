@@ -194,11 +194,11 @@ class InvocationRequestEdit(msgspec.Struct, frozen=True, kw_only=True):
     headers: ValueExpression | None = None
     cookies: ValueExpression | None = None
     body: ValueExpression | None = None
+    body_type: ValueExpression | None = None
     auth: ValueExpression | None = None
-    timeouts: ValueExpression | None = None
+    stream: ValueExpression | None = None
+    timeout: ValueExpression | None = None
     retries: ValueExpression | None = None
-    tls: ValueExpression | None = None
-    proxy: ValueExpression | None = None
     redirects: ValueExpression | None = None
 
     def __post_init__(self) -> None:
@@ -221,11 +221,11 @@ class InvocationRequestEdit(msgspec.Struct, frozen=True, kw_only=True):
             ("headers", self.headers),
             ("cookies", self.cookies),
             ("body", self.body),
+            ("bodyType", self.body_type),
             ("auth", self.auth),
-            ("timeouts", self.timeouts),
+            ("stream", self.stream),
+            ("timeout", self.timeout),
             ("retries", self.retries),
-            ("tls", self.tls),
-            ("proxy", self.proxy),
             ("redirects", self.redirects),
         )
         return tuple(

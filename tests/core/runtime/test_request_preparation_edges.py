@@ -63,6 +63,7 @@ from comparo.core.runtime import iter_execution_work
 from comparo.core.runtime import request_preparation as preparation
 from comparo.core.runtime.http import _attempt_scope
 from comparo.core.runtime.ports import PreparedRequest
+from comparo.core.runtime.request_lowering import lower_headers
 from tests.core.domain.http.factories import definition
 from tests.core.planning.conftest import authority
 from tests.core.planning.conftest import compile_project
@@ -233,27 +234,15 @@ def test_secret_derived_routing_is_denied_before_normalization(request_config: s
 
 
 def test_sensitive_method_origin_is_denied_by_routing_boundary() -> None:
-    prepared = _prepared("{request: {method: GET, endpoint: /}}")
-    context = _context(prepared)
-    provider = ConfigurationRequestProvider(prepared, context)
-    work = next(iter_execution_work(prepared))
-    payload = JsonObject(
-        members=(
-            JsonObjectMember(name="method", value=JsonString(value="GET")),
-            JsonObjectMember(name="endpoint", value=JsonString(value="/")),
-        )
-    )
     origin = TaintOriginId(value="test/secret-method")
-    result = asyncio.run(
-        provider._routing(
-            payload,
-            {"method": (origin,)},
-            work,
-            _attempt_scope(work, 0),
-        )
+    result = preparation._routing(
+        {
+            "method": JsonString(value="GET"),
+            "endpoint": JsonString(value="/"),
+        },
+        {"method": (origin,)},
+        "https://api.example.test",
     )
-    asyncio.run(provider.close())
-    asyncio.run(context.close())
 
     assert type(result) is RequestPreparationFailure
     outcome = cast(UnavailableExecution, result.outcome)
@@ -267,7 +256,7 @@ def test_sensitive_method_origin_is_denied_by_routing_boundary() -> None:
             "{request: {method: POST, endpoint: /, body: hello}}",
             "'https://api.test'",
             "",
-            "body-unsupported",
+            "shape-invalid",
         ),
         (
             "{request: {method: GET, url: 'ftp://api.test'}}",
@@ -412,7 +401,7 @@ def test_resolution_failures_map_to_value_free_execution_outcomes() -> None:
     assert mapped_blocked is not None
     assert type(mapped_blocked.outcome) is BlockedExecution
     assert preparation._resolution_failure(object()) is None
-    assert type(preparation._resolved_json_value(object())) is RequestPreparationFailure
+    assert type(preparation._resolved_value(object())) is RequestPreparationFailure
 
 
 def test_missing_top_level_field_is_intentionally_omitted(
@@ -441,7 +430,7 @@ def test_missing_top_level_field_is_intentionally_omitted(
     )
     work = next(iter_execution_work(prepared_comparison_run))
     result = asyncio.run(
-        preparation._resolve_request_fields(
+        preparation._resolve_fields(
             cast("RunContext", MissingContext()),
             expression,
             ResolutionTarget(
@@ -452,7 +441,7 @@ def test_missing_top_level_field_is_intentionally_omitted(
         )
     )
 
-    assert result == (JsonObject(members=()), {})
+    assert result == ({}, {})
 
 
 def test_sensitive_wire_value_is_revealed_only_inside_materialization_boundary(
@@ -481,7 +470,7 @@ def test_sensitive_wire_value_is_revealed_only_inside_materialization_boundary(
             ),
         )
         assert type(result) is ResolvedForWire
-        resolved = preparation._resolved_json_value(result)
+        resolved = preparation._resolved_value(result)
         assert type(resolved) is tuple
         text_result = await context.resolve_for_wire(
             SensitiveLiteralExpr(
@@ -498,7 +487,7 @@ def test_sensitive_wire_value_is_revealed_only_inside_materialization_boundary(
             ),
         )
         assert type(text_result) is ResolvedForWire
-        assert type(preparation._resolved_json_value(text_result)) is tuple
+        assert type(preparation._resolved_value(text_result)) is tuple
         public_text_result = await context.resolve_for_wire(
             LiteralExpr(
                 value=JsonString(value="not-object"),
@@ -511,7 +500,7 @@ def test_sensitive_wire_value_is_revealed_only_inside_materialization_boundary(
             ),
         )
         assert type(public_text_result) is ResolvedForWire
-        assert type(preparation._resolved_json_value(public_text_result)) is tuple
+        assert type(preparation._resolved_value(public_text_result)) is tuple
         for value in (
             BytesValue(value=b"public"),
             SensitiveValue(
@@ -535,7 +524,7 @@ def test_sensitive_wire_value_is_revealed_only_inside_materialization_boundary(
                 ),
             )
             assert type(bytes_result) is ResolvedForWire
-            assert type(preparation._resolved_json_value(bytes_result)) is RequestPreparationFailure
+            assert type(preparation._resolved_value(bytes_result)) is tuple
         await context.close()
         return cast("tuple[JsonObject, tuple[TaintOriginId, ...]]", resolved)
 
@@ -546,34 +535,20 @@ def test_sensitive_wire_value_is_revealed_only_inside_materialization_boundary(
 
 def test_url_and_header_helpers_cover_root_ipv6_and_invalid_shapes() -> None:
     provenance = _configuration_provenance()
-    empty = JsonObject(members=())
     assert preparation._path("/", ()) == UrlPath()
     assert preparation._host("2001:db8::1").value == "2001:db8::1"
     assert preparation._host("Example.TEST").value == "example.test"
     assert preparation._join_url("https://api.test/", "/v1") == "https://api.test/v1"
-    assert preparation._headers(empty, provenance, ()).fields == ()
+    assert lower_headers(None, (), provenance).fields == ()
     with pytest.raises(ValueError, match="absolute HTTP"):
-        preparation._absolute_url("relative", empty, provenance)
+        preparation._absolute_url("relative", (), provenance)
     with pytest.raises(ValueError, match="user information"):
-        preparation._absolute_url("https://u@api.test", empty, provenance)
+        preparation._absolute_url("https://u@api.test", (), provenance)
     with pytest.raises(TypeError, match="headers must be an object"):
-        preparation._headers(
-            JsonObject(members=(JsonObjectMember(name="headers", value=JsonString(value="x")),)),
-            provenance,
+        lower_headers(JsonString(value="x"), (), provenance)
+    with pytest.raises(TypeError, match="header value"):
+        lower_headers(
+            JsonObject(members=(JsonObjectMember(name="x", value=JsonInteger(value=1)),)),
             (),
-        )
-    with pytest.raises(TypeError, match="header values"):
-        preparation._headers(
-            JsonObject(
-                members=(
-                    JsonObjectMember(
-                        name="headers",
-                        value=JsonObject(
-                            members=(JsonObjectMember(name="x", value=JsonInteger(value=1)),)
-                        ),
-                    ),
-                )
-            ),
             provenance,
-            (),
         )

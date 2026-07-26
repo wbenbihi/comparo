@@ -169,6 +169,9 @@ class CliExecutionLimits(msgspec.Struct, frozen=True, kw_only=True):
 
     body_memory_threshold_bytes: int
     maximum_transient_body_bytes: int
+    maximum_request_body_bytes: int
+    maximum_request_json_depth: int
+    maximum_request_json_nodes: int
     maximum_authorization_occurrences: int
     maximum_encoded_body_bytes: int
     maximum_entity_body_bytes: int
@@ -189,6 +192,9 @@ class CliExecutionLimits(msgspec.Struct, frozen=True, kw_only=True):
         values = (
             self.body_memory_threshold_bytes,
             self.maximum_transient_body_bytes,
+            self.maximum_request_body_bytes,
+            self.maximum_request_json_depth,
+            self.maximum_request_json_nodes,
             self.maximum_authorization_occurrences,
             self.maximum_encoded_body_bytes,
             self.maximum_entity_body_bytes,
@@ -212,6 +218,9 @@ class CliExecutionLimits(msgspec.Struct, frozen=True, kw_only=True):
 DEFAULT_CLI_EXECUTION_LIMITS_V1 = CliExecutionLimits(
     body_memory_threshold_bytes=1024 * 1024,
     maximum_transient_body_bytes=512 * 1024 * 1024,
+    maximum_request_body_bytes=64 * 1024 * 1024,
+    maximum_request_json_depth=256,
+    maximum_request_json_nodes=1_000_000,
     maximum_authorization_occurrences=1_000_000,
     maximum_encoded_body_bytes=64 * 1024 * 1024,
     maximum_entity_body_bytes=64 * 1024 * 1024,

@@ -22,16 +22,20 @@ from comparo.adapters.artifacts import LocalArtifactStoreError
 from comparo.adapters.artifacts import PosixSanitizedBlobSpool
 from comparo.adapters.artifacts import SanitizedSpoolError
 from comparo.adapters.artifacts import TransientArtifactBodyReader
+from comparo.adapters.http import BodyMaterializationLimits
 from comparo.adapters.http import BodyStoreError
 from comparo.adapters.http import DefaultCaptureBudgetProvider
 from comparo.adapters.http import ExplicitTlsContextProvider
 from comparo.adapters.http import HttpcoreTransport
 from comparo.adapters.http import HttpcoreTransportConfig
+from comparo.adapters.http import HttpRequestFinalizer
 from comparo.adapters.http import PolicyHttpExchangePreparer
 from comparo.adapters.http import ProductionRetryWaiter
+from comparo.adapters.http import RequestBodyMaterializer
 from comparo.adapters.http import ResponseCaptureLimits
 from comparo.adapters.http import ResponseClassification
 from comparo.adapters.http import SseDataJsonPolicy
+from comparo.adapters.http import StandardRedirectResolver
 from comparo.adapters.http import StoredStreamSnapshotProvider
 from comparo.adapters.http import StreamDecodingLimits
 from comparo.adapters.http import SystemHostResolver
@@ -133,6 +137,11 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
             maximum_transient_bytes=ByteCount(value=512 * 1024 * 1024),
             io_chunk_size=PositiveCount(value=64 * 1024),
         ),
+        request_body=BodyMaterializationLimits(
+            maximum_body_bytes=ByteCount(value=64 * 1024 * 1024),
+            maximum_json_depth=PositiveCount(value=256),
+            maximum_json_nodes=PositiveCount(value=1_000_000),
+        ),
         transport=HttpcoreTransportConfig(
             maximum_connections=PositiveCount(value=20),
             maximum_keepalive_connections=Count(value=10),
@@ -198,6 +207,7 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
     environment: EnvironmentSourceLimits
     yaml: YamlValueLimits
     body_store: TransientBodyStoreConfig
+    request_body: BodyMaterializationLimits
     transport: HttpcoreTransportConfig
     streams: StreamDecodingLimits
     ordinary: OrdinaryResponseDecodeLimits
@@ -212,6 +222,7 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
             (self.environment, EnvironmentSourceLimits),
             (self.yaml, YamlValueLimits),
             (self.body_store, TransientBodyStoreConfig),
+            (self.request_body, BodyMaterializationLimits),
             (self.transport, HttpcoreTransportConfig),
             (self.streams, StreamDecodingLimits),
             (self.ordinary, OrdinaryResponseDecodeLimits),
@@ -225,6 +236,10 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
             self.body_store.maximum_transient_bytes.value
         ):
             raise ValueError("response capture limit exceeds the run transient-store limit")
+        if self.request_body.maximum_body_bytes.value > (
+            self.body_store.maximum_transient_bytes.value
+        ):
+            raise ValueError("request body limit exceeds the run transient-store limit")
         if self.ordinary.maximum_body_bytes.value > (
             self.transport.capture.maximum_entity_body_bytes.value
         ):
@@ -584,20 +599,19 @@ def _capture_driver(
     settings = request.settings
     store = TransientBodyStore(settings.body_store)
     resources.body_store = store
-    streams = (
-        StoredStreamSnapshotProvider(
-            store=store,
-            limits=settings.streams,
-            sse_json=SseDataJsonPolicy(),
-        )
-        if requirements.stream
-        else None
+    streams = StoredStreamSnapshotProvider(
+        store=store,
+        limits=settings.streams,
+        sse_json=SseDataJsonPolicy(),
+    )
+    effective_requirements = (
+        requirements if requirements.stream else msgspec.structs.replace(requirements, stream=True)
     )
     snapshots = StoredOrdinaryResponseSnapshotProvider(
         store=store,
         limits=settings.ordinary,
         streams=streams,
-        requirements=requirements,
+        requirements=effective_requirements,
     )
     transport = HttpcoreTransport(
         body_store=store,
@@ -608,8 +622,13 @@ def _capture_driver(
             _capture_budget_origin(settings.transport.capture),
         ),
     )
+    request_materializer = RequestBodyMaterializer(store, settings.request_body)
     driver = HttpExecutionDriver(
-        request_provider=ConfigurationRequestProvider(request.project.prepared, context),
+        request_provider=ConfigurationRequestProvider(
+            request.project.prepared,
+            context,
+            HttpRequestFinalizer(request_materializer),
+        ),
         exchange_preparer=PolicyHttpExchangePreparer(
             policy=request.project.policy,
             plan_fingerprint=request.project.prepared.plan.fingerprint,
@@ -619,6 +638,7 @@ def _capture_driver(
         transport=transport,
         snapshot_provider=snapshots,
         retry_waiter=ProductionRetryWaiter(),
+        redirect_resolver=StandardRedirectResolver(),
         cancellation=context.cancellation,
         maximum_attempts=request.project.prepared.effective.maximum_attempts,
     )

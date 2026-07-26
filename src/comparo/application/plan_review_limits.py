@@ -18,6 +18,7 @@ _RUNTIME_LIMIT_IDENTITIES = frozenset(
         ),
         *(("yaml", name) for name in ("bytes", "depth", "nodes")),
         *(("body-store", name) for name in ("memory-threshold", "transient-bytes", "io-chunk")),
+        *(("request-body", name) for name in ("bytes", "json-depth", "json-nodes")),
         *(
             ("http", name)
             for name in (
@@ -135,6 +136,11 @@ class RuntimeLimitsInspection(msgspec.Struct, frozen=True, kw_only=True):
         ):
             raise ValueError("body-store memory threshold cannot exceed its aggregate ceiling")
         if (
+            self.find("request-body", "bytes").value
+            > self.find("body-store", "transient-bytes").value
+        ):
+            raise ValueError("request body ceiling cannot exceed aggregate transient bytes")
+        if (
             self.find("ordinary", "body-bytes").value
             > self.find("capture", "entity-body-bytes").value
         ):
@@ -203,6 +209,24 @@ def inspect_runtime_limits(settings: ProductionExecutionSettings) -> RuntimeLimi
                 "bytes",
             ),
             _limit("body-store", "io-chunk", settings.body_store.io_chunk_size.value, "bytes"),
+            _limit(
+                "request-body",
+                "bytes",
+                settings.request_body.maximum_body_bytes.value,
+                "bytes",
+            ),
+            _limit(
+                "request-body",
+                "json-depth",
+                settings.request_body.maximum_json_depth.value,
+                "count",
+            ),
+            _limit(
+                "request-body",
+                "json-nodes",
+                settings.request_body.maximum_json_nodes.value,
+                "count",
+            ),
             _limit("http", "connections", settings.transport.maximum_connections.value, "count"),
             _limit(
                 "http",

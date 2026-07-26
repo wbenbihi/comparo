@@ -95,7 +95,7 @@ def test_supported_body_free_subset_is_admitted_without_effects() -> None:
     "field",
     ["headers", "cookies", "auth", "timeout", "tls", "proxy"],
 )
-def test_every_environment_request_overlay_is_rejected(field: str) -> None:
+def test_every_implemented_environment_request_overlay_is_admitted(field: str) -> None:
     values = {
         "headers": "{X-Test: value}",
         "cookies": "{session: value}",
@@ -110,11 +110,8 @@ def test_every_environment_request_overlay_is_rejected(field: str) -> None:
         )
     )
 
-    assert not result.supported
-    assert _codes(result) == ("runtime.capability.environment-overlay-unsupported",)
-    assert _paths(result) == ((field,),)
-    assert result.diagnostics[0].context.resource is not None
-    assert result.diagnostics[0].context.resource.kind is ResourceKind.ENVIRONMENT
+    assert result.supported
+    assert result.diagnostics == ()
 
 
 @pytest.mark.parametrize(
@@ -129,26 +126,26 @@ def test_every_environment_request_overlay_is_rejected(field: str) -> None:
         ("retries", "{maximumAttempts: 2}"),
     ],
 )
-def test_every_ignored_request_wire_field_is_rejected(field: str, value: str) -> None:
+def test_every_implemented_request_wire_field_is_admitted(field: str, value: str) -> None:
     result = preflight_runtime_capabilities(
         _prepared_project(request=f"{{request: {{method: GET, endpoint: /, {field}: {value}}}}}")
     )
 
-    assert _codes(result) == ("runtime.capability.request-field-unsupported",)
-    assert _paths(result) == (("request", field),)
+    assert result.supported
+    assert result.diagnostics == ()
 
 
 @pytest.mark.parametrize(
     "body",
     ["hello", "{$env: BODY}"],
 )
-def test_non_null_or_resolvable_request_bodies_are_rejected(body: str) -> None:
+def test_non_null_or_resolvable_request_bodies_are_admitted(body: str) -> None:
     result = preflight_runtime_capabilities(
         _prepared_project(request=f"{{request: {{method: POST, endpoint: /, body: {body}}}}}")
     )
 
-    assert _codes(result) == ("runtime.capability.request-body-unsupported",)
-    assert _paths(result) == (("request", "body"),)
+    assert result.supported
+    assert result.diagnostics == ()
     assert body not in msgspec.json.encode(result).decode()
 
 

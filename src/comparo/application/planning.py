@@ -229,11 +229,11 @@ class RequestOverride(msgspec.Struct, frozen=True, kw_only=True):
     headers: ValueExpression | None = None
     cookies: ValueExpression | None = None
     body: ValueExpression | None = None
+    body_type: ValueExpression | None = None
     auth: ValueExpression | None = None
-    timeouts: ValueExpression | None = None
+    stream: ValueExpression | None = None
+    timeout: ValueExpression | None = None
     retries: ValueExpression | None = None
-    tls: ValueExpression | None = None
-    proxy: ValueExpression | None = None
     redirects: ValueExpression | None = None
 
     def __post_init__(self) -> None:
@@ -259,11 +259,11 @@ class RequestOverride(msgspec.Struct, frozen=True, kw_only=True):
             self.headers,
             self.cookies,
             self.body,
+            self.body_type,
             self.auth,
-            self.timeouts,
+            self.stream,
+            self.timeout,
             self.retries,
-            self.tls,
-            self.proxy,
             self.redirects,
         )
         return tuple(value for value in values if value is not None)
@@ -642,11 +642,11 @@ def _request_edit(value: RequestOverride) -> InvocationRequestEdit:
         headers=value.headers,
         cookies=value.cookies,
         body=value.body,
+        body_type=value.body_type,
         auth=value.auth,
-        timeouts=value.timeouts,
+        stream=value.stream,
+        timeout=value.timeout,
         retries=value.retries,
-        tls=value.tls,
-        proxy=value.proxy,
         redirects=value.redirects,
     )
 

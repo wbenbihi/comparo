@@ -833,6 +833,12 @@ def test_run_callback_preserves_shared_options_and_every_execution_limit() -> No
         "2",
         "--maximum-transient-body-bytes",
         "43",
+        "--maximum-request-body-bytes",
+        "41",
+        "--maximum-request-json-depth",
+        "23",
+        "--maximum-request-json-nodes",
+        "29",
         "--maximum-authorization-occurrences",
         "47",
         "--maximum-encoded-body-bytes",
@@ -902,7 +908,7 @@ def test_run_callback_preserves_shared_options_and_every_execution_limit() -> No
     runtime = request.limits
     assert tuple(
         getattr(runtime, field) for field in runtime.__struct_fields__ if field != "artifact"
-    ) == (2, 43, 47, 41, 41, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31)
+    ) == (2, 43, 41, 23, 29, 47, 41, 41, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31)
     assert tuple(
         getattr(runtime.artifact, field) for field in runtime.artifact.__struct_fields__
     ) == (7, 11, 13, 17, 19, 23, 29, 31, 37)

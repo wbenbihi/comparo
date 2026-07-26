@@ -278,25 +278,18 @@ def test_secret_derived_routing_fails_the_whole_preview(
     assert secret not in msgspec.json.encode(result).decode()
 
 
-def test_capability_preflight_happens_before_local_resource_acquisition(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_body_preview_fails_closed_without_exposing_live_payload(tmp_path: Path) -> None:
     project = _project(
         tmp_path,
         request_spec="{request: {method: POST, endpoint: /, body: {secret: canary}}}",
     )
 
-    def forbidden(*_args: object, **_kwargs: object) -> Never:
-        raise AssertionError("local resources opened before capability admission")
-
-    monkeypatch.setattr(rendering, "PinnedProjectFiles", forbidden)
     result = _render(project)
 
     assert result.previews == ()
-    assert tuple(item.code for item in result.diagnostics) == (
-        "runtime.capability.request-body-unsupported",
-    )
+    assert {item.code for item in result.diagnostics} == {"runtime.request.shape-invalid"}
+    assert len(result.diagnostics) == 2
+    assert "canary" not in msgspec.json.encode(result).decode()
 
 
 def test_environment_snapshot_failures_discard_all_requests(tmp_path: Path) -> None:

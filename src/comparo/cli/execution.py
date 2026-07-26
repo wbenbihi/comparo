@@ -7,6 +7,7 @@ from uuid import UUID
 
 import msgspec
 
+from comparo.adapters.http import BodyMaterializationLimits
 from comparo.adapters.http import ResponseCaptureLimits
 from comparo.adapters.http import StreamDecodingLimits
 from comparo.adapters.http import TransientBodyStoreConfig
@@ -87,6 +88,11 @@ def production_execution_settings(
         io_chunk_size=defaults.body_store.io_chunk_size,
         root=defaults.body_store.root,
     )
+    request_body = BodyMaterializationLimits(
+        maximum_body_bytes=ByteCount(value=limits.maximum_request_body_bytes),
+        maximum_json_depth=PositiveCount(value=limits.maximum_request_json_depth),
+        maximum_json_nodes=PositiveCount(value=limits.maximum_request_json_nodes),
+    )
     streams = StreamDecodingLimits(
         maximum_records=PositiveCount(value=limits.maximum_stream_records),
         maximum_controls=PositiveCount(value=limits.maximum_stream_controls),
@@ -138,6 +144,7 @@ def production_execution_settings(
         environment=defaults.environment,
         yaml=defaults.yaml,
         body_store=body_store,
+        request_body=request_body,
         transport=transport,
         streams=streams,
         ordinary=ordinary,

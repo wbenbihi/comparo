@@ -14,13 +14,10 @@ from comparo.core.domain.diagnostics import DiagnosticContext
 from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.diagnostics import DiagnosticStage
 from comparo.core.domain.diagnostics import FieldPathSegment
-from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import Count
-from comparo.core.domain.values import JsonNull
-from comparo.core.domain.values import JsonString
 from comparo.core.planning._canonical import object_member
 from comparo.core.planning._canonical import resource_spec
 from comparo.core.planning.models import EffectiveSubject
@@ -29,13 +26,10 @@ _PLAN_INCONSISTENT = DiagnosticCode(value="runtime.capability.plan-inconsistent"
 _SCENARIO = DiagnosticCode(value="runtime.capability.scenario-unsupported")
 _ENVIRONMENT_OVERLAY = DiagnosticCode(value="runtime.capability.environment-overlay-unsupported")
 _REQUEST_FIELD = DiagnosticCode(value="runtime.capability.request-field-unsupported")
-_REQUEST_BODY = DiagnosticCode(value="runtime.capability.request-body-unsupported")
 _RESPONSE_SCHEMA = DiagnosticCode(value="runtime.capability.response-schema-unsupported")
 _SAFETY_PROFILE = DiagnosticCode(value="runtime.capability.safety-profile-unsupported")
 _REDACTION_PROFILE = DiagnosticCode(value="runtime.capability.redaction-profile-unsupported")
 _ARTIFACT_PROFILE = DiagnosticCode(value="runtime.capability.artifact-profile-unsupported")
-_HTTP_METHOD = DiagnosticCode(value="runtime.capability.http-method-denied")
-_HTTP_METHOD_UNRESOLVED = DiagnosticCode(value="runtime.capability.http-method-unresolved")
 
 _REQUEST_RESOURCE_FIELDS = frozenset(
     {
@@ -45,13 +39,39 @@ _REQUEST_RESOURCE_FIELDS = frozenset(
         "responseSchema",
         "assertions",
         "diffs",
-        "safety",
-        "redaction",
-        "artifacts",
     }
 )
-_REQUEST_WIRE_FIELDS = frozenset({"method", "endpoint", "url", "headers", "query", "body"})
-_ENVIRONMENT_SUPPORTED = frozenset({"baseUrl", "env", "variables", "secrets"})
+_REQUEST_WIRE_FIELDS = frozenset(
+    {
+        "method",
+        "endpoint",
+        "url",
+        "headers",
+        "query",
+        "cookies",
+        "auth",
+        "body",
+        "bodyType",
+        "stream",
+        "timeout",
+        "redirects",
+        "retries",
+    }
+)
+_ENVIRONMENT_SUPPORTED = frozenset(
+    {
+        "baseUrl",
+        "env",
+        "variables",
+        "secrets",
+        "headers",
+        "cookies",
+        "auth",
+        "timeout",
+        "tls",
+        "proxy",
+    }
+)
 
 
 @final
@@ -92,7 +112,6 @@ def preflight_runtime_capabilities(
             diagnostics.append(_diagnostic(_SCENARIO, resource))
         else:
             _request_capabilities(resource, diagnostics)
-            _http_policy_capabilities(project, resource, diagnostics)
         _profile_capabilities(subject, resource, diagnostics)
     for definition in project.prepared.effective.environments:
         resource = _selected_resource(project, definition)
@@ -130,32 +149,11 @@ def _request_capabilities(
     if type(request) is not ObjectExpr:
         diagnostics.append(_diagnostic(_PLAN_INCONSISTENT, resource, "request"))
         return
-    for member in request.members:
-        if member.name == "body":
-            if not _is_exact_null(member.expression):
-                diagnostics.append(_diagnostic(_REQUEST_BODY, resource, "request", "body"))
-        elif member.name not in _REQUEST_WIRE_FIELDS:
-            diagnostics.append(_diagnostic(_REQUEST_FIELD, resource, "request", member.name))
-
-
-def _http_policy_capabilities(
-    project: PreparedProjectPlan,
-    resource: CompiledResource,
-    diagnostics: list[Diagnostic],
-) -> None:
-    request = object_member(resource_spec(resource), "request")
-    if type(request) is not ObjectExpr:
-        return
-    method = next(
-        (member.expression for member in request.members if member.name == "method"),
-        None,
+    diagnostics.extend(
+        _diagnostic(_REQUEST_FIELD, resource, "request", member.name)
+        for member in request.members
+        if member.name not in _REQUEST_WIRE_FIELDS
     )
-    if type(method) is not LiteralExpr or type(method.value) is not JsonString:
-        diagnostics.append(_diagnostic(_HTTP_METHOD_UNRESOLVED, resource, "request", "method"))
-        return
-    allowed = {item.value for item in project.policy.http.allowed_methods}
-    if method.value.value.upper() not in allowed:
-        diagnostics.append(_diagnostic(_HTTP_METHOD, resource, "request", "method"))
 
 
 def _environment_capabilities(
@@ -195,10 +193,6 @@ def _profile_capabilities(
                     occurrences=count,
                 )
             )
-
-
-def _is_exact_null(expression: object) -> bool:
-    return type(expression) is LiteralExpr and type(expression.value) is JsonNull
 
 
 def _inconsistent(definition: DefinitionRef) -> Diagnostic:

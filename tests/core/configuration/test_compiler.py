@@ -612,6 +612,48 @@ def test_fingerprint_redacts_structured_credential_entries() -> None:
     )
 
 
+def test_compiled_wire_credentials_never_retain_authored_canaries_as_public_values() -> None:
+    canaries = (
+        "request-auth-canary",
+        "request-cookie-canary",
+        "request-header-canary",
+        "request-url-canary",
+        "environment-auth-canary",
+        "environment-cookie-canary",
+        "environment-header-canary",
+        "proxy-auth-canary",
+    )
+    result = _compile(
+        "---\n".join(
+            (
+                _valid_project(),
+                _document(
+                    "Environment",
+                    "secured",
+                    "{baseUrl: 'https://api.example', "
+                    "auth: {bearer: environment-auth-canary}, "
+                    "cookies: {session: environment-cookie-canary}, "
+                    "headers: {authorization: environment-header-canary}, "
+                    "proxy: {url: 'https://proxy.example', "
+                    "auth: {bearer: proxy-auth-canary}}}",
+                ),
+                _document(
+                    "Request",
+                    "secured",
+                    "{request: {method: GET, endpoint: '/?api_key=request-url-canary', "
+                    "auth: {bearer: request-auth-canary}, "
+                    "cookies: {session: request-cookie-canary}, "
+                    "headers: {authorization: request-header-canary}}}",
+                ),
+            )
+        )
+    )
+
+    assert result.project is not None
+    compiled = repr(result.project)
+    assert all(canary not in compiled for canary in canaries)
+
+
 def test_static_dynamic_detection_recurses_through_sequences() -> None:
     result = _compile(
         _valid_project()

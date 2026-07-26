@@ -29,6 +29,7 @@ from comparo.core.runtime.ports import RequestPreparationFailure as RequestPrepa
 from comparo.core.runtime.request_preparation import (
     ConfigurationRequestProvider as ConfigurationRequestProvider,
 )
+from comparo.core.runtime.request_preparation import RequestFinalizer as RequestFinalizer
 from comparo.core.runtime.scheduling import NullEventSink as NullEventSink
 from comparo.core.runtime.scheduling import RecordingEventSink as RecordingEventSink
 from comparo.core.runtime.scheduling import iter_execution_work as iter_execution_work

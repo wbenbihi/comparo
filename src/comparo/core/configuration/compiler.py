@@ -21,6 +21,7 @@ from comparo.core.configuration.canonical import LinkedResource
 from comparo.core.configuration.canonical import RemoteSchema
 from comparo.core.configuration.directives import compile_inert_value
 from comparo.core.configuration.directives import compile_value_expression
+from comparo.core.configuration.directives import seal_expression_literals
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.models import ConfigurationNode
 from comparo.core.configuration.models import MappingEntry
@@ -40,6 +41,10 @@ from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.credentials import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticSeverity
+from comparo.core.domain.expressions import ArrayExpr
+from comparo.core.domain.expressions import LiteralExpr
+from comparo.core.domain.expressions import ObjectExpr
+from comparo.core.domain.expressions import ObjectExpressionMember
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionOrigin
@@ -54,6 +59,7 @@ from comparo.core.domain.primitives import Fingerprint
 from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import SourceLocation
+from comparo.core.domain.values import JsonString
 
 _SPEC_MAPPING = DiagnosticCode(value="configuration.spec.mapping-required")
 _SPEC_FIELD_UNKNOWN = DiagnosticCode(value="configuration.spec.field-unknown")
@@ -88,6 +94,100 @@ def _issue(
 
 def _mapping_entries(node: MappingNode) -> dict[str, MappingEntry]:
     return {entry.name: entry for entry in node.entries}
+
+
+def _secure_wire_credentials(
+    field_name: str,
+    expression: ValueExpression,
+) -> ValueExpression:
+    """Seal authored credential leaves before canonical state can retain them as public."""
+    if field_name in {"auth", "cookies"}:
+        return seal_expression_literals(expression)
+    if field_name == "headers":
+        return _seal_named_credentials(expression, MANDATORY_SENSITIVE_HEADER_NAMES)
+    if field_name == "proxy" and type(expression) is ObjectExpr:
+        return _seal_object_members(expression, frozenset({"auth"}))
+    if field_name != "request" or type(expression) is not ObjectExpr:
+        return expression
+    members: list[ObjectExpressionMember] = []
+    for member in expression.members:
+        secured = member.expression
+        if member.name in {"auth", "cookies"}:
+            secured = seal_expression_literals(secured)
+        elif member.name in {"endpoint", "url"}:
+            secured = _seal_url_credentials(secured)
+        elif member.name == "headers":
+            secured = _seal_named_credentials(secured, MANDATORY_SENSITIVE_HEADER_NAMES)
+        elif member.name == "query":
+            secured = _seal_named_credentials(secured, MANDATORY_SENSITIVE_QUERY_NAMES)
+        members.append(ObjectExpressionMember(name=member.name, expression=secured))
+    return ObjectExpr(members=tuple(members), provenance=expression.provenance)
+
+
+def _seal_url_credentials(expression: ValueExpression) -> ValueExpression:
+    """Deny public retention of credential-shaped query data embedded in URL text."""
+    if (
+        type(expression) is LiteralExpr
+        and type(expression.value) is JsonString
+        and _redact_url_credentials(expression.value.value) != expression.value.value
+    ):
+        return seal_expression_literals(expression)
+    return expression
+
+
+def _seal_object_members(
+    expression: ObjectExpr,
+    names: frozenset[str],
+) -> ObjectExpr:
+    """Seal literal descendants of exact credential-bearing object members."""
+    return ObjectExpr(
+        members=tuple(
+            ObjectExpressionMember(
+                name=member.name,
+                expression=(
+                    seal_expression_literals(member.expression)
+                    if member.name in names
+                    else member.expression
+                ),
+            )
+            for member in expression.members
+        ),
+        provenance=expression.provenance,
+    )
+
+
+def _seal_named_credentials(
+    expression: ValueExpression,
+    names: frozenset[str],
+) -> ValueExpression:
+    """Seal known credential values in map and ordered-entry collection forms."""
+    if type(expression) is ArrayExpr:
+        return ArrayExpr(
+            items=tuple(_seal_named_credentials(item, names) for item in expression.items),
+            provenance=expression.provenance,
+        )
+    if type(expression) is not ObjectExpr:
+        return expression
+    fields = {member.name: member.expression for member in expression.members}
+    declared_name = fields.get("name", fields.get("key"))
+    credential_name = (
+        declared_name.value.value.casefold()
+        if type(declared_name) is LiteralExpr and type(declared_name.value) is JsonString
+        else None
+    )
+    members = tuple(
+        ObjectExpressionMember(
+            name=member.name,
+            expression=(
+                seal_expression_literals(member.expression)
+                if member.name.casefold() in names
+                or (member.name == "value" and credential_name in names)
+                else member.expression
+            ),
+        )
+        for member in expression.members
+    )
+    return ObjectExpr(members=members, provenance=expression.provenance)
 
 
 def _fingerprint_scalar(
@@ -433,13 +533,14 @@ class _Compiler:
             FieldMode.ASSERTION_RULES,
             FieldMode.DIFF_RULES,
         }:
-            return compile_value_expression(
+            expression = compile_value_expression(
                 node,
                 owner=owner,
                 diagnostics=self.diagnostics,
                 resolve_value=self._resolve_value,
                 sensitive_literals=field.name == "secrets",
             )
+            return _secure_wire_credentials(field.name, expression)
         if field.mode is FieldMode.SCHEMA:
             return self._compile_schema_binding(field, node, owner=owner)
         if field.mode is FieldMode.REFERENCE:

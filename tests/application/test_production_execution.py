@@ -188,6 +188,48 @@ def _secret_assertion_project(
     )
 
 
+def _body_and_auth_project(root: Path, *, base_url: str, token: str) -> PreparedProjectPlan:
+    compiled = compile_project(
+        document(
+            "Project",
+            "demo",
+            "{defaults: {subjects: [{$use: Request/check}], baseline: {$use: staging}, "
+            "candidates: [{$use: prod}]}}",
+        ),
+        document(
+            "Environment",
+            "staging",
+            f"{{baseUrl: '{base_url}', headers: {{X-Environment: staging}}, "
+            f"auth: {{bearer: '{token}'}}}}",
+        ),
+        document(
+            "Environment",
+            "prod",
+            f"{{baseUrl: '{base_url}', headers: {{X-Environment: prod}}, "
+            f"auth: {{bearer: '{token}'}}}}",
+        ),
+        document(
+            "Request",
+            "check",
+            "{request: {method: POST, endpoint: /check, "
+            "headers: {X-Request: comparo}, cookies: {session: cookie-secret}, "
+            "body: {message: hello}, bodyType: json, timeout: 5s}}",
+        ),
+    )
+    policy = trusted_local_policy()
+    planned = plan_run(
+        compiled,
+        invocation(),
+        planning_authority(policy, project_namespace=compiled.namespace),
+    )
+    assert planned.prepared is not None
+    return PreparedProjectPlan(
+        prepared=planned.prepared,
+        policy=policy,
+        project_root=root,
+    )
+
+
 def _artifact_read_limits(
     settings: production.ProductionExecutionSettings,
 ) -> ArtifactReadLimits:
@@ -324,6 +366,52 @@ def test_production_root_executes_http_evaluation_and_transient_artifact(
             if response_value is not None
         )
         assert len(artifact.blobs) == 1
+
+    asyncio.run(scenario())
+
+
+def test_production_root_materializes_body_auth_cookies_and_environment_defaults(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        response = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+        server = await _start_loopback_server(response)
+        token = "wire-auth-canary"
+        request = production.ProductionExecutionRequest(
+            project=_body_and_auth_project(
+                tmp_path,
+                base_url=f"http://127.0.0.1:{server.port}",
+                token=token,
+            ),
+            settings=production.production_execution_defaults_v1(),
+            ambient_environment={},
+            artifact_root=None,
+            approve_mutations=True,
+            tool_version="test",
+        )
+        try:
+            result = await production.execute_production(request)
+        finally:
+            await server.close()
+
+        assert result.diagnostics == ()
+        assert result.artifact is not None
+        assert len(server.requests) == 2
+        assert all(item.startswith(b"POST /check HTTP/1.1\r\n") for item in server.requests)
+        assert all(
+            b"authorization: Bearer wire-auth-canary\r\n" in item for item in server.requests
+        )
+        assert all(b"cookie: session=cookie-secret\r\n" in item.lower() for item in server.requests)
+        assert all(b"x-request: comparo\r\n" in item.lower() for item in server.requests)
+        assert {b"x-environment: staging\r\n", b"x-environment: prod\r\n"} == {
+            next(
+                line + b"\r\n"
+                for line in item.lower().split(b"\r\n")
+                if line.startswith(b"x-environment:")
+            )
+            for item in server.requests
+        }
+        assert all(item.endswith(b'{"message":"hello"}') for item in server.requests)
 
     asyncio.run(scenario())
 
