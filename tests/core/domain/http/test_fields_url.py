@@ -22,6 +22,7 @@ from comparo.core.domain.http.fields import RequestCookie
 from comparo.core.domain.http.fields import RequestCookies
 from comparo.core.domain.http.fields import RequestHeaders
 from comparo.core.domain.http.fields import is_header_value
+from comparo.core.domain.http.fields import is_read_only_http_method
 from comparo.core.domain.http.url import AbsoluteHttpUrl
 from comparo.core.domain.http.url import BaseRelativeTarget
 from comparo.core.domain.http.url import DecodedPathSegment
@@ -63,6 +64,21 @@ def query(name: str, value: str) -> QueryParameter:
 @pytest.mark.parametrize("value", ["GET", "POST", "M-SEARCH"])
 def test_http_method_accepts_canonical_tokens(value: str) -> None:
     assert HttpMethod(value=value).value == value
+
+
+@pytest.mark.parametrize("value", ["GET", "HEAD", "OPTIONS", "TRACE"])
+def test_read_only_http_method_classification_is_shared(value: str) -> None:
+    assert is_read_only_http_method(HttpMethod(value=value))
+
+
+@pytest.mark.parametrize("value", ["POST", "PUT", "PATCH", "DELETE", "PURGE"])
+def test_every_other_http_method_is_mutation_capable(value: str) -> None:
+    assert not is_read_only_http_method(HttpMethod(value=value))
+
+
+def test_http_method_classification_rejects_untyped_values() -> None:
+    with pytest.raises(TypeError, match="classification"):
+        is_read_only_http_method("GET")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("value", ["", "get", "A B", "GÉT", 1])

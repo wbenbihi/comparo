@@ -96,6 +96,7 @@ from comparo.core.runtime.ports import PreparedRequest
 from comparo.core.runtime.ports import RequestPreparationFailure
 
 _REQUEST_ACCESS = SensitiveValueAccess(purpose="runtime.request.materialization")
+DEFAULT_REQUEST_TIMEOUT = Duration(nanoseconds=30_000_000_000)
 _RESOLUTION_UNAVAILABLE = DiagnosticCode(value="runtime.request.unavailable")
 _RESOLUTION_ERROR = DiagnosticCode(value="runtime.request.resolution-error")
 _RESOLUTION_BLOCKED = DiagnosticCode(value="runtime.request.blocked")
@@ -480,7 +481,7 @@ def _combined_origins(
 
 
 def _default_policies() -> RequestPolicies:
-    deadline = Duration(nanoseconds=30_000_000_000)
+    deadline = DEFAULT_REQUEST_TIMEOUT
     return RequestPolicies(
         timeouts=TimeoutPolicy(
             connect=deadline,

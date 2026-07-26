@@ -9,6 +9,7 @@ import msgspec
 from comparo.core.domain.capabilities import CapabilityId
 from comparo.core.domain.capabilities import CapabilityOperation
 from comparo.core.domain.capabilities import ExecutionPolicyAuthority
+from comparo.core.domain.http.fields import is_read_only_http_method
 from comparo.core.domain.http.policies import MutationApprovalRequired
 from comparo.core.domain.http.requests import FinalizedWireRequest
 from comparo.core.domain.http.route_authority import (
@@ -33,7 +34,6 @@ _PROXY_DNS_ID = CapabilityId(namespace="comparo", name="http.proxy-dns", version
 _PROXY_DNS_OPERATION = CapabilityOperation(value="dns.delegate")
 _SECRET_EGRESS_ID = CapabilityId(namespace="comparo", name="secret-egress", version="1")
 _SECRET_EGRESS_OPERATION = CapabilityOperation(value="request.egress")
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
 
 def _validate_contract(
@@ -99,7 +99,7 @@ def _validate_occurrence_request(
 def _requires_mutation_approval(intent: HttpAuthorizationIntent) -> bool:
     """Return whether this exact route-pinned intent requires mutation authority."""
     return (
-        intent.request.method.value not in _SAFE_METHODS
+        not is_read_only_http_method(intent.request.method)
         and type(intent.request.policies.mutation_approval) is MutationApprovalRequired
     )
 
@@ -280,7 +280,7 @@ class HttpAuthorizationIntent(msgspec.Struct, frozen=True, kw_only=True):
         self._validate_secret_egress_approval()
 
     def _validate_mutation_approval(self) -> None:
-        unsafe = self.request.method.value not in _SAFE_METHODS
+        unsafe = not is_read_only_http_method(self.request.method)
         if not unsafe and self.mutation_approval is not None:
             raise ValueError("safe HTTP methods cannot carry mutation approval")
         if self.mutation_approval is not None:

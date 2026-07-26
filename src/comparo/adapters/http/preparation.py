@@ -17,6 +17,7 @@ from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import HttpRequestOccurrence
 from comparo.core.domain.http.authorization import MutationApproval
 from comparo.core.domain.http.authorization import SecretEgressApproval
+from comparo.core.domain.http.fields import is_read_only_http_method
 from comparo.core.domain.http.policies import MutationApprovalRequired
 from comparo.core.domain.http.policies import NoProxy
 from comparo.core.domain.http.pre_send import AuthorizedResolutionRequest
@@ -293,12 +294,7 @@ def _mutation_required(
     policy: CompiledExecutionPolicy,
     request: FinalizedWireRequest,
 ) -> bool:
-    return policy.http.require_mutation_approval and request.method.value not in {
-        "GET",
-        "HEAD",
-        "OPTIONS",
-        "TRACE",
-    }
+    return policy.http.require_mutation_approval and not is_read_only_http_method(request.method)
 
 
 def _secret_egress_allowed(

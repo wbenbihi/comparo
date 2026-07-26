@@ -19,6 +19,7 @@ from comparo.core.domain.sensitivity import is_sensitive_value
 
 _TOKEN_PATTERN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _METHOD_PATTERN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Z-]+")
+READ_ONLY_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 _RESERVED_FRAMING_NAMES = frozenset({"content-length", "host", "transfer-encoding"})
 _FORBIDDEN_CONNECTION_NAMES = frozenset(
     {
@@ -64,6 +65,13 @@ class HttpMethod(msgspec.Struct, frozen=True, kw_only=True):
         """Reject non-canonical or malformed method tokens."""
         if type(self.value) is not str or _METHOD_PATTERN.fullmatch(self.value) is None:
             raise ValueError("HTTP method must be a non-empty canonical uppercase token")
+
+
+def is_read_only_http_method(method: HttpMethod) -> bool:
+    """Classify one validated method through the single mutation-safety vocabulary."""
+    if type(method) is not HttpMethod:
+        raise TypeError("HTTP method safety classification requires HttpMethod")
+    return method.value in READ_ONLY_HTTP_METHODS
 
 
 @final

@@ -28,6 +28,7 @@ from comparo.core.domain.http.fields import QueryParameters
 from comparo.core.domain.http.fields import QuerySource
 from comparo.core.domain.http.fields import RequestCookies
 from comparo.core.domain.http.fields import RequestHeaders
+from comparo.core.domain.http.fields import is_read_only_http_method
 from comparo.core.domain.http.policies import IdempotencyKeyRetry
 from comparo.core.domain.http.policies import NoMutationRetry
 from comparo.core.domain.http.policies import RequestPolicies
@@ -67,7 +68,7 @@ def _validate_retry_compatibility(method: HttpMethod, policies: RequestPolicies)
     retry = policies.retries
     if retry.max_attempts.value == 1:
         return
-    read_only = method.value in {"GET", "HEAD", "OPTIONS", "TRACE"}
+    read_only = is_read_only_http_method(method)
     if read_only and type(retry.mutation_retry) is not NoMutationRetry:
         raise ValueError("read-only requests cannot declare a mutation retry strategy")
     if not read_only and type(retry.mutation_retry) is NoMutationRetry:

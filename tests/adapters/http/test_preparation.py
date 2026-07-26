@@ -565,9 +565,22 @@ def test_ip_literals_skip_dns_and_mutations_require_explicit_run_approval() -> N
 
 def test_policy_level_mutation_requirement_denies_an_unmarked_request() -> None:
     async def scenario() -> None:
-        wire = _wire(method="POST", host=Ipv4Host(value="127.0.0.1"))
+        wire = _wire(method="PURGE", host=Ipv4Host(value="127.0.0.1"))
+        policy = _policy(require_mutation=True)
+        policy = msgspec.structs.replace(
+            policy,
+            http=msgspec.structs.replace(
+                policy.http,
+                allowed_methods=tuple(
+                    sorted(
+                        (*policy.http.allowed_methods, HttpMethod(value="PURGE")),
+                        key=lambda item: item.value,
+                    )
+                ),
+            ),
+        )
         outcome = await PolicyHttpExchangePreparer(
-            policy=_policy(require_mutation=True),
+            policy=policy,
             plan_fingerprint=fingerprint("f"),
             resolver=_Resolver(),
         ).prepare(wire, _occurrence(wire))

@@ -19,6 +19,7 @@ from comparo.core.configuration.v1alpha1.operations import DIFF_TRANSFORM_ALIASE
 from comparo.core.configuration.v1alpha1.operations import supports_operation
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticSeverity
+from comparo.core.domain.http.fields import HttpMethod
 from comparo.core.domain.identity import ResourceKind
 
 _SEMANTIC_MATRIX = DiagnosticCode(value="configuration.semantic.matrix-shape")
@@ -64,12 +65,15 @@ def _valid_request_node(node: ConfigurationNode) -> bool:
         return False
     method = entries["method"].value
     destination_count = int("endpoint" in entries) + int("url" in entries)
-    return (
-        type(method) is ScalarNode
-        and type(method.value) is str
-        and "${" not in method.value
-        and destination_count == 1
-    )
+    valid_method = False
+    if type(method) is ScalarNode and type(method.value) is str and "${" not in method.value:
+        try:
+            HttpMethod(value=method.value.upper())
+        except ValueError:
+            pass
+        else:
+            valid_method = True
+    return valid_method and destination_count == 1
 
 
 def _operation_name(node: ConfigurationNode) -> tuple[object, ConfigurationNode] | None:

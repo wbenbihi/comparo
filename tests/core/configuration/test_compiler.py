@@ -370,6 +370,10 @@ def test_profile_rules_accept_structured_and_versioned_builtin_operations() -> N
             "configuration.semantic.request-shape",
         ),
         (
+            ("Request", "bad", "{request: {method: 'GET SPACE', endpoint: /}}"),
+            "configuration.semantic.request-shape",
+        ),
+        (
             ("Request", "bad", "{request: {method: GET, endpoint: /, url: 'https://x'}}"),
             "configuration.semantic.request-shape",
         ),
