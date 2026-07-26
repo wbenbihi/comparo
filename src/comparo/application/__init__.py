@@ -201,6 +201,22 @@ from comparo.application.runtime_capabilities import (
 from comparo.application.runtime_capabilities import (
     preflight_runtime_capabilities as preflight_runtime_capabilities,
 )
+from comparo.application.source_inspection import (
+    EffectiveResourceInspectionRequest as EffectiveResourceInspectionRequest,
+)
+from comparo.application.source_inspection import EffectiveResourceWindow as EffectiveResourceWindow
+from comparo.application.source_inspection import SourceInspectionError as SourceInspectionError
+from comparo.application.source_inspection import (
+    SourceInspectionErrorCode as SourceInspectionErrorCode,
+)
+from comparo.application.source_inspection import SourceInspectionLimits as SourceInspectionLimits
+from comparo.application.source_inspection import SourceInspectionRequest as SourceInspectionRequest
+from comparo.application.source_inspection import SourceViewMode as SourceViewMode
+from comparo.application.source_inspection import SourceWindow as SourceWindow
+from comparo.application.source_inspection import (
+    inspect_effective_resource as inspect_effective_resource,
+)
+from comparo.application.source_inspection import inspect_project_source as inspect_project_source
 from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS as DEFAULT_PROJECT_LOAD_LIMITS
 from comparo.configuration.loader import ProjectLoadLimits as ProjectLoadLimits
 from comparo.policy import DEFAULT_POLICY_LOAD_LIMITS as DEFAULT_POLICY_LOAD_LIMITS
@@ -237,6 +253,8 @@ __all__ = (
     "CurlExportRequest",
     "CurlExportWarning",
     "DiagnosticPresentation",
+    "EffectiveResourceInspectionRequest",
+    "EffectiveResourceWindow",
     "EnvironmentBindingResult",
     "EnvironmentResponseClassification",
     "EnvironmentValueOverride",
@@ -314,6 +332,12 @@ __all__ = (
     "RuntimeLimitInspection",
     "RuntimeLimitsInspection",
     "SecurityCheck",
+    "SourceInspectionError",
+    "SourceInspectionErrorCode",
+    "SourceInspectionLimits",
+    "SourceInspectionRequest",
+    "SourceViewMode",
+    "SourceWindow",
     "ValueResourceOverride",
     "apply_report_retention",
     "bind_execution_profiles",
@@ -328,10 +352,12 @@ __all__ = (
     "inspect_artifact",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",
+    "inspect_effective_resource",
     "inspect_execution_settings",
     "inspect_plan",
     "inspect_policy_diagnostic",
     "inspect_project_plan",
+    "inspect_project_source",
     "inspect_project_workspace",
     "inspect_runtime_limits",
     "list_report_archive",

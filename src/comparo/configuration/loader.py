@@ -139,6 +139,8 @@ class SourceCatalogEntry(msgspec.Struct, frozen=True, kw_only=True):
 
     source_id: SourceId
     path: Path
+    sha256: str | None = None
+    byte_count: int | None = None
 
     def __post_init__(self) -> None:
         """Require a logical identifier and absolute canonical path."""
@@ -146,6 +148,17 @@ class SourceCatalogEntry(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("source catalog ID must be a SourceId")
         if not isinstance(self.path, Path) or not self.path.is_absolute():
             raise TypeError("source catalog path must be an absolute Path")
+        if self.sha256 is not None and (
+            len(self.sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.sha256)
+        ):
+            raise ValueError("source catalog digest must be lowercase SHA-256 or absent")
+        if self.byte_count is not None and (
+            type(self.byte_count) is not int or self.byte_count < 0
+        ):
+            raise ValueError("source catalog byte count must be non-negative or absent")
+        if (self.sha256 is None) != (self.byte_count is None):
+            raise ValueError("source catalog revision metadata must be complete or absent")
 
 
 @final
@@ -181,6 +194,7 @@ class LoadedCompilation(msgspec.Struct, frozen=True, kw_only=True):
 
     compilation: CompilationResult
     catalog: tuple[SourceCatalogEntry, ...]
+    documents: tuple[ParsedDocument, ...] = ()
 
     def __post_init__(self) -> None:
         """Require exact compilation and catalog values."""
@@ -190,6 +204,10 @@ class LoadedCompilation(msgspec.Struct, frozen=True, kw_only=True):
             type(entry) is not SourceCatalogEntry for entry in self.catalog
         ):
             raise TypeError("loaded compilation catalog must be an immutable typed tuple")
+        if type(self.documents) is not tuple or any(
+            type(document) is not ParsedDocument for document in self.documents
+        ):
+            raise TypeError("loaded compilation documents must be an immutable typed tuple")
 
 
 @final
@@ -201,6 +219,7 @@ class _SourceLoad(msgspec.Struct, frozen=True, kw_only=True):
     byte_count: int
     node_count: int
     resource_count: int
+    sha256: str | None = None
 
 
 def _span(source_id: SourceId) -> SourceSpan:
@@ -331,6 +350,7 @@ def _read(
         byte_count=len(content),
         node_count=node_count,
         resource_count=resource_count,
+        sha256=hashlib.sha256(content).hexdigest(),
     )
 
 
@@ -632,7 +652,14 @@ def load_project_sources(
             entry_source=entry_id,
             documents=entry_load.documents,
             diagnostics=entry_load.diagnostics,
-            catalog=(SourceCatalogEntry(source_id=entry_id, path=entry),),
+            catalog=(
+                SourceCatalogEntry(
+                    source_id=entry_id,
+                    path=entry,
+                    sha256=entry_load.sha256,
+                    byte_count=entry_load.byte_count if entry_load.sha256 is not None else None,
+                ),
+            ),
         )
     discovery = _discovery_config(project)
     if discovery is None:
@@ -640,7 +667,14 @@ def load_project_sources(
             entry_source=entry_id,
             documents=entry_load.documents,
             diagnostics=(*entry_load.diagnostics, _issue(_DISCOVERY_INVALID, entry_id)),
-            catalog=(SourceCatalogEntry(source_id=entry_id, path=entry),),
+            catalog=(
+                SourceCatalogEntry(
+                    source_id=entry_id,
+                    path=entry,
+                    sha256=entry_load.sha256,
+                    byte_count=entry_load.byte_count if entry_load.sha256 is not None else None,
+                ),
+            ),
         )
     data_root_name, includes, excludes, declared_sources = discovery
     diagnostics = list(entry_load.diagnostics)
@@ -659,7 +693,14 @@ def load_project_sources(
         maximum_discovery_entries=limits.maximum_discovery_entries,
     )
     documents = list(entry_load.documents)
-    catalog = [SourceCatalogEntry(source_id=entry_id, path=entry)]
+    catalog = [
+        SourceCatalogEntry(
+            source_id=entry_id,
+            path=entry,
+            sha256=entry_load.sha256,
+            byte_count=entry_load.byte_count if entry_load.sha256 is not None else None,
+        )
+    ]
     used_bytes = entry_load.byte_count
     used_documents = len(entry_load.documents)
     used_nodes = entry_load.node_count
@@ -679,7 +720,14 @@ def load_project_sources(
         if any(item.code == _SOURCE_AGGREGATE_LIMIT for item in loaded.diagnostics):
             break
         documents.extend(loaded.documents)
-        catalog.append(SourceCatalogEntry(source_id=source_id, path=path))
+        catalog.append(
+            SourceCatalogEntry(
+                source_id=source_id,
+                path=path,
+                sha256=loaded.sha256,
+                byte_count=loaded.byte_count if loaded.sha256 is not None else None,
+            )
+        )
         used_bytes += loaded.byte_count
         used_documents += len(loaded.documents)
         used_nodes += loaded.node_count
@@ -719,4 +767,5 @@ def compile_project_path(
             entry_source=sources.entry_source,
         ),
         catalog=sources.catalog,
+        documents=sources.documents,
     )

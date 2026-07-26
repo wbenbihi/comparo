@@ -77,6 +77,8 @@ class ProjectSourceSummary(msgspec.Struct, frozen=True, kw_only=True):
     source_id: str
     entry: bool
     resources: tuple[ResourceCoordinate, ...] = ()
+    sha256: str | None = None
+    byte_count: int | None = None
 
     def __post_init__(self) -> None:
         """Require a logical ID and unique immutable resource membership."""
@@ -92,6 +94,17 @@ class ProjectSourceSummary(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("project source summary resources must be an immutable typed tuple")
         if len(set(self.resources)) != len(self.resources):
             raise ValueError("project source summary resources must be unique")
+        if self.sha256 is not None and (
+            len(self.sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.sha256)
+        ):
+            raise ValueError("project source summary digest must be lowercase SHA-256 or absent")
+        if self.byte_count is not None and (
+            type(self.byte_count) is not int or self.byte_count < 0
+        ):
+            raise ValueError("project source summary byte count must be non-negative or absent")
+        if (self.sha256 is None) != (self.byte_count is None):
+            raise ValueError("project source revision metadata must be complete or absent")
 
 
 @final
@@ -336,6 +349,8 @@ def _source_summaries(
             source_id=item.source_id.value,
             entry=index == 0,
             resources=tuple(resources_by_source.get(item.source_id.value, ())),
+            sha256=item.sha256,
+            byte_count=item.byte_count,
         )
         for index, item in enumerate(catalog)
     )
