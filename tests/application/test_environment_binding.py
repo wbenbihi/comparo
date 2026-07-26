@@ -14,6 +14,8 @@ from comparo.adapters.values import PinnedProjectFiles
 from comparo.application import environment_binding as binding_module
 from comparo.application.environment_binding import EnvironmentBindingResult
 from comparo.application.environment_binding import build_environment_snapshots
+from comparo.application.planning import PlanningOptions
+from comparo.application.planning import environment_value_override
 from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.preflight import prepare_project_plan
 from comparo.core.domain.diagnostics import Diagnostic
@@ -25,7 +27,12 @@ from tests.application.test_preflight import _request
 from tests.application.test_preflight import _write_project
 
 
-def _project(root: Path, env: str) -> PreparedProjectPlan:
+def _project(
+    root: Path,
+    env: str,
+    *,
+    options: PlanningOptions | None = None,
+) -> PreparedProjectPlan:
     config = _write_project(root)
     resources = root / ".comparo" / "resources.yaml"
     text = resources.read_text(encoding="utf-8")
@@ -37,7 +44,7 @@ def _project(root: Path, env: str) -> PreparedProjectPlan:
         f"spec: {{baseUrl: https://prod.example.test, env: {env}}}",
     )
     resources.write_text(text, encoding="utf-8")
-    outcome = prepare_project_plan(_request(config))
+    outcome = prepare_project_plan(_request(config, options=options))
     assert outcome.project is not None
     return outcome.project
 
@@ -80,6 +87,32 @@ def test_selected_environments_receive_isolated_explicit_precedence(tmp_path: Pa
         }
         assert values == {"A": "file", "B": "inline", "ONLY_AMBIENT": "yes"}
     assert result.snapshots[0].environment != result.snapshots[1].environment
+
+
+def test_invocation_environment_value_is_sealed_and_wins_declared_sources(tmp_path: Path) -> None:
+    secret = "invocation-environment-secret-canary"
+    project = _project(
+        tmp_path,
+        "{inheritProcess: true, values: {TOKEN: configured}}",
+        options=PlanningOptions(
+            environment_values=(environment_value_override("staging", "TOKEN", secret),)
+        ),
+    )
+    with PinnedProjectFiles(tmp_path.resolve()) as files:
+        result = _build(project, files, ambient={"TOKEN": "ambient"})
+
+    assert result.diagnostics == ()
+    access = SensitiveValueAccess(purpose="test.invocation-environment-binding")
+    staging, prod = result.snapshots
+    staging_token = next(
+        item.value for item in staging.entries if item.symbol.segments == ("TOKEN",)
+    )
+    prod_token = next(item.value for item in prod.entries if item.symbol.segments == ("TOKEN",))
+    assert is_sensitive_value(staging_token)
+    assert cast("JsonString", staging_token.reveal(access=access)).value == secret
+    assert is_sensitive_value(prod_token)
+    assert cast("JsonString", prod_token.reveal(access=access)).value == "configured"
+    assert secret not in repr(project)
 
 
 @pytest.mark.parametrize(

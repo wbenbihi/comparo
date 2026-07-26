@@ -141,11 +141,14 @@ def _lower_environment(
     source = object_member(resource_spec(resource), "env")
     provenance = _provenance(resource)
     if source is None:
-        return EnvironmentSnapshotRequest(
-            environment=resource.definition,
-            configuration=provenance,
-            policy=project.policy.definition,
-            safety=safety,
+        return _with_invocation_values(
+            EnvironmentSnapshotRequest(
+                environment=resource.definition,
+                configuration=provenance,
+                policy=project.policy.definition,
+                safety=safety,
+            ),
+            project,
         )
     if type(source) is not JsonObject:
         return None
@@ -159,14 +162,17 @@ def _lower_environment(
     inline_values = _values(fields.get("values"), provenance)
     if file_sources is None or inline_values is None:
         return None
-    return EnvironmentSnapshotRequest(
-        environment=resource.definition,
-        configuration=provenance,
-        policy=project.policy.definition,
-        inherit_process=inherit.value,
-        files=file_sources,
-        values=inline_values,
-        safety=safety,
+    return _with_invocation_values(
+        EnvironmentSnapshotRequest(
+            environment=resource.definition,
+            configuration=provenance,
+            policy=project.policy.definition,
+            inherit_process=inherit.value,
+            files=file_sources,
+            values=inline_values,
+            safety=safety,
+        ),
+        project,
     )
 
 
@@ -224,6 +230,32 @@ def _values(
         )
     except ValueError:
         return None
+
+
+def _with_invocation_values(
+    request: EnvironmentSnapshotRequest,
+    project: PreparedProjectPlan,
+) -> EnvironmentSnapshotRequest:
+    """Apply sealed caller values after declared sources without retaining duplicates."""
+    environment = request.environment.identity.resource_id
+    replacements = {
+        item.symbol: item
+        for item in project.prepared.invocation.environment_values
+        if item.environment == environment
+    }
+    if not replacements:
+        return request
+    retained = tuple(item for item in request.values if item.symbol not in replacements)
+    provenance = ValueProvenance(entries=(ProvenanceEntry(kind=ProvenanceKind.INVOCATION),))
+    invocation_values = tuple(
+        EnvironmentInlineValue(
+            symbol=item.symbol,
+            value=item.value,
+            configuration=provenance,
+        )
+        for item in sorted(replacements.values(), key=lambda item: item.symbol.segments)
+    )
+    return msgspec.structs.replace(request, values=(*retained, *invocation_values))
 
 
 def _safety(project: PreparedProjectPlan) -> tuple[DefinitionHandle, ...]:

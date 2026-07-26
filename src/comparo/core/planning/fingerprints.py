@@ -23,6 +23,7 @@ from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.planning import PlanSlice
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import RunInvocation
 from comparo.core.domain.primitives import Count
@@ -73,6 +74,7 @@ def plan_fingerprint(
                     for matrix in subject.matrices
                 ],
                 "profiles": _profiles(subject.profiles),
+                "requestEdit": _request_edit(subject.request_edit),
             }
             for subject in effective.subjects
         ],
@@ -95,6 +97,15 @@ def plan_fingerprint(
                 "secrets": _optional_secret_expression(layer.secrets),
             }
             for layer in effective.value_layers
+        ],
+        "environmentValues": [
+            {
+                "environment": item.environment.value,
+                "symbol": list(item.symbol.segments),
+                "payloadType": item.value.payload_type.__name__,
+                "origins": [origin.value for origin in item.value.origins],
+            }
+            for item in invocation.environment_values
         ],
         "provenance": [
             {
@@ -155,6 +166,16 @@ def _profiles(profiles: EffectiveProfiles) -> dict[str, object]:
         "safety": [_definition(item) for item in profiles.safety],
         "redaction": None if profiles.redaction is None else _definition(profiles.redaction),
         "artifacts": None if profiles.artifacts is None else _definition(profiles.artifacts),
+    }
+
+
+def _request_edit(edit: InvocationRequestEdit | None) -> object:
+    """Describe edited expression structure while preserving secret opacity."""
+    if edit is None:
+        return None
+    return {
+        name: _expression(expression, sensitive_context=name in {"auth"})
+        for name, expression in edit.field_values()
     }
 
 

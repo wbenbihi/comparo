@@ -13,6 +13,7 @@ import msgspec
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticStage
 from comparo.core.domain.expressions import ObjectExpr
+from comparo.core.domain.expressions import ObjectExpressionMember
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.http.bodies import NoBody
@@ -140,6 +141,11 @@ class ConfigurationRequestProvider:
         request_expression = object_member(resource_spec(request_resource), "request")
         if type(request_expression) is not ObjectExpr:  # pragma: no cover - compiler invariant
             return _unavailable(_SHAPE_INVALID)
+        request_expression = _effective_request_expression(
+            self._prepared,
+            work,
+            request_expression,
+        )
         resolved = await _resolve_request_fields(
             self._context,
             request_expression,
@@ -264,6 +270,35 @@ class ConfigurationRequestProvider:
 
     async def close(self) -> None:
         """Release no resources because the injected RunContext remains caller-owned."""
+
+
+def _effective_request_expression(
+    prepared: PreparedRun,
+    work: ExecutionWork,
+    authored: ObjectExpr,
+) -> ObjectExpr:
+    """Overlay the run-owned typed Request edit without mutating the compiled project."""
+    subject = next(item for item in prepared.effective.subjects if item.definition == work.subject)
+    edit = subject.request_edit
+    if edit is None:
+        return authored
+    replacements = dict(edit.field_values())
+    retained = tuple(
+        ObjectExpressionMember(
+            name=member.name,
+            expression=replacements.pop(member.name, member.expression),
+        )
+        for member in authored.members
+    )
+    appended = tuple(
+        ObjectExpressionMember(name=name, expression=expression)
+        for name, expression in edit.field_values()
+        if name in replacements
+    )
+    return ObjectExpr(
+        members=(*retained, *appended),
+        provenance=authored.provenance,
+    )
 
 
 async def _resolve_request_fields(

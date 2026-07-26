@@ -13,10 +13,13 @@ from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.expressions import ObjectExpressionMember
 from comparo.core.domain.expressions import SensitiveLiteralExpr
+from comparo.core.domain.http.url import DecodedPathSegment
 from comparo.core.domain.http.url import UrlPath
+from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.lifecycle import CancellationSource
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ResolutionProvenance
@@ -74,6 +77,7 @@ def _prepared(
     base_url: str = "'https://api.example.test'",
     project_fields: str = "",
     scenario: bool = False,
+    request_edit: InvocationRequestEdit | None = None,
 ) -> PreparedRun:
     subject_kind = "Scenario" if scenario else "Request"
     subject_name = "flow" if scenario else "check"
@@ -88,7 +92,11 @@ def _prepared(
         document("Environment", "dev", f"{{baseUrl: {base_url}}}"),
         document(subject_kind, subject_name, request),
     )
-    result = plan_run(project, invocation(), authority())
+    result = plan_run(
+        project,
+        invocation(requests=() if request_edit is None else (request_edit,)),
+        authority(),
+    )
     assert result.prepared is not None
     return result.prepared
 
@@ -174,6 +182,32 @@ def test_explicit_url_query_headers_ports_and_sensitive_values_materialize() -> 
         secret_result.materialization.identity.effective_request_fingerprint,
         SensitiveValue,
     )
+
+
+def test_run_owned_request_edit_materializes_without_mutating_project_request() -> None:
+    provenance = _configuration_provenance()
+    edited = _prepared(
+        "{request: {method: GET, endpoint: /original}}",
+        request_edit=InvocationRequestEdit(
+            subject=ResourceId(value="check"),
+            endpoint=LiteralExpr(
+                value=JsonString(value="/temporary"),
+                provenance=provenance,
+            ),
+        ),
+    )
+
+    result = asyncio.run(_prepare(edited))
+
+    assert not isinstance(result, RequestPreparationFailure)
+    assert all(not is_sensitive_value(segment) for segment in result.url.path.segments)
+    assert tuple(
+        cast("DecodedPathSegment", segment).value for segment in result.url.path.segments
+    ) == ("temporary",)
+    request = edited.project.find(ResourceKind.REQUEST, ResourceId(value="check"))
+    assert request is not None
+    assert "/original" in repr(request.spec)
+    assert "/temporary" not in repr(request.spec)
 
 
 @pytest.mark.parametrize(

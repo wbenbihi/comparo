@@ -12,6 +12,7 @@ from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import InvocationId
 from comparo.core.domain.identity import MatrixBindingId
+from comparo.core.domain.identity import MatrixCaseId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
@@ -24,6 +25,10 @@ from comparo.core.domain.overrides import ReplaceBase
 from comparo.core.domain.overrides import ScalarOverride
 from comparo.core.domain.overrides import SetValue
 from comparo.core.domain.primitives import PositiveCount
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import is_sensitive_value
+from comparo.core.domain.value_references import SymbolPath
+from comparo.core.domain.values import JsonString
 
 _EXECUTION_COUNT_RESOURCES = frozenset(
     {
@@ -49,6 +54,7 @@ class MatrixSelection(msgspec.Struct, frozen=True, kw_only=True):
 
     binding: MatrixBindingId
     matrix: ResourceId
+    cases: tuple[MatrixCaseId, ...] = ()
 
     def __post_init__(self) -> None:
         """Require stable typed selection coordinates."""
@@ -56,6 +62,12 @@ class MatrixSelection(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("matrix selection binding must be a MatrixBindingId")
         if type(self.matrix) is not ResourceId:
             raise TypeError("matrix selection resource must be a ResourceId")
+        if type(self.cases) is not tuple or any(
+            type(item) is not MatrixCaseId for item in self.cases
+        ):
+            raise TypeError("matrix selection cases must be an immutable MatrixCaseId tuple")
+        if len(self.cases) != len(set(self.cases)):
+            raise ValueError("matrix selection cases must be unique")
 
 
 @final
@@ -152,6 +164,109 @@ class InvocationValueOverlay(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("value overlay must define at least one namespace")
 
 
+@final
+class InvocationEnvironmentValue(msgspec.Struct, frozen=True, kw_only=True):
+    """One immediately sealed invocation override for an Environment `$env` symbol."""
+
+    environment: ResourceId
+    symbol: SymbolPath
+    value: SensitiveValue[JsonString]
+
+    def __post_init__(self) -> None:
+        """Forbid raw environment strings from entering the immutable invocation graph."""
+        if type(self.environment) is not ResourceId:
+            raise TypeError("invocation Environment value requires a ResourceId")
+        if type(self.symbol) is not SymbolPath or len(self.symbol.segments) != 1:
+            raise ValueError("invocation Environment value symbol must contain one segment")
+        if not is_sensitive_value(self.value) or self.value.payload_type is not JsonString:
+            raise TypeError("invocation Environment values must be sealed JsonString values")
+
+
+@final
+class InvocationRequestEdit(msgspec.Struct, frozen=True, kw_only=True):
+    """Field-owned Request edits applied after project/profile composition."""
+
+    subject: ResourceId
+    method: ValueExpression | None = None
+    url: ValueExpression | None = None
+    endpoint: ValueExpression | None = None
+    query: ValueExpression | None = None
+    headers: ValueExpression | None = None
+    cookies: ValueExpression | None = None
+    body: ValueExpression | None = None
+    auth: ValueExpression | None = None
+    timeouts: ValueExpression | None = None
+    retries: ValueExpression | None = None
+    tls: ValueExpression | None = None
+    proxy: ValueExpression | None = None
+    redirects: ValueExpression | None = None
+
+    def __post_init__(self) -> None:
+        """Require one subject and at least one typed, explicitly named field edit."""
+        if type(self.subject) is not ResourceId:
+            raise TypeError("invocation Request edit requires a subject ResourceId")
+        values = self.field_values()
+        if not values:
+            raise ValueError("invocation Request edit requires at least one field")
+        if any(not is_value_expression(value) for _name, value in values):
+            raise TypeError("invocation Request edit fields must be ValueExpression values")
+
+    def field_values(self) -> tuple[tuple[str, ValueExpression], ...]:
+        """Return edited canonical field names in stable request-contract order."""
+        candidates = (
+            ("method", self.method),
+            ("url", self.url),
+            ("endpoint", self.endpoint),
+            ("query", self.query),
+            ("headers", self.headers),
+            ("cookies", self.cookies),
+            ("body", self.body),
+            ("auth", self.auth),
+            ("timeouts", self.timeouts),
+            ("retries", self.retries),
+            ("tls", self.tls),
+            ("proxy", self.proxy),
+            ("redirects", self.redirects),
+        )
+        return tuple(
+            (name, expression) for name, expression in candidates if expression is not None
+        )
+
+
+def _default_profile_collection() -> CollectionOverridePlan[ResourceId, ResourceId]:
+    return CollectionOverridePlan(base=KeepBase())
+
+
+@final
+class InvocationProfileOverrides(msgspec.Struct, frozen=True, kw_only=True):
+    """Typed profile edits shared across every selected invocation subject."""
+
+    assertions: CollectionOverridePlan[ResourceId, ResourceId] = _default_profile_collection()
+    diffs: CollectionOverridePlan[ResourceId, ResourceId] = _default_profile_collection()
+    gate: ScalarOverride[ResourceId] = Inherit()
+    safety: CollectionOverridePlan[ResourceId, ResourceId] = _default_profile_collection()
+    redaction: ScalarOverride[ResourceId] = Inherit()
+    artifacts: ScalarOverride[ResourceId] = Inherit()
+
+    def __post_init__(self) -> None:
+        """Require field-specific collection and scalar override operations."""
+        for label, edit in (
+            ("assertion profile", self.assertions),
+            ("diff profile", self.diffs),
+            ("safety profile", self.safety),
+        ):
+            _validate_resource_edit(edit, label=label)
+        for label, scalar_edit in (
+            ("gate profile", self.gate),
+            ("redaction profile", self.redaction),
+            ("artifact profile", self.artifacts),
+        ):
+            if type(scalar_edit) not in {Inherit, Clear} and not (
+                type(scalar_edit) is SetValue and type(scalar_edit.value) is ResourceId
+            ):
+                raise TypeError(f"{label} override must inherit, clear, or set a ResourceId")
+
+
 def _default_matrix_edit() -> CollectionOverridePlan[MatrixBindingId, MatrixSelection]:
     return CollectionOverridePlan(base=KeepBase())
 
@@ -171,6 +286,9 @@ class RunInvocation(msgspec.Struct, frozen=True, kw_only=True):
     fail_fast: ScalarOverride[bool] = Inherit()
     budgets: tuple[PlanningBudgetValue, ...] = ()
     values: tuple[InvocationValueOverlay, ...] = ()
+    environment_values: tuple[InvocationEnvironmentValue, ...] = ()
+    requests: tuple[InvocationRequestEdit, ...] = ()
+    profiles: InvocationProfileOverrides = msgspec.field(default_factory=InvocationProfileOverrides)
 
     def __post_init__(self) -> None:
         """Validate the closed override surface without consulting external state."""
@@ -193,6 +311,10 @@ class RunInvocation(msgspec.Struct, frozen=True, kw_only=True):
         _validate_bool_override(self.fail_fast)
         _validate_invocation_budgets(self.budgets)
         _validate_invocation_values(self.values)
+        _validate_environment_values(self.environment_values)
+        _validate_request_edits(self.requests)
+        if type(self.profiles) is not InvocationProfileOverrides:
+            raise TypeError("invocation profile overrides must be typed")
 
 
 def _validate_count_overrides(*overrides: ScalarOverride[PositiveCount]) -> None:
@@ -228,6 +350,26 @@ def _validate_invocation_values(values: tuple[InvocationValueOverlay, ...]) -> N
     environments = tuple(overlay.environment for overlay in values)
     if len(environments) != len(set(environments)):
         raise ValueError("invocation value overlays must have unique Environment scopes")
+
+
+def _validate_environment_values(values: tuple[InvocationEnvironmentValue, ...]) -> None:
+    if type(values) is not tuple or any(
+        type(value) is not InvocationEnvironmentValue for value in values
+    ):
+        raise TypeError("invocation Environment values must be an immutable typed tuple")
+    identities = tuple((value.environment, value.symbol) for value in values)
+    if len(identities) != len(set(identities)):
+        raise ValueError("invocation Environment value coordinates must be unique")
+
+
+def _validate_request_edits(values: tuple[InvocationRequestEdit, ...]) -> None:
+    if type(values) is not tuple or any(
+        type(value) is not InvocationRequestEdit for value in values
+    ):
+        raise TypeError("invocation Request edits must be an immutable typed tuple")
+    subjects = tuple(value.subject for value in values)
+    if len(subjects) != len(set(subjects)):
+        raise ValueError("invocation Request edits must have unique subjects")
 
 
 @final

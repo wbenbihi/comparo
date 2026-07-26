@@ -57,11 +57,18 @@ from comparo.application.plan_review import clipboard_summary as clipboard_summa
 from comparo.application.plan_review import inspect_execution_settings as inspect_execution_settings
 from comparo.application.plan_review import inspect_runtime_limits as inspect_runtime_limits
 from comparo.application.planning import BudgetOverride as BudgetOverride
+from comparo.application.planning import ClearProfileSelection as ClearProfileSelection
+from comparo.application.planning import EnvironmentValueOverride as EnvironmentValueOverride
+from comparo.application.planning import InlineValueOverride as InlineValueOverride
 from comparo.application.planning import InvocationBuildError as InvocationBuildError
 from comparo.application.planning import MatrixOverride as MatrixOverride
 from comparo.application.planning import PlanningOptions as PlanningOptions
+from comparo.application.planning import ProfileSelectionOverrides as ProfileSelectionOverrides
+from comparo.application.planning import RequestOverride as RequestOverride
 from comparo.application.planning import ValueResourceOverride as ValueResourceOverride
 from comparo.application.planning import build_invocation as build_invocation
+from comparo.application.planning import environment_value_override as environment_value_override
+from comparo.application.planning import inline_value_override as inline_value_override
 from comparo.application.planning import plan_project as plan_project
 from comparo.application.preflight import PreparedProjectPlan as PreparedProjectPlan
 from comparo.application.preflight import ProjectPlanRequest as ProjectPlanRequest
@@ -152,6 +159,7 @@ __all__ = (
     "ArtifactOperationError",
     "ArtifactReadLimits",
     "BudgetOverride",
+    "ClearProfileSelection",
     "CompareExecutionControls",
     "CompareIntent",
     "ComparePreparationHandle",
@@ -162,11 +170,13 @@ __all__ = (
     "CompareServiceErrorCode",
     "ComparisonResultRow",
     "EnvironmentBindingResult",
+    "EnvironmentValueOverride",
     "ExecutionProgressSnapshot",
     "ExecutionResultRow",
     "ExecutionSession",
     "ExecutionSessionPhase",
     "ExecutionSettingsInspection",
+    "InlineValueOverride",
     "InvocationBuildError",
     "MatrixOverride",
     "PlanClipboardSummary",
@@ -180,6 +190,7 @@ __all__ = (
     "ProductionExecutionRequest",
     "ProductionExecutionResult",
     "ProductionExecutionSettings",
+    "ProfileSelectionOverrides",
     "ProjectLoadLimits",
     "ProjectPlanRequest",
     "ProjectPlanResult",
@@ -204,6 +215,7 @@ __all__ = (
     "ReportArchiveListing",
     "ReportArchiveResource",
     "RequestBodyOmissionReason",
+    "RequestOverride",
     "ResultCrossLink",
     "ResultEntity",
     "ResultFact",
@@ -219,8 +231,10 @@ __all__ = (
     "build_environment_snapshots",
     "build_invocation",
     "clipboard_summary",
+    "environment_value_override",
     "execute_production",
     "initialize_project_artifact_root",
+    "inline_value_override",
     "inspect_artifact",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",

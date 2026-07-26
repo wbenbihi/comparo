@@ -21,6 +21,7 @@ from comparo.core.domain.identity import TrialId
 from comparo.core.domain.planning import EnvironmentPair
 from comparo.core.domain.planning import PlannedCell
 from comparo.core.domain.planning import RunPlan
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import RunInvocation
 from comparo.core.domain.primitives import Count
@@ -129,6 +130,7 @@ class EffectiveSubject(msgspec.Struct, frozen=True, kw_only=True):
     definition: DefinitionRef
     matrices: tuple[EffectiveMatrix, ...]
     profiles: EffectiveProfiles
+    request_edit: InvocationRequestEdit | None = None
 
     def __post_init__(self) -> None:
         """Require a Request/Scenario and unambiguous ordered Matrix bindings."""
@@ -145,6 +147,11 @@ class EffectiveSubject(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("effective subject Matrix bindings must be unique")
         if type(self.profiles) is not EffectiveProfiles:
             raise TypeError("effective subject profiles must be EffectiveProfiles")
+        if self.request_edit is not None:
+            if type(self.request_edit) is not InvocationRequestEdit:
+                raise TypeError("effective subject Request edit must be typed or absent")
+            if self.request_edit.subject != self.definition.identity.resource_id:
+                raise ValueError("effective subject Request edit must target its definition")
 
 
 @final

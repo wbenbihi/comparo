@@ -14,13 +14,22 @@ from comparo.application.planning import InvocationBuildError
 from comparo.application.planning import InvocationBuildErrorCode
 from comparo.application.planning import MatrixOverride
 from comparo.application.planning import PlanningOptions
+from comparo.application.planning import ProfileSelectionOverrides
+from comparo.application.planning import RequestOverride
 from comparo.application.planning import ValueResourceOverride
 from comparo.application.planning import build_invocation
+from comparo.application.planning import environment_value_override
+from comparo.application.planning import inline_value_override
 from comparo.application.planning import plan_project
 from comparo.core.configuration.canonical import CompiledProject
 from comparo.core.domain.budget_contracts import BudgetResource
+from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ObjectExpr
+from comparo.core.domain.expressions import ObjectExpressionMember
 from comparo.core.domain.expressions import SensitiveLiteralExpr
+from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import ResourceId
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.overrides import Inherit
 from comparo.core.domain.overrides import ReplaceBase
 from comparo.core.domain.overrides import SetValue
@@ -29,7 +38,9 @@ from comparo.core.domain.planning_inputs import ComparisonTopology
 from comparo.core.domain.planning_inputs import InheritTopology
 from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import RunInvocation
+from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import JsonString
 from tests.core.planning.conftest import authority
@@ -42,6 +53,24 @@ _RUN_ID = UUID("20000000-0000-0000-0000-000000000002")
 
 def _build(options: PlanningOptions) -> RunInvocation:
     return build_invocation(options, invocation_id=_INVOCATION_ID, run_id=_RUN_ID)
+
+
+def _literal(value: str) -> LiteralExpr:
+    return LiteralExpr(
+        value=JsonString(value=value),
+        provenance=ValueProvenance(entries=(ProvenanceEntry(kind=ProvenanceKind.INVOCATION),)),
+    )
+
+
+def _object(**values: str) -> ObjectExpr:
+    provenance = ValueProvenance(entries=(ProvenanceEntry(kind=ProvenanceKind.INVOCATION),))
+    return ObjectExpr(
+        members=tuple(
+            ObjectExpressionMember(name=name, expression=_literal(value))
+            for name, value in values.items()
+        ),
+        provenance=provenance,
+    )
 
 
 def test_empty_options_retain_every_configured_planning_field() -> None:
@@ -88,6 +117,89 @@ def test_explicit_options_replace_only_their_owned_fields() -> None:
     assert type(invocation.fail_fast) is SetValue
     assert invocation.fail_fast.value is False
     assert invocation.budgets[0].resource is BudgetResource.CONCURRENCY
+
+
+def test_inline_invocation_compiles_case_request_profile_and_sealed_value_overlays() -> None:
+    secret = "inline-invocation-secret-canary"
+    project = compile_project(
+        document(
+            "Project",
+            "demo",
+            "{defaults: {subjects: [{$use: Request/ping}], environments: [{$use: dev}], "
+            "matrices: [{$use: regions}], assertions: [{$use: original}]}}",
+        ),
+        document("Environment", "dev", "{baseUrl: 'https://dev.example'}"),
+        document(
+            "Matrix",
+            "regions",
+            "{cases: [{id: eu, values: {region: eu}}, {id: us, values: {region: us}}]}",
+        ),
+        document("AssertionProfile", "original", "{rules: [{operator: equals}]}"),
+        document("AssertionProfile", "temporary", "{rules: [{operator: notEquals}]}"),
+        document("Request", "ping", "{request: {method: GET, endpoint: /original}}"),
+    )
+    original_request = project.find(ResourceKind.REQUEST, ResourceId(value="ping"))
+    assert original_request is not None
+    original_spec = original_request.spec
+    result = plan_project(
+        project,
+        authority(),
+        PlanningOptions(
+            matrices=(MatrixOverride(binding="regions", matrix="regions", cases=("us",)),),
+            inline_values=(
+                inline_value_override(ValueNamespace.VARIABLES, _object(tenant="demo")),
+                inline_value_override(ValueNamespace.SECRETS, _object(token=secret)),
+            ),
+            environment_values=(environment_value_override("dev", "TOKEN", secret),),
+            requests=(RequestOverride(subject="ping", endpoint=_literal("/temporary")),),
+            profiles=ProfileSelectionOverrides(assertions=("temporary",)),
+        ),
+        invocation_id=_INVOCATION_ID,
+        run_id=_RUN_ID,
+    )
+
+    prepared = result.prepared
+    assert prepared is not None
+    subject = prepared.effective.subjects[0]
+    assert tuple(case.case_id.value for case in subject.matrices[0].cases) == ("us",)
+    assert subject.request_edit is not None
+    assert subject.request_edit.endpoint == _literal("/temporary")
+    assert all(type(item) is DefinitionRef for item in subject.profiles.assertions)
+    assert tuple(
+        cast("DefinitionRef", item).identity.resource_id.value
+        for item in subject.profiles.assertions
+    ) == ("temporary",)
+    unchanged_request = prepared.project.find(ResourceKind.REQUEST, ResourceId(value="ping"))
+    assert unchanged_request is not None
+    assert unchanged_request.spec == original_spec
+    assert secret not in repr(prepared.effective)
+    assert secret not in repr(prepared.invocation.environment_values)
+    secret_overlay = next(
+        layer.secrets for layer in prepared.effective.value_layers if layer.secrets is not None
+    )
+    assert type(secret_overlay) is ObjectExpr
+    assert type(secret_overlay.members[0].expression) is SensitiveLiteralExpr
+
+    rotated = plan_project(
+        project,
+        authority(),
+        PlanningOptions(
+            matrices=(MatrixOverride(binding="regions", matrix="regions", cases=("us",)),),
+            inline_values=(
+                inline_value_override(ValueNamespace.VARIABLES, _object(tenant="demo")),
+                inline_value_override(ValueNamespace.SECRETS, _object(token="rotated-secret")),
+            ),
+            environment_values=(
+                environment_value_override("dev", "TOKEN", "rotated-environment-secret"),
+            ),
+            requests=(RequestOverride(subject="ping", endpoint=_literal("/temporary")),),
+            profiles=ProfileSelectionOverrides(assertions=("temporary",)),
+        ),
+        invocation_id=_INVOCATION_ID,
+        run_id=_RUN_ID,
+    ).prepared
+    assert rotated is not None
+    assert rotated.plan.fingerprint == prepared.plan.fingerprint
 
 
 def test_value_resources_group_by_scope_and_override_authored_layers() -> None:

@@ -110,7 +110,7 @@ class EnvironmentInlineValue(msgspec.Struct, frozen=True, kw_only=True):
     """One explicit string value at the strongest Environment source layer."""
 
     symbol: SymbolPath
-    value: JsonString
+    value: SnapshotValue
     configuration: ValueProvenance
 
     def __post_init__(self) -> None:
@@ -119,8 +119,10 @@ class EnvironmentInlineValue(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("Environment inline symbol must be one portable name")
         if _ENVIRONMENT_NAME.fullmatch(self.symbol.segments[0]) is None:
             raise ValueError("Environment inline symbol must use portable variable syntax")
-        if type(self.value) is not JsonString:
-            raise TypeError("Environment inline value must be JsonString")
+        if type(self.value) is not JsonString and not (
+            type(self.value) is SensitiveValue and self.value.payload_type is JsonString
+        ):
+            raise TypeError("Environment inline value must be JsonString or sealed JsonString")
         if type(self.configuration) is not ValueProvenance:
             raise TypeError("Environment inline value requires ValueProvenance")
 
@@ -437,9 +439,11 @@ def _merge_file(
 
 def _environment_value(
     name: str,
-    value: JsonString,
+    value: SnapshotValue,
 ) -> SensitiveValue[JsonString]:
     """Seal one snapshot value with its exact Environment provider/name lineage."""
+    if type(value) is SensitiveValue:
+        return value
     return SensitiveValue(
         value,
         origins=(

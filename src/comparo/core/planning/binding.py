@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import msgspec
+
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import CanonicalValue
@@ -17,6 +19,7 @@ from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import MatrixBindingId
+from comparo.core.domain.identity import MatrixCaseId
 from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.immutability import ImmutableDomainValue
@@ -31,6 +34,8 @@ from comparo.core.domain.planning_inputs import AssertionTopology
 from comparo.core.domain.planning_inputs import ComparisonTopology
 from comparo.core.domain.planning_inputs import ComparisonTopologyEdit
 from comparo.core.domain.planning_inputs import InheritTopology
+from comparo.core.domain.planning_inputs import InvocationProfileOverrides
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
 from comparo.core.domain.planning_inputs import MatrixSelection
 from comparo.core.domain.planning_inputs import PlanningAuthority
 from comparo.core.domain.planning_inputs import RunInvocation
@@ -92,7 +97,9 @@ def bind_execution(
         )
 
     subject_resources, subject_sources = _bind_subjects(project, tuple(layers), invocation)
+    _validate_request_edit_targets(invocation.requests, subject_resources)
     environments, comparisons, topology_sources = _bind_topology(project, tuple(layers), invocation)
+    _validate_environment_value_targets(invocation, environments)
     _authorize_selection(subject_resources, environments, authority)
     trial_count, trial_sources = _bind_count(
         tuple(layers), invocation.trials, field="trials", default=1, invocation=invocation
@@ -112,7 +119,13 @@ def bind_execution(
     profile_pairs = tuple(
         (
             subject,
-            _effective_profiles(project, tuple(layers), subject, environments),
+            _effective_profiles(
+                project,
+                tuple(layers),
+                subject,
+                environments,
+                invocation.profiles,
+            ),
         )
         for subject in subject_resources
     )
@@ -121,6 +134,7 @@ def bind_execution(
         tuple(layers),
         subject_resources,
         environments,
+        invocation.profiles.safety,
     )
     budgets = compose_planning_budgets(
         project_resource=project.project,
@@ -141,6 +155,7 @@ def bind_execution(
                 maximum_cells=matrix_limit,
             ),
             profiles=profiles,
+            request_edit=_request_edit(invocation, subject),
         )
         for subject, profiles in profile_pairs
     )
@@ -296,6 +311,45 @@ def _find_subject(
     if len(matches) != 1:
         raise PlanningProblem("planning.subject.not-found-or-ambiguous", resource=owner)
     return matches[0]
+
+
+def _validate_request_edit_targets(
+    edits: tuple[InvocationRequestEdit, ...],
+    subjects: tuple[CompiledResource, ...],
+) -> None:
+    selected = {subject.definition.identity.resource_id for subject in subjects}
+    if any(edit.subject not in selected for edit in edits):
+        raise PlanningProblem("planning.request-edit.subject-not-selected")
+    if any(
+        subject.definition.identity.kind is not ResourceKind.REQUEST
+        for subject in subjects
+        if subject.definition.identity.resource_id in {edit.subject for edit in edits}
+    ):
+        raise PlanningProblem("planning.request-edit.subject-kind-invalid")
+
+
+def _request_edit(
+    invocation: RunInvocation,
+    subject: CompiledResource,
+) -> InvocationRequestEdit | None:
+    return next(
+        (
+            edit
+            for edit in invocation.requests
+            if edit.subject == subject.definition.identity.resource_id
+        ),
+        None,
+    )
+
+
+def _validate_environment_value_targets(
+    invocation: RunInvocation,
+    environments: tuple[CompiledResource, ...],
+) -> None:
+    """Reject invocation `$env` values outside the deliberately selected topology."""
+    selected = {item.definition.identity.resource_id for item in environments}
+    if any(item.environment not in selected for item in invocation.environment_values):
+        raise PlanningProblem("planning.environment-value.environment-not-selected")
 
 
 def _bind_topology(
@@ -553,6 +607,7 @@ def _subject_matrices(
         )
         remaining = maximum_cells // cell_count
         matrix = compile_matrix(resource, selection.binding, maximum_cases=remaining)
+        matrix = _filter_matrix_cases(matrix, selection.cases, subject)
         cell_count *= len(matrix.cases)
         matrices.append(matrix)
     result = tuple(matrices)
@@ -560,15 +615,52 @@ def _subject_matrices(
     return result
 
 
+def _filter_matrix_cases(
+    matrix: EffectiveMatrix,
+    selected: tuple[MatrixCaseId, ...],
+    owner: CompiledResource,
+) -> EffectiveMatrix:
+    """Apply one invocation case filter while preserving authored Matrix order."""
+    if not selected:
+        return matrix
+    requested = set(selected)
+    available = {case.case_id for case in matrix.cases}
+    if not requested <= available:
+        raise PlanningProblem(
+            "planning.matrix.case-not-found",
+            resource=owner,
+            field="matrices",
+        )
+    return msgspec.structs.replace(
+        matrix,
+        cases=tuple(case for case in matrix.cases if case.case_id in requested),
+    )
+
+
 def _effective_profiles(
     project: CompiledProject,
     layers: tuple[_Layer, ...],
     subject: CompiledResource,
     environments: tuple[CompiledResource, ...],
+    overrides: InvocationProfileOverrides,
 ) -> EffectiveProfiles:
     sources = (*layers, _Layer(subject, resource_spec(subject), ProvenanceKind.PROJECT))
-    assertions = _expand_profiles(project, _multi_roots(project, sources, "assertions"), "include")
-    diffs = _expand_profiles(project, _multi_roots(project, sources, "diffs"), "include")
+    assertion_roots = _edit_profile_roots(
+        project,
+        _multi_roots(project, sources, "assertions"),
+        overrides.assertions,
+        ResourceKind.ASSERTION_PROFILE,
+        subject,
+    )
+    diff_roots = _edit_profile_roots(
+        project,
+        _multi_roots(project, sources, "diffs"),
+        overrides.diffs,
+        ResourceKind.DIFF_PROFILE,
+        subject,
+    )
+    assertions = _expand_profiles(project, assertion_roots, "include")
+    diffs = _expand_profiles(project, diff_roots, "include")
     safety_roots = [*_single_or_multi_roots(project, sources, "safety")]
     safety_roots.extend(
         root
@@ -579,10 +671,35 @@ def _effective_profiles(
             "safety",
         )
     )
-    safety = _expand_profiles(project, tuple(safety_roots), "extends", "include")
-    gate = _latest_root(project, sources, "gate")
-    redaction = _latest_root(project, sources, "redaction")
-    artifacts = _latest_root(project, sources, "artifacts")
+    effective_safety_roots = _edit_profile_roots(
+        project,
+        tuple(safety_roots),
+        overrides.safety,
+        ResourceKind.SAFETY_PROFILE,
+        subject,
+    )
+    safety = _expand_profiles(project, effective_safety_roots, "extends", "include")
+    gate = _edit_single_profile(
+        project,
+        _latest_root(project, sources, "gate"),
+        overrides.gate,
+        ResourceKind.GATE_PROFILE,
+        subject,
+    )
+    redaction = _edit_single_profile(
+        project,
+        _latest_root(project, sources, "redaction"),
+        overrides.redaction,
+        ResourceKind.REDACTION_PROFILE,
+        subject,
+    )
+    artifacts = _edit_single_profile(
+        project,
+        _latest_root(project, sources, "artifacts"),
+        overrides.artifacts,
+        ResourceKind.ARTIFACT_PROFILE,
+        subject,
+    )
     return EffectiveProfiles(
         assertions=tuple(_profile_handle(item) for item in assertions),
         diffs=tuple(_profile_handle(item) for item in diffs),
@@ -593,11 +710,65 @@ def _effective_profiles(
     )
 
 
+def _edit_profile_roots(
+    project: CompiledProject,
+    inherited: tuple[ProfileResource, ...],
+    edit: CollectionOverridePlan[ResourceId, ResourceId],
+    kind: ResourceKind,
+    owner: CompiledResource,
+) -> tuple[ProfileResource, ...]:
+    if type(edit.base) is KeepBase:
+        values = list(inherited)
+    elif type(edit.base) is ClearBase:
+        values = []
+    else:
+        values = [
+            find_resource(project, kind, resource_id, owner=owner, field="profiles")
+            for resource_id in edit.base.items
+        ]
+    values = [
+        value
+        for value in values
+        if _named_profile_id(value) is None or _named_profile_id(value) not in edit.remove
+    ]
+    for operation in edit.set_items:
+        values = [value for value in values if _named_profile_id(value) != operation.identity]
+        values.append(find_resource(project, kind, operation.item, owner=owner, field="profiles"))
+    values.extend(
+        find_resource(project, kind, resource_id, owner=owner, field="profiles")
+        for resource_id in edit.add
+    )
+    return tuple(values)
+
+
+def _edit_single_profile(
+    project: CompiledProject,
+    inherited: ProfileResource | None,
+    edit: object,
+    kind: ResourceKind,
+    owner: CompiledResource,
+) -> ProfileResource | None:
+    if type(edit) is Inherit:
+        return inherited
+    if type(edit) is Clear:
+        return None
+    if type(edit) is SetValue and type(edit.value) is ResourceId:
+        return find_resource(project, kind, edit.value, owner=owner, field="profiles")
+    raise TypeError("single profile edit must inherit, clear, or set ResourceId")
+
+
+def _named_profile_id(resource: ProfileResource) -> ResourceId | None:
+    if type(resource) is CompiledResource:
+        return resource.definition.identity.resource_id
+    return None
+
+
 def _all_safety_resources(
     project: CompiledProject,
     layers: tuple[_Layer, ...],
     subjects: tuple[CompiledResource, ...],
     environments: tuple[CompiledResource, ...],
+    override: CollectionOverridePlan[ResourceId, ResourceId],
 ) -> tuple[ProfileResource, ...]:
     roots: list[ProfileResource] = []
     roots.extend(_single_or_multi_roots(project, layers, "safety"))
@@ -609,7 +780,14 @@ def _all_safety_resources(
                 "safety",
             )
         )
-    return _expand_profiles(project, tuple(roots), "extends", "include")
+    edited = _edit_profile_roots(
+        project,
+        tuple(roots),
+        override,
+        ResourceKind.SAFETY_PROFILE,
+        project.project,
+    )
+    return _expand_profiles(project, edited, "extends", "include")
 
 
 def _multi_roots(
