@@ -491,6 +491,7 @@ def _intersect_schema_restrictions(
 def _safe_schema_uri(uri: str) -> bool:
     try:
         parsed = urlsplit(uri)
+        _ = parsed.port
         return (
             parsed.scheme in {"http", "https"}
             and parsed.hostname is not None
