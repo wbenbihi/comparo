@@ -265,6 +265,41 @@ class EvaluationBindingResult(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class EvaluationPreflightResult(msgspec.Struct, frozen=True, kw_only=True):
+    """Effect-free exact rule and gate compilation result for Plan admission."""
+
+    diagnostics: tuple[Diagnostic, ...]
+    rejected: tuple[RejectedEvaluationCapability, ...]
+    assertion_rules: int
+    diff_rules: int
+    gate: CompiledGateProfile | None
+
+    def __post_init__(self) -> None:
+        """Keep successful counts/gate and rejected diagnostics structurally coherent."""
+        if type(self.diagnostics) is not tuple or any(
+            type(item) is not Diagnostic for item in self.diagnostics
+        ):
+            raise TypeError("evaluation preflight diagnostics must be immutable and typed")
+        if type(self.rejected) is not tuple or any(
+            type(item) is not RejectedEvaluationCapability for item in self.rejected
+        ):
+            raise TypeError("evaluation preflight rejections must be immutable and typed")
+        if any(
+            type(item) is not int or item < 0 for item in (self.assertion_rules, self.diff_rules)
+        ):
+            raise ValueError("evaluation preflight rule counts must be non-negative integers")
+        if self.gate is not None and type(self.gate) is not CompiledGateProfile:
+            raise TypeError("evaluation preflight gate must be compiled or absent")
+        if self.diagnostics and (self.assertion_rules or self.diff_rules or self.gate is not None):
+            raise ValueError("rejected evaluation preflight cannot retain compiled products")
+
+    @property
+    def supported(self) -> bool:
+        """Return whether the selected validation configuration is execution-ready."""
+        return not self.diagnostics
+
+
+@final
 class _SubjectRules(msgspec.Struct, frozen=True, kw_only=True):
     subject: DefinitionRef
     assertions: tuple[CompiledAssertionRule, ...]
@@ -566,12 +601,7 @@ def bind_configuration_evaluation(
         raise TypeError("evaluation binding requires PreparedRun and RunContext")
     if type(limits) is not EvaluationRuleLimits:
         raise TypeError("evaluation binding requires EvaluationRuleLimits")
-    problems = _Problems()
-    subject_rules = tuple(
-        _compile_subject(prepared.project, subject, problems)
-        for subject in prepared.effective.subjects
-    )
-    gate = _compile_gate(prepared, subject_rules, problems)
+    subject_rules, gate, problems = _compile_configuration(prepared)
     if problems.diagnostics:
         return EvaluationBindingResult(
             diagnostics=tuple(problems.diagnostics),
@@ -586,6 +616,40 @@ def bind_configuration_evaluation(
             gate=gate,
         )
     )
+
+
+def preflight_configuration_evaluation(prepared: PreparedRun) -> EvaluationPreflightResult:
+    """Compile all selected rules and the exact gate formula without acquiring effects."""
+    if type(prepared) is not PreparedRun:
+        raise TypeError("evaluation preflight requires PreparedRun")
+    subject_rules, gate, problems = _compile_configuration(prepared)
+    if problems.diagnostics:
+        return EvaluationPreflightResult(
+            diagnostics=tuple(problems.diagnostics),
+            rejected=tuple(problems.rejected),
+            assertion_rules=0,
+            diff_rules=0,
+            gate=None,
+        )
+    return EvaluationPreflightResult(
+        diagnostics=(),
+        rejected=(),
+        assertion_rules=sum(len(item.assertions) for item in subject_rules),
+        diff_rules=sum(len(item.diffs) for item in subject_rules),
+        gate=gate,
+    )
+
+
+def _compile_configuration(
+    prepared: PreparedRun,
+) -> tuple[tuple[_SubjectRules, ...], CompiledGateProfile | None, _Problems]:
+    problems = _Problems()
+    subject_rules = tuple(
+        _compile_subject(prepared.project, subject, problems)
+        for subject in prepared.effective.subjects
+    )
+    gate = _compile_gate(prepared, subject_rules, problems)
+    return subject_rules, gate, problems
 
 
 def _compile_subject(
@@ -1481,7 +1545,9 @@ __all__ = (
     "ConfigurationEvaluationPreparation",
     "EvaluationBindingResult",
     "EvaluationCapabilityFamily",
+    "EvaluationPreflightResult",
     "EvaluationRuleLimits",
     "RejectedEvaluationCapability",
     "bind_configuration_evaluation",
+    "preflight_configuration_evaluation",
 )

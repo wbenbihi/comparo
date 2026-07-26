@@ -1,23 +1,71 @@
-"""Secret-free inspection products for compiled, planned, and failed operations."""
+"""Stable secret-free inspection facade for diagnostics and admitted Plans."""
 
 from __future__ import annotations
 
-from typing import cast
+import re
 from typing import final
 
 import msgspec
 
+from comparo.application.plan_inspection import inspect_plan as inspect_plan
+from comparo.application.plan_inspection_authority import (
+    PlanArtifactAuthorityInspection as PlanArtifactAuthorityInspection,
+)
+from comparo.application.plan_inspection_authority import (
+    PlanHttpAuthorityInspection as PlanHttpAuthorityInspection,
+)
+from comparo.application.plan_inspection_authority import (
+    PlanSecretEgressRuleInspection as PlanSecretEgressRuleInspection,
+)
+from comparo.application.plan_inspection_authority import (
+    PlanSecretEgressSourceInspection as PlanSecretEgressSourceInspection,
+)
+from comparo.application.plan_inspection_authority import (
+    PlanValueAuthorityInspection as PlanValueAuthorityInspection,
+)
+from comparo.application.plan_inspection_identity import ResourceCoordinate as ResourceCoordinate
+from comparo.application.plan_inspection_profiles import PlanGateInspection as PlanGateInspection
+from comparo.application.plan_inspection_profiles import (
+    PlanGateThresholdInspection as PlanGateThresholdInspection,
+)
+from comparo.application.plan_inspection_profiles import (
+    PlanProfileAttachmentInspection as PlanProfileAttachmentInspection,
+)
+from comparo.application.plan_inspection_profiles import (
+    PlanProfilesInspection as PlanProfilesInspection,
+)
+from comparo.application.plan_inspection_profiles import (
+    PlanValidationInspection as PlanValidationInspection,
+)
+from comparo.application.plan_inspection_topology import BudgetInspection as BudgetInspection
+from comparo.application.plan_inspection_topology import (
+    EnvironmentPairInspection as EnvironmentPairInspection,
+)
+from comparo.application.plan_inspection_topology import (
+    InlineSourceCoordinate as InlineSourceCoordinate,
+)
+from comparo.application.plan_inspection_topology import (
+    MatrixAxisInspection as MatrixAxisInspection,
+)
+from comparo.application.plan_inspection_topology import (
+    PlanCardinalityInspection as PlanCardinalityInspection,
+)
+from comparo.application.plan_inspection_topology import PlanInspection as PlanInspection
+from comparo.application.plan_inspection_topology import (
+    PlanningSourceInspection as PlanningSourceInspection,
+)
+from comparo.application.plan_inspection_topology import PlanSliceInspection as PlanSliceInspection
+from comparo.application.plan_inspection_topology import (
+    ProvenanceInspection as ProvenanceInspection,
+)
+from comparo.application.plan_sources import SensitiveSourceInspection as SensitiveSourceInspection
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import FieldPathSegment
 from comparo.core.domain.diagnostics import IndexPathSegment
-from comparo.core.domain.identity import DefinitionRef
-from comparo.core.domain.planning import PlanSlice
-from comparo.core.domain.planning import PlanSliceCardinality
-from comparo.core.domain.planning import RunPlanCardinality
-from comparo.core.domain.primitives import Count
 from comparo.core.domain.provenance import SourceLocation
-from comparo.core.planning.models import PreparedRun
+
+_SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 @final
@@ -29,15 +77,14 @@ class SourceCoordinate(msgspec.Struct, frozen=True, kw_only=True):
     line: int
     column: int
 
-
-@final
-class ResourceCoordinate(msgspec.Struct, frozen=True, kw_only=True):
-    """Stable resource identity plus exact compiled-definition fingerprint."""
-
-    namespace: str
-    kind: str
-    resource_id: str
-    fingerprint: str
+    def __post_init__(self) -> None:
+        """Require one logical source ID and one-based exact coordinates."""
+        if type(self.source) is not str or not self.source or len(self.source) > 1024:
+            raise ValueError("source coordinate requires bounded non-empty source text")
+        if any(
+            type(item) is not int or item < 1 for item in (self.document, self.line, self.column)
+        ):
+            raise ValueError("source coordinate positions must be positive exact integers")
 
 
 @final
@@ -52,80 +99,34 @@ class ApplicationDiagnostic(msgspec.Struct, frozen=True, kw_only=True):
     path: tuple[str, ...] = ()
     occurrences: int | None = None
 
-
-@final
-class PlanCardinalityInspection(msgspec.Struct, frozen=True, kw_only=True):
-    """Exact admitted work counts without eagerly expanding cells."""
-
-    cells: int
-    trials: int
-    environment_executions: int
-    comparisons: int
-    maximum_attempts: int
-
-
-@final
-class MatrixAxisInspection(msgspec.Struct, frozen=True, kw_only=True):
-    """One compact Matrix axis and its stable case identities."""
-
-    binding: str
-    matrix: ResourceCoordinate
-    cases: tuple[str, ...]
-
-
-@final
-class EnvironmentPairInspection(msgspec.Struct, frozen=True, kw_only=True):
-    """One directed baseline-to-candidate comparison."""
-
-    baseline: ResourceCoordinate
-    candidate: ResourceCoordinate
-
-
-@final
-class PlanSliceInspection(msgspec.Struct, frozen=True, kw_only=True):
-    """One executable subject's compact, value-unresolved recipe."""
-
-    subject: ResourceCoordinate
-    matrices: tuple[MatrixAxisInspection, ...]
-    trials: int
-    environments: tuple[ResourceCoordinate, ...]
-    comparisons: tuple[EnvironmentPairInspection, ...]
-    maximum_attempts_per_execution: int
-    cardinality: PlanCardinalityInspection
-
-
-@final
-class BudgetInspection(msgspec.Struct, frozen=True, kw_only=True):
-    """Requested, effective, and operator-capped planning budget."""
-
-    resource: str
-    requested: int
-    effective: int
-    cap: int
-
-
-@final
-class ProvenanceInspection(msgspec.Struct, frozen=True, kw_only=True):
-    """Ordered value-free origins for one effective planning field."""
-
-    field: str
-    sources: tuple[str, ...]
-
-
-@final
-class PlanInspection(msgspec.Struct, frozen=True, kw_only=True):
-    """Complete secret-free preview shared by human and machine renderers."""
-
-    api_version: str
-    run_id: str
-    invocation_id: str
-    fingerprint: str
-    ordering: str
-    policy: ResourceCoordinate
-    cardinality: PlanCardinalityInspection
-    slices: tuple[PlanSliceInspection, ...]
-    budgets: tuple[BudgetInspection, ...]
-    provenance: tuple[ProvenanceInspection, ...]
+    def __post_init__(self) -> None:
+        """Keep frontend diagnostics bounded, typed, and free of arbitrary prose."""
+        for value, label in ((self.code, "code"), (self.stage, "stage")):
+            if (
+                type(value) is not str
+                or not value
+                or len(value) > 255
+                or _SAFE_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"application diagnostic {label} must be a bounded token")
+        if self.severity not in {"error", "warning", "info"}:
+            raise ValueError("application diagnostic severity is unsupported")
+        if self.source is not None and type(self.source) is not SourceCoordinate:
+            raise TypeError("application diagnostic source must be typed or absent")
+        if self.resource is not None and (
+            type(self.resource) is not tuple
+            or len(self.resource) != 3
+            or any(type(item) is not str or not item or len(item) > 255 for item in self.resource)
+        ):
+            raise ValueError("application diagnostic resource must be a complete coordinate")
+        if type(self.path) is not tuple or any(
+            type(item) is not str or not item or len(item) > 255 for item in self.path
+        ):
+            raise ValueError("application diagnostic path must contain bounded text segments")
+        if self.occurrences is not None and (
+            type(self.occurrences) is not int or self.occurrences < 0
+        ):
+            raise ValueError("application diagnostic occurrences must be non-negative")
 
 
 def inspect_configuration_diagnostic(
@@ -176,86 +177,6 @@ def inspect_diagnostic(diagnostic: Diagnostic) -> ApplicationDiagnostic:
     )
 
 
-def inspect_plan(prepared: PreparedRun) -> PlanInspection:
-    """Project an admitted run to a deterministic, unresolved inspection document."""
-    if type(prepared) is not PreparedRun:
-        raise TypeError("plan inspection requires PreparedRun")
-    plan = prepared.plan
-    return PlanInspection(
-        api_version="comparo.plan/v1alpha1",
-        run_id=str(plan.run_id.value),
-        invocation_id=str(prepared.invocation.invocation_id.value),
-        fingerprint=plan.fingerprint.digest.hex_value,
-        ordering=plan.ordering.value,
-        policy=_definition(prepared.authority.policy),
-        cardinality=_cardinality(plan.cardinality),
-        slices=tuple(_slice(item) for item in plan.slices),
-        budgets=tuple(
-            BudgetInspection(
-                resource=item.resource.value,
-                requested=cast("Count", item.requested).value,
-                effective=cast("Count", item.effective).value,
-                cap=cast("Count", item.cap).value,
-            )
-            for item in plan.budgets
-        ),
-        provenance=tuple(
-            ProvenanceInspection(
-                field=item.field,
-                sources=tuple(source.kind.value for source in item.sources),
-            )
-            for item in prepared.effective.provenance
-        ),
-    )
-
-
-def _slice(value: PlanSlice) -> PlanSliceInspection:
-    return PlanSliceInspection(
-        subject=_definition(value.cells.subject),
-        matrices=tuple(
-            MatrixAxisInspection(
-                binding=axis.binding.value,
-                matrix=_definition(axis.matrix),
-                cases=tuple(case.value for case in axis.cases),
-            )
-            for axis in value.cells.matrix.axes
-        ),
-        trials=value.trial_count.value,
-        environments=tuple(_definition(item) for item in value.environments),
-        comparisons=tuple(
-            EnvironmentPairInspection(
-                baseline=_definition(item.baseline),
-                candidate=_definition(item.candidate),
-            )
-            for item in value.comparisons
-        ),
-        maximum_attempts_per_execution=value.maximum_attempts_per_execution.value,
-        cardinality=_cardinality(value.cardinality),
-    )
-
-
-def _definition(value: DefinitionRef) -> ResourceCoordinate:
-    identity = value.identity
-    return ResourceCoordinate(
-        namespace=identity.namespace.value,
-        kind=identity.kind.value,
-        resource_id=identity.resource_id.value,
-        fingerprint=value.fingerprint.digest.hex_value,
-    )
-
-
-def _cardinality(
-    value: PlanSliceCardinality | RunPlanCardinality,
-) -> PlanCardinalityInspection:
-    return PlanCardinalityInspection(
-        cells=value.cells.value,
-        trials=value.trials.value,
-        environment_executions=value.environment_executions.value,
-        comparisons=value.comparisons.value,
-        maximum_attempts=value.maximum_attempts.value,
-    )
-
-
 def _source(value: SourceLocation) -> SourceCoordinate:
     return SourceCoordinate(
         source=value.source_id.value,
@@ -277,12 +198,25 @@ __all__ = (
     "ApplicationDiagnostic",
     "BudgetInspection",
     "EnvironmentPairInspection",
+    "InlineSourceCoordinate",
     "MatrixAxisInspection",
+    "PlanArtifactAuthorityInspection",
     "PlanCardinalityInspection",
+    "PlanGateInspection",
+    "PlanGateThresholdInspection",
+    "PlanHttpAuthorityInspection",
     "PlanInspection",
+    "PlanProfileAttachmentInspection",
+    "PlanProfilesInspection",
+    "PlanSecretEgressRuleInspection",
+    "PlanSecretEgressSourceInspection",
     "PlanSliceInspection",
+    "PlanValidationInspection",
+    "PlanValueAuthorityInspection",
+    "PlanningSourceInspection",
     "ProvenanceInspection",
     "ResourceCoordinate",
+    "SensitiveSourceInspection",
     "SourceCoordinate",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",

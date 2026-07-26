@@ -133,6 +133,10 @@ def test_preflight_uses_trusted_local_by_default_and_external_policy_only_when_e
     assert external.inspection is not None
     assert external.inspection.policy.resource_id == "ci"
     assert external.inspection.policy.namespace == "operator"
+    assert external.inspection.http_authority is not None
+    assert external.inspection.http_authority.allowed_schemes == ("https",)
+    assert external.inspection.http_authority.allowed_hosts == ("api.example.test",)
+    assert external.inspection.http_authority.require_mutation_approval is False
 
     retained = prepare_project_plan(_request(config))
     assert retained.project is not None

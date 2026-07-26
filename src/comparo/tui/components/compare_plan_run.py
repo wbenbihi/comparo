@@ -237,7 +237,10 @@ def _authority_text(plan: PlanInspection) -> str:
 
 def _plan_provenance(plan: PlanInspection) -> str:
     return (
-        "\n".join(f"{item.field:<24} {' → '.join(item.sources)}" for item in plan.provenance)
+        "\n".join(
+            f"{item.field:<24} {' → '.join(source.kind for source in item.sources)}"
+            for item in plan.provenance
+        )
         or "No invocation-level overrides changed versioned defaults."
     )
 

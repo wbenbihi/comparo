@@ -20,6 +20,7 @@ from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.values import JsonNull
+from comparo.core.domain.values import JsonString
 from comparo.core.planning._canonical import object_member
 from comparo.core.planning._canonical import resource_spec
 from comparo.core.planning.models import EffectiveSubject
@@ -33,6 +34,8 @@ _RESPONSE_SCHEMA = DiagnosticCode(value="runtime.capability.response-schema-unsu
 _SAFETY_PROFILE = DiagnosticCode(value="runtime.capability.safety-profile-unsupported")
 _REDACTION_PROFILE = DiagnosticCode(value="runtime.capability.redaction-profile-unsupported")
 _ARTIFACT_PROFILE = DiagnosticCode(value="runtime.capability.artifact-profile-unsupported")
+_HTTP_METHOD = DiagnosticCode(value="runtime.capability.http-method-denied")
+_HTTP_METHOD_UNRESOLVED = DiagnosticCode(value="runtime.capability.http-method-unresolved")
 
 _REQUEST_RESOURCE_FIELDS = frozenset(
     {
@@ -89,6 +92,7 @@ def preflight_runtime_capabilities(
             diagnostics.append(_diagnostic(_SCENARIO, resource))
         else:
             _request_capabilities(resource, diagnostics)
+            _http_policy_capabilities(project, resource, diagnostics)
         _profile_capabilities(subject, resource, diagnostics)
     for definition in project.prepared.effective.environments:
         resource = _selected_resource(project, definition)
@@ -132,6 +136,26 @@ def _request_capabilities(
                 diagnostics.append(_diagnostic(_REQUEST_BODY, resource, "request", "body"))
         elif member.name not in _REQUEST_WIRE_FIELDS:
             diagnostics.append(_diagnostic(_REQUEST_FIELD, resource, "request", member.name))
+
+
+def _http_policy_capabilities(
+    project: PreparedProjectPlan,
+    resource: CompiledResource,
+    diagnostics: list[Diagnostic],
+) -> None:
+    request = object_member(resource_spec(resource), "request")
+    if type(request) is not ObjectExpr:
+        return
+    method = next(
+        (member.expression for member in request.members if member.name == "method"),
+        None,
+    )
+    if type(method) is not LiteralExpr or type(method.value) is not JsonString:
+        diagnostics.append(_diagnostic(_HTTP_METHOD_UNRESOLVED, resource, "request", "method"))
+        return
+    allowed = {item.value for item in project.policy.http.allowed_methods}
+    if method.value.value.upper() not in allowed:
+        diagnostics.append(_diagnostic(_HTTP_METHOD, resource, "request", "method"))
 
 
 def _environment_capabilities(

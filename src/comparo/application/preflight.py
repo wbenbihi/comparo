@@ -9,6 +9,7 @@ from uuid import UUID
 
 import msgspec
 
+from comparo.application.evaluation_binding import preflight_configuration_evaluation
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection
 from comparo.application.inspection import inspect_configuration_diagnostic
@@ -126,10 +127,28 @@ class ProjectPreparationResult(msgspec.Struct, frozen=True, kw_only=True):
 
 def inspect_project_plan(request: ProjectPlanRequest) -> ProjectPlanResult:
     """Compile and plan without resolving values, opening bodies, or using the network."""
+    from comparo.application.runtime_capabilities import preflight_runtime_capabilities
+
     outcome = prepare_project_plan(request)
     if outcome.project is None:
         return ProjectPlanResult(diagnostics=outcome.diagnostics)
-    return ProjectPlanResult(inspection=inspect_plan(outcome.project.prepared))
+    capabilities = preflight_runtime_capabilities(outcome.project)
+    if not capabilities.supported:
+        return ProjectPlanResult(
+            diagnostics=tuple(inspect_diagnostic(item) for item in capabilities.diagnostics)
+        )
+    evaluation = preflight_configuration_evaluation(outcome.project.prepared)
+    if not evaluation.supported:
+        return ProjectPlanResult(
+            diagnostics=tuple(inspect_diagnostic(item) for item in evaluation.diagnostics)
+        )
+    return ProjectPlanResult(
+        inspection=inspect_plan(
+            outcome.project.prepared,
+            outcome.project.policy,
+            evaluation,
+        )
+    )
 
 
 def prepare_project_plan(request: ProjectPlanRequest) -> ProjectPreparationResult:

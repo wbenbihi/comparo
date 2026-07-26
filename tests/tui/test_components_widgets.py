@@ -414,6 +414,8 @@ def _plan() -> PlanInspection:
             fingerprint="f" * 64,
         ),
         cardinality=cardinality,
+        environment_count=2,
+        write_capable_subjects=0,
         slices=(
             PlanSliceInspection(
                 subject=_resource("Request", "ping").coordinate,
@@ -429,7 +431,7 @@ def _plan() -> PlanInspection:
                         candidate=_resource("Environment", "prod").coordinate,
                     ),
                 ),
-                maximum_attempts_per_execution=2,
+                maximum_attempts_per_execution=1,
                 cardinality=cardinality,
             ),
         ),

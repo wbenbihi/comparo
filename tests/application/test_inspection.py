@@ -32,17 +32,37 @@ from tests.core.planning.conftest import document
 from tests.core.planning.conftest import invocation
 
 
-def _prepared() -> PreparedRun:
+def _prepared(*, method: str = "get") -> PreparedRun:
     project = compile_project(
         document(
             "Project",
             "demo",
             "{defaults: {subjects: [{$use: Request/ping}], "
-            "baseline: {$use: staging}, candidates: [{$use: prod}]}}",
+            "baseline: {$use: staging}, candidates: [{$use: prod}], "
+            "assertions: [{$use: usable}], safety: {$use: protected}}}",
         ),
-        document("Environment", "staging", "{baseUrl: 'https://staging.example'}"),
-        document("Environment", "prod", "{baseUrl: 'https://prod.example'}"),
-        document("Request", "ping", "{request: {method: GET, endpoint: /ping}}"),
+        document(
+            "Environment",
+            "staging",
+            "{baseUrl: 'https://staging.example', secrets: {API_TOKEN: {$env: CHAT_TOKEN}, "
+            "UNUSED: UNUSED-CANARY}}",
+        ),
+        document(
+            "Environment",
+            "prod",
+            "{baseUrl: 'https://prod.example', secrets: {API_TOKEN: {$env: CHAT_TOKEN}, "
+            "UNUSED: UNUSED-CANARY}}",
+        ),
+        document("AssertionProfile", "usable", "{rules: [{operator: equals}]}"),
+        document("DiffProfile", "stable", "{rules: [{comparator: exact}]}"),
+        document("SafetyProfile", "protected", "{budgets: {trials: 10}}"),
+        document(
+            "Request",
+            "ping",
+            f"{{request: {{method: {method}, endpoint: '/private?api_key=PLAN-CANARY', "
+            "headers: {Authorization: '${secrets.API_TOKEN}'}}, "
+            "diffs: [{$use: stable}]}",
+        ),
     )
     result = plan_run(project, invocation(), authority())
     assert result.prepared is not None
@@ -64,11 +84,30 @@ def test_plan_inspection_retains_compact_safe_structure() -> None:
     )
     assert inspection.slices[0].comparisons[0].baseline.resource_id == "staging"
     assert inspection.slices[0].comparisons[0].candidate.resource_id == "prod"
+    assert inspection.slices[0].method == "GET"
+    assert inspection.slices[0].unsafe_method is False
+    assert inspection.slices[0].profiles.assertions[0].resource_id == "usable"
+    assert inspection.slices[0].profiles.assertions[0].kind == "AssertionProfile"
+    assert inspection.slices[0].profiles.diffs[0].resource_id == "stable"
+    assert inspection.slices[0].profiles.safety[0].resource_id == "protected"
+    assert inspection.slices[0].profiles.safety[0].fingerprint
+    assert inspection.sensitive_sources[0].name == "API_TOKEN"
+    assert inspection.sensitive_sources[0].mechanisms == ("$env:CHAT_TOKEN",)
+    assert all(item.name != "UNUSED" for item in inspection.sensitive_sources)
+    assert b"PLAN-CANARY" not in msgspec.json.encode(inspection)
+    assert b"UNUSED-CANARY" not in msgspec.json.encode(inspection)
     assert inspection.policy.kind == "ExecutionPolicy"
     assert inspection.budgets
     assert msgspec.json.decode(msgspec.json.encode(inspection))["api_version"] == (
         "comparo.plan/v1alpha1"
     )
+
+
+def test_plan_inspection_canonicalizes_and_classifies_custom_unsafe_methods() -> None:
+    inspection = inspect_plan(_prepared(method="purge"))
+
+    assert inspection.slices[0].method == "PURGE"
+    assert inspection.slices[0].unsafe_method is True
 
 
 def test_configuration_diagnostic_inspection_uses_only_safe_coordinates() -> None:

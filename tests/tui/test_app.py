@@ -25,8 +25,10 @@ from comparo.application.execution_session import ExecutionProgressSnapshot
 from comparo.application.execution_session import ExecutionSession
 from comparo.application.execution_session import ExecutionSessionPhase
 from comparo.application.inspection import ApplicationDiagnostic
+from comparo.application.inspection import EnvironmentPairInspection
 from comparo.application.inspection import PlanCardinalityInspection
 from comparo.application.inspection import PlanInspection
+from comparo.application.inspection import PlanSliceInspection
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import SourceCoordinate
 from comparo.application.production_execution import ProductionExecutionFailure
@@ -251,6 +253,15 @@ def _artifact() -> RunArtifact:
 
 
 def _plan() -> PlanInspection:
+    cardinality = PlanCardinalityInspection(
+        cells=1,
+        trials=1,
+        environment_executions=2,
+        comparisons=1,
+        maximum_attempts=2,
+    )
+    staging = _coordinate("Environment", "staging")
+    production = _coordinate("Environment", "prod")
     return PlanInspection(
         api_version="comparo.plan/v1alpha1",
         run_id="run-1",
@@ -258,14 +269,22 @@ def _plan() -> PlanInspection:
         fingerprint="e" * 64,
         ordering="canonical",
         policy=_coordinate("ExecutionPolicy", "default"),
-        cardinality=PlanCardinalityInspection(
-            cells=1,
-            trials=1,
-            environment_executions=2,
-            comparisons=1,
-            maximum_attempts=2,
+        cardinality=cardinality,
+        environment_count=2,
+        write_capable_subjects=0,
+        slices=(
+            PlanSliceInspection(
+                subject=_coordinate("Request", "ping"),
+                matrices=(),
+                trials=1,
+                environments=(staging, production),
+                comparisons=(EnvironmentPairInspection(baseline=staging, candidate=production),),
+                maximum_attempts_per_execution=1,
+                cardinality=cardinality,
+                method="GET",
+                unsafe_method=False,
+            ),
         ),
-        slices=(),
         budgets=(),
         provenance=(),
     )
