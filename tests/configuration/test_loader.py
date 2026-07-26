@@ -4,8 +4,11 @@ from pathlib import Path
 from typing import BinaryIO
 from typing import cast
 
+import msgspec
 import pytest
 
+from comparo.configuration import loader as loader_module
+from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS
 from comparo.configuration.loader import LoadedCompilation
 from comparo.configuration.loader import ProjectLoadLimits
 from comparo.configuration.loader import ProjectSourceSet
@@ -13,6 +16,7 @@ from comparo.configuration.loader import SourceCatalogEntry
 from comparo.configuration.loader import compile_project_path
 from comparo.configuration.loader import load_project_sources
 from comparo.configuration.yaml_parser import YamlParseLimits
+from comparo.configuration.yaml_parser import parse_yaml_source
 from comparo.core.configuration.canonical import CompilationResult
 from comparo.core.configuration.models import ConfigurationDiagnostic
 from comparo.core.configuration.models import ParsedDocument
@@ -322,6 +326,140 @@ def test_loader_enforces_source_byte_count_and_discovery_limits(tmp_path: Path) 
     assert "configuration.source.limit-exceeded" in {
         diagnostic.code.value for diagnostic in bounded.diagnostics
     }
+
+
+def test_excluded_files_do_not_consume_the_source_admission_budget(tmp_path: Path) -> None:
+    entry = tmp_path / "comparo.yaml"
+    entry.write_text(
+        _entry(data=("{root: resources, include: ['**/*.yaml'], exclude: ['a-excluded.yaml']}")),
+        encoding="utf-8",
+    )
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "a-excluded.yaml").write_text(
+        _resource("Environment", "excluded", "{baseUrl: excluded}"),
+        encoding="utf-8",
+    )
+    (resources / "z-admitted.yaml").write_text(
+        _resource("Environment", "admitted", "{baseUrl: admitted}"),
+        encoding="utf-8",
+    )
+
+    loaded = load_project_sources(entry, limits=ProjectLoadLimits(maximum_sources=2))
+
+    assert tuple(item.path.name for item in loaded.catalog) == (
+        "comparo.yaml",
+        "z-admitted.yaml",
+    )
+    assert "configuration.source.limit-exceeded" not in {
+        diagnostic.code.value for diagnostic in loaded.diagnostics
+    }
+
+
+def test_automatic_and_explicit_duplicates_do_not_consume_unique_source_capacity(
+    tmp_path: Path,
+) -> None:
+    entry = tmp_path / "comparo.yaml"
+    entry.write_text(
+        _entry(sources="[.comparo/one.yaml, extra.yaml]"),
+        encoding="utf-8",
+    )
+    data = tmp_path / ".comparo"
+    data.mkdir()
+    (data / "one.yaml").write_text(
+        _resource("Environment", "one", "{baseUrl: one}"),
+        encoding="utf-8",
+    )
+    (tmp_path / "extra.yaml").write_text(
+        _resource("Environment", "extra", "{baseUrl: extra}"),
+        encoding="utf-8",
+    )
+
+    loaded = load_project_sources(entry, limits=ProjectLoadLimits(maximum_sources=3))
+
+    assert {item.path.name for item in loaded.catalog} == {
+        "comparo.yaml",
+        "one.yaml",
+        "extra.yaml",
+    }
+    assert len(loaded.catalog) == 3
+    assert "configuration.source.limit-exceeded" not in {
+        diagnostic.code.value for diagnostic in loaded.diagnostics
+    }
+
+
+def test_irrelevant_entries_exhaust_bounded_discovery_and_fail_closed(tmp_path: Path) -> None:
+    entry = tmp_path / "comparo.yaml"
+    entry.write_text(_entry(), encoding="utf-8")
+    data = tmp_path / ".comparo"
+    data.mkdir()
+    for name in ("one.txt", "two.txt", "three.txt"):
+        (data / name).write_text("irrelevant", encoding="utf-8")
+
+    loaded = load_project_sources(
+        entry,
+        limits=ProjectLoadLimits(maximum_discovery_entries=2),
+    )
+
+    assert tuple(item.path.name for item in loaded.catalog) == ("comparo.yaml",)
+    assert "configuration.source.discovery-limit-exceeded" in {
+        diagnostic.code.value for diagnostic in loaded.diagnostics
+    }
+
+
+def test_loader_enforces_aggregate_project_budgets_across_individually_valid_files(
+    tmp_path: Path,
+) -> None:
+    entry = tmp_path / "comparo.yaml"
+    entry_text = _entry()
+    entry.write_text(entry_text, encoding="utf-8")
+    data = tmp_path / ".comparo"
+    data.mkdir()
+    resource_text = _resource("Environment", "one", "{baseUrl: one}")
+    (data / "one.yaml").write_text(resource_text, encoding="utf-8")
+    (data / "two.yaml").write_text(
+        _resource("Environment", "two", "{baseUrl: two}"),
+        encoding="utf-8",
+    )
+    limits = ProjectLoadLimits(
+        maximum_total_bytes=len(entry_text.encode()) + len(resource_text.encode()),
+        maximum_total_documents=2,
+        maximum_total_nodes=1_000_000,
+        maximum_resources=2,
+    )
+
+    loaded = load_project_sources(entry, limits=limits)
+
+    assert "configuration.source.aggregate-limit-exceeded" in {
+        diagnostic.code.value for diagnostic in loaded.diagnostics
+    }
+    assert len(loaded.documents) == 2
+    assert len(loaded.catalog) == 2
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"maximum_total_bytes": 0},
+        {"maximum_total_documents": 0},
+        {"maximum_total_nodes": 0},
+        {"maximum_resources": 0},
+    ],
+)
+def test_project_aggregate_budgets_are_positive_caller_owned_values(
+    changes: dict[str, int],
+) -> None:
+    with pytest.raises(ValueError, match="aggregate limits"):
+        msgspec.structs.replace(DEFAULT_PROJECT_LOAD_LIMITS, **changes)
+
+
+def test_aggregate_node_unit_charges_mapping_entries_and_value_nodes() -> None:
+    parsed = parse_yaml_source(
+        source_id=SourceId(value="mapping-count"),
+        text="{a: 1, b: [2, 3]}",
+    )
+
+    assert loader_module._document_node_count(parsed.documents) == 7
 
 
 def test_loader_bounds_explicit_directories_before_reading_every_file(tmp_path: Path) -> None:

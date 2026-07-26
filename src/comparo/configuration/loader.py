@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import final
@@ -37,7 +38,9 @@ _SOURCE_MISSING = DiagnosticCode(value="configuration.source.explicit-missing")
 _SOURCE_EXTERNAL = DiagnosticCode(value="configuration.source.external-forbidden")
 _SOURCE_READ = DiagnosticCode(value="configuration.source.read-failed")
 _DISCOVERY_INVALID = DiagnosticCode(value="configuration.source.discovery-invalid")
+_DISCOVERY_LIMIT = DiagnosticCode(value="configuration.source.discovery-limit-exceeded")
 _SOURCE_LIMIT = DiagnosticCode(value="configuration.source.limit-exceeded")
+_SOURCE_AGGREGATE_LIMIT = DiagnosticCode(value="configuration.source.aggregate-limit-exceeded")
 _LOCAL_NAMESPACE = NamespaceId(value="local")
 
 
@@ -46,17 +49,88 @@ class ProjectLoadLimits(msgspec.Struct, frozen=True, kw_only=True):
     """Finite caller-overridable admission limits for project source discovery."""
 
     maximum_sources: int = 4096
+    maximum_discovery_entries: int = 100_000
+    maximum_total_bytes: int = 64 * 1024 * 1024
+    maximum_total_documents: int = 4096
+    maximum_total_nodes: int = 4_000_000
+    maximum_resources: int = 4096
     yaml: YamlParseLimits = DEFAULT_YAML_PARSE_LIMITS
 
     def __post_init__(self) -> None:
         """Require an exact positive source count and typed YAML policy."""
-        if type(self.maximum_sources) is not int or self.maximum_sources < 1:
-            raise ValueError("project source limit must be a positive exact integer")
+        aggregate = (
+            self.maximum_sources,
+            self.maximum_discovery_entries,
+            self.maximum_total_bytes,
+            self.maximum_total_documents,
+            self.maximum_total_nodes,
+            self.maximum_resources,
+        )
+        if any(type(value) is not int or value < 1 for value in aggregate):
+            raise ValueError("project aggregate limits must be positive exact integers")
         if type(self.yaml) is not YamlParseLimits:
             raise TypeError("project YAML limits must be YamlParseLimits")
 
 
 DEFAULT_PROJECT_LOAD_LIMITS = ProjectLoadLimits()
+
+
+@final
+class _DiscoveryBudget:
+    """Caller-bounded count of filesystem entries examined during recursive discovery."""
+
+    __slots__ = ("examined", "maximum")
+
+    def __init__(self, maximum: int) -> None:
+        self.maximum = maximum
+        self.examined = 0
+
+    def admit(self) -> bool:
+        """Charge one directory entry, returning false before exceeding the ceiling."""
+        if self.examined >= self.maximum:
+            return False
+        self.examined += 1
+        return True
+
+
+@final
+class _DirectoryDiscovery(msgspec.Struct, frozen=True, kw_only=True):
+    """One bounded directory traversal result with closed failure categories."""
+
+    files: tuple[Path, ...] = ()
+    source_exceeded: bool = False
+    work_exceeded: bool = False
+    invalid: bool = False
+
+
+@final
+class _ScannedDirectory(msgspec.Struct, frozen=True, kw_only=True):
+    """One caller-bounded immediate directory scan before deterministic sorting."""
+
+    entries: tuple[tuple[str, Path, bool, bool], ...] = ()
+    work_exceeded: bool = False
+    invalid: bool = False
+
+
+def _scan_directory(current: Path, budget: _DiscoveryBudget) -> _ScannedDirectory:
+    examined: list[tuple[str, Path, bool, bool]] = []
+    try:
+        with os.scandir(current) as entries:
+            for entry in entries:
+                if not budget.admit():
+                    return _ScannedDirectory(work_exceeded=True)
+                is_symlink = entry.is_symlink()
+                examined.append(
+                    (
+                        entry.name,
+                        Path(entry.path),
+                        not is_symlink and entry.is_dir(follow_symlinks=False),
+                        not is_symlink and entry.is_file(follow_symlinks=False),
+                    )
+                )
+    except OSError:
+        return _ScannedDirectory(invalid=True)
+    return _ScannedDirectory(entries=tuple(sorted(examined, key=lambda item: item[0])))
 
 
 @final
@@ -118,6 +192,17 @@ class LoadedCompilation(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("loaded compilation catalog must be an immutable typed tuple")
 
 
+@final
+class _SourceLoad(msgspec.Struct, frozen=True, kw_only=True):
+    """One parsed source plus aggregate work retained by the project loader."""
+
+    documents: tuple[ParsedDocument, ...]
+    diagnostics: tuple[ConfigurationDiagnostic, ...]
+    byte_count: int
+    node_count: int
+    resource_count: int
+
+
 def _span(source_id: SourceId) -> SourceSpan:
     location = SourceLocation(
         source_id=source_id,
@@ -145,20 +230,123 @@ def _read(
     path: Path,
     source_id: SourceId,
     limits: YamlParseLimits,
-) -> tuple[tuple[ParsedDocument, ...], tuple[ConfigurationDiagnostic, ...]]:
+    *,
+    remaining_bytes: int,
+    remaining_documents: int,
+    remaining_nodes: int,
+    remaining_resources: int,
+) -> _SourceLoad:
+    if (
+        min(
+            remaining_bytes,
+            remaining_documents,
+            remaining_nodes,
+            remaining_resources,
+        )
+        < 1
+    ):
+        return _SourceLoad(
+            documents=(),
+            diagnostics=(_issue(_SOURCE_AGGREGATE_LIMIT, source_id),),
+            byte_count=0,
+            node_count=0,
+            resource_count=0,
+        )
+    effective = YamlParseLimits(
+        maximum_bytes=min(limits.maximum_bytes, remaining_bytes),
+        maximum_documents=min(
+            limits.maximum_documents,
+            remaining_documents,
+            remaining_resources,
+        ),
+        maximum_depth=limits.maximum_depth,
+        maximum_nodes=min(limits.maximum_nodes, remaining_nodes),
+    )
     try:
         with path.open("rb") as stream:
-            content = stream.read(limits.maximum_bytes + 1)
+            content = stream.read(effective.maximum_bytes + 1)
     except (OSError, UnicodeError):
-        return (), (_issue(_SOURCE_READ, source_id),)
-    if len(content) > limits.maximum_bytes:
-        return (), (_issue(_SOURCE_LIMIT, source_id),)
+        return _SourceLoad(
+            documents=(),
+            diagnostics=(_issue(_SOURCE_READ, source_id),),
+            byte_count=0,
+            node_count=0,
+            resource_count=0,
+        )
+    if len(content) > effective.maximum_bytes:
+        code = (
+            _SOURCE_AGGREGATE_LIMIT
+            if effective.maximum_bytes < limits.maximum_bytes
+            else _SOURCE_LIMIT
+        )
+        return _SourceLoad(
+            documents=(),
+            diagnostics=(_issue(code, source_id),),
+            byte_count=0,
+            node_count=0,
+            resource_count=0,
+        )
     try:
         text = content.decode("utf-8")
     except UnicodeError:
-        return (), (_issue(_SOURCE_READ, source_id),)
-    parsed = parse_yaml_source(source_id=source_id, text=text, limits=limits)
-    return parsed.documents, parsed.diagnostics
+        return _SourceLoad(
+            documents=(),
+            diagnostics=(_issue(_SOURCE_READ, source_id),),
+            byte_count=len(content),
+            node_count=0,
+            resource_count=0,
+        )
+    parsed = parse_yaml_source(source_id=source_id, text=text, limits=effective)
+    constrained_parse = (
+        effective.maximum_documents < limits.maximum_documents
+        or effective.maximum_nodes < limits.maximum_nodes
+    )
+    if constrained_parse and any(
+        item.code.value == "configuration.yaml.limit-exceeded" for item in parsed.diagnostics
+    ):
+        return _SourceLoad(
+            documents=(),
+            diagnostics=(_issue(_SOURCE_AGGREGATE_LIMIT, source_id),),
+            byte_count=len(content),
+            node_count=0,
+            resource_count=0,
+        )
+    node_count = _document_node_count(parsed.documents)
+    resource_count = len(parsed.documents)
+    if (
+        len(parsed.documents) > remaining_documents
+        or node_count > remaining_nodes
+        or resource_count > remaining_resources
+    ):
+        return _SourceLoad(
+            documents=(),
+            diagnostics=(_issue(_SOURCE_AGGREGATE_LIMIT, source_id),),
+            byte_count=len(content),
+            node_count=0,
+            resource_count=0,
+        )
+    return _SourceLoad(
+        documents=parsed.documents,
+        diagnostics=parsed.diagnostics,
+        byte_count=len(content),
+        node_count=node_count,
+        resource_count=resource_count,
+    )
+
+
+def _document_node_count(documents: tuple[ParsedDocument, ...]) -> int:
+    """Count retained configuration nodes iteratively without recursion."""
+    count = 0
+    pending = [document.root for document in documents]
+    while pending:
+        node = pending.pop()
+        count += 1
+        if type(node) is MappingNode:
+            count += len(node.entries)
+            pending.extend(entry.value for entry in node.entries)
+        elif type(node) is SequenceNode:
+            pending.extend(node.items)
+    return count
 
 
 def _project_from_entry(documents: tuple[ParsedDocument, ...]) -> V1Alpha1Resource | None:
@@ -229,18 +417,107 @@ def _authorized(
     return _inside(path, root) or (authorizer is not None and authorizer(path))
 
 
-def _directory_files(directory: Path, maximum: int) -> tuple[tuple[Path, ...], bool]:
+def _directory_files(
+    directory: Path,
+    maximum: int,
+    budget: _DiscoveryBudget,
+    seen: set[Path],
+    *,
+    root: Path | None = None,
+    includes: tuple[str, ...] = (),
+    excludes: tuple[str, ...] = (),
+) -> _DirectoryDiscovery:
+    """Discover matching YAML files with bounded traversal and bounded retention."""
     files: list[Path] = []
-    for current, directories, names in directory.walk(top_down=True, follow_symlinks=False):
-        directories[:] = sorted(name for name in directories if not (current / name).is_symlink())
-        for name in sorted(names):
-            path = current / name
-            if path.suffix.lower() not in {".yaml", ".yml"} or path.is_symlink():
+    pending = [directory]
+    while pending:
+        current = pending.pop()
+        scanned = _scan_directory(current, budget)
+        if scanned.work_exceeded:
+            return _DirectoryDiscovery(work_exceeded=True)
+        if scanned.invalid:
+            return _DirectoryDiscovery(invalid=True)
+        directories: list[Path] = []
+        for _name, path, is_directory, is_file in scanned.entries:
+            if is_directory:
+                directories.append(path)
+                continue
+            if not is_file or path.suffix.lower() not in {".yaml", ".yml"}:
+                continue
+            if root is not None and not _matches(path, root, includes, excludes):
+                continue
+            if path in seen:
                 continue
             if len(files) >= maximum:
-                return tuple(files), True
+                return _DirectoryDiscovery(files=tuple(files), source_exceeded=True)
+            seen.add(path)
             files.append(path)
-    return tuple(files), False
+        pending.extend(reversed(directories))
+    return _DirectoryDiscovery(files=tuple(files))
+
+
+def _admit_directory_discovery(
+    result: _DirectoryDiscovery,
+    candidates: list[Path],
+    diagnostics: list[ConfigurationDiagnostic],
+    source_id: SourceId,
+) -> bool:
+    """Admit one traversal result, discarding every partial path on hard failure."""
+    if result.work_exceeded:
+        diagnostics.append(_issue(_DISCOVERY_LIMIT, source_id))
+        return False
+    if result.invalid:
+        diagnostics.append(_issue(_DISCOVERY_INVALID, source_id))
+        return False
+    candidates.extend(result.files)
+    if result.source_exceeded:
+        diagnostics.append(_issue(_SOURCE_LIMIT, source_id))
+    return True
+
+
+def _admit_explicit_source(
+    source: Path,
+    *,
+    root: Path,
+    authorizer: ExternalSourceAuthorizer | None,
+    candidates: list[Path],
+    seen: set[Path],
+    diagnostics: list[ConfigurationDiagnostic],
+    source_id: SourceId,
+    maximum: int,
+    budget: _DiscoveryBudget,
+) -> bool | None:
+    """Admit one explicit file/directory; false stops capacity work, None fails closed."""
+    canonical = source.resolve()
+    if not _authorized(canonical, root, authorizer):
+        diagnostics.append(_issue(_SOURCE_EXTERNAL, source_id))
+        return True
+    if canonical.is_file():
+        if canonical in seen:
+            return True
+        if len(candidates) >= maximum:
+            diagnostics.append(_issue(_SOURCE_LIMIT, source_id))
+            return False
+        seen.add(canonical)
+        candidates.append(canonical)
+        return True
+    if canonical.is_dir():
+        discovered = _directory_files(
+            canonical,
+            maximum - len(candidates),
+            budget,
+            seen,
+        )
+        if not _admit_directory_discovery(
+            discovered,
+            candidates,
+            diagnostics,
+            source_id,
+        ):
+            return None
+        return not discovered.source_exceeded
+    diagnostics.append(_issue(_SOURCE_MISSING, source_id))
+    return True
 
 
 def _matches(path: Path, root: Path, includes: tuple[str, ...], excludes: tuple[str, ...]) -> bool:
@@ -272,36 +549,48 @@ def _discover_candidates(
     diagnostics: list[ConfigurationDiagnostic],
     source_id: SourceId,
     maximum: int,
+    maximum_discovery_entries: int,
 ) -> tuple[Path, ...]:
     candidates: list[Path] = []
+    seen = {entry}
+    budget = _DiscoveryBudget(maximum_discovery_entries)
     data_root = (root / data_root_name).resolve()
     if _authorized(data_root, root, authorizer) and data_root.is_dir():
-        discovered, exceeded = _directory_files(data_root, maximum)
-        candidates.extend(
-            path for path in discovered if _matches(path, data_root, includes, excludes)
+        discovered = _directory_files(
+            data_root,
+            maximum,
+            budget,
+            seen,
+            root=data_root,
+            includes=includes,
+            excludes=excludes,
         )
-        if exceeded:
-            diagnostics.append(_issue(_SOURCE_LIMIT, source_id))
+        if not _admit_directory_discovery(
+            discovered,
+            candidates,
+            diagnostics,
+            source_id,
+        ):
+            return ()
     elif not _authorized(data_root, root, authorizer):
         diagnostics.append(_issue(_SOURCE_EXTERNAL, source_id))
     for source in explicit:
-        if len(candidates) >= maximum:
-            diagnostics.append(_issue(_SOURCE_LIMIT, source_id))
+        admitted = _admit_explicit_source(
+            source,
+            root=root,
+            authorizer=authorizer,
+            candidates=candidates,
+            seen=seen,
+            diagnostics=diagnostics,
+            source_id=source_id,
+            maximum=maximum,
+            budget=budget,
+        )
+        if admitted is None:
+            return ()
+        if not admitted:
             break
-        canonical = source.resolve()
-        if not _authorized(canonical, root, authorizer):
-            diagnostics.append(_issue(_SOURCE_EXTERNAL, source_id))
-        elif canonical.is_file():
-            candidates.append(canonical)
-        elif canonical.is_dir():
-            discovered, exceeded = _directory_files(canonical, maximum - len(candidates))
-            candidates.extend(discovered)
-            if exceeded:
-                diagnostics.append(_issue(_SOURCE_LIMIT, source_id))
-                break
-        else:
-            diagnostics.append(_issue(_SOURCE_MISSING, source_id))
-    return tuple(sorted(set(candidates) - {entry}, key=str))
+    return tuple(sorted(candidates, key=str))
 
 
 def load_project_sources(
@@ -328,25 +617,33 @@ def load_project_sources(
             diagnostics=(_issue(_ENTRY_MISSING, entry_id),),
         )
     root = entry.parent
-    entry_documents, entry_diagnostics = _read(entry, entry_id, limits.yaml)
-    project = _project_from_entry(entry_documents)
+    entry_load = _read(
+        entry,
+        entry_id,
+        limits.yaml,
+        remaining_bytes=limits.maximum_total_bytes,
+        remaining_documents=limits.maximum_total_documents,
+        remaining_nodes=limits.maximum_total_nodes,
+        remaining_resources=limits.maximum_resources,
+    )
+    project = _project_from_entry(entry_load.documents)
     if project is None:
         return ProjectSourceSet(
             entry_source=entry_id,
-            documents=entry_documents,
-            diagnostics=entry_diagnostics,
+            documents=entry_load.documents,
+            diagnostics=entry_load.diagnostics,
             catalog=(SourceCatalogEntry(source_id=entry_id, path=entry),),
         )
     discovery = _discovery_config(project)
     if discovery is None:
         return ProjectSourceSet(
             entry_source=entry_id,
-            documents=entry_documents,
-            diagnostics=(*entry_diagnostics, _issue(_DISCOVERY_INVALID, entry_id)),
+            documents=entry_load.documents,
+            diagnostics=(*entry_load.diagnostics, _issue(_DISCOVERY_INVALID, entry_id)),
             catalog=(SourceCatalogEntry(source_id=entry_id, path=entry),),
         )
     data_root_name, includes, excludes, declared_sources = discovery
-    diagnostics = list(entry_diagnostics)
+    diagnostics = list(entry_load.diagnostics)
     explicit = tuple(root / name for name in declared_sources) + additional_sources
     ordered = _discover_candidates(
         root=root,
@@ -359,15 +656,34 @@ def load_project_sources(
         diagnostics=diagnostics,
         source_id=entry_id,
         maximum=limits.maximum_sources - 1,
+        maximum_discovery_entries=limits.maximum_discovery_entries,
     )
-    documents = list(entry_documents)
+    documents = list(entry_load.documents)
     catalog = [SourceCatalogEntry(source_id=entry_id, path=entry)]
+    used_bytes = entry_load.byte_count
+    used_documents = len(entry_load.documents)
+    used_nodes = entry_load.node_count
+    used_resources = entry_load.resource_count
     for path in ordered:
         source_id = _source_id(path)
-        source_documents, source_diagnostics = _read(path, source_id, limits.yaml)
-        documents.extend(source_documents)
-        diagnostics.extend(source_diagnostics)
+        loaded = _read(
+            path,
+            source_id,
+            limits.yaml,
+            remaining_bytes=limits.maximum_total_bytes - used_bytes,
+            remaining_documents=limits.maximum_total_documents - used_documents,
+            remaining_nodes=limits.maximum_total_nodes - used_nodes,
+            remaining_resources=limits.maximum_resources - used_resources,
+        )
+        diagnostics.extend(loaded.diagnostics)
+        if any(item.code == _SOURCE_AGGREGATE_LIMIT for item in loaded.diagnostics):
+            break
+        documents.extend(loaded.documents)
         catalog.append(SourceCatalogEntry(source_id=source_id, path=path))
+        used_bytes += loaded.byte_count
+        used_documents += len(loaded.documents)
+        used_nodes += loaded.node_count
+        used_resources += loaded.resource_count
     return ProjectSourceSet(
         entry_source=entry_id,
         documents=tuple(documents),
