@@ -230,20 +230,19 @@ def test_reader_rejects_tampered_results_and_blob_symlinks(tmp_path: Path) -> No
     assert linked.value.code is ArtifactStoreErrorCode.IO_FAILED
 
 
-def test_invalid_bundle_identity_and_closed_sink_fail_without_writing(tmp_path: Path) -> None:
+def test_invalid_bundle_identity_is_rejected_before_sink_and_closed_sink_does_not_write(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "artifacts"
     root.mkdir(mode=0o700)
     artifact, blobs = asyncio.run(_stored_artifact())
-    unsafe_metadata = msgspec.structs.replace(artifact.metadata, artifact_id="../escape")
-    unsafe = msgspec.structs.replace(artifact, metadata=unsafe_metadata)
+    with pytest.raises(ValueError, match="artifact ID must be a stable ASCII token"):
+        msgspec.structs.replace(artifact.metadata, artifact_id="../escape")
     sink = LocalArtifactBundleSink(root)
 
-    invalid = asyncio.run(sink.persist(unsafe, blobs, _limits()))
     sink.close()
     closed = asyncio.run(sink.persist(artifact, blobs, _limits()))
 
-    assert invalid.failure is not None
-    assert invalid.failure.code is ArtifactStoreErrorCode.INVALID_ARTIFACT
     assert closed.failure is not None
     assert closed.failure.code is ArtifactStoreErrorCode.CLOSED
     assert not tuple(root.iterdir())

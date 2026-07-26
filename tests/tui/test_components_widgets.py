@@ -47,6 +47,7 @@ from comparo.application.project_outline import ProjectResourceOutline
 from comparo.application.project_outline import ResourceIdentityCoordinate
 from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.report_archive import ReportArchiveEntry
+from comparo.application.report_archive import ReportArchiveResource
 from comparo.application.results import ComparisonResultRow
 from comparo.application.results import ExecutionResultRow
 from comparo.application.results import ResultCrossLink
@@ -598,13 +599,13 @@ async def test_untrusted_text_is_contained_across_project_and_report_components(
     resource = _resource("Request", "safe-id", name=canary)
     report = ReportArchiveEntry(
         bundle_id="bundle",
-        run_id=canary,
+        run_id="run",
         invocation_id="invocation",
         created_unix_nanoseconds=1,
         completion="complete",
-        gate="passed",
-        subjects=(canary,),
-        environments=("staging",),
+        gate=canary,
+        subjects=(ReportArchiveResource(namespace="local", resource_id="safe-id"),),
+        environments=(ReportArchiveResource(namespace="local", resource_id="staging"),),
         executions=1,
         comparisons=0,
         assertions=0,
@@ -817,7 +818,7 @@ async def test_project_and_report_lists_emit_only_typed_safe_identifiers() -> No
         created_unix_nanoseconds=1,
         completion="complete",
         gate="passed",
-        subjects=("ping",),
+        subjects=(ReportArchiveResource(namespace="local", resource_id="ping"),),
         environments=(),
         executions=1,
         comparisons=0,

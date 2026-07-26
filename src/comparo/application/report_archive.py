@@ -12,6 +12,7 @@ from comparo.adapters.artifacts import LocalArtifactStoreError
 from comparo.adapters.artifacts import list_local_artifact_bundle_ids
 from comparo.adapters.artifacts import open_local_artifact_bundle
 from comparo.application.artifacts import ArtifactReadLimits
+from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.policy import ArtifactLimits
 from comparo.core.artifacts.policy import SanitizationLimits
@@ -57,6 +58,19 @@ class ReportArchiveLimits(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ReportArchiveResource(msgspec.Struct, frozen=True, kw_only=True):
+    """One namespace-preserving safe definition identity for archive summaries."""
+
+    namespace: str
+    resource_id: str
+
+    def __post_init__(self) -> None:
+        """Require route- and terminal-safe logical identity tokens."""
+        require_stable_token(self.namespace, label="report resource namespace", maximum=63)
+        require_stable_token(self.resource_id, label="report resource ID", maximum=255)
+
+
+@final
 class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
     """Small authenticated report-list row derived without reading blob bodies."""
 
@@ -66,8 +80,8 @@ class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
     created_unix_nanoseconds: int
     completion: str
     gate: str
-    subjects: tuple[str, ...]
-    environments: tuple[str, ...]
+    subjects: tuple[ReportArchiveResource, ...]
+    environments: tuple[ReportArchiveResource, ...]
     executions: int
     comparisons: int
     assertions: int
@@ -89,12 +103,17 @@ class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
             )
         ):
             raise TypeError("report archive entry identifiers and outcomes must be text")
-        if type(self.subjects) is not tuple or any(type(item) is not str for item in self.subjects):
-            raise TypeError("report archive subjects must be an immutable text tuple")
-        if type(self.environments) is not tuple or any(
-            type(item) is not str for item in self.environments
+        require_stable_token(self.bundle_id, label="report bundle ID", maximum=255)
+        require_stable_token(self.run_id, label="report run ID", maximum=255)
+        require_stable_token(self.invocation_id, label="report invocation ID", maximum=255)
+        if type(self.subjects) is not tuple or any(
+            type(item) is not ReportArchiveResource for item in self.subjects
         ):
-            raise TypeError("report archive environments must be an immutable text tuple")
+            raise TypeError("report archive subjects must be immutable typed coordinates")
+        if type(self.environments) is not tuple or any(
+            type(item) is not ReportArchiveResource for item in self.environments
+        ):
+            raise TypeError("report archive environments must be immutable typed coordinates")
         if type(self.created_unix_nanoseconds) is not int:
             raise TypeError("report archive creation instant must be integer nanoseconds")
         counts = (
@@ -197,8 +216,21 @@ def _entry(bundle_id: str, artifact: RunArtifact) -> ReportArchiveEntry:
         created_unix_nanoseconds=artifact.metadata.created_unix_nanoseconds,
         completion=artifact.completion.kind.value,
         gate=artifact.gate.verdict.value,
-        subjects=tuple(sorted({item.subject.resource_id for item in artifact.executions})),
-        environments=tuple(sorted({item.environment.resource_id for item in artifact.executions})),
+        subjects=tuple(
+            ReportArchiveResource(namespace=namespace, resource_id=resource_id)
+            for namespace, resource_id in sorted(
+                {(item.subject.namespace, item.subject.resource_id) for item in artifact.executions}
+            )
+        ),
+        environments=tuple(
+            ReportArchiveResource(namespace=namespace, resource_id=resource_id)
+            for namespace, resource_id in sorted(
+                {
+                    (item.environment.namespace, item.environment.resource_id)
+                    for item in artifact.executions
+                }
+            )
+        ),
         executions=len(artifact.executions),
         comparisons=len(artifact.comparisons),
         assertions=sum(len(item.assertions) for item in artifact.executions),
@@ -240,5 +272,6 @@ __all__ = (
     "ReportArchiveErrorCode",
     "ReportArchiveLimits",
     "ReportArchiveListing",
+    "ReportArchiveResource",
     "list_report_archive",
 )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from fractions import Fraction
 from math import gcd
 from typing import final
@@ -14,6 +15,7 @@ ARTIFACT_API_VERSION = "comparo.artifact/v1alpha1"
 SANITIZER_VERSION = "comparo.sanitizer/v1alpha1"
 CREDENTIAL_CATALOG_VERSION = "comparo.credentials/v1alpha1"
 ARTIFACT_REDACTION_MARKER = "<redacted>"
+_STABLE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+~-]*")
 
 
 def require_text(value: object, *, label: str, maximum: int = 512) -> None:
@@ -27,6 +29,15 @@ def require_unicode_scalars(value: str, *, label: str) -> None:
     """Reject unpaired surrogates that cannot cross a UTF-8 JSON boundary."""
     if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
         raise ValueError(f"{label} must contain Unicode scalar values")
+
+
+def require_stable_token(value: object, *, label: str, maximum: int = 128) -> None:
+    """Require a bounded ASCII occurrence token safe for storage and local routing."""
+    require_text(value, label=label, maximum=maximum)
+    if type(value) is not str:
+        raise AssertionError("text validation guarantees an exact string")
+    if _STABLE_TOKEN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be a stable ASCII token")
 
 
 def require_sha256(value: object, *, label: str) -> None:
@@ -199,7 +210,10 @@ class ArtifactMetadata(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown
             (self.sanitizer_version, "sanitizer version", 127),
             (self.credential_catalog_version, "credential catalog version", 127),
         ):
-            require_text(value, label=label, maximum=maximum)
+            if label in {"artifact ID", "run ID", "invocation ID"}:
+                require_stable_token(value, label=label, maximum=maximum)
+            else:
+                require_text(value, label=label, maximum=maximum)
         if type(self.created_unix_nanoseconds) is not int:
             raise TypeError("artifact creation instant must be integer nanoseconds")
 

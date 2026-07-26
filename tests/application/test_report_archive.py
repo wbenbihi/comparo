@@ -18,6 +18,7 @@ from comparo.application.report_archive import ReportArchiveError
 from comparo.application.report_archive import ReportArchiveErrorCode
 from comparo.application.report_archive import ReportArchiveLimits
 from comparo.application.report_archive import ReportArchiveListing
+from comparo.application.report_archive import ReportArchiveResource
 from comparo.application.report_archive import list_report_archive
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
@@ -68,9 +69,20 @@ def test_archive_lists_authenticated_summaries_newest_first_without_blob_reads(
     assert entry.created_unix_nanoseconds == 20
     assert entry.completion == newer.completion.kind.value
     assert entry.gate == newer.gate.verdict.value
-    assert entry.subjects == tuple(sorted({item.subject.resource_id for item in newer.executions}))
+    assert entry.subjects == tuple(
+        ReportArchiveResource(namespace=namespace, resource_id=resource_id)
+        for namespace, resource_id in sorted(
+            {(item.subject.namespace, item.subject.resource_id) for item in newer.executions}
+        )
+    )
     assert entry.environments == tuple(
-        sorted({item.environment.resource_id for item in newer.executions})
+        ReportArchiveResource(namespace=namespace, resource_id=resource_id)
+        for namespace, resource_id in sorted(
+            {
+                (item.environment.namespace, item.environment.resource_id)
+                for item in newer.executions
+            }
+        )
     )
     assert entry.executions == len(newer.executions)
     assert entry.comparisons == len(newer.comparisons)
@@ -218,10 +230,10 @@ def test_archive_contracts_reject_untyped_and_contradictory_values() -> None:
     for changes, error in (
         ({"bundle_id": ""}, TypeError),
         ({"run_id": cast("str", 1)}, TypeError),
-        ({"subjects": cast("tuple[str, ...]", [])}, TypeError),
-        ({"subjects": (cast("str", 1),)}, TypeError),
-        ({"environments": cast("tuple[str, ...]", [])}, TypeError),
-        ({"environments": (cast("str", 1),)}, TypeError),
+        ({"subjects": cast("tuple[ReportArchiveResource, ...]", [])}, TypeError),
+        ({"subjects": (cast("ReportArchiveResource", 1),)}, TypeError),
+        ({"environments": cast("tuple[ReportArchiveResource, ...]", [])}, TypeError),
+        ({"environments": (cast("ReportArchiveResource", 1),)}, TypeError),
         ({"created_unix_nanoseconds": cast("int", "now")}, TypeError),
         ({"executions": -1}, ValueError),
         ({"executions": cast("int", True)}, ValueError),

@@ -39,6 +39,7 @@ from comparo.application.project_workspace import ProjectWorkspaceResult
 from comparo.application.project_workspace import ProjectWorkspaceSnapshot
 from comparo.application.report_archive import ReportArchiveEntry
 from comparo.application.report_archive import ReportArchiveListing
+from comparo.application.report_archive import ReportArchiveResource
 from comparo.application.results import ResultEntity
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
@@ -154,8 +155,11 @@ def _listing() -> ReportArchiveListing:
                 created_unix_nanoseconds=1,
                 completion="complete",
                 gate="passed",
-                subjects=("ping",),
-                environments=("staging", "prod"),
+                subjects=(ReportArchiveResource(namespace="local", resource_id="ping"),),
+                environments=(
+                    ReportArchiveResource(namespace="local", resource_id="staging"),
+                    ReportArchiveResource(namespace="local", resource_id="prod"),
+                ),
                 executions=2,
                 comparisons=1,
                 assertions=1,

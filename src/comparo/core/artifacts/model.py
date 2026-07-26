@@ -20,6 +20,7 @@ from comparo.core.artifacts.common import ArtifactMetadata
 from comparo.core.artifacts.common import ArtifactMetric
 from comparo.core.artifacts.common import ArtifactOmissionReason
 from comparo.core.artifacts.common import ArtifactProvenance
+from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.common import require_text
 from comparo.core.artifacts.facts import ArtifactComparison
 from comparo.core.artifacts.facts import ArtifactExecution
@@ -46,7 +47,11 @@ class ArtifactCoverageIssue(msgspec.Struct, frozen=True, kw_only=True, forbid_un
         if type(self.reason) is not ArtifactOmissionReason:
             raise TypeError("artifact coverage reason must be typed")
         if self.execution_id is not None:
-            require_text(self.execution_id, label="artifact coverage execution ID", maximum=64)
+            require_stable_token(
+                self.execution_id,
+                label="artifact coverage execution ID",
+                maximum=64,
+            )
 
 
 @final

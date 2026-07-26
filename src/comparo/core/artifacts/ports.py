@@ -9,7 +9,7 @@ from typing import final
 import msgspec
 
 from comparo.core.artifacts.common import ArtifactBlob
-from comparo.core.artifacts.common import require_text
+from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.policy import ArtifactLimits
 from comparo.core.domain.enums import DomainStrEnum
@@ -80,7 +80,7 @@ class ArtifactPersistenceOutcome(msgspec.Struct, frozen=True, kw_only=True):
         if type(self.status) is not ArtifactPersistenceStatus:
             raise TypeError("artifact persistence status must be typed")
         if self.bundle_id is not None:
-            require_text(self.bundle_id, label="artifact bundle ID", maximum=127)
+            require_stable_token(self.bundle_id, label="artifact bundle ID", maximum=127)
         if self.failure is not None and type(self.failure) is not ArtifactStoreFailure:
             raise TypeError("artifact persistence failure must be typed")
         persisted = self.status is ArtifactPersistenceStatus.PERSISTED

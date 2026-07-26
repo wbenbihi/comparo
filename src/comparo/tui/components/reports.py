@@ -27,8 +27,14 @@ class ReportListItem(ListItem):
     def __init__(self, entry: ReportArchiveEntry) -> None:
         """Initialize one row from an authenticated archive entry."""
         self.entry = entry
-        environments = " ⇄ ".join(entry.environments) or "no environments"
-        subjects = ", ".join(entry.subjects) or "no subjects"
+        environments = (
+            " ⇄ ".join(f"{item.namespace}/{item.resource_id}" for item in entry.environments)
+            or "no environments"
+        )
+        subjects = (
+            ", ".join(f"{item.namespace}/{item.resource_id}" for item in entry.subjects)
+            or "no subjects"
+        )
         created = datetime.fromtimestamp(
             entry.created_unix_nanoseconds / 1_000_000_000,
             tz=UTC,
@@ -121,8 +127,14 @@ class ReportArchivePreview(Static):
         """Update the preview without opening report bodies or sending HTTP."""
         if type(entry) is not ReportArchiveEntry:
             raise TypeError("report preview requires a typed archive entry")
-        topology = " → ".join(entry.environments) or "No environments"
-        subjects = ", ".join(entry.subjects) or "No subjects"
+        topology = (
+            " → ".join(f"{item.namespace}/{item.resource_id}" for item in entry.environments)
+            or "No environments"
+        )
+        subjects = (
+            ", ".join(f"{item.namespace}/{item.resource_id}" for item in entry.subjects)
+            or "No subjects"
+        )
         self.update(
             safe_terminal_text(
                 "\n".join(

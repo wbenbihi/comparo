@@ -16,6 +16,7 @@ from comparo.core.artifacts.common import ArtifactMetric
 from comparo.core.artifacts.common import ArtifactSeverity
 from comparo.core.artifacts.common import require_count
 from comparo.core.artifacts.common import require_metrics
+from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.common import require_text
 from comparo.core.artifacts.http import ArtifactAttempt
 from comparo.core.artifacts.http import ArtifactTiming
@@ -62,7 +63,7 @@ class ArtifactEvidence(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown
 
     def __post_init__(self) -> None:
         """Require safe coordinates and unique canonical value names."""
-        require_text(self.fact_id, label="artifact evidence fact ID", maximum=64)
+        require_stable_token(self.fact_id, label="artifact evidence fact ID", maximum=64)
         require_text(self.outcome, label="artifact evidence outcome", maximum=127)
         require_text(self.location, label="artifact evidence location", maximum=2048)
         if type(self.values) is not tuple or any(
@@ -100,7 +101,7 @@ class ArtifactFact(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fie
             (self.rule_id, "artifact rule ID"),
             (self.effective_rule_id, "artifact effective rule ID"),
         ):
-            require_text(value, label=label, maximum=64)
+            require_stable_token(value, label=label, maximum=64)
         if type(self.engine) is not ArtifactFactEngine:
             raise TypeError("artifact fact engine must be typed")
         if type(self.rule) is not ArtifactDefinition:
@@ -147,7 +148,7 @@ class ArtifactExecution(msgspec.Struct, frozen=True, kw_only=True, forbid_unknow
             (self.cell_id, "artifact cell ID"),
             (self.trial_id, "artifact trial ID"),
         ):
-            require_text(value, label=label, maximum=64)
+            require_stable_token(value, label=label, maximum=64)
         if (
             type(self.subject) is not ArtifactDefinition
             or type(self.environment) is not ArtifactDefinition
@@ -196,7 +197,7 @@ class ArtifactComparison(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
             (self.baseline_execution_id, "artifact baseline execution ID"),
             (self.candidate_execution_id, "artifact candidate execution ID"),
         ):
-            require_text(value, label=label, maximum=64)
+            require_stable_token(value, label=label, maximum=64)
         if type(self.subject) is not ArtifactDefinition:
             raise TypeError("artifact comparison subject must be ArtifactDefinition")
         if type(self.outcome) is not ArtifactComparisonOutcome:
@@ -205,6 +206,12 @@ class ArtifactComparison(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
             type(item) is not str for item in self.unavailable_execution_ids
         ):
             raise TypeError("artifact unavailable execution IDs must be immutable text")
+        for execution_id in self.unavailable_execution_ids:
+            require_stable_token(
+                execution_id,
+                label="artifact unavailable execution ID",
+                maximum=64,
+            )
         _require_exact_tuple(self.diffs, ArtifactFact, "comparison diffs")
         incomplete = self.outcome is ArtifactComparisonOutcome.INCOMPLETE
         incomplete_shape = bool(self.unavailable_execution_ids) and not self.diffs

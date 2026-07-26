@@ -119,6 +119,45 @@ def initialize_project_artifact_root(project_root: Path, selected: Path) -> Path
     return _resolved_contained_root(project_root, selected)
 
 
+def validate_project_artifact_root(project_root: Path, selected: Path) -> Path:
+    """Validate an existing private relative artifact root without creating directories."""
+    if not isinstance(project_root, Path) or not isinstance(selected, Path):
+        raise TypeError("artifact root validation requires Path inputs")
+    if not project_root.is_absolute() or selected.is_absolute() or not selected.parts:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
+    if any(part in {"", ".", ".."} for part in selected.parts):
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
+    _validate_relative_directories(project_root, selected.parts)
+    return _resolved_contained_root(project_root, selected)
+
+
+def validate_existing_artifact_root(root: Path) -> Path:
+    """Validate and resolve one existing private artifact directory without mutation."""
+    if not isinstance(root, Path):
+        raise TypeError("artifact root validation requires a Path")
+    if not root.is_absolute():
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(root, flags)
+    except OSError as error:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    try:
+        _validate_private_directory(descriptor)
+    finally:
+        with suppress(OSError):
+            os.close(descriptor)
+    try:
+        return root.resolve(strict=True)
+    except OSError as error:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+
+
 def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...]) -> None:
     flags = (
         os.O_RDONLY
@@ -139,6 +178,32 @@ def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...])
                 child = os.open(part, flags, dir_fd=current)
             descriptors.append(child)
             current = child
+            _validate_private_directory(current)
+    except ArtifactOperationError:
+        raise
+    except OSError as error:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    finally:
+        for descriptor in reversed(descriptors):
+            with suppress(OSError):
+                os.close(descriptor)
+
+
+def _validate_relative_directories(project_root: Path, parts: tuple[str, ...]) -> None:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptors: list[int] = []
+    try:
+        current = os.open(project_root, flags)
+        descriptors.append(current)
+        _validate_private_directory(current)
+        for part in parts:
+            current = os.open(part, flags, dir_fd=current)
+            descriptors.append(current)
             _validate_private_directory(current)
     except ArtifactOperationError:
         raise
@@ -291,5 +356,7 @@ __all__ = (
     "inspect_artifact",
     "read_artifact_blob",
     "render_artifact_report",
+    "validate_existing_artifact_root",
+    "validate_project_artifact_root",
     "verify_artifact",
 )

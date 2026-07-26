@@ -544,6 +544,10 @@ def test_lifecycle_policy_and_persistence_guards() -> None:
         status=ArtifactPersistenceStatus.PERSISTED,
         bundle_id="bundle",
     )
+    with pytest.raises(ValueError, match="stable ASCII token"):
+        msgspec.structs.replace(persisted, bundle_id="a/../b")
+    with pytest.raises(ValueError, match="stable ASCII token"):
+        msgspec.structs.replace(_artifact().metadata, artifact_id="a/../b")
     with pytest.raises(TypeError, match="status"):
         msgspec.structs.replace(persisted, status="persisted")
     with pytest.raises(TypeError, match="failure must"):
