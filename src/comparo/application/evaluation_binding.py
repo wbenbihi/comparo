@@ -14,6 +14,9 @@ from uuid import uuid5
 
 import msgspec
 
+from comparo.application.digest_validation import DEFAULT_DIGEST_VALIDATION_LIMITS_V1
+from comparo.application.digest_validation import DigestValidationLimits
+from comparo.application.digest_validation import prepare_digest_predicate
 from comparo.application.evaluation_assertions import InvalidAssertionOperationError
 from comparo.application.evaluation_assertions import compile_assertion_operation
 from comparo.application.evaluation_diffs import DiffSyntaxFamily
@@ -24,6 +27,11 @@ from comparo.application.evaluation_diffs import compile_reducer
 from comparo.application.evaluation_diffs import compile_transforms
 from comparo.application.evaluation_selectors import InvalidSelectorError
 from comparo.application.evaluation_selectors import compile_selector
+from comparo.application.regex_validation import DEFAULT_REGEX_VALIDATION_LIMITS_V1
+from comparo.application.regex_validation import PreparedRegex
+from comparo.application.regex_validation import PreparedRegexCatalog
+from comparo.application.regex_validation import RegexValidationLimits
+from comparo.application.regex_validation import prepare_compiled_regex
 from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
 from comparo.application.schema_validation import PreparedSchema
 from comparo.application.schema_validation import PreparedSchemaCatalog
@@ -58,10 +66,12 @@ from comparo.core.diffs.inputs import PreparedOperandError as DiffOperandError
 from comparo.core.diffs.inputs import PreparedOperandReady as DiffOperandReady
 from comparo.core.diffs.inputs import PreparedOperandUnavailable as DiffOperandUnavailable
 from comparo.core.diffs.inputs import required_expressions as required_diff_expressions
+from comparo.core.domain.assertions.extended_operators import DigestOperator
 from comparo.core.domain.assertions.extended_operators import SchemaOperator
 from comparo.core.domain.assertions.operators import AssertionOperatorIdentity
 from comparo.core.domain.assertions.operators import AssertionOperatorKind
 from comparo.core.domain.assertions.operators import operator_uses_match_predicate
+from comparo.core.domain.assertions.regex import RegexOperator
 from comparo.core.domain.assertions.rules import AssertionApplication
 from comparo.core.domain.assertions.rules import AssertionRuleDefinition
 from comparo.core.domain.assertions.rules import CompiledAssertionRule
@@ -196,6 +206,8 @@ _DIFF_FIELDS = frozenset(
         "description",
         "tags",
         "selector",
+        "baseline",
+        "candidate",
         "transforms",
         "reducer",
         "pairing",
@@ -439,9 +451,11 @@ class ConfigurationEvaluationPreparation:
 
     __slots__ = (
         "_context",
+        "_digest_limits",
         "_gate",
         "_limits",
         "_prepared",
+        "_regexes",
         "_schemas",
         "_snapshot_requirements",
         "_subjects",
@@ -456,6 +470,8 @@ class ConfigurationEvaluationPreparation:
         subjects: tuple[_SubjectRules, ...],
         gate: CompiledGateProfile | None,
         schemas: PreparedSchemaCatalog,
+        regexes: PreparedRegexCatalog,
+        digest_limits: DigestValidationLimits,
     ) -> None:
         """Bind one admitted run, its context, finite limits, rules, and optional gate."""
         if type(prepared) is not PreparedRun or type(context) is not RunContext:
@@ -468,6 +484,10 @@ class ConfigurationEvaluationPreparation:
             raise TypeError("configuration evaluation gate must be compiled")
         if type(schemas) is not PreparedSchemaCatalog:
             raise TypeError("configuration evaluation schemas must be prepared")
+        if type(regexes) is not PreparedRegexCatalog:
+            raise TypeError("configuration evaluation regexes must be prepared")
+        if type(digest_limits) is not DigestValidationLimits:
+            raise TypeError("configuration evaluation digest limits must be typed")
         if context.run.run_id != prepared.plan.run_id:
             raise ValueError("configuration evaluation context belongs to another run")
         self._prepared = prepared
@@ -476,6 +496,8 @@ class ConfigurationEvaluationPreparation:
         self._subjects = subjects
         self._gate = gate
         self._schemas = schemas
+        self._regexes = regexes
+        self._digest_limits = digest_limits
         self._snapshot_requirements = _snapshot_requirements(subjects)
 
     @property
@@ -517,11 +539,14 @@ class ConfigurationEvaluationPreparation:
                         ),
                     )
                 )
-            predicates = _schema_predicates(
+            predicates = _prepared_predicates(
                 self._schemas,
+                self._regexes,
                 rule,
                 record.outcome,
                 control.selection,
+                tuple(expressions),
+                self._digest_limits,
             )
             application = AssertionApplication(
                 application_id=RuleApplicationId(
@@ -650,6 +675,8 @@ def bind_configuration_evaluation(
     context: RunContext,
     limits: EvaluationRuleLimits,
     schema_limits: SchemaValidationLimits = DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
+    regex_limits: RegexValidationLimits = DEFAULT_REGEX_VALIDATION_LIMITS_V1,
+    digest_limits: DigestValidationLimits = DEFAULT_DIGEST_VALIDATION_LIMITS_V1,
 ) -> EvaluationBindingResult:
     """Lower every requested profile or reject the whole run before effects begin."""
     if type(prepared) is not PreparedRun or type(context) is not RunContext:
@@ -658,7 +685,15 @@ def bind_configuration_evaluation(
         raise TypeError("evaluation binding requires EvaluationRuleLimits")
     if type(schema_limits) is not SchemaValidationLimits:
         raise TypeError("evaluation binding requires SchemaValidationLimits")
-    subject_rules, gate, schemas, problems = _compile_configuration(prepared, schema_limits)
+    if type(regex_limits) is not RegexValidationLimits:
+        raise TypeError("evaluation binding requires RegexValidationLimits")
+    if type(digest_limits) is not DigestValidationLimits:
+        raise TypeError("evaluation binding requires DigestValidationLimits")
+    subject_rules, gate, schemas, regexes, problems = _compile_configuration(
+        prepared,
+        schema_limits,
+        regex_limits,
+    )
     if problems.diagnostics:
         return EvaluationBindingResult(
             diagnostics=tuple(problems.diagnostics),
@@ -672,6 +707,8 @@ def bind_configuration_evaluation(
             subjects=subject_rules,
             gate=gate,
             schemas=schemas,
+            regexes=regexes,
+            digest_limits=digest_limits,
         )
     )
 
@@ -679,13 +716,20 @@ def bind_configuration_evaluation(
 def preflight_configuration_evaluation(
     prepared: PreparedRun,
     schema_limits: SchemaValidationLimits = DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
+    regex_limits: RegexValidationLimits = DEFAULT_REGEX_VALIDATION_LIMITS_V1,
 ) -> EvaluationPreflightResult:
     """Compile all selected rules and the exact gate formula without acquiring effects."""
     if type(prepared) is not PreparedRun:
         raise TypeError("evaluation preflight requires PreparedRun")
     if type(schema_limits) is not SchemaValidationLimits:
         raise TypeError("evaluation preflight requires SchemaValidationLimits")
-    subject_rules, gate, _schemas, problems = _compile_configuration(prepared, schema_limits)
+    if type(regex_limits) is not RegexValidationLimits:
+        raise TypeError("evaluation preflight requires RegexValidationLimits")
+    subject_rules, gate, _schemas, _regexes, problems = _compile_configuration(
+        prepared,
+        schema_limits,
+        regex_limits,
+    )
     if problems.diagnostics:
         return EvaluationPreflightResult(
             diagnostics=tuple(problems.diagnostics),
@@ -706,10 +750,12 @@ def preflight_configuration_evaluation(
 def _compile_configuration(
     prepared: PreparedRun,
     schema_limits: SchemaValidationLimits,
+    regex_limits: RegexValidationLimits,
 ) -> tuple[
     tuple[_SubjectRules, ...],
     CompiledGateProfile | None,
     PreparedSchemaCatalog,
+    PreparedRegexCatalog,
     _Problems,
 ]:
     problems = _Problems()
@@ -733,7 +779,25 @@ def _compile_configuration(
         ),
         limits=schema_limits,
     )
-    return subject_rules, gate, schemas, problems
+    regex_entries: list[PreparedRegex] = []
+    for subject in subject_rules:
+        for rule in subject.assertions:
+            if type(rule.operator) is not RegexOperator:
+                continue
+            try:
+                prepared_regex = prepare_compiled_regex(rule.operator, regex_limits)
+            except (TypeError, ValueError):
+                problems.add(
+                    _OPERATOR,
+                    prepared.project.project,
+                    family=EvaluationCapabilityFamily.ASSERTION_OPERATOR,
+                    alias="matches",
+                )
+                continue
+            if prepared_regex.operator not in tuple(item.operator for item in regex_entries):
+                regex_entries.append(prepared_regex)
+    regexes = PreparedRegexCatalog(entries=tuple(regex_entries), limits=regex_limits)
+    return subject_rules, gate, schemas, regexes, problems
 
 
 def _compile_subject(
@@ -901,6 +965,10 @@ def _compile_assertion_profile(
     if not _profile_fields_supported(profile, problems):
         return ()
     rules = object_member(_spec(profile), "rules")
+    if rules is None:
+        if object_member(_spec(profile), "include") is None:
+            problems.add(_PROFILE_EMPTY, profile, field="rules")
+        return ()
     if type(rules) is not ArrayExpr or not rules.items:
         problems.add(_PROFILE_EMPTY, profile, field="rules")
         return ()
@@ -976,6 +1044,10 @@ def _compile_diff_profile(
     if not _profile_fields_supported(profile, problems):
         return ()
     rules = object_member(_spec(profile), "rules")
+    if rules is None:
+        if object_member(_spec(profile), "include") is None:
+            problems.add(_PROFILE_EMPTY, profile, field="rules")
+        return ()
     if type(rules) is not ArrayExpr or not rules.items:
         problems.add(_PROFILE_EMPTY, profile, field="rules")
         return ()
@@ -1000,21 +1072,29 @@ def _compile_diff_rule(
     if not _fields_supported(fields, _DIFF_FIELDS, profile, index, problems):
         return None
     rule_id = _rule_id(fields.get("id"), index, profile, problems)
-    selector = _selector_value(fields.get("selector"), profile, index, problems)
-    if rule_id is None or selector is None:
+    if rule_id is None:
         return None
     try:
-        transforms = compile_transforms(fields.get("transforms"), input_contract=selector.output)
-        reducer = compile_reducer(
-            fields.get("reducer"),
-            input_contract=selector.output,
-            transforms=transforms,
+        baseline = _compile_diff_side(
+            fields,
+            "baseline",
+            profile,
+            index,
+            problems,
         )
-        side = SidePipeline(selector=selector, transforms=transforms, reducer=reducer)
+        candidate = _compile_diff_side(
+            fields,
+            "candidate",
+            profile,
+            index,
+            problems,
+        )
+        if baseline is None or candidate is None:
+            return None
         pairing = compile_pairing(
             fields.get("pairing"),
-            baseline=side.output_contract,
-            candidate=side.output_contract,
+            baseline=baseline.output_contract,
+            candidate=candidate.output_contract,
         )
         comparator = compile_comparator(fields.get("comparator"))
         return CompiledDiffRule(
@@ -1029,8 +1109,8 @@ def _compile_diff_rule(
                 DiffCompletenessRequirement.COMPLETE,
             ),
             pipeline=DiffPipeline(
-                baseline=side,
-                candidate=side,
+                baseline=baseline,
+                candidate=candidate,
                 pairing=pairing,
                 comparator=comparator,
             ),
@@ -1049,6 +1129,46 @@ def _compile_diff_rule(
     except (TypeError, ValueError):
         problems.add(_RULE_SHAPE, profile, rule_index=index)
         return None
+
+
+def _compile_diff_side(
+    fields: dict[str, ValueExpression],
+    name: str,
+    profile: CompiledResource | InlineResource,
+    index: int,
+    problems: _Problems,
+) -> SidePipeline | None:
+    """Compile a shared pipeline or one explicit asymmetric side override."""
+    side_expression = fields.get(name)
+    side_fields: dict[str, ValueExpression] = {}
+    if side_expression is not None:
+        if type(side_expression) is not ObjectExpr:
+            problems.add(_RULE_SHAPE, profile, rule_index=index, field=name)
+            return None
+        side_fields = _expression_fields(side_expression)
+        if not set(side_fields) <= {"selector", "transforms", "reducer"}:
+            problems.add(_RULE_FIELD, profile, rule_index=index, field=name)
+            return None
+    selector_expression = side_fields.get("selector", fields.get("selector"))
+    selector = _selector_value(
+        selector_expression,
+        profile,
+        index,
+        problems,
+        slot=name,
+    )
+    if selector is None:
+        return None
+    transforms = compile_transforms(
+        side_fields.get("transforms", fields.get("transforms")),
+        input_contract=selector.output,
+    )
+    reducer = compile_reducer(
+        side_fields.get("reducer", fields.get("reducer")),
+        input_contract=selector.output,
+        transforms=transforms,
+    )
+    return SidePipeline(selector=selector, transforms=transforms, reducer=reducer)
 
 
 def _compile_gate(
@@ -1260,11 +1380,13 @@ def _selector_value(
     profile: CompiledResource | InlineResource,
     index: int,
     problems: _Problems,
+    *,
+    slot: str = "shared",
 ) -> CompiledSelector | None:
     try:
         return compile_selector(
             expression,
-            fingerprint=_selector_fingerprint(profile, f"rule-{index + 1}"),
+            fingerprint=_selector_fingerprint(profile, f"rule-{index + 1}-{slot}"),
             default_body_view=BodyViewKind.JSON,
         )
     except InvalidSelectorError as error:
@@ -1512,14 +1634,17 @@ async def _assertion_operand(
     raise TypeError("resolution returned an unsupported outcome")
 
 
-def _schema_predicates(
+def _prepared_predicates(
     schemas: PreparedSchemaCatalog,
+    regexes: PreparedRegexCatalog,
     rule: CompiledAssertionRule,
     observed: ObservedExecution,
     control: SelectionControl,
+    expressions: tuple[PreparedAssertionExpression, ...],
+    digest_limits: DigestValidationLimits,
 ) -> tuple[PreparedPredicate, ...]:
     """Prepare pinned schema results for the matches the pure engine will evaluate."""
-    if type(rule.operator) is not SchemaOperator:
+    if type(rule.operator) not in {SchemaOperator, RegexOperator, DigestOperator}:
         return ()
     selected = select(observed.snapshot, rule.selector, control).result
     if type(selected) is SelectionReady:  # noqa: SIM114 -- exact-type branches narrow for mypy
@@ -1528,15 +1653,50 @@ def _schema_predicates(
         matches = selected.matches
     else:
         return ()
-    return tuple(
-        schemas.predicate(
-            rule.operator,
-            match,
-            observed.observation.execution_id,
-            rule.selector.fingerprint,
+    if type(rule.operator) is SchemaOperator:
+        return tuple(
+            schemas.predicate(
+                rule.operator,
+                match,
+                observed.observation.execution_id,
+                rule.selector.fingerprint,
+            )
+            for match in matches
         )
-        for match in matches
-    )
+    if type(rule.operator) is RegexOperator:
+        return tuple(
+            regexes.predicate(
+                rule.operator,
+                match,
+                observed.observation.execution_id,
+                rule.selector.fingerprint,
+            )
+            for match in matches
+        )
+    if type(rule.operator) is DigestOperator:
+        operand = next(
+            (
+                item.result
+                for item in expressions
+                if item.expression == rule.operator.expected
+                and type(item.result) is AssertionOperandReady
+            ),
+            None,
+        )
+        if type(operand) is not AssertionOperandReady:
+            return ()
+        return tuple(
+            prepare_digest_predicate(
+                rule.operator,
+                match,
+                operand,
+                observed.observation.execution_id,
+                rule.selector.fingerprint,
+                digest_limits,
+            )
+            for match in matches
+        )
+    return ()  # pragma: no cover - guarded by the prepared-capability type check above
 
 
 async def _diff_operands(

@@ -172,9 +172,13 @@ class CompiledItemPredicate(msgspec.Struct, frozen=True, kw_only=True):
         )
         if not identity_matches:
             raise ValueError("item predicate identity does not match its typed operator")
-        if type(self.operator) is ItemEqualityPredicate and not expression_accepts(
-            self.operator.expected,
-            frozenset(self.selector.output.kinds),
+        if (
+            type(self.operator) is ItemEqualityPredicate
+            and ValueKind.UNKNOWN not in self.selector.output.kinds
+            and not expression_accepts(
+                self.operator.expected,
+                frozenset(self.selector.output.kinds),
+            )
         ):
             raise ValueError("item predicate operand contradicts selector output types")
 

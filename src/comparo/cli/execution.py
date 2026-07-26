@@ -150,6 +150,8 @@ def production_execution_settings(
         ordinary=ordinary,
         evaluation=defaults.evaluation,
         schemas=defaults.schemas,
+        regexes=defaults.regexes,
+        digests=defaults.digests,
         artifact=artifact,
         artifact_io_chunk_size=defaults.artifact_io_chunk_size,
     )

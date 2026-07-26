@@ -6,8 +6,12 @@ from typing import final
 
 import msgspec
 
+from comparo.application.evaluation_items import compile_item_predicate
+from comparo.application.evaluation_items import compile_item_selector
 from comparo.core.domain.diffs.contracts import derive_side_contract
 from comparo.core.domain.diffs.operations import CaseMode
+from comparo.core.domain.diffs.operations import CollectionFilter
+from comparo.core.domain.diffs.operations import CollectionMap
 from comparo.core.domain.diffs.operations import DiffDigestAlgorithm
 from comparo.core.domain.diffs.operations import DiffOperationFamily
 from comparo.core.domain.diffs.operations import DiffOperationIdentity
@@ -20,6 +24,11 @@ from comparo.core.domain.diffs.operations import LengthTransform
 from comparo.core.domain.diffs.operations import LengthUnit
 from comparo.core.domain.diffs.operations import NewlineMode
 from comparo.core.domain.diffs.operations import Projection
+from comparo.core.domain.diffs.operations import RelativeSelection
+from comparo.core.domain.diffs.operations import SortBy
+from comparo.core.domain.diffs.operations import SortDirection
+from comparo.core.domain.diffs.operations import StreamProjection
+from comparo.core.domain.diffs.operations import StreamSemanticSource
 from comparo.core.domain.diffs.operations import TextNormalization
 from comparo.core.domain.diffs.operations import TrimMode
 from comparo.core.domain.diffs.operations import ValueTypeTransform
@@ -30,10 +39,14 @@ from comparo.core.domain.diffs.strategies import CompatibilityKind
 from comparo.core.domain.diffs.strategies import DiffComparator
 from comparo.core.domain.diffs.strategies import DiffPairing
 from comparo.core.domain.diffs.strategies import DiffReducer
+from comparo.core.domain.diffs.strategies import DuplicateKeyMode
 from comparo.core.domain.diffs.strategies import EmptyInputMode
 from comparo.core.domain.diffs.strategies import ExactComparator
+from comparo.core.domain.diffs.strategies import GroupByReducer
 from comparo.core.domain.diffs.strategies import IgnoreComparator
+from comparo.core.domain.diffs.strategies import KeyedPairing
 from comparo.core.domain.diffs.strategies import NumericToleranceComparator
+from comparo.core.domain.diffs.strategies import ObjectFromEntriesReducer
 from comparo.core.domain.diffs.strategies import OrderedPairing
 from comparo.core.domain.diffs.strategies import Reducer
 from comparo.core.domain.diffs.strategies import ReducerKind
@@ -48,6 +61,7 @@ from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.selectors.contracts import ValueContract
+from comparo.core.domain.selectors.contracts import ValueKind
 from comparo.core.domain.selectors.paths import JsonPointer
 from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.values import JsonString
@@ -97,7 +111,7 @@ def compile_transforms(
         try:
             if operation is None:
                 raise ValueError("transform operation is not static")
-            transform = _compile_transform(*operation)
+            transform = _compile_transform(*operation, input_contract=current)
             current = derive_side_contract(current, (transform,), None)
         except (KeyError, TypeError, ValueError) as error:
             raise _invalid(DiffSyntaxFamily.TRANSFORM, alias) from error
@@ -146,18 +160,36 @@ def compile_pairing(
             raise _invalid(DiffSyntaxFamily.PAIRING, None)
         name, fields = operation
     try:
-        _require_fields(fields, "name" if expression is not None else None)
         identity = _identity(DiffOperationFamily.PAIRING, _kebab(name))
         if name == "singular":
+            _require_fields(fields, "name" if expression is not None else None)
             return SingularPairing(identity=identity)
         if name == "ordered":
+            _require_fields(fields, "name" if expression is not None else None)
             return OrderedPairing(identity=identity)
         if name in {"set", "multiset"}:
+            _require_fields(fields, "name" if expression is not None else None)
             return UnorderedPairing(
                 identity=identity,
                 kind=(UnorderedPairingKind.SET if name == "set" else UnorderedPairingKind.MULTISET),
             )
-        raise ValueError("pairing needs a relative key selector")
+        if name == "keyed":
+            _require_optional_fields(
+                fields,
+                {"name", "baselinePath", "candidatePath"},
+                {"duplicateKeys"},
+            )
+            return KeyedPairing(
+                identity=identity,
+                baseline_key=compile_item_selector(
+                    fields["baselinePath"], baseline, label="pairing.baseline"
+                ),
+                candidate_key=compile_item_selector(
+                    fields["candidatePath"], candidate, label="pairing.candidate"
+                ),
+                duplicate_keys=DuplicateKeyMode(_text(fields.get("duplicateKeys")) or "error"),
+            )
+        raise ValueError("unsupported pairing")
     except (TypeError, ValueError) as error:
         raise _invalid(DiffSyntaxFamily.PAIRING, name) from error
 
@@ -213,9 +245,11 @@ def compile_comparator(expression: ValueExpression | None) -> DiffComparator:
         raise _invalid(DiffSyntaxFamily.COMPARATOR, alias) from error
 
 
-def _compile_transform(
+def _compile_transform(  # noqa: C901 -- closed typed transform catalog
     name: str,
     fields: dict[str, ValueExpression],
+    *,
+    input_contract: ValueContract,
 ) -> DiffTransform:
     identity = _identity(DiffOperationFamily.TRANSFORM, _kebab(name))
     if name in {"project", "exclude"}:
@@ -255,7 +289,40 @@ def _compile_transform(
             identity=identity,
             algorithm=DiffDigestAlgorithm(_required_text(fields, "algorithm")),
         )
-    raise ValueError("transform requires a relative item selector")
+    if name in {"relativeSelect", "collectionMap"}:
+        _require_fields(fields, "name", "path")
+        selector = compile_item_selector(fields["path"], input_contract, label=f"transform.{name}")
+        return (
+            RelativeSelection(identity=identity, selector=selector)
+            if name == "relativeSelect"
+            else CollectionMap(identity=identity, selector=selector)
+        )
+    if name == "collectionFilter":
+        _require_fields(fields, "name", "path", "predicate")
+        selector = compile_item_selector(
+            fields["path"], input_contract, label="transform.collectionFilter"
+        )
+        return CollectionFilter(
+            identity=identity,
+            predicate=compile_item_predicate(fields["predicate"], selector),
+        )
+    if name == "sortBy":
+        _require_optional_fields(fields, {"name", "path"}, {"direction"})
+        return SortBy(
+            identity=identity,
+            key=compile_item_selector(fields["path"], input_contract, label="transform.sortBy"),
+            direction=SortDirection(_text(fields.get("direction")) or "ascending"),
+        )
+    if name == "streamProject":
+        _require_fields(fields, "name", "source", "path")
+        return StreamProjection(
+            identity=identity,
+            source=StreamSemanticSource(_required_text(fields, "source")),
+            selector=compile_item_selector(
+                fields["path"], input_contract, label="transform.streamProject"
+            ),
+        )
+    raise ValueError("unsupported transform")
 
 
 def _compile_reducer_operation(
@@ -277,7 +344,7 @@ def _compile_reducer_operation(
     }
     kind = kind_names.get(name)
     if kind is None:
-        raise ValueError("reducer requires relative item selectors")
+        return _compile_structured_reducer(name, fields)
     optional = {"empty", "separator"} if kind is ReducerKind.CONCATENATE else {"empty"}
     _require_optional_fields(fields, {"name"}, optional)
     separator = fields.get("separator")
@@ -289,6 +356,47 @@ def _compile_reducer_operation(
         empty=EmptyInputMode(_text(fields.get("empty")) or "error"),
         separator=separator,
     )
+
+
+def _compile_structured_reducer(
+    name: str,
+    fields: dict[str, ValueExpression],
+) -> DiffReducer:
+    """Compile key-producing reducers using explicit relative path arguments."""
+    unknown = ValueContract(
+        kinds=(ValueKind.UNKNOWN,),
+        cardinality=SelectorCardinality.EXACTLY_ONE,
+    )
+    if name == "groupBy":
+        _require_optional_fields(
+            fields,
+            {"name", "path"},
+            {"empty", "duplicateKeys"},
+        )
+        return GroupByReducer(
+            identity=_identity(DiffOperationFamily.REDUCER, "group-by"),
+            key=compile_item_selector(fields["path"], unknown, label="reducer.groupBy"),
+            empty=EmptyInputMode(_text(fields.get("empty")) or "error"),
+            duplicate_keys=DuplicateKeyMode(_text(fields.get("duplicateKeys")) or "error"),
+        )
+    if name == "objectFromEntries":
+        _require_optional_fields(
+            fields,
+            {"name", "keyPath", "valuePath"},
+            {"empty", "duplicateKeys"},
+        )
+        return ObjectFromEntriesReducer(
+            identity=_identity(DiffOperationFamily.REDUCER, "object-from-entries"),
+            key=compile_item_selector(
+                fields["keyPath"], unknown, label="reducer.objectFromEntries.key"
+            ),
+            value=compile_item_selector(
+                fields["valuePath"], unknown, label="reducer.objectFromEntries.value"
+            ),
+            empty=EmptyInputMode(_text(fields.get("empty")) or "error"),
+            duplicate_keys=DuplicateKeyMode(_text(fields.get("duplicateKeys")) or "error"),
+        )
+    raise ValueError("unsupported reducer")
 
 
 def _operation(

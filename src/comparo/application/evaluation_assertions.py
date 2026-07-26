@@ -6,6 +6,7 @@ from typing import final
 
 import msgspec
 
+from comparo.application.regex_validation import compile_regex
 from comparo.core.domain.assertions.extended_operators import CardinalityOperator
 from comparo.core.domain.assertions.extended_operators import DecodeOperator
 from comparo.core.domain.assertions.extended_operators import DigestAlgorithm
@@ -34,6 +35,7 @@ from comparo.core.domain.assertions.operators import StringOperator
 from comparo.core.domain.assertions.operators import StringRelation
 from comparo.core.domain.assertions.operators import TypeOperator
 from comparo.core.domain.assertions.operators import operator_kind
+from comparo.core.domain.assertions.regex import RegexMode
 from comparo.core.domain.expressions import ArrayExpr
 from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ObjectExpr
@@ -195,6 +197,13 @@ def _compile(alias: str, fields: dict[str, ValueExpression]) -> AssertionOperato
             minimum=_optional_count(fields.get("minimum")),
             maximum=_optional_count(fields.get("maximum")),
         )
+    if alias in {"matches", "notMatches"}:
+        _require_optional_fields(fields, {"name", "pattern"}, {"mode"})
+        return compile_regex(
+            _required_text(fields, "pattern"),
+            mode=RegexMode(_text(fields.get("mode")) or "search"),
+            negate=alias == "notMatches",
+        ).operator
     raise ValueError("operation alias requires a prepared capability or is unsupported")
 
 

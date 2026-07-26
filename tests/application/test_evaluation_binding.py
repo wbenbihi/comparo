@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
@@ -11,12 +12,17 @@ import msgspec
 import pytest
 
 from comparo.application import evaluation_binding as binding
+from comparo.application.digest_validation import DEFAULT_DIGEST_VALIDATION_LIMITS_V1
+from comparo.application.digest_validation import prepare_digest_predicate
 from comparo.core.assertions.inputs import PreparedOperandError as AssertionOperandError
 from comparo.core.assertions.inputs import PreparedOperandReady as AssertionOperandReady
 from comparo.core.assertions.inputs import PreparedOperandUnavailable as AssertionOperandUnavailable
+from comparo.core.assertions.inputs import PreparedPredicateOutcome
 from comparo.core.diffs.inputs import PreparedOperandError as DiffOperandError
 from comparo.core.diffs.inputs import PreparedOperandReady as DiffOperandReady
 from comparo.core.diffs.inputs import PreparedOperandUnavailable as DiffOperandUnavailable
+from comparo.core.domain.assertions.extended_operators import DigestOperator
+from comparo.core.domain.assertions.regex import RegexOperator
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticStage
@@ -24,10 +30,13 @@ from comparo.core.domain.expressions import LiteralExpr
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.gates.model import CompiledGateProfile
 from comparo.core.domain.gates.model import GateVerdict
+from comparo.core.domain.identity import BodyId
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EffectiveRuleId
+from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import RunId
+from comparo.core.domain.identity import ViewId
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
@@ -38,7 +47,12 @@ from comparo.core.domain.provenance import ResolutionStepOutcome
 from comparo.core.domain.provenance import ValueProvenance
 from comparo.core.domain.provenance import ValueProviderIdentity
 from comparo.core.domain.scopes import RunScope
+from comparo.core.domain.selectors.locations import BodyLocation
+from comparo.core.domain.selectors.locations import JsonLocation
+from comparo.core.domain.selectors.paths import JsonPointer
+from comparo.core.domain.selectors.results import SelectionMatch
 from comparo.core.domain.selectors.sources import BodyViewKind
+from comparo.core.domain.selectors.sources import SelectorSource
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.value_references import SymbolPath
@@ -398,6 +412,86 @@ def test_typed_selectors_and_deterministic_assertion_catalog_are_admitted() -> N
     assert compiled[2].selector.body_view is BodyViewKind.JSON
 
 
+def test_re2_assertions_are_precompiled_and_bound_to_selected_values() -> None:
+    prepared = _prepared(
+        assertion=(
+            "[{id: message-pattern, selector: {source: response.body, view: json, "
+            "path: /message}, operator: {name: matches, pattern: '^hello', mode: search}}]"
+        )
+    )
+    outcome = _bind(prepared)
+    evaluation = cast("binding.ConfigurationEvaluationPreparation", outcome.preparation)
+    rule = evaluation._subjects[0].assertions[0]
+    execution_id = EnvironmentExecutionId(value=UUID(int=41_001))
+    predicate = evaluation._regexes.predicate(
+        cast("RegexOperator", rule.operator),
+        SelectionMatch(
+            value=JsonString(value="hello from Comparo"),
+            location=JsonLocation(
+                environment_execution_id=execution_id,
+                source=SelectorSource.RESPONSE_BODY,
+                view_id=ViewId(value=UUID(int=41_002)),
+                pointer=JsonPointer(value="/message"),
+                body_view=BodyViewKind.JSON,
+            ),
+        ),
+        execution_id,
+        rule.selector.fingerprint,
+    )
+
+    assert len(evaluation._regexes.entries) == 1
+    assert predicate.outcome is PreparedPredicateOutcome.SATISFIED
+
+
+def test_invalid_re2_syntax_is_rejected_before_http() -> None:
+    outcome = _bind(
+        _prepared(
+            assertion=(
+                "[{id: invalid-pattern, selector: {source: response.body, view: text}, "
+                "operator: {name: matches, pattern: '(a)\\1'}}]"
+            )
+        )
+    )
+
+    assert outcome.preparation is None
+    assert _codes(outcome) == ("evaluation.operator.unsupported",)
+
+
+def test_digest_assertion_is_bound_to_exact_bytes_and_expected_operand() -> None:
+    expected = hashlib.sha256(b"payload").hexdigest()
+    prepared = _prepared(
+        assertion=(
+            "[{id: payload-digest, selector: {source: response.body, view: entity-bytes}, "
+            f"operator: {{name: digestEquals, algorithm: sha256, expected: '{expected}'}}}}]"
+        )
+    )
+    evaluation = cast(
+        "binding.ConfigurationEvaluationPreparation",
+        _bind(prepared).preparation,
+    )
+    rule = evaluation._subjects[0].assertions[0]
+    operator = cast("DigestOperator", rule.operator)
+    execution_id = EnvironmentExecutionId(value=UUID(int=42_001))
+    predicate = prepare_digest_predicate(
+        operator,
+        SelectionMatch(
+            value=BytesValue(value=b"payload"),
+            location=BodyLocation(
+                environment_execution_id=execution_id,
+                source=SelectorSource.RESPONSE_BODY,
+                body_id=BodyId(value=UUID(int=42_002)),
+                body_view=BodyViewKind.ENTITY_BYTES,
+            ),
+        ),
+        AssertionOperandReady(value=JsonString(value=expected)),
+        execution_id,
+        rule.selector.fingerprint,
+        DEFAULT_DIGEST_VALIDATION_LIMITS_V1,
+    )
+
+    assert predicate.outcome is PreparedPredicateOutcome.SATISFIED
+
+
 def test_semantic_diff_exclusion_and_collection_modes_are_admitted() -> None:
     diff = (
         "[{id: body-without-env-id, selector: {source: response.body, view: json}, "
@@ -413,6 +507,108 @@ def test_semantic_diff_exclusion_and_collection_modes_are_admitted() -> None:
     assert len(compiled) == 2
     assert len(compiled[0].pipeline.baseline.transforms) == 1
     assert compiled[1].pipeline.pairing.identity.name == "set"
+
+
+def test_advanced_relative_diff_stages_and_keyed_pairing_are_admitted() -> None:
+    diff = (
+        "[{id: keyed-items, selector: {source: response.body, view: json, path: '$[*]'}, "
+        "transforms: [{name: collectionFilter, path: /enabled, "
+        "predicate: {name: equals, expected: true}}, "
+        "{name: collectionMap, path: ''}, {name: sortBy, path: /id}], "
+        "pairing: {name: keyed, baselinePath: /id, candidatePath: /id, "
+        "duplicateKeys: incomparable}, comparator: exact}, "
+        "{id: grouped, selector: {source: response.body, view: json, path: '$[*]'}, "
+        "reducer: {name: groupBy, path: /kind, empty: return-empty-collection, "
+        "duplicateKeys: collect}, comparator: exact}, "
+        "{id: indexed, selector: {source: response.body, view: json, path: '$[*]'}, "
+        "reducer: {name: objectFromEntries, keyPath: /id, valuePath: /value, "
+        "duplicateKeys: keep-last}, comparator: exact}]"
+    )
+    outcome = _bind(_prepared(diff=diff))
+
+    preparation = outcome.preparation
+    assert preparation is not None, outcome.diagnostics
+    compiled = preparation._subjects[0].diffs
+    assert tuple(rule.pipeline.pairing.identity.name for rule in compiled) == (
+        "keyed",
+        "singular",
+        "singular",
+    )
+    assert (
+        tuple(
+            rule.pipeline.baseline.reducer.identity.name  # type: ignore[union-attr]
+            for rule in compiled[1:]
+        )
+        == ("group-by", "object-from-entries")
+    )
+
+
+def test_diff_rule_supports_explicit_asymmetric_side_pipelines() -> None:
+    diff = (
+        "[{id: migration, baseline: {selector: {source: response.body, view: json, "
+        "path: /legacy}, transforms: [{name: normalizeText, trim: both}]}, "
+        "candidate: {selector: {source: response.body, view: json, path: /current}}, "
+        "pairing: singular, comparator: exact}]"
+    )
+    outcome = _bind(_prepared(diff=diff))
+
+    preparation = outcome.preparation
+    assert preparation is not None, outcome.diagnostics
+    pipeline = preparation._subjects[0].diffs[0].pipeline
+    assert pipeline.baseline.selector.fingerprint != pipeline.candidate.selector.fingerprint
+    assert len(pipeline.baseline.transforms) == 1
+    assert pipeline.candidate.transforms == ()
+
+
+def test_assertion_and_diff_profile_includes_compose_before_local_rules() -> None:
+    project = compile_project(
+        document(
+            "Project",
+            "demo",
+            "{defaults: {subjects: [{$use: Request/check}], baseline: {$use: staging}, "
+            "candidates: [{$use: prod}], assertions: [{$use: assertion-child}], "
+            "diffs: [{$use: diff-child}]}}",
+        ),
+        document("Environment", "staging", "{baseUrl: 'https://staging.example'}"),
+        document("Environment", "prod", "{baseUrl: 'https://prod.example'}"),
+        document("Request", "check", "{request: {method: GET, endpoint: /check}}"),
+        document(
+            "AssertionProfile",
+            "assertion-base",
+            "{rules: [{id: status-ok, selector: status, operator: {name: equals, expected: 200}}]}",
+        ),
+        document(
+            "AssertionProfile",
+            "assertion-child",
+            "{include: [{$use: assertion-base}], rules: [{id: status-type, "
+            "selector: status, operator: {name: isType, expected: integer}}]}",
+        ),
+        document(
+            "DiffProfile",
+            "diff-base",
+            "{rules: [{id: status-exact, selector: status, comparator: exact}]}",
+        ),
+        document(
+            "DiffProfile",
+            "diff-child",
+            "{include: [{$use: diff-base}], rules: [{id: body-shape, selector: body, "
+            "transforms: [jsonShape], comparator: exact}]}",
+        ),
+    )
+    planned = plan_run(project, invocation(), authority())
+    assert planned.prepared is not None
+    outcome = _bind(planned.prepared)
+
+    preparation = outcome.preparation
+    assert preparation is not None, outcome.diagnostics
+    assert tuple(rule.effective_id.value for rule in preparation._subjects[0].assertions) == (
+        "status-ok",
+        "status-type",
+    )
+    assert tuple(rule.effective_id.value for rule in preparation._subjects[0].diffs) == (
+        "status-exact",
+        "body-shape",
+    )
 
 
 def test_empty_profile_and_nonempty_gate_fail_closed() -> None:
@@ -594,6 +790,8 @@ def test_evaluation_preparation_constructor_invariants() -> None:
     limits = _limits()
     subjects = valid._subjects
     schemas = valid._schemas
+    regexes = valid._regexes
+    digest_limits = valid._digest_limits
 
     with pytest.raises(TypeError, match="PreparedRun and RunContext"):
         binding.ConfigurationEvaluationPreparation(
@@ -603,6 +801,8 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             subjects=subjects,
             gate=None,
             schemas=schemas,
+            regexes=regexes,
+            digest_limits=digest_limits,
         )
     with pytest.raises(TypeError, match="PreparedRun and RunContext"):
         binding.ConfigurationEvaluationPreparation(
@@ -612,6 +812,8 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             subjects=subjects,
             gate=None,
             schemas=schemas,
+            regexes=regexes,
+            digest_limits=digest_limits,
         )
     with pytest.raises(TypeError, match="EvaluationRuleLimits"):
         binding.ConfigurationEvaluationPreparation(
@@ -621,6 +823,8 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             subjects=subjects,
             gate=None,
             schemas=schemas,
+            regexes=regexes,
+            digest_limits=digest_limits,
         )
     with pytest.raises(TypeError, match="subjects"):
         binding.ConfigurationEvaluationPreparation(
@@ -630,6 +834,8 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             subjects=cast("tuple[binding._SubjectRules, ...]", (object(),)),
             gate=None,
             schemas=schemas,
+            regexes=regexes,
+            digest_limits=digest_limits,
         )
     with pytest.raises(TypeError, match="gate"):
         binding.ConfigurationEvaluationPreparation(
@@ -639,6 +845,8 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             subjects=subjects,
             gate=cast("CompiledGateProfile", object()),
             schemas=schemas,
+            regexes=regexes,
+            digest_limits=digest_limits,
         )
 
     mismatched = _context(prepared)
@@ -651,6 +859,8 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             subjects=subjects,
             gate=None,
             schemas=schemas,
+            regexes=regexes,
+            digest_limits=digest_limits,
         )
 
 

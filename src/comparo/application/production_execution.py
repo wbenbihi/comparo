@@ -52,12 +52,16 @@ from comparo.adapters.values import SafeYamlValueDecoder
 from comparo.adapters.values import SecureGenerator
 from comparo.adapters.values import SystemRunClock
 from comparo.adapters.values import YamlValueLimits
+from comparo.application.digest_validation import DEFAULT_DIGEST_VALIDATION_LIMITS_V1
+from comparo.application.digest_validation import DigestValidationLimits
 from comparo.application.environment_binding import build_environment_snapshots
 from comparo.application.evaluation_binding import EvaluationRuleLimits
 from comparo.application.evaluation_binding import bind_configuration_evaluation
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import inspect_diagnostic
 from comparo.application.preflight import PreparedProjectPlan
+from comparo.application.regex_validation import DEFAULT_REGEX_VALIDATION_LIMITS_V1
+from comparo.application.regex_validation import RegexValidationLimits
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
 from comparo.application.schema_validation import SchemaValidationLimits
@@ -178,6 +182,8 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
             pairs=100_000,
         ),
         schemas=DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
+        regexes=DEFAULT_REGEX_VALIDATION_LIMITS_V1,
+        digests=DEFAULT_DIGEST_VALIDATION_LIMITS_V1,
         artifact=ArtifactPolicy(
             persist=ArtifactPersistMode.NEVER,
             unsafe_source=UnsafeSourceBehavior.OMIT,
@@ -216,6 +222,8 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
     ordinary: OrdinaryResponseDecodeLimits
     evaluation: EvaluationRuleLimits
     schemas: SchemaValidationLimits
+    regexes: RegexValidationLimits
+    digests: DigestValidationLimits
     artifact: ArtifactPolicy
     artifact_io_chunk_size: PositiveCount
 
@@ -232,6 +240,8 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
             (self.ordinary, OrdinaryResponseDecodeLimits),
             (self.evaluation, EvaluationRuleLimits),
             (self.schemas, SchemaValidationLimits),
+            (self.regexes, RegexValidationLimits),
+            (self.digests, DigestValidationLimits),
             (self.artifact, ArtifactPolicy),
             (self.artifact_io_chunk_size, PositiveCount),
         )
@@ -445,6 +455,8 @@ async def _execute_with_resources(
         context,
         request.settings.evaluation,
         request.settings.schemas,
+        request.settings.regexes,
+        request.settings.digests,
     )
     if evaluation.diagnostics:
         return _failure(
