@@ -283,10 +283,12 @@ RESOURCE_SCHEMAS: tuple[ResourceSchema, ...] = (
     ResourceSchema(
         kind=ResourceKind.GATE_PROFILE,
         fields=(
-            _field("assertions", FieldMode.STATIC),
-            _field("diffs", FieldMode.STATIC),
-            _field("runtime", FieldMode.STATIC),
-            _field("coverage", FieldMode.STATIC),
+            _field("severities", FieldMode.STATIC),
+            _field("environmentRoles", FieldMode.STATIC),
+            _field("requireCompleteRun", FieldMode.STATIC),
+            _field("requireAssertionCoverage", FieldMode.STATIC),
+            _field("requireDiffCoverage", FieldMode.STATIC),
+            _field("thresholds", FieldMode.STATIC),
         ),
     ),
     ResourceSchema(

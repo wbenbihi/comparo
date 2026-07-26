@@ -14,6 +14,16 @@ from uuid import uuid5
 
 import msgspec
 
+from comparo.application.evaluation_assertions import InvalidAssertionOperationError
+from comparo.application.evaluation_assertions import compile_assertion_operation
+from comparo.application.evaluation_diffs import DiffSyntaxFamily
+from comparo.application.evaluation_diffs import InvalidDiffOperationError
+from comparo.application.evaluation_diffs import compile_comparator
+from comparo.application.evaluation_diffs import compile_pairing
+from comparo.application.evaluation_diffs import compile_reducer
+from comparo.application.evaluation_diffs import compile_transforms
+from comparo.application.evaluation_selectors import InvalidSelectorError
+from comparo.application.evaluation_selectors import compile_selector
 from comparo.core.assertions.accounting import AssertionBudgets
 from comparo.core.assertions.accounting import assertion_budget_operations
 from comparo.core.assertions.engine import AssertionControl
@@ -29,6 +39,8 @@ from comparo.core.configuration.canonical import CanonicalValue
 from comparo.core.configuration.canonical import CompiledProject
 from comparo.core.configuration.canonical import CompiledResource
 from comparo.core.configuration.canonical import InlineResource
+from comparo.core.configuration.v1alpha1.operations import ASSERTION_OPERATION_ALIASES
+from comparo.core.configuration.v1alpha1.operations import DIFF_COMPARATOR_ALIASES
 from comparo.core.diffs.accounting import DiffBudgets
 from comparo.core.diffs.accounting import DiffCancellation
 from comparo.core.diffs.accounting import DiffControl
@@ -39,10 +51,7 @@ from comparo.core.diffs.inputs import PreparedOperandError as DiffOperandError
 from comparo.core.diffs.inputs import PreparedOperandReady as DiffOperandReady
 from comparo.core.diffs.inputs import PreparedOperandUnavailable as DiffOperandUnavailable
 from comparo.core.diffs.inputs import required_expressions as required_diff_expressions
-from comparo.core.domain.assertions.operators import AssertionOperatorIdentity
-from comparo.core.domain.assertions.operators import AssertionOperatorKind
-from comparo.core.domain.assertions.operators import EqualityOperator
-from comparo.core.domain.assertions.operators import EqualityRelation
+from comparo.core.domain.assertions.operators import operator_uses_match_predicate
 from comparo.core.domain.assertions.rules import AssertionApplication
 from comparo.core.domain.assertions.rules import AssertionRuleDefinition
 from comparo.core.domain.assertions.rules import CompiledAssertionRule
@@ -68,8 +77,6 @@ from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.diagnostics import DiagnosticStage
 from comparo.core.domain.diagnostics import FieldPathSegment
 from comparo.core.domain.diagnostics import IndexPathSegment
-from comparo.core.domain.diffs.operations import DiffOperationFamily
-from comparo.core.domain.diffs.operations import DiffOperationIdentity
 from comparo.core.domain.diffs.rules import CompiledDiffRule
 from comparo.core.domain.diffs.rules import DiffApplication
 from comparo.core.domain.diffs.rules import DiffCompletenessRequirement
@@ -78,10 +85,6 @@ from comparo.core.domain.diffs.rules import DiffRuleDefinition
 from comparo.core.domain.diffs.rules import DiffSeverity
 from comparo.core.domain.diffs.rules import DirectedEnvironmentPair
 from comparo.core.domain.diffs.rules import SidePipeline
-from comparo.core.domain.diffs.strategies import ExactComparator
-from comparo.core.domain.diffs.strategies import IgnoreComparator
-from comparo.core.domain.diffs.strategies import OrderedPairing
-from comparo.core.domain.diffs.strategies import SingularPairing
 from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.expressions import ArrayExpr
 from comparo.core.domain.expressions import LiteralExpr
@@ -105,19 +108,17 @@ from comparo.core.domain.primitives import Sha256Digest
 from comparo.core.domain.provenance import SourceLocation
 from comparo.core.domain.scopes import ComparisonBudgetScope
 from comparo.core.domain.scopes import RunScope
-from comparo.core.domain.selectors.contracts import JSON_VALUE_KINDS
-from comparo.core.domain.selectors.contracts import ValueContract
 from comparo.core.domain.selectors.model import CompiledSelector
-from comparo.core.domain.selectors.paths import NoPath
-from comparo.core.domain.selectors.selector_semantics import derive_selector_capabilities
 from comparo.core.domain.selectors.sources import STREAM_SELECTOR_SOURCES
 from comparo.core.domain.selectors.sources import BodyViewKind
-from comparo.core.domain.selectors.sources import SelectorCardinality
 from comparo.core.domain.selectors.sources import SelectorSource
-from comparo.core.domain.value_kinds import ValueKind
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.values import Blocked
 from comparo.core.domain.values import Error
+from comparo.core.domain.values import JsonArray
+from comparo.core.domain.values import JsonBoolean
+from comparo.core.domain.values import JsonInteger
+from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import Missing
 from comparo.core.domain.values import Present
@@ -157,13 +158,34 @@ _RESOLUTION_ERROR = DiagnosticCode(value="evaluation.operand.error")
 _CANCELLED = DiagnosticCode(value="evaluation.cancelled")
 
 _ASSERTION_FIELDS = frozenset(
-    {"id", "selector", "operator", "severity", "quantifier", "completeness"}
+    {
+        "id",
+        "name",
+        "description",
+        "tags",
+        "selector",
+        "operator",
+        "severity",
+        "quantifier",
+        "completeness",
+    }
 )
-_DIFF_FIELDS = frozenset({"id", "selector", "comparator", "severity", "completeness"})
+_DIFF_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "description",
+        "tags",
+        "selector",
+        "transforms",
+        "reducer",
+        "pairing",
+        "comparator",
+        "severity",
+        "completeness",
+    }
+)
 _PROFILE_FIELDS = frozenset({"include", "rules"})
-_SUPPORTED_ASSERTIONS = frozenset({"equals", "notEquals"})
-_SUPPORTED_COMPARATORS = frozenset({"exact", "ignore"})
-_JSON_KINDS = tuple(sorted(JSON_VALUE_KINDS, key=lambda item: item.value))
 
 
 class EvaluationCapabilityFamily(DomainStrEnum):
@@ -744,50 +766,35 @@ def _compile_assertion_rule(
         return None
     rule_id = _rule_id(fields.get("id"), index, profile, problems)
     selector = _selector_value(fields.get("selector"), profile, index, problems)
-    operator = _operation(fields.get("operator"))
-    if operator is None or operator[0] not in _SUPPORTED_ASSERTIONS:
-        alias = None if operator is None else operator[0]
+    try:
+        operator_id, operator = compile_assertion_operation(fields.get("operator"))
+    except InvalidAssertionOperationError as error:
         problems.add(
             _OPERATOR,
             profile,
             rule_index=index,
             field="operator",
             family=EvaluationCapabilityFamily.ASSERTION_OPERATOR,
-            alias=_safe_alias(alias),
+            alias=_safe_alias(error.error.alias),
         )
         return None
-    operation_name, operation_fields = operator
-    if set(operation_fields) != {"name", "expected"}:
-        problems.add(
-            _OPERATOR,
-            profile,
-            rule_index=index,
-            field="operator",
-            family=EvaluationCapabilityFamily.ASSERTION_OPERATOR,
-            alias=operation_name,
-        )
-        return None
-    expected = operation_fields["expected"]
     if rule_id is None or selector is None:
         return None
-    relation = (
-        EqualityRelation.EQUALS if operation_name == "equals" else EqualityRelation.NOT_EQUALS
-    )
     try:
         compiled = CompiledAssertionRule(
             definition=AssertionRuleDefinition(origin=_rule_origin(profile), rule_id=rule_id),
             effective_id=EffectiveRuleId(value=rule_id.value),
             fingerprint=_rule_fingerprint(profile, "assertion", rule_id, index),
-            metadata=Metadata(),
+            metadata=_rule_metadata(fields),
             severity=_enum_field(fields.get("severity"), Severity, Severity.BLOCKING),
             selector=selector,
-            operator_id=AssertionOperatorIdentity(
-                namespace="comparo.core",
-                kind=AssertionOperatorKind.EQUALITY,
-                version="1",
+            operator_id=operator_id,
+            operator=operator,
+            quantifier=(
+                _enum_field(fields.get("quantifier"), Quantifier, Quantifier.ONE)
+                if operator_uses_match_predicate(operator)
+                else None
             ),
-            operator=EqualityOperator(relation=relation, expected=expected),
-            quantifier=_enum_field(fields.get("quantifier"), Quantifier, Quantifier.ONE),
             completeness=_enum_field(
                 fields.get("completeness"),
                 CompletenessRequirement,
@@ -831,59 +838,30 @@ def _compile_diff_rule(
         return None
     fields = _expression_fields(expression)
     if not _fields_supported(fields, _DIFF_FIELDS, profile, index, problems):
-        _reject_diff_operations(fields, profile, index, problems)
         return None
     rule_id = _rule_id(fields.get("id"), index, profile, problems)
     selector = _selector_value(fields.get("selector"), profile, index, problems)
-    comparator = _operation(fields.get("comparator"))
-    if comparator is None or comparator[0] not in _SUPPORTED_COMPARATORS:
-        alias = None if comparator is None else comparator[0]
-        problems.add(
-            _OPERATOR,
-            profile,
-            rule_index=index,
-            field="comparator",
-            family=EvaluationCapabilityFamily.DIFF_COMPARATOR,
-            alias=_safe_alias(alias),
-        )
-        return None
-    comparator_name, comparator_fields = comparator
-    if set(comparator_fields) != {"name"}:
-        problems.add(
-            _OPERATOR,
-            profile,
-            rule_index=index,
-            field="comparator",
-            family=EvaluationCapabilityFamily.DIFF_COMPARATOR,
-            alias=comparator_name,
-        )
-        return None
     if rule_id is None or selector is None:
         return None
-    pairing_identity = _diff_identity(
-        DiffOperationFamily.PAIRING,
-        "ordered"
-        if selector.output.cardinality is SelectorCardinality.ZERO_OR_MORE
-        else "singular",
-    )
-    pairing = (
-        OrderedPairing(identity=pairing_identity)
-        if selector.output.cardinality is SelectorCardinality.ZERO_OR_MORE
-        else SingularPairing(identity=pairing_identity)
-    )
-    comparator_identity = _diff_identity(DiffOperationFamily.COMPARATOR, comparator_name)
-    strategy = (
-        ExactComparator(identity=comparator_identity)
-        if comparator_name == "exact"
-        else IgnoreComparator(identity=comparator_identity)
-    )
-    side = SidePipeline(selector=selector)
     try:
+        transforms = compile_transforms(fields.get("transforms"), input_contract=selector.output)
+        reducer = compile_reducer(
+            fields.get("reducer"),
+            input_contract=selector.output,
+            transforms=transforms,
+        )
+        side = SidePipeline(selector=selector, transforms=transforms, reducer=reducer)
+        pairing = compile_pairing(
+            fields.get("pairing"),
+            baseline=side.output_contract,
+            candidate=side.output_contract,
+        )
+        comparator = compile_comparator(fields.get("comparator"))
         return CompiledDiffRule(
             definition=DiffRuleDefinition(origin=_rule_origin(profile), rule_id=rule_id),
             effective_id=EffectiveRuleId(value=rule_id.value),
             fingerprint=_rule_fingerprint(profile, "diff", rule_id, index),
-            metadata=Metadata(),
+            metadata=_rule_metadata(fields),
             severity=_enum_field(fields.get("severity"), DiffSeverity, DiffSeverity.BLOCKING),
             completeness=_enum_field(
                 fields.get("completeness"),
@@ -894,9 +872,20 @@ def _compile_diff_rule(
                 baseline=side,
                 candidate=side,
                 pairing=pairing,
-                comparator=strategy,
+                comparator=comparator,
             ),
         )
+    except InvalidDiffOperationError as error:
+        family, field = _diff_problem_family(error.error.family)
+        problems.add(
+            _OPERATOR,
+            profile,
+            rule_index=index,
+            field=field,
+            family=family,
+            alias=_safe_alias(error.error.alias),
+        )
+        return None
     except (TypeError, ValueError):
         problems.add(_RULE_SHAPE, profile, rule_index=index)
         return None
@@ -928,35 +917,140 @@ def _compile_gate(
     if type(profile) is InlineResource:
         problems.add(_INLINE_GATE, profile, family=EvaluationCapabilityFamily.GATE)
         return None
-    if _spec(profile).members:
+    try:
+        severities = _gate_enum_array(
+            object_member(_spec(profile), "severities"),
+            GateSeverity,
+            (GateSeverity.BLOCKING,),
+        )
+        roles = _gate_enum_array(
+            object_member(_spec(profile), "environmentRoles"),
+            EnvironmentRole,
+            (
+                EnvironmentRole.BASELINE,
+                EnvironmentRole.CANDIDATE,
+                EnvironmentRole.OTHER,
+            ),
+        )
+        require_complete = _gate_boolean(
+            object_member(_spec(profile), "requireCompleteRun"),
+            default=True,
+        )
+        require_assertions = _gate_boolean(
+            object_member(_spec(profile), "requireAssertionCoverage"),
+            default=any(item.assertions for item in subjects),
+        )
+        require_diffs = _gate_boolean(
+            object_member(_spec(profile), "requireDiffCoverage"),
+            default=(
+                prepared.plan.cardinality.comparisons.value > 0
+                and any(item.diffs for item in subjects)
+            ),
+        )
+        thresholds = _gate_thresholds(
+            object_member(_spec(profile), "thresholds"),
+            severities,
+        )
+    except (KeyError, TypeError, ValueError):
         problems.add(_GATE, profile, family=EvaluationCapabilityFamily.GATE)
         return None
-    zero = Count(value=0)
     return CompiledGateProfile(
         definition=profile.definition,
-        severities=(GateSeverity.BLOCKING,),
-        environment_roles=(
-            EnvironmentRole.BASELINE,
-            EnvironmentRole.CANDIDATE,
-            EnvironmentRole.OTHER,
-        ),
-        require_complete_run=True,
-        require_assertion_coverage=any(item.assertions for item in subjects),
-        require_diff_coverage=(
-            prepared.plan.cardinality.comparisons.value > 0 and any(item.diffs for item in subjects)
-        ),
-        thresholds=(
+        severities=severities,
+        environment_roles=roles,
+        require_complete_run=require_complete,
+        require_assertion_coverage=require_assertions,
+        require_diff_coverage=require_diffs,
+        thresholds=thresholds,
+    )
+
+
+def _gate_enum_array[EnumT: DomainStrEnum](
+    value: CanonicalValue | None,
+    enum_type: type[EnumT],
+    default: tuple[EnumT, ...],
+) -> tuple[EnumT, ...]:
+    """Read a non-empty unique static enum array or retain the versioned default."""
+    if value is None:
+        return default
+    if type(value) is not JsonArray or not value.items:
+        raise ValueError("gate enum selection must be a non-empty array")
+    result = tuple(
+        enum_type(item.value) if type(item) is JsonString else enum_type("") for item in value.items
+    )
+    if len(set(result)) != len(result):
+        raise ValueError("gate enum selections must be unique")
+    return result
+
+
+def _gate_boolean(value: CanonicalValue | None, *, default: bool) -> bool:
+    """Read one static gate flag without accepting integer truthiness."""
+    if value is None:
+        return default
+    if type(value) is not JsonBoolean:
+        raise ValueError("gate flag must be a boolean")
+    return value.value
+
+
+def _gate_thresholds(
+    value: CanonicalValue | None,
+    severities: tuple[GateSeverity, ...],
+) -> tuple[GateThreshold, ...]:
+    """Compile exact per-severity adverse-rule allowances with zero defaults."""
+    zero = Count(value=0)
+    if value is None:
+        return tuple(
             GateThreshold(
-                severity=GateSeverity.BLOCKING,
+                severity=severity,
                 violated_rules=zero,
                 drifted_rules=zero,
                 unavailable_rules=zero,
                 incomparable_rules=zero,
                 incomplete_rules=zero,
                 error_rules=zero,
-            ),
-        ),
+            )
+            for severity in severities
+        )
+    if type(value) is not JsonArray or not value.items:
+        raise ValueError("gate thresholds must be a non-empty array")
+    thresholds = tuple(_gate_threshold(item) for item in value.items)
+    if tuple(threshold.severity for threshold in thresholds) != severities:
+        raise ValueError("gate thresholds must follow and exactly cover selected severities")
+    return thresholds
+
+
+def _gate_threshold(value: CanonicalValue) -> GateThreshold:
+    """Compile one closed threshold object without retaining unknown fields."""
+    if type(value) is not JsonObject:
+        raise ValueError("gate threshold must be an object")
+    fields = {member.name: member.value for member in value.members}
+    expected = {
+        "severity",
+        "violatedRules",
+        "driftedRules",
+        "unavailableRules",
+        "incomparableRules",
+        "incompleteRules",
+        "errorRules",
+    }
+    if set(fields) != expected or type(fields["severity"]) is not JsonString:
+        raise ValueError("gate threshold fields do not match the typed schema")
+    return GateThreshold(
+        severity=GateSeverity(fields["severity"].value),
+        violated_rules=_gate_count(fields["violatedRules"]),
+        drifted_rules=_gate_count(fields["driftedRules"]),
+        unavailable_rules=_gate_count(fields["unavailableRules"]),
+        incomparable_rules=_gate_count(fields["incomparableRules"]),
+        incomplete_rules=_gate_count(fields["incompleteRules"]),
+        error_rules=_gate_count(fields["errorRules"]),
     )
+
+
+def _gate_count(value: CanonicalValue) -> Count:
+    """Read one exact non-negative threshold count."""
+    if type(value) is not JsonInteger:
+        raise ValueError("gate threshold counts must be integers")
+    return Count(value=value.value)
 
 
 def _profile_fields_supported(
@@ -989,36 +1083,16 @@ def _fields_supported(
     return not unsupported
 
 
-def _reject_diff_operations(
-    fields: dict[str, ValueExpression],
-    profile: CompiledResource | InlineResource,
-    index: int,
-    problems: _Problems,
-) -> None:
-    families = {
-        "transforms": EvaluationCapabilityFamily.DIFF_TRANSFORM,
-        "reducer": EvaluationCapabilityFamily.DIFF_REDUCER,
-        "pairing": EvaluationCapabilityFamily.DIFF_PAIRING,
-    }
-    for field, family in families.items():
-        value = fields.get(field)
-        if value is None:
-            continue
-        operations = (
-            tuple(_operation(item) for item in value.items)
-            if type(value) is ArrayExpr
-            else (_operation(value),)
-        )
-        aliases = tuple(operation[0] for operation in operations if operation is not None)
-        for alias in aliases or (None,):
-            problems.rejected.append(
-                RejectedEvaluationCapability(
-                    family=family,
-                    alias=_safe_alias(alias),
-                    resource=_profile_context(profile)[0],
-                    rule_index=Count(value=index),
-                )
-            )
+def _diff_problem_family(
+    family: DiffSyntaxFamily,
+) -> tuple[EvaluationCapabilityFamily, str]:
+    """Map the isolated syntax compiler stage to one public preflight coordinate."""
+    return {
+        DiffSyntaxFamily.TRANSFORM: (EvaluationCapabilityFamily.DIFF_TRANSFORM, "transforms"),
+        DiffSyntaxFamily.REDUCER: (EvaluationCapabilityFamily.DIFF_REDUCER, "reducer"),
+        DiffSyntaxFamily.PAIRING: (EvaluationCapabilityFamily.DIFF_PAIRING, "pairing"),
+        DiffSyntaxFamily.COMPARATOR: (EvaluationCapabilityFamily.DIFF_COMPARATOR, "comparator"),
+    }[family]
 
 
 def _selector_value(
@@ -1027,60 +1101,22 @@ def _selector_value(
     index: int,
     problems: _Problems,
 ) -> CompiledSelector | None:
-    text = _literal_text(expression)
-    if text is None:
+    try:
+        return compile_selector(
+            expression,
+            fingerprint=_selector_fingerprint(profile, f"rule-{index + 1}"),
+            default_body_view=BodyViewKind.JSON,
+        )
+    except InvalidSelectorError as error:
         problems.add(
             _SELECTOR,
             profile,
             rule_index=index,
             field="selector",
             family=EvaluationCapabilityFamily.SELECTOR,
+            alias=error.error.alias,
         )
         return None
-    source: SelectorSource
-    path = NoPath()
-    view: BodyViewKind | None = None
-    kinds: tuple[ValueKind, ...]
-    if text in {"status", "response.status"}:
-        source = SelectorSource.RESPONSE_STATUS
-        kinds = (ValueKind.INTEGER,)
-    elif text in {"body", "response.body"}:
-        source = SelectorSource.RESPONSE_BODY
-        view = BodyViewKind.JSON
-        kinds = _JSON_KINDS
-    else:
-        problems.add(
-            _SELECTOR,
-            profile,
-            rule_index=index,
-            field="selector",
-            family=EvaluationCapabilityFamily.SELECTOR,
-        )
-        return None
-    capabilities = derive_selector_capabilities(source, path)
-    return CompiledSelector(
-        fingerprint=_selector_fingerprint(profile, text),
-        source=source,
-        path=path,
-        capabilities=capabilities,
-        output=ValueContract(kinds=kinds, cardinality=capabilities.cardinality),
-        body_view=view,
-    )
-
-
-def _operation(
-    expression: ValueExpression | None,
-) -> tuple[str, dict[str, ValueExpression]] | None:
-    shorthand = _literal_text(expression)
-    if shorthand is not None and expression is not None:
-        return _normalize_operation(shorthand), {"name": expression}
-    if type(expression) is not ObjectExpr:
-        return None
-    fields = _expression_fields(expression)
-    name = _literal_text(fields.get("name"))
-    if name is None:
-        return None
-    return _normalize_operation(name), fields
 
 
 def _normalize_operation(name: str) -> str:
@@ -1093,8 +1129,8 @@ def _safe_alias(alias: str | None) -> str | None:
         return None
     normalized = _normalize_operation(alias)
     catalogs = (
-        _SUPPORTED_ASSERTIONS
-        | _SUPPORTED_COMPARATORS
+        ASSERTION_OPERATION_ALIASES
+        | DIFF_COMPARATOR_ALIASES
         | {
             "approximatelyEquals",
             "between",
@@ -1171,6 +1207,25 @@ def _literal_text(value: ValueExpression | None) -> str | None:
         if type(value) is LiteralExpr and type(value.value) is JsonString
         else None
     )
+
+
+def _rule_metadata(fields: dict[str, ValueExpression]) -> Metadata:
+    """Compile presentation-only rule metadata without affecting stable rule identity."""
+    name = _literal_text(fields.get("name"))
+    description = _literal_text(fields.get("description"))
+    if ("name" in fields and name is None) or ("description" in fields and description is None):
+        raise ValueError("rule name and description must be static text")
+    tags_value = fields.get("tags")
+    if tags_value is None:
+        tags: tuple[str, ...] = ()
+    elif type(tags_value) is ArrayExpr:
+        maybe_tags = tuple(_literal_text(item) for item in tags_value.items)
+        if any(tag is None for tag in maybe_tags):
+            raise ValueError("rule tags must be static text")
+        tags = tuple(tag for tag in maybe_tags if tag is not None)
+    else:
+        raise ValueError("rule tags must be an array")
+    return Metadata(name=name, description=description, tags=tags)
 
 
 def _enum_field[EnumT: DomainStrEnum](
@@ -1271,15 +1326,6 @@ def _selector_fingerprint(profile: CompiledResource | InlineResource, selector: 
         "comparo.selector.v1",
         _profile_fingerprint(profile).digest.hex_value,
         selector,
-    )
-
-
-def _diff_identity(family: DiffOperationFamily, name: str) -> DiffOperationIdentity:
-    return DiffOperationIdentity(
-        namespace="comparo.core",
-        family=family,
-        name=name,
-        version="1",
     )
 
 

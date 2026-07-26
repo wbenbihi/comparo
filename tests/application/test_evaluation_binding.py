@@ -20,10 +20,7 @@ from comparo.core.diffs.inputs import PreparedOperandUnavailable as DiffOperandU
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticStage
-from comparo.core.domain.expressions import ArrayExpr
 from comparo.core.domain.expressions import LiteralExpr
-from comparo.core.domain.expressions import ObjectExpr
-from comparo.core.domain.expressions import ObjectExpressionMember
 from comparo.core.domain.expressions import ValueExpression
 from comparo.core.domain.gates.model import CompiledGateProfile
 from comparo.core.domain.gates.model import GateVerdict
@@ -348,42 +345,103 @@ def test_assertion_forms_fail_closed(
         assert rejected.alias == alias
 
 
-@pytest.mark.parametrize(
-    ("diff", "family", "alias"),
-    [
-        (
-            "[{selector: status, comparator: numericTolerance}]",
-            "diff-comparator",
-            "numericTolerance",
-        ),
-        (
-            "[{selector: status, comparator: exact, transforms: [jsonShape]}]",
-            "diff-transform",
-            "jsonShape",
-        ),
-        ("[{selector: status, comparator: exact, reducer: count}]", "diff-reducer", "count"),
-        ("[{selector: status, comparator: exact, pairing: ordered}]", "diff-pairing", "ordered"),
-    ],
-)
-def test_diff_capabilities_are_listed_and_rejected_before_runtime(
-    diff: str,
-    family: str,
-    alias: str,
-) -> None:
-    outcome = _bind(_prepared(diff=diff))
+def test_invalid_diff_capability_arguments_are_rejected_before_runtime() -> None:
+    outcome = _bind(_prepared(diff="[{selector: status, comparator: numericTolerance}]"))
 
     assert outcome.preparation is None
-    rejected = next(item for item in outcome.rejected if item.family.value == family)
-    assert rejected.alias == alias
+    assert outcome.rejected[0].family.value == "diff-comparator"
+    assert outcome.rejected[0].alias == "numericTolerance"
+
+
+@pytest.mark.parametrize(
+    "diff",
+    [
+        "[{selector: status, comparator: exact, transforms: [jsonShape]}]",
+        "[{selector: status, comparator: exact, reducer: count}]",
+        "[{selector: status, comparator: exact, pairing: ordered}]",
+    ],
+)
+def test_deterministic_diff_pipeline_stages_are_admitted(diff: str) -> None:
+    outcome = _bind(_prepared(diff=diff))
+
+    assert outcome.preparation is not None
+    assert outcome.diagnostics == ()
+
+
+def test_typed_selectors_and_deterministic_assertion_catalog_are_admitted() -> None:
+    rules = (
+        "[{id: status-set, name: Expected status, description: Accepted response, "
+        "tags: [contract, http], selector: response.status, "
+        "operator: {name: in, choices: [200, 204]}}, "
+        "{id: status-range, selector: status, "
+        "operator: {name: between, lower: 200, upper: 299}}, "
+        "{id: message-prefix, selector: {source: response.body, view: json, path: /message}, "
+        "operator: {name: startsWith, expected: hello}}, "
+        "{id: at-least-one, selector: {source: response.headers, "
+        "field: {name: x-request-id, occurrence: 0}}, "
+        "operator: {name: cardinality, minimum: 0}}]"
+    )
+    outcome = _bind(_prepared(assertion=rules))
+
+    preparation = outcome.preparation
+    assert preparation is not None
+    compiled = preparation._subjects[0].assertions
+    assert len(compiled) == 4
+    assert compiled[0].metadata.name == "Expected status"
+    assert compiled[0].metadata.tags == ("contract", "http")
+    assert compiled[2].selector.body_view is BodyViewKind.JSON
+
+
+def test_semantic_diff_exclusion_and_collection_modes_are_admitted() -> None:
+    diff = (
+        "[{id: body-without-env-id, selector: {source: response.body, view: json}, "
+        "transforms: [{name: exclude, pointers: [/id, /createdAt]}], comparator: exact}, "
+        "{id: request-ids, selector: {source: response.headers, field: x-request-id}, "
+        "pairing: set, comparator: exact}]"
+    )
+    outcome = _bind(_prepared(diff=diff))
+
+    preparation = outcome.preparation
+    assert preparation is not None
+    compiled = preparation._subjects[0].diffs
+    assert len(compiled) == 2
+    assert len(compiled[0].pipeline.baseline.transforms) == 1
+    assert compiled[1].pipeline.pairing.identity.name == "set"
 
 
 def test_empty_profile_and_nonempty_gate_fail_closed() -> None:
     empty = _bind(_prepared(assertion="[]"))
-    gate = _bind(_prepared(gate="{runtime: {requireComplete: true}}"))
+    gate = _bind(_prepared(gate="{thresholds: invalid}"))
 
     assert _codes(empty) == ("evaluation.profile.empty",)
     assert _codes(gate) == ("evaluation.gate.unsupported",)
     assert gate.rejected[0].family is binding.EvaluationCapabilityFamily.GATE
+
+
+def test_gate_profile_compiles_explicit_dimensions_and_thresholds() -> None:
+    threshold = (
+        "{severity: warning, violatedRules: 2, driftedRules: 3, unavailableRules: 4, "
+        "incomparableRules: 5, incompleteRules: 6, errorRules: 7}"
+    )
+    outcome = _bind(
+        _prepared(
+            gate=(
+                "{severities: [warning], environmentRoles: [candidate], "
+                "requireCompleteRun: false, requireAssertionCoverage: false, "
+                f"requireDiffCoverage: false, thresholds: [{threshold}]}}"
+            )
+        )
+    )
+
+    preparation = outcome.preparation
+    assert preparation is not None
+    gate = preparation.gate_profile
+    assert gate is not None
+    assert tuple(item.value for item in gate.severities) == ("warning",)
+    assert tuple(item.value for item in gate.environment_roles) == ("candidate",)
+    assert not gate.require_complete_run
+    assert gate.thresholds[0].violated_rules.value == 2
+    assert gate.thresholds[0].error_rules.value == 7
 
 
 def test_assertion_topology_does_not_require_impossible_diff_coverage() -> None:
@@ -761,17 +819,10 @@ def test_lowering_helpers_reject_frontend_impossible_shapes() -> None:
         value=JsonString(value="invalid-rule"),
         provenance=_configuration_provenance(),
     )
-    array = ArrayExpr(items=(literal,), provenance=_configuration_provenance())
-    unnamed = ObjectExpr(
-        members=(ObjectExpressionMember(name="expected", expression=literal),),
-        provenance=_configuration_provenance(),
-    )
     problems = binding._Problems()
 
     assert binding._compile_assertion_rule(profile, literal, 0, problems) is None
     assert binding._compile_diff_rule(profile, literal, 0, problems) is None
-    assert binding._operation(array) is None
-    assert binding._operation(unnamed) is None
     assert binding._safe_alias(None) is None
     assert _codes(_bind(_prepared(diff="[]"))) == ("evaluation.profile.empty",)
 

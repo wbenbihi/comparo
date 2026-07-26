@@ -370,16 +370,22 @@
         "spec": {
           "additionalProperties": false,
           "properties": {
-            "assertions": {
+            "environmentRoles": {
               "$ref": "#/$defs/jsonValue"
             },
-            "coverage": {
+            "requireAssertionCoverage": {
               "$ref": "#/$defs/jsonValue"
             },
-            "diffs": {
+            "requireCompleteRun": {
               "$ref": "#/$defs/jsonValue"
             },
-            "runtime": {
+            "requireDiffCoverage": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "severities": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "thresholds": {
               "$ref": "#/$defs/jsonValue"
             }
           },

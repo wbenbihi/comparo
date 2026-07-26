@@ -17,6 +17,7 @@ from comparo.core.domain.selectors.occurrences import AttemptOccurrence
 from comparo.core.domain.selectors.occurrences import ExchangeOccurrence
 from comparo.core.domain.selectors.occurrences import ObservationOccurrenceSelector
 from comparo.core.domain.selectors.occurrences import TerminalOccurrence
+from comparo.core.domain.selectors.occurrences import is_observation_occurrence_selector
 from comparo.core.domain.selectors.paths import JsonPathExpression
 from comparo.core.domain.selectors.paths import JsonPointerPath
 from comparo.core.domain.selectors.paths import NoPath
@@ -204,6 +205,39 @@ def derive_selector_capabilities(
         may_duplicate=False,
         uses_descendant=False,
         uses_filter=False,
+    )
+
+
+def derive_selector_output_contract(
+    source: SelectorSource,
+    path: SelectorPath,
+    body_view: BodyViewKind | None,
+    occurrence: ObservationOccurrenceSelector = TERMINAL_OCCURRENCE,
+) -> ValueContract:
+    """Derive the canonical static output contract for an authored selector.
+
+    Configuration adapters must not duplicate the source/view type catalog.  This helper exposes
+    the same closed derivation used by selector invariant validation while keeping compilation
+    independent from runtime selection.
+    """
+    if type(source) is not SelectorSource or not is_selector_path(path):
+        raise TypeError("selector output derivation requires a typed source and path")
+    if body_view is not None and type(body_view) is not BodyViewKind:
+        raise TypeError("selector output derivation requires a typed body view")
+    if not is_observation_occurrence_selector(occurrence):
+        raise TypeError("selector output derivation requires a typed occurrence")
+    capabilities = derive_selector_capabilities(source, path, occurrence)
+    kinds = _whole_source_kinds(source, path, body_view)
+    if kinds is None:
+        kinds = frozenset({ValueKind.UNKNOWN})
+    elif len(kinds) > 1:
+        # A selector compiler has no schema proof for which member of a broad source union will
+        # appear at runtime. UNKNOWN preserves that absence of proof without falsely claiming that
+        # every JSON kind will appear in one value.
+        kinds = frozenset({ValueKind.UNKNOWN})
+    return ValueContract(
+        kinds=tuple(sorted(kinds, key=lambda item: item.value)),
+        cardinality=capabilities.cardinality,
     )
 
 
