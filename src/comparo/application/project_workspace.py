@@ -11,6 +11,9 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import SourceCoordinate
 from comparo.application.inspection import inspect_configuration_diagnostic
+from comparo.application.project_outline import ProjectRelationship
+from comparo.application.project_outline import ProjectResourceOutline
+from comparo.application.project_outline import outline_resource
 from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS
 from comparo.configuration.loader import ProjectLoadLimits
 from comparo.configuration.loader import SourceCatalogEntry
@@ -49,6 +52,7 @@ class ProjectResourceSummary(msgspec.Struct, frozen=True, kw_only=True):
     description: str | None
     tags: tuple[str, ...]
     source: SourceCoordinate
+    outline: ProjectResourceOutline | None = None
 
     def __post_init__(self) -> None:
         """Keep the Explorer boundary immutable and free of untyped presentation values."""
@@ -61,6 +65,8 @@ class ProjectResourceSummary(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("project resource summary tags must be an immutable text tuple")
         if type(self.source) is not SourceCoordinate:
             raise TypeError("project resource summary source must be typed")
+        if self.outline is not None and type(self.outline) is not ProjectResourceOutline:
+            raise TypeError("project resource summary outline must be typed")
 
 
 @final
@@ -195,15 +201,19 @@ def inspect_project_workspace(request: ProjectWorkspaceRequest) -> ProjectWorksp
             ),
         )
     project = compilation.project
-    project_summary = _resource_summary(project.project)
-    resource_summaries = tuple(_resource_summary(resource) for resource in project.resources)
+    authored_summaries = (
+        _resource_summary(project.project),
+        *(_resource_summary(resource) for resource in project.resources),
+    )
+    project_summary, *resource_summaries = _with_consumers(authored_summaries)
+    resource_summaries_tuple = tuple(resource_summaries)
     all_resources = (project_summary, *resource_summaries)
     return ProjectWorkspaceResult(
         snapshot=ProjectWorkspaceSnapshot(
             api_version=project.api_version,
             namespace=project.namespace.value,
             project=project_summary,
-            resources=resource_summaries,
+            resources=resource_summaries_tuple,
         ),
         sources=_source_summaries(loaded.catalog, all_resources),
     )
@@ -223,7 +233,76 @@ def _resource_summary(resource: CompiledResource) -> ProjectResourceSummary:
         description=metadata.description,
         tags=metadata.tags,
         source=_source_coordinate(resource.location),
+        outline=outline_resource(identity, resource.spec),
     )
+
+
+def _with_consumers(
+    resources: tuple[ProjectResourceSummary, ...],
+) -> tuple[ProjectResourceSummary, ...]:
+    """Add safe inverse dependency edges so Explorer can show resource consumers."""
+    by_identity = {
+        (
+            resource.coordinate.namespace,
+            resource.coordinate.kind,
+            resource.coordinate.resource_id,
+        ): index
+        for index, resource in enumerate(resources)
+    }
+    inverse: dict[int, list[ProjectRelationship]] = {}
+    for owner in resources:
+        relationships = () if owner.outline is None else owner.outline.relationships
+        for relationship in relationships:
+            target = relationship.target
+            index = by_identity.get((target.namespace, target.kind, target.resource_id))
+            if index is None:
+                continue
+            inverse.setdefault(index, []).append(
+                ProjectRelationship(
+                    path=relationship.path,
+                    target=owner.coordinate,
+                    origin="used-by",
+                )
+            )
+    enriched: list[ProjectResourceSummary] = []
+    for index, resource in enumerate(resources):
+        additions = tuple(inverse.get(index, ()))
+        if not additions:
+            enriched.append(resource)
+            continue
+        outline = resource.outline or ProjectResourceOutline()
+        known = {
+            (
+                item.origin,
+                item.target.namespace,
+                item.target.kind,
+                item.target.resource_id,
+                item.path,
+            )
+            for item in outline.relationships
+        }
+        relationships = (
+            *outline.relationships,
+            *(
+                item
+                for item in additions
+                if (
+                    item.origin,
+                    item.target.namespace,
+                    item.target.kind,
+                    item.target.resource_id,
+                    item.path,
+                )
+                not in known
+            ),
+        )
+        enriched.append(
+            msgspec.structs.replace(
+                resource,
+                outline=msgspec.structs.replace(outline, relationships=relationships),
+            )
+        )
+    return tuple(enriched)
 
 
 def _source_coordinate(location: SourceLocation) -> SourceCoordinate:

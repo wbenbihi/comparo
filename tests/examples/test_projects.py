@@ -79,3 +79,25 @@ def test_showcase_contains_two_independently_bound_matrices() -> None:
     matrices = prepared.project.prepared.effective.subjects[0].matrices
     assert tuple(matrix.binding.value for matrix in matrices) == ("audiences", "locales")
     assert tuple(len(matrix.cases) for matrix in matrices) == (4, 2)
+
+
+def test_showcase_explorer_projects_inverse_resource_consumers() -> None:
+    workspace = inspect_project_workspace(
+        ProjectWorkspaceRequest(config=_EXAMPLES / "tui-showcase" / "comparo.yaml")
+    )
+
+    assert workspace.snapshot is not None
+    audiences = next(
+        resource
+        for resource in workspace.snapshot.resources
+        if resource.coordinate.kind == "Matrix" and resource.coordinate.resource_id == "audiences"
+    )
+    assert audiences.outline is not None
+    consumers = tuple(
+        relationship.target
+        for relationship in audiences.outline.relationships
+        if relationship.origin == "used-by"
+    )
+    assert any(
+        consumer.kind == "Request" and consumer.resource_id == "catalog" for consumer in consumers
+    )
