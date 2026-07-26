@@ -196,6 +196,18 @@ from comparo.application.report_retention import ReportRetentionPolicy as Report
 from comparo.application.report_retention import apply_report_retention as apply_report_retention
 from comparo.application.report_retention import plan_report_retention as plan_report_retention
 from comparo.application.report_retention import restore_report as restore_report
+from comparo.application.result_analysis import AnalysisProjection as AnalysisProjection
+from comparo.application.result_analysis import FieldPathAggregate as FieldPathAggregate
+from comparo.application.result_analysis import IssueAggregate as IssueAggregate
+from comparo.application.result_analysis import RequestAggregate as RequestAggregate
+from comparo.application.result_analysis import ResultProjectionWindow as ResultProjectionWindow
+from comparo.application.result_analysis import RuleAggregate as RuleAggregate
+from comparo.application.result_analysis import TimelineEvent as TimelineEvent
+from comparo.application.result_analysis import project_fields as project_fields
+from comparo.application.result_analysis import project_issues as project_issues
+from comparo.application.result_analysis import project_requests as project_requests
+from comparo.application.result_analysis import project_rules as project_rules
+from comparo.application.result_analysis import project_timeline as project_timeline
 from comparo.application.results import ComparisonResultRow as ComparisonResultRow
 from comparo.application.results import ExecutionResultRow as ExecutionResultRow
 from comparo.application.results import ResultCrossLink as ResultCrossLink
@@ -237,6 +249,7 @@ __all__ = (
     "DEFAULT_EXECUTION_SESSION_LIMITS_V1",
     "DEFAULT_POLICY_LOAD_LIMITS",
     "DEFAULT_PROJECT_LOAD_LIMITS",
+    "AnalysisProjection",
     "ApplicationDiagnostic",
     "ArtifactBodyMessage",
     "ArtifactBodyReference",
@@ -276,8 +289,10 @@ __all__ = (
     "ExecutionSessionLimits",
     "ExecutionSessionPhase",
     "ExecutionSettingsInspection",
+    "FieldPathAggregate",
     "InlineValueOverride",
     "InvocationBuildError",
+    "IssueAggregate",
     "LiveOccurrenceKind",
     "LiveOccurrenceProgress",
     "LiveOccurrenceState",
@@ -335,15 +350,18 @@ __all__ = (
     "ReportRetentionOutcome",
     "ReportRetentionPlan",
     "ReportRetentionPolicy",
+    "RequestAggregate",
     "RequestBodyOmissionReason",
     "RequestOverride",
     "ResultCrossLink",
     "ResultEntity",
     "ResultFact",
     "ResultProjection",
+    "ResultProjectionWindow",
     "ResultReference",
     "ResultRelation",
     "ResultSummary",
+    "RuleAggregate",
     "RuntimeCapabilityPreflightResult",
     "RuntimeLimitInspection",
     "RuntimeLimitsInspection",
@@ -354,6 +372,7 @@ __all__ = (
     "SourceInspectionRequest",
     "SourceViewMode",
     "SourceWindow",
+    "TimelineEvent",
     "ValueResourceOverride",
     "apply_report_retention",
     "bind_execution_profiles",
@@ -384,7 +403,12 @@ __all__ = (
     "prepare_project_plan",
     "present_diagnostic",
     "production_execution_defaults_v1",
+    "project_fields",
+    "project_issues",
+    "project_requests",
     "project_results",
+    "project_rules",
+    "project_timeline",
     "query_report_archive",
     "read_artifact_blob",
     "read_artifact_body_window",
