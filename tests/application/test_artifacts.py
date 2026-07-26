@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
+import msgspec
 import pytest
 
 from comparo.adapters.artifacts import LocalArtifactBundleSink
+from comparo.application import artifacts as artifacts_module
 from comparo.application.artifacts import ArtifactBodyMessage
 from comparo.application.artifacts import ArtifactBodyReference
+from comparo.application.artifacts import ArtifactBodyWindow
 from comparo.application.artifacts import ArtifactOperationError
 from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.application.artifacts import ArtifactReadLimits
@@ -19,7 +23,13 @@ from comparo.application.artifacts import inspect_artifact
 from comparo.application.artifacts import read_artifact_blob
 from comparo.application.artifacts import read_artifact_body_window
 from comparo.application.artifacts import render_artifact_report
+from comparo.application.artifacts import validate_existing_artifact_root
+from comparo.application.artifacts import validate_project_artifact_root
 from comparo.application.artifacts import verify_artifact
+from comparo.core.artifacts.common import ArtifactCapture
+from comparo.core.artifacts.common import ArtifactCaptureExtent
+from comparo.core.artifacts.common import ArtifactOmissionReason
+from comparo.core.artifacts.common import ArtifactSourceCaptureState
 from comparo.core.artifacts.model import RunArtifact
 from comparo.reporters import ReportFormat
 from tests.adapters.artifacts.test_local_store import _stored_artifact
@@ -317,3 +327,264 @@ def test_report_budget_and_untyped_limits_fail_safely(tmp_path: Path) -> None:
         verify_artifact(root, "artifact-0", object())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="error code"):
         ArtifactOperationError(cast("ArtifactOperationErrorCode", "bad"))
+
+
+def test_body_reference_and_window_contracts_reject_ambiguous_state() -> None:
+    reference = ArtifactBodyReference(
+        execution_id="execution",
+        attempt_id="attempt",
+        exchange_id="exchange",
+        message=ArtifactBodyMessage.REQUEST,
+    )
+    for reference_changes, error in (
+        ({"execution_id": ""}, ValueError),
+        ({"attempt_id": "x" * 65}, ValueError),
+        ({"exchange_id": cast("str", object())}, ValueError),
+        ({"message": cast("ArtifactBodyMessage", "request")}, TypeError),
+    ):
+        with pytest.raises(error):
+            msgspec.structs.replace(reference, **reference_changes)
+
+    window = ArtifactBodyWindow(
+        reference=reference,
+        source_state="complete",
+        extent="complete",
+        reason=None,
+        media_type="application/json",
+        total_bytes=10,
+        offset=0,
+        content=b"12345",
+        next_offset=5,
+        redaction_count=0,
+    )
+    for window_changes, error in (
+        ({"reference": cast("ArtifactBodyReference", object())}, TypeError),
+        ({"source_state": ""}, ValueError),
+        ({"extent": cast("str", object())}, ValueError),
+        ({"reason": ""}, ValueError),
+        ({"media_type": cast("str", object())}, TypeError),
+        ({"total_bytes": -1}, ValueError),
+        ({"offset": -1}, ValueError),
+        ({"content": cast("bytes", object())}, ValueError),
+        ({"next_offset": 0}, ValueError),
+        ({"next_offset": 10}, ValueError),
+        ({"next_offset": 5, "total_bytes": None}, ValueError),
+        ({"redaction_count": -1}, ValueError),
+    ):
+        with pytest.raises(error):
+            msgspec.structs.replace(window, **window_changes)
+
+
+def test_existing_and_project_root_validation_is_read_only_and_private(tmp_path: Path) -> None:
+    project = tmp_path.resolve()
+    selected = Path(".comparo/artifacts")
+    initialized = initialize_project_artifact_root(project, selected)
+    assert validate_project_artifact_root(project, selected) == initialized
+    assert validate_existing_artifact_root(initialized) == initialized
+
+    for root, relative, error in (
+        (cast("Path", object()), selected, TypeError),
+        (Path("relative"), selected, ArtifactOperationError),
+        (project, Path("/absolute"), ArtifactOperationError),
+        (project, Path("../escape"), ArtifactOperationError),
+    ):
+        with pytest.raises(error):
+            validate_project_artifact_root(root, relative)
+
+    with pytest.raises(TypeError, match="requires a Path"):
+        validate_existing_artifact_root(cast("Path", object()))
+    with pytest.raises(ArtifactOperationError) as relative_error:
+        validate_existing_artifact_root(Path("relative"))
+    assert relative_error.value.code is ArtifactOperationErrorCode.ROOT_UNSAFE
+    with pytest.raises(ArtifactOperationError) as missing:
+        validate_existing_artifact_root(tmp_path / "missing")
+    assert missing.value.code is ArtifactOperationErrorCode.ROOT_UNAVAILABLE
+
+    unsafe = tmp_path / "unsafe-read"
+    unsafe.mkdir(mode=0o777)
+    unsafe.chmod(0o777)
+    with pytest.raises(ArtifactOperationError) as permissions:
+        validate_existing_artifact_root(unsafe)
+    assert permissions.value.code is ArtifactOperationErrorCode.ROOT_UNSAFE
+    with pytest.raises(ArtifactOperationError) as project_permissions:
+        validate_project_artifact_root(project, Path("unsafe-read"))
+    assert project_permissions.value.code is ArtifactOperationErrorCode.ROOT_UNSAFE
+
+    with pytest.raises(ArtifactOperationError) as absent_child:
+        validate_project_artifact_root(project, Path("missing/child"))
+    assert absent_child.value.code is ArtifactOperationErrorCode.ROOT_UNAVAILABLE
+
+
+def test_body_read_rejects_invalid_limits_offsets_and_nested_coordinates(tmp_path: Path) -> None:
+    root, artifact = _bundle(tmp_path)
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    reference = ArtifactBodyReference(
+        execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id,
+        exchange_id=exchange.exchange_id,
+        message=ArtifactBodyMessage.RESPONSE,
+    )
+    calls = (
+        (cast("ArtifactBodyReference", object()), 0, 1, TypeError),
+        (reference, -1, 1, ArtifactOperationError),
+        (reference, 0, 0, ArtifactOperationError),
+        (reference, 100, 1, ArtifactOperationError),
+    )
+    for selected, offset, maximum, error in calls:
+        with pytest.raises(error):
+            asyncio.run(
+                read_artifact_body_window(
+                    root,
+                    "artifact-0",
+                    selected,
+                    _limits(),
+                    offset=offset,
+                    maximum_output_bytes=maximum,
+                )
+            )
+
+    for missing_reference in (
+        msgspec.structs.replace(reference, attempt_id="missing"),
+        msgspec.structs.replace(reference, exchange_id="missing"),
+    ):
+        with pytest.raises(ArtifactOperationError) as missing:
+            asyncio.run(
+                read_artifact_body_window(
+                    root,
+                    "artifact-0",
+                    missing_reference,
+                    _limits(),
+                    offset=0,
+                    maximum_output_bytes=1,
+                )
+            )
+        assert missing.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
+
+    with pytest.raises(ArtifactOperationError) as unavailable:
+        asyncio.run(
+            read_artifact_body_window(
+                tmp_path / "missing",
+                "artifact-0",
+                reference,
+                _limits(),
+                offset=0,
+                maximum_output_bytes=1,
+            )
+        )
+    assert unavailable.value.code is ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE
+
+
+def test_existing_root_reports_a_resolve_race_as_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir(mode=0o700)
+
+    def fail_resolve(_path: Path, *, strict: bool = False) -> Path:
+        del strict
+        raise OSError("value-free test failure")
+
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+    with pytest.raises(ArtifactOperationError) as unavailable:
+        validate_existing_artifact_root(root)
+    assert unavailable.value.code is ArtifactOperationErrorCode.ROOT_UNAVAILABLE
+
+
+def test_omitted_and_absent_body_captures_are_distinguished(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    assert exchange.request is not None
+    omitted = ArtifactCapture(
+        source_state=ArtifactSourceCaptureState.POLICY_OMITTED,
+        extent=ArtifactCaptureExtent.OMITTED,
+        source_byte_count=None,
+        blob=None,
+        reason=ArtifactOmissionReason.POLICY,
+    )
+    omitted_request = msgspec.structs.replace(exchange.request, body=omitted)
+    omitted_exchange = msgspec.structs.replace(exchange, request=omitted_request)
+    omitted_attempt = msgspec.structs.replace(attempt, exchanges=(omitted_exchange,))
+    omitted_execution = msgspec.structs.replace(execution, attempts=(omitted_attempt,))
+    omitted_artifact = msgspec.structs.replace(
+        artifact,
+        executions=(omitted_execution, *artifact.executions[1:]),
+    )
+    reference = ArtifactBodyReference(
+        execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id,
+        exchange_id=exchange.exchange_id,
+        message=ArtifactBodyMessage.REQUEST,
+    )
+
+    class Bundle:
+        artifact = omitted_artifact
+
+        def __enter__(self) -> Bundle:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(artifacts_module, "open_local_artifact_bundle", lambda *_a, **_k: Bundle())
+    window = asyncio.run(
+        read_artifact_body_window(
+            root,
+            "artifact-0",
+            reference,
+            _limits(),
+            offset=0,
+            maximum_output_bytes=1,
+        )
+    )
+    assert window.content == b""
+    assert window.reason == "policy"
+    with pytest.raises(ArtifactOperationError) as invalid_offset:
+        asyncio.run(
+            read_artifact_body_window(
+                root,
+                "artifact-0",
+                reference,
+                _limits(),
+                offset=1,
+                maximum_output_bytes=1,
+            )
+        )
+    assert invalid_offset.value.code is ArtifactOperationErrorCode.INVALID_LIMIT
+
+    absent_request = msgspec.structs.replace(exchange.request, body=None)
+    absent_exchange = msgspec.structs.replace(exchange, request=absent_request)
+    absent_attempt = msgspec.structs.replace(attempt, exchanges=(absent_exchange,))
+    absent_execution = msgspec.structs.replace(execution, attempts=(absent_attempt,))
+    absent_artifact = msgspec.structs.replace(
+        artifact,
+        executions=(absent_execution, *artifact.executions[1:]),
+    )
+    with pytest.raises(ArtifactOperationError) as absent:
+        artifacts_module._find_body_capture(absent_artifact, reference)
+    assert absent.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
+
+
+def test_blob_window_skips_prefix_bounds_output_and_rejects_invalid_chunks() -> None:
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b"ab"
+        yield b"cdef"
+        yield b"gh"
+
+    assert (
+        asyncio.run(artifacts_module._read_blob_window(chunks(), offset=3, maximum_output_bytes=3))
+        == b"def"
+    )
+
+    async def invalid() -> AsyncIterator[bytes]:
+        yield cast("bytes", object())
+
+    with pytest.raises(TypeError, match="chunks must be bytes"):
+        asyncio.run(artifacts_module._read_blob_window(invalid(), offset=0, maximum_output_bytes=1))
