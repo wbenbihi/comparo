@@ -20,6 +20,7 @@ from comparo.core.artifacts.common import ArtifactMetadata
 from comparo.core.artifacts.common import ArtifactMetric
 from comparo.core.artifacts.common import ArtifactOmissionReason
 from comparo.core.artifacts.common import ArtifactProvenance
+from comparo.core.artifacts.common import ArtifactRunAnnotations
 from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.common import require_text
 from comparo.core.artifacts.facts import ArtifactComparison
@@ -70,6 +71,7 @@ class RunArtifact(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fiel
     budgets: tuple[ArtifactBudget, ...]
     blobs: tuple[ArtifactBlob, ...]
     coverage_issues: tuple[ArtifactCoverageIssue, ...] = ()
+    annotations: ArtifactRunAnnotations | None = None
 
     def __post_init__(self) -> None:
         """Require canonical order, ownership, blob closure, and independent versioning."""
@@ -90,6 +92,8 @@ class RunArtifact(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fiel
         _require_artifact_tuple(self.budgets, ArtifactBudget, "budgets")
         _require_artifact_tuple(self.blobs, ArtifactBlob, "blobs")
         _require_artifact_tuple(self.coverage_issues, ArtifactCoverageIssue, "coverage issues")
+        if self.annotations is not None and type(self.annotations) is not ArtifactRunAnnotations:
+            raise TypeError("RunArtifact annotations must be typed or absent")
         if len(set(self.coverage_issues)) != len(self.coverage_issues):
             raise ValueError("artifact coverage issues must be unique")
         if tuple(item.ordinal for item in self.executions) != tuple(range(len(self.executions))):

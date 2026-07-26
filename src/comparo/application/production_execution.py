@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import final
+from urllib.parse import urlsplit
 
 import msgspec
 
@@ -72,7 +73,10 @@ from comparo.application.runtime_capabilities import preflight_runtime_capabilit
 from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
 from comparo.application.schema_validation import SchemaValidationLimits
 from comparo.core.artifacts.capture import ArtifactCapturingDriver
+from comparo.core.artifacts.common import ArtifactCiProvenance
 from comparo.core.artifacts.common import ArtifactGateVerdict
+from comparo.core.artifacts.common import ArtifactRunAnnotations
+from comparo.core.artifacts.common import ArtifactVcsProvenance
 from comparo.core.artifacts.compiler import ArtifactCompilationStatus
 from comparo.core.artifacts.compiler import compile_run_artifact
 from comparo.core.artifacts.model import RunArtifact
@@ -86,6 +90,7 @@ from comparo.core.artifacts.policy import UnsafeSourceBehavior
 from comparo.core.artifacts.ports import ArtifactPersistenceOutcome
 from comparo.core.artifacts.ports import ArtifactPersistenceStatus
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
+from comparo.core.artifacts.sanitization import SanitizationBoundary
 from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import RemoteSchema
 from comparo.core.domain.budget_origins import DefaultBudgetOrigin
@@ -271,6 +276,90 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ProductionVcsProvenance(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-supplied source-control context sanitized before artifact retention."""
+
+    provider: str
+    repository: str
+    revision: str
+    branch: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded text before crossing the sanitizer boundary."""
+        _annotation_text(self.provider, maximum=63)
+        _annotation_text(self.repository, maximum=1024)
+        _annotation_text(self.revision, maximum=255)
+        if self.branch is not None:
+            _annotation_text(self.branch, maximum=255)
+
+
+@final
+class ProductionCiProvenance(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-supplied CI context sanitized before artifact retention."""
+
+    provider: str
+    run_id: str
+    job: str | None = None
+    url: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded coordinates and reject credential-bearing CI links."""
+        _annotation_text(self.provider, maximum=63)
+        _annotation_text(self.run_id, maximum=255)
+        if self.job is not None:
+            _annotation_text(self.job, maximum=255)
+        if self.url is not None:
+            _annotation_text(self.url, maximum=2048)
+            parsed = urlsplit(self.url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("production CI URL must not contain credentials or a query")
+
+
+@final
+class ProductionRunAnnotations(msgspec.Struct, frozen=True, kw_only=True):
+    """Optional user and automation context supplied for one invocation."""
+
+    title: str | None = None
+    notes: str | None = None
+    tags: tuple[str, ...] = ()
+    vcs: ProductionVcsProvenance | None = None
+    ci: ProductionCiProvenance | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded immutable inputs before any runtime effect."""
+        if self.title is not None:
+            _annotation_text(self.title, maximum=255)
+        if self.notes is not None:
+            _annotation_text(self.notes, maximum=16_384)
+        if type(self.tags) is not tuple or any(
+            type(item) is not str or not item or len(item) > 127 for item in self.tags
+        ):
+            raise ValueError("production run tags must be immutable bounded text")
+        if len(self.tags) > 128 or len(set(self.tags)) != len(self.tags):
+            raise ValueError("production run tags must be bounded and unique")
+        if self.vcs is not None and type(self.vcs) is not ProductionVcsProvenance:
+            raise TypeError("production VCS provenance must be typed or absent")
+        if self.ci is not None and type(self.ci) is not ProductionCiProvenance:
+            raise TypeError("production CI provenance must be typed or absent")
+
+
+def _annotation_text(value: object, *, maximum: int) -> None:
+    if type(value) is not str or not value or len(value) > maximum:
+        raise ValueError("production annotation text must be bounded and non-empty")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("production annotation text must contain Unicode scalars") from error
+
+
+@final
 class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
     """Complete effectful request assembled only after project planning succeeds."""
 
@@ -282,8 +371,9 @@ class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
     tool_version: str
     events: RuntimeEventSink | None = None
     cancellation: RunCancellation | None = None
+    annotations: ProductionRunAnnotations | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901 - complete effect boundary validation
         """Validate primitive frontend choices without retaining any output text."""
         if type(self.project) is not PreparedProjectPlan:
             raise TypeError("production execution requires PreparedProjectPlan")
@@ -312,6 +402,8 @@ class ProductionExecutionRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("production execution events must implement RuntimeEventSink")
         if self.cancellation is not None and type(self.cancellation) is not RunCancellation:
             raise TypeError("production execution cancellation must be RunCancellation or None")
+        if self.annotations is not None and type(self.annotations) is not ProductionRunAnnotations:
+            raise TypeError("production run annotations must be typed or absent")
 
 
 @final
@@ -607,6 +699,11 @@ async def _run_compile_persist(
         artifact_id=_artifact_id(request.project.prepared),
         created_unix_nanoseconds=created,
         tool_version=request.tool_version,
+        annotations=(
+            None
+            if request.annotations is None
+            else _artifact_annotations(request.annotations, capture.boundary)
+        ),
     )
     if compilation.status is not ArtifactCompilationStatus.CREATED:
         code = (
@@ -745,6 +842,52 @@ def _capture_budget_origin(limits: ResponseCaptureLimits) -> DefaultBudgetOrigin
     )
 
 
+def _artifact_annotations(
+    value: ProductionRunAnnotations | None,
+    boundary: SanitizationBoundary,
+) -> ArtifactRunAnnotations | None:
+    if value is None:
+        return None
+    redactions = 0
+
+    def safe(text: str | None) -> str | None:
+        nonlocal redactions
+        if text is None:
+            return None
+        sanitized = boundary.sanitize_text(text)
+        redactions += sanitized.redaction_count
+        return sanitized.value
+
+    vcs = None
+    if value.vcs is not None:
+        vcs = ArtifactVcsProvenance(
+            provider=safe(value.vcs.provider) or "<redacted>",
+            repository=safe(value.vcs.repository) or "<redacted>",
+            revision=safe(value.vcs.revision) or "<redacted>",
+            branch=safe(value.vcs.branch),
+        )
+    ci = None
+    if value.ci is not None:
+        safe_url = safe(value.ci.url)
+        if value.ci.url is not None and safe_url != value.ci.url:
+            safe_url = None
+        ci = ArtifactCiProvenance(
+            provider=safe(value.ci.provider) or "<redacted>",
+            run_id=safe(value.ci.run_id) or "<redacted>",
+            job=safe(value.ci.job),
+            url=safe_url,
+        )
+    tags = tuple(dict.fromkeys(safe(item) or "<redacted>" for item in value.tags))
+    return ArtifactRunAnnotations(
+        title=safe(value.title),
+        notes=safe(value.notes),
+        tags=tags,
+        vcs=vcs,
+        ci=ci,
+        redaction_count=redactions,
+    )
+
+
 def _artifact_sink(
     project: PreparedProjectPlan,
     selected: Path | None,
@@ -833,11 +976,14 @@ def _diagnostics(code: str) -> tuple[ApplicationDiagnostic, ...]:
 
 
 __all__ = (
+    "ProductionCiProvenance",
     "ProductionExecutionFailure",
     "ProductionExecutionFailureKind",
     "ProductionExecutionRequest",
     "ProductionExecutionResult",
     "ProductionExecutionSettings",
+    "ProductionRunAnnotations",
+    "ProductionVcsProvenance",
     "execute_production",
     "persisted_production_execution_defaults_v1",
     "production_execution_defaults_v1",

@@ -6,6 +6,7 @@ import re
 from fractions import Fraction
 from math import gcd
 from typing import final
+from urllib.parse import urlsplit
 
 import msgspec
 
@@ -247,6 +248,86 @@ class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unkno
         require_sha256(self.configuration_fingerprint, label="configuration fingerprint")
         require_sha256(self.plan_fingerprint, label="plan fingerprint")
         require_text(self.ordering, label="plan ordering", maximum=127)
+
+
+@final
+class ArtifactVcsProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Optional sanitized source-control coordinates supplied by the invocation."""
+
+    provider: str
+    repository: str
+    revision: str
+    branch: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded provider, repository, revision, and optional branch text."""
+        for value, label, maximum in (
+            (self.provider, "VCS provider", 63),
+            (self.repository, "VCS repository", 1024),
+            (self.revision, "VCS revision", 255),
+        ):
+            require_text(value, label=label, maximum=maximum)
+        if self.branch is not None:
+            require_text(self.branch, label="VCS branch", maximum=255)
+
+
+@final
+class ArtifactCiProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Optional sanitized CI occurrence coordinates supplied by the invocation."""
+
+    provider: str
+    run_id: str
+    job: str | None = None
+    url: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded coordinates and a query-free HTTP(S) link when present."""
+        require_text(self.provider, label="CI provider", maximum=63)
+        require_text(self.run_id, label="CI run ID", maximum=255)
+        if self.job is not None:
+            require_text(self.job, label="CI job", maximum=255)
+        if self.url is not None:
+            require_text(self.url, label="CI URL", maximum=2048)
+            parsed = urlsplit(self.url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("CI URL must be an absolute credential- and query-free HTTP URL")
+
+
+@final
+class ArtifactRunAnnotations(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Sanitized optional user, VCS, and CI context retained with one run."""
+
+    title: str | None = None
+    notes: str | None = None
+    tags: tuple[str, ...] = ()
+    vcs: ArtifactVcsProvenance | None = None
+    ci: ArtifactCiProvenance | None = None
+    redaction_count: int = 0
+
+    def __post_init__(self) -> None:
+        """Require bounded immutable annotations and explicit sanitization evidence."""
+        if self.title is not None:
+            require_text(self.title, label="run title", maximum=255)
+        if self.notes is not None:
+            require_text(self.notes, label="run notes", maximum=16_384)
+        if type(self.tags) is not tuple or any(
+            type(item) is not str or not item or len(item) > 127 for item in self.tags
+        ):
+            raise ValueError("run tags must be immutable bounded non-empty text")
+        if len(self.tags) > 128 or len(set(self.tags)) != len(self.tags):
+            raise ValueError("run tags must be bounded and unique")
+        if self.vcs is not None and type(self.vcs) is not ArtifactVcsProvenance:
+            raise TypeError("run VCS provenance must be typed or absent")
+        if self.ci is not None and type(self.ci) is not ArtifactCiProvenance:
+            raise TypeError("run CI provenance must be typed or absent")
+        require_count(self.redaction_count, label="run annotation redaction count")
 
 
 @final

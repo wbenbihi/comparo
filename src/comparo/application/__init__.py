@@ -101,6 +101,9 @@ from comparo.application.preflight import inspect_project_plan as inspect_projec
 from comparo.application.preflight import prepare_project_plan as prepare_project_plan
 from comparo.application.preflight import resolve_project_root as resolve_project_root
 from comparo.application.production_execution import (
+    ProductionCiProvenance as ProductionCiProvenance,
+)
+from comparo.application.production_execution import (
     ProductionExecutionFailure as ProductionExecutionFailure,
 )
 from comparo.application.production_execution import (
@@ -114,6 +117,12 @@ from comparo.application.production_execution import (
 )
 from comparo.application.production_execution import (
     ProductionExecutionSettings as ProductionExecutionSettings,
+)
+from comparo.application.production_execution import (
+    ProductionRunAnnotations as ProductionRunAnnotations,
+)
+from comparo.application.production_execution import (
+    ProductionVcsProvenance as ProductionVcsProvenance,
 )
 from comparo.application.production_execution import execute_production as execute_production
 from comparo.application.production_execution import (
@@ -158,6 +167,7 @@ from comparo.application.render_preview import (
     render_prepared_request_window as render_prepared_request_window,
 )
 from comparo.application.render_preview import render_prepared_requests as render_prepared_requests
+from comparo.application.report_archive import ReportArchiveCi as ReportArchiveCi
 from comparo.application.report_archive import ReportArchiveEntry as ReportArchiveEntry
 from comparo.application.report_archive import (
     ReportArchiveEntryFailure as ReportArchiveEntryFailure,
@@ -169,6 +179,7 @@ from comparo.application.report_archive import ReportArchiveListing as ReportArc
 from comparo.application.report_archive import ReportArchivePage as ReportArchivePage
 from comparo.application.report_archive import ReportArchiveQuery as ReportArchiveQuery
 from comparo.application.report_archive import ReportArchiveResource as ReportArchiveResource
+from comparo.application.report_archive import ReportArchiveVcs as ReportArchiveVcs
 from comparo.application.report_archive import list_report_archive as list_report_archive
 from comparo.application.report_archive import query_report_archive as query_report_archive
 from comparo.application.report_retention import (
@@ -278,11 +289,14 @@ __all__ = (
     "PlanningOptions",
     "PolicyLoadLimits",
     "PreparedProjectPlan",
+    "ProductionCiProvenance",
     "ProductionExecutionFailure",
     "ProductionExecutionFailureKind",
     "ProductionExecutionRequest",
     "ProductionExecutionResult",
     "ProductionExecutionSettings",
+    "ProductionRunAnnotations",
+    "ProductionVcsProvenance",
     "ProfileBindingResult",
     "ProfileSelectionOverrides",
     "ProjectLoadLimits",
@@ -303,6 +317,7 @@ __all__ = (
     "RenderedCookie",
     "RenderedHeader",
     "RenderedRequestPreview",
+    "ReportArchiveCi",
     "ReportArchiveEntry",
     "ReportArchiveEntryFailure",
     "ReportArchiveError",
@@ -312,6 +327,7 @@ __all__ = (
     "ReportArchivePage",
     "ReportArchiveQuery",
     "ReportArchiveResource",
+    "ReportArchiveVcs",
     "ReportRetentionCandidate",
     "ReportRetentionError",
     "ReportRetentionErrorCode",

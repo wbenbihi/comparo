@@ -294,6 +294,46 @@
       ],
       "title": "ArtifactCaptureExtent"
     },
+    "ArtifactCiProvenance": {
+      "additionalProperties": false,
+      "description": "Optional sanitized CI occurrence coordinates supplied by the invocation.",
+      "properties": {
+        "job": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "provider",
+        "run_id"
+      ],
+      "title": "ArtifactCiProvenance",
+      "type": "object"
+    },
     "ArtifactComparison": {
       "additionalProperties": false,
       "description": "One terminal directed comparison and its sanitized diff facts.",
@@ -1389,6 +1429,70 @@
       "title": "ArtifactResponse",
       "type": "object"
     },
+    "ArtifactRunAnnotations": {
+      "additionalProperties": false,
+      "description": "Sanitized optional user, VCS, and CI context retained with one run.",
+      "properties": {
+        "ci": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactCiProvenance"
+            }
+          ],
+          "default": null
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "redaction_count": {
+          "default": 0,
+          "type": "integer"
+        },
+        "tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "vcs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactVcsProvenance"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [],
+      "title": "ArtifactRunAnnotations",
+      "type": "object"
+    },
     "ArtifactSeverity": {
       "description": "Normalized severity retained without importing live gate types.",
       "enum": [
@@ -1508,10 +1612,54 @@
       "title": "ArtifactTiming",
       "type": "object"
     },
+    "ArtifactVcsProvenance": {
+      "additionalProperties": false,
+      "description": "Optional sanitized source-control coordinates supplied by the invocation.",
+      "properties": {
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "repository",
+        "revision"
+      ],
+      "title": "ArtifactVcsProvenance",
+      "type": "object"
+    },
     "RunArtifact": {
       "additionalProperties": false,
       "description": "A complete safe manifest from which persistence and all reporters derive.",
       "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactRunAnnotations"
+            }
+          ],
+          "default": null
+        },
         "api_version": {
           "const": "comparo.artifact/v1alpha1",
           "type": "string"

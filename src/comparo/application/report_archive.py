@@ -75,6 +75,26 @@ class ReportArchiveResource(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ReportArchiveVcs(msgspec.Struct, frozen=True, kw_only=True):
+    """Compact sanitized source-control coordinates for one archive row."""
+
+    provider: str
+    repository: str
+    revision: str
+    branch: str | None = None
+
+
+@final
+class ReportArchiveCi(msgspec.Struct, frozen=True, kw_only=True):
+    """Compact sanitized CI coordinates for one archive row."""
+
+    provider: str
+    run_id: str
+    job: str | None = None
+    url: str | None = None
+
+
+@final
 class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
     """Small authenticated report-list row derived without reading blob bodies."""
 
@@ -97,8 +117,12 @@ class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
     execution_profile: ReportArchiveResource | None = None
     adverse_assertions: int = 0
     adverse_diffs: int = 0
+    title: str | None = None
+    tags: tuple[str, ...] = ()
+    vcs: ReportArchiveVcs | None = None
+    ci: ReportArchiveCi | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901 - complete archive row validation
         """Require an immutable, scalar-only, non-negative listing product."""
         if any(
             type(value) is not str or not value
@@ -145,6 +169,14 @@ class ReportArchiveEntry(msgspec.Struct, frozen=True, kw_only=True):
             type(self.execution_profile) is not ReportArchiveResource
         ):
             raise TypeError("report archive execution profile must be a resource or absent")
+        if self.title is not None and type(self.title) is not str:
+            raise TypeError("report archive title must be text or absent")
+        if type(self.tags) is not tuple or any(type(item) is not str for item in self.tags):
+            raise TypeError("report archive tags must be immutable text")
+        if self.vcs is not None and type(self.vcs) is not ReportArchiveVcs:
+            raise TypeError("report archive VCS coordinates must be typed or absent")
+        if self.ci is not None and type(self.ci) is not ReportArchiveCi:
+            raise TypeError("report archive CI coordinates must be typed or absent")
 
 
 @final
@@ -347,6 +379,10 @@ def _entry(bundle_id: str, artifact: RunArtifact) -> ReportArchiveEntry:
             for comparison in artifact.comparisons
             for item in comparison.diffs
         ),
+        title=None if artifact.annotations is None else artifact.annotations.title,
+        tags=() if artifact.annotations is None else artifact.annotations.tags,
+        vcs=_archive_vcs(artifact),
+        ci=_archive_ci(artifact),
     )
 
 
@@ -368,6 +404,30 @@ def _archive_resource(value: object) -> ReportArchiveResource | None:
     return ReportArchiveResource(namespace=value.namespace, resource_id=value.resource_id)
 
 
+def _archive_vcs(artifact: RunArtifact) -> ReportArchiveVcs | None:
+    value = None if artifact.annotations is None else artifact.annotations.vcs
+    if value is None:
+        return None
+    return ReportArchiveVcs(
+        provider=value.provider,
+        repository=value.repository,
+        revision=value.revision,
+        branch=value.branch,
+    )
+
+
+def _archive_ci(artifact: RunArtifact) -> ReportArchiveCi | None:
+    value = None if artifact.annotations is None else artifact.annotations.ci
+    if value is None:
+        return None
+    return ReportArchiveCi(
+        provider=value.provider,
+        run_id=value.run_id,
+        job=value.job,
+        url=value.url,
+    )
+
+
 def _matches(entry: ReportArchiveEntry, query: ReportArchiveQuery) -> bool:
     if query.completion is not None and entry.completion != query.completion:
         return False
@@ -384,9 +444,12 @@ def _matches(entry: ReportArchiveEntry, query: ReportArchiveQuery) -> bool:
         entry.bundle_id,
         entry.run_id,
         entry.invocation_id,
+        *(entry.tags),
         *(f"{item.namespace}/{item.resource_id}" for item in entry.subjects),
         *(f"{item.namespace}/{item.resource_id}" for item in entry.environments),
     )
+    if entry.title is not None:
+        values = (*values, entry.title)
     if entry.execution_profile is not None:
         profile = entry.execution_profile
         values = (*values, f"{profile.namespace}/{profile.resource_id}")
@@ -444,6 +507,7 @@ def _artifact_limits(value: ArtifactReadLimits) -> ArtifactLimits:
 
 
 __all__ = (
+    "ReportArchiveCi",
     "ReportArchiveEntry",
     "ReportArchiveEntryFailure",
     "ReportArchiveError",
@@ -453,6 +517,7 @@ __all__ = (
     "ReportArchivePage",
     "ReportArchiveQuery",
     "ReportArchiveResource",
+    "ReportArchiveVcs",
     "list_report_archive",
     "query_report_archive",
 )

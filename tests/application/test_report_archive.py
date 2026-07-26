@@ -28,6 +28,9 @@ from comparo.application.report_retention import ReportRetentionPolicy
 from comparo.application.report_retention import apply_report_retention
 from comparo.application.report_retention import plan_report_retention
 from comparo.application.report_retention import restore_report
+from comparo.core.artifacts import ArtifactCiProvenance
+from comparo.core.artifacts import ArtifactRunAnnotations
+from comparo.core.artifacts import ArtifactVcsProvenance
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
 from tests.adapters.artifacts.test_local_store import _secure_root
@@ -160,6 +163,44 @@ def test_archive_query_pages_stably_and_filters_only_safe_metadata(tmp_path: Pat
         "middle",
         "oldest",
     )
+
+
+def test_archive_projects_optional_sanitized_run_vcs_and_ci_metadata(tmp_path: Path) -> None:
+    root = _secure_root(tmp_path / "archive")
+    artifact, blobs = asyncio.run(_stored_artifact())
+    annotated = msgspec.structs.replace(
+        artifact,
+        annotations=ArtifactRunAnnotations(
+            title="Release candidate",
+            notes="Reviewed by release engineering",
+            tags=("release", "candidate"),
+            vcs=ArtifactVcsProvenance(
+                provider="git",
+                repository="org/repo",
+                revision="abc123",
+                branch="main",
+            ),
+            ci=ArtifactCiProvenance(
+                provider="github",
+                run_id="42",
+                job="compare",
+                url="https://ci.example.test/runs/42",
+            ),
+        ),
+    )
+    _persist(root, annotated, blobs)
+
+    entry = list_report_archive(
+        root,
+        ReportArchiveLimits(maximum_entries=1, artifact=_limits()),
+    ).entries[0]
+
+    assert entry.title == "Release candidate"
+    assert entry.tags == ("release", "candidate")
+    assert entry.vcs is not None
+    assert entry.vcs.revision == "abc123"
+    assert entry.ci is not None
+    assert entry.ci.run_id == "42"
 
 
 def test_archive_query_rejects_untrusted_or_oversized_continuations(tmp_path: Path) -> None:

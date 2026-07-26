@@ -13,6 +13,7 @@ from comparo.core.artifacts.common import ArtifactBlob as ArtifactBlob
 from comparo.core.artifacts.common import ArtifactBudget as ArtifactBudget
 from comparo.core.artifacts.common import ArtifactCapture as ArtifactCapture
 from comparo.core.artifacts.common import ArtifactCaptureExtent as ArtifactCaptureExtent
+from comparo.core.artifacts.common import ArtifactCiProvenance as ArtifactCiProvenance
 from comparo.core.artifacts.common import ArtifactComparisonOutcome as ArtifactComparisonOutcome
 from comparo.core.artifacts.common import ArtifactCompletionKind as ArtifactCompletionKind
 from comparo.core.artifacts.common import ArtifactDefinition as ArtifactDefinition
@@ -25,8 +26,10 @@ from comparo.core.artifacts.common import ArtifactMetadata as ArtifactMetadata
 from comparo.core.artifacts.common import ArtifactMetric as ArtifactMetric
 from comparo.core.artifacts.common import ArtifactOmissionReason as ArtifactOmissionReason
 from comparo.core.artifacts.common import ArtifactProvenance as ArtifactProvenance
+from comparo.core.artifacts.common import ArtifactRunAnnotations as ArtifactRunAnnotations
 from comparo.core.artifacts.common import ArtifactSeverity as ArtifactSeverity
 from comparo.core.artifacts.common import ArtifactSourceCaptureState as ArtifactSourceCaptureState
+from comparo.core.artifacts.common import ArtifactVcsProvenance as ArtifactVcsProvenance
 from comparo.core.artifacts.facts import ArtifactComparison as ArtifactComparison
 from comparo.core.artifacts.facts import ArtifactCoordinate as ArtifactCoordinate
 from comparo.core.artifacts.facts import ArtifactEvidence as ArtifactEvidence
@@ -67,6 +70,7 @@ __all__ = (
     "ArtifactBudget",
     "ArtifactCapture",
     "ArtifactCaptureExtent",
+    "ArtifactCiProvenance",
     "ArtifactCodecError",
     "ArtifactCodecErrorCode",
     "ArtifactComparison",
@@ -101,12 +105,14 @@ __all__ = (
     "ArtifactProvenance",
     "ArtifactRequest",
     "ArtifactResponse",
+    "ArtifactRunAnnotations",
     "ArtifactSeverity",
     "ArtifactSourceCaptureState",
     "ArtifactString",
     "ArtifactSummary",
     "ArtifactTiming",
     "ArtifactValue",
+    "ArtifactVcsProvenance",
     "RunArtifact",
     "decode_run_artifact",
     "encode_run_artifact",

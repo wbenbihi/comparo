@@ -26,6 +26,7 @@ from comparo.core.artifacts.common import ArtifactGateVerdict
 from comparo.core.artifacts.common import ArtifactMetadata
 from comparo.core.artifacts.common import ArtifactMetric
 from comparo.core.artifacts.common import ArtifactProvenance
+from comparo.core.artifacts.common import ArtifactRunAnnotations
 from comparo.core.artifacts.common import ArtifactSeverity
 from comparo.core.artifacts.fact_compiler import compile_assertion_fact
 from comparo.core.artifacts.fact_compiler import compile_diff_fact
@@ -107,6 +108,7 @@ def compile_run_artifact(
     artifact_id: str,
     created_unix_nanoseconds: int,
     tool_version: str,
+    annotations: ArtifactRunAnnotations | None = None,
 ) -> ArtifactCompilationResult:
     """Cross the sole boundary and release all retained secret match patterns afterward."""
     if type(prepared) is not PreparedRun or type(result) is not RunResult:
@@ -115,6 +117,8 @@ def compile_run_artifact(
         raise ValueError("artifact compilation inputs belong to different runs")
     if type(capture) is not ArtifactCapturingDriver or type(policy) is not ArtifactPolicy:
         raise TypeError("artifact compilation requires typed capture and policy")
+    if annotations is not None and type(annotations) is not ArtifactRunAnnotations:
+        raise TypeError("artifact compilation annotations must be typed or absent")
     try:
         if capture.policy != policy:
             raise ValueError("artifact compilation policy differs from capture policy")
@@ -141,6 +145,7 @@ def compile_run_artifact(
             artifact_id=artifact_id,
             created_unix_nanoseconds=created_unix_nanoseconds,
             tool_version=tool_version,
+            annotations=annotations,
         )
         return ArtifactCompilationResult(
             status=ArtifactCompilationStatus.CREATED,
@@ -160,6 +165,7 @@ def _compile(
     artifact_id: str,
     created_unix_nanoseconds: int,
     tool_version: str,
+    annotations: ArtifactRunAnnotations | None,
 ) -> RunArtifact:
     by_execution = {item.execution_id: item for item in batch.executions}
     boundary = capture.boundary
@@ -213,6 +219,7 @@ def _compile(
         budgets=tuple(_budget(item) for item in result.ledgers),
         blobs=blobs,
         coverage_issues=batch.coverage_issues,
+        annotations=annotations,
     )
 
 
