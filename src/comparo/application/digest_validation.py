@@ -104,15 +104,15 @@ def prepare_digest_predicate(
     if operator.algorithm is DigestAlgorithm.SHA512:
         digest = hashlib.sha512(raw.value).digest()
     digest_value = BytesValue(value=digest)
-    actual: BytesValue | SensitiveValue[BytesValue] = digest_value
     origins = stable_taint_origin_union(
         match.taint_origins,
         operand.value.origins if is_sensitive_value(operand.value) else (),
     )
+    digest_evidence = DigestEvidence(algorithm=operator.algorithm, actual=digest_value)
+    matched = digest_matches(digest_evidence, expected, operator)
+    evidence: DigestEvidence | SensitiveValue[DigestEvidence] = digest_evidence
     if origins:
-        actual = SensitiveValue(digest_value, origins=origins)
-    evidence = DigestEvidence(algorithm=operator.algorithm, actual=actual)
-    matched = digest_matches(evidence, expected, operator)
+        evidence = SensitiveValue(digest_evidence, origins=origins)
     return PreparedPredicate(
         kind=PreparedCapabilityKind.DIGEST,
         selector_fingerprint=selector_fingerprint,
