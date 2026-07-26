@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
 
@@ -25,10 +26,12 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.plan_review import PlanReviewInspection
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
+from comparo.application.preflight import prepare_project_plan
 from comparo.application.production_execution import ProductionExecutionFailure
 from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionResult
 from comparo.application.production_execution import production_execution_defaults_v1
+from comparo.core.artifacts.policy import ArtifactPersistMode
 
 _INVOCATION_ID = UUID("10000000-0000-0000-0000-000000000001")
 _RUN_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -429,6 +432,7 @@ def test_compare_preparation_result_rejects_invalid_state(tmp_path: Path) -> Non
     [
         ({"settings": object()}, TypeError, "settings"),
         ({"artifact_root": object()}, TypeError, "artifact root"),
+        ({"artifact_root": Path("relative")}, ValueError, "resolved and absolute"),
         ({"approve_mutations": 1}, TypeError, "approval"),
         ({"tool_version": 1}, ValueError, "tool version"),
         ({"tool_version": ""}, ValueError, "tool version"),
@@ -464,9 +468,99 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
         )
     with pytest.raises(TypeError, match="discard handle"):
         service.discard(cast("ComparePreparationHandle", object()))
+    with pytest.raises(TypeError, match="start handle"):
+        service.validate_start(cast("ComparePreparationHandle", object()), _controls())
+    with pytest.raises(TypeError, match="start controls"):
+        service.validate_start(
+            ComparePreparationHandle(value=str(_HANDLE_ID)),
+            cast("CompareExecutionControls", object()),
+        )
 
     prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
     assert prepared.handle is not None
+    service.validate_start(prepared.handle, _controls())
+    assert service.outstanding == 1
     with pytest.raises(CompareServiceError) as captured:
         service.start(ComparePreparationHandle(value=str(_HANDLE_ID)), _controls())
     assert captured.value.code is CompareServiceErrorCode.HANDLE_UNKNOWN
+
+
+def test_compare_blocks_start_when_review_requires_missing_artifact_root(tmp_path: Path) -> None:
+    config = _write_project(tmp_path)
+    settings = production_execution_defaults_v1()
+    controls = msgspec.structs.replace(
+        _controls(),
+        settings=msgspec.structs.replace(
+            settings,
+            artifact=msgspec.structs.replace(
+                settings.artifact,
+                persist=ArtifactPersistMode.ALWAYS,
+            ),
+        ),
+    )
+    request = msgspec.structs.replace(_assertion_request(config), controls=controls)
+    service = CompareService(maximum_outstanding=1)
+    prepared = service.prepare(request)
+    assert prepared.handle is not None
+    assert prepared.review is not None
+    assert not prepared.review.execution_allowed
+
+    with pytest.raises(CompareServiceError) as blocked:
+        service.validate_start(prepared.handle, controls)
+    assert blocked.value.code is CompareServiceErrorCode.PREPARATION_BLOCKED
+    assert service.outstanding == 1
+
+
+def test_retained_comparison_contract_rejects_untyped_components(tmp_path: Path) -> None:
+    service = CompareService(maximum_outstanding=1)
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+    retained = service._prepared[prepared.handle]
+    for changes, message in (
+        ({"project": object()}, "project"),
+        ({"controls": object()}, "controls"),
+        ({"review": object()}, "review"),
+    ):
+        with pytest.raises(TypeError, match=message):
+            msgspec.structs.replace(retained, **changes)
+
+
+def test_compare_admission_surfaces_each_backend_preflight_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _assertion_request(_write_project(tmp_path))
+    outcome = prepare_project_plan(request.project)
+    assert outcome.project is not None
+    diagnostic = ApplicationDiagnostic(code="test.rejected", severity="error", stage="execution")
+    monkeypatch.setattr(compare, "inspect_diagnostic", lambda _item: diagnostic)
+
+    with monkeypatch.context() as context:
+        context.setattr(compare, "inspect_diagnostic", lambda _item: diagnostic)
+        context.setattr(
+            compare,
+            "preflight_runtime_capabilities",
+            lambda _project: SimpleNamespace(supported=False, diagnostics=(object(),)),
+        )
+        assert compare._admit_review(request, outcome.project) == (diagnostic,)
+
+    with monkeypatch.context() as context:
+        context.setattr(compare, "inspect_diagnostic", lambda _item: diagnostic)
+        context.setattr(
+            compare,
+            "bind_execution_profiles",
+            lambda *_args, **_kwargs: SimpleNamespace(profiles=None, diagnostics=(object(),)),
+        )
+        assert compare._admit_review(request, outcome.project) == (diagnostic,)
+
+    with monkeypatch.context() as context:
+        context.setattr(compare, "inspect_diagnostic", lambda _item: diagnostic)
+        context.setattr(
+            compare,
+            "preflight_configuration_evaluation",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                supported=False,
+                diagnostics=(object(),),
+            ),
+        )
+        assert compare._admit_review(request, outcome.project) == (diagnostic,)
