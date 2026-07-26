@@ -238,6 +238,15 @@ def test_explicit_tui_command_builds_a_typed_launch_request() -> None:
     assert stderr.getvalue() == ""
 
 
+def test_tui_help_describes_relative_and_absolute_artifact_root_authority() -> None:
+    code, stdout, stderr = _invoke(["tui", "--help"], services=_StaticServices())
+
+    assert (code, stderr) == (0, "")
+    assert "Project-relative archive created privately" in stdout
+    assert "after admitted Start; absolute" in stdout
+    assert "operator-managed archives must already exist" in stdout
+
+
 def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> None:
     captured: list[TuiLaunchRequest] = []
 
@@ -252,6 +261,16 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
             "tui",
             "--maximum-config-sources",
             "17",
+            "--maximum-config-discovery-entries",
+            "170",
+            "--maximum-config-total-bytes",
+            "32000",
+            "--maximum-config-total-documents",
+            "31",
+            "--maximum-config-total-nodes",
+            "3200",
+            "--maximum-config-resources",
+            "29",
             "--maximum-encoded-body-bytes",
             "1234",
             "--maximum-report-entries",
@@ -262,6 +281,10 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
             "8192",
             "--maximum-input-items",
             "257",
+            "--maximum-output-characters",
+            "16384",
+            "--maximum-output-items",
+            "129",
             "--maximum-navigation-frames-per-workspace",
             "33",
         ],
@@ -273,15 +296,41 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
     assert code == 0
     limits = captured[0].limits
     assert limits.project_load.maximum_sources == 17
+    assert limits.project_load.maximum_discovery_entries == 170
+    assert limits.project_load.maximum_total_bytes == 32000
+    assert limits.project_load.maximum_total_documents == 31
+    assert limits.project_load.maximum_total_nodes == 3200
+    assert limits.project_load.maximum_resources == 29
     assert limits.execution_settings.transport.capture.maximum_encoded_body_bytes.value == 1234
     assert limits.report_archive.maximum_entries == 23
     assert limits.maximum_outstanding_preparations == 3
     assert limits.interaction.maximum_input_characters == 8192
     assert limits.interaction.maximum_input_items == 257
+    assert limits.interaction.maximum_output_characters == 16384
+    assert limits.interaction.maximum_output_items == 129
     assert limits.interaction.maximum_navigation_frames_per_workspace == 33
     assert limits.execution_settings.artifact.persist.value == "always"
     assert stdout.getvalue() == ""
     assert stderr.getvalue() == ""
+
+
+def test_tui_command_can_disable_persistence_for_a_no_storage_policy() -> None:
+    captured: list[TuiLaunchRequest] = []
+
+    def launch(request: TuiLaunchRequest) -> int:
+        captured.append(request)
+        return 0
+
+    code = main(
+        ["tui", "--no-persist"],
+        services=cast("CliServices", _StaticServices()),
+        stdout=StringIO(),
+        stderr=StringIO(),
+        tui_launcher=launch,
+    )
+
+    assert code == 0
+    assert captured[0].limits.execution_settings.artifact.persist.value == "never"
 
 
 @pytest.mark.parametrize(
@@ -294,6 +343,9 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
         ["--maximum-input-characters", "0"],
         ["--maximum-input-items", "0"],
         ["--maximum-navigation-frames-per-workspace", "1"],
+        ["--artifact-root", "."],
+        ["--artifact-root", ".."],
+        ["--artifact-root", "../reports"],
     ],
 )
 def test_tui_command_rejects_invalid_limits_without_launching(arguments: list[str]) -> None:
@@ -536,6 +588,16 @@ def test_every_project_loading_journey_preserves_configuration_limits(
     limits = [
         "--maximum-config-sources",
         "2",
+        "--maximum-config-discovery-entries",
+        "21",
+        "--maximum-config-total-bytes",
+        "23",
+        "--maximum-config-total-documents",
+        "29",
+        "--maximum-config-total-nodes",
+        "31",
+        "--maximum-config-resources",
+        "37",
         "--maximum-config-yaml-bytes",
         "3",
         "--maximum-config-yaml-documents",
@@ -566,6 +628,11 @@ def test_every_project_loading_journey_preserves_configuration_limits(
         load_limits = services.execution_request.plan.load_limits
     assert tuple(getattr(load_limits, field) for field in load_limits.__struct_fields__) == (
         2,
+        21,
+        23,
+        29,
+        31,
+        37,
         3,
         5,
         7,
@@ -592,6 +659,9 @@ def test_every_project_loading_help_documents_configuration_limits(command: list
     assert (code, stderr) == (0, "")
     for option in (
         "--maximum-config-sources",
+        "--maximum-config-total-bytes",
+        "--maximum-config-total-nodes",
+        "--maximum-config-resources",
         "--maximum-config-yaml-bytes",
         "--maximum-config-yaml-depth",
         "--maximum-config-yaml-nodes",
@@ -600,6 +670,8 @@ def test_every_project_loading_help_documents_configuration_limits(command: list
         "--maximum-policy-yaml-nodes",
     ):
         assert option in stdout
+    assert "--maximum-config-discovery-e" in stdout
+    assert "--maximum-config-total-docum" in stdout
     assert "--maximum-config-yaml-docume" in stdout
     assert "Maximum project YAML sources discovered and" in stdout
     assert "Maximum documents admitted from one project" in stdout

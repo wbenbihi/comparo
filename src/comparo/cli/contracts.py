@@ -79,6 +79,11 @@ class CliConfigLoadLimits(msgspec.Struct, frozen=True, kw_only=True):
     """Caller-owned project-source and YAML admission limits for one CLI journey."""
 
     maximum_sources: int
+    maximum_discovery_entries: int
+    maximum_total_bytes: int
+    maximum_total_documents: int
+    maximum_total_nodes: int
+    maximum_resources: int
     maximum_yaml_bytes: int
     maximum_yaml_documents: int
     maximum_yaml_depth: int
@@ -95,6 +100,11 @@ class CliConfigLoadLimits(msgspec.Struct, frozen=True, kw_only=True):
 
 DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1 = CliConfigLoadLimits(
     maximum_sources=4096,
+    maximum_discovery_entries=100_000,
+    maximum_total_bytes=64 * 1024 * 1024,
+    maximum_total_documents=4096,
+    maximum_total_nodes=4_000_000,
+    maximum_resources=4096,
     maximum_yaml_bytes=8 * 1024 * 1024,
     maximum_yaml_documents=128,
     maximum_yaml_depth=256,

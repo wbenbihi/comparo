@@ -15,6 +15,11 @@ def project_load_limits(value: CliConfigLoadLimits) -> ProjectLoadLimits:
         raise TypeError("configuration load limits require CliConfigLoadLimits")
     return ProjectLoadLimits(
         maximum_sources=value.maximum_sources,
+        maximum_discovery_entries=value.maximum_discovery_entries,
+        maximum_total_bytes=value.maximum_total_bytes,
+        maximum_total_documents=value.maximum_total_documents,
+        maximum_total_nodes=value.maximum_total_nodes,
+        maximum_resources=value.maximum_resources,
         yaml=YamlParseLimits(
             maximum_bytes=value.maximum_yaml_bytes,
             maximum_documents=value.maximum_yaml_documents,

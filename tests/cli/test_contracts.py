@@ -103,6 +103,11 @@ def test_exit_codes_and_valid_contracts_are_stable() -> None:
         for field in DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.__struct_fields__
     ) == (
         4096,
+        100_000,
+        64 * 1024 * 1024,
+        4096,
+        4_000_000,
+        4096,
         8 * 1024 * 1024,
         128,
         256,

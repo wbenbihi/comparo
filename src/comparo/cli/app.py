@@ -60,6 +60,8 @@ from comparo.cli.services import DefaultCliServices
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_INPUT_CHARACTERS_V1
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_INPUT_ITEMS_V1
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_NAVIGATION_FRAMES_V1
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_OUTPUT_CHARACTERS_V1
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_OUTPUT_ITEMS_V1
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1
 from comparo.tui.contracts import TuiInteractionLimits
@@ -116,6 +118,16 @@ FailFastOption = Annotated[
 ArtifactRootOption = Annotated[Path, Parameter(name="--root")]
 BlobOutputLimitOption = Annotated[int, Parameter(name="--maximum-output-bytes")]
 ExecutionArtifactRootOption = Annotated[Path, Parameter(name="--artifact-root")]
+TuiArtifactRootOption = Annotated[
+    Path,
+    Parameter(
+        name="--artifact-root",
+        help=(
+            "Project-relative archive created privately after admitted Start; "
+            "absolute operator-managed archives must already exist."
+        ),
+    ),
+]
 MaximumReportEntriesOption = Annotated[int, Parameter(name="--maximum-report-entries")]
 MaximumPreparationsOption = Annotated[
     int,
@@ -123,9 +135,19 @@ MaximumPreparationsOption = Annotated[
 ]
 MaximumInputCharactersOption = Annotated[int, Parameter(name="--maximum-input-characters")]
 MaximumInputItemsOption = Annotated[int, Parameter(name="--maximum-input-items")]
+MaximumOutputCharactersOption = Annotated[int, Parameter(name="--maximum-output-characters")]
+MaximumOutputItemsOption = Annotated[int, Parameter(name="--maximum-output-items")]
 MaximumNavigationFramesOption = Annotated[
     int,
     Parameter(name="--maximum-navigation-frames-per-workspace"),
+]
+TuiPersistenceOption = Annotated[
+    bool,
+    Parameter(
+        name="--persist",
+        negative="--no-persist",
+        help="Persist sanitized run reports; disable when policy forbids artifact storage.",
+    ),
 ]
 
 
@@ -214,6 +236,41 @@ class _ConfigLoadLimitArguments:
             help="Maximum project YAML sources discovered and admitted.",
         ),
     ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_sources
+    maximum_discovery_entries: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-discovery-entries",
+            help="Maximum filesystem entries examined during project source discovery.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_discovery_entries
+    maximum_total_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-total-bytes",
+            help="Maximum aggregate bytes admitted across all project YAML sources.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_total_bytes
+    maximum_total_documents: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-total-documents",
+            help="Maximum aggregate YAML documents admitted across the project.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_total_documents
+    maximum_total_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-total-nodes",
+            help="Maximum aggregate YAML nodes retained across the project.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_total_nodes
+    maximum_resources: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-resources",
+            help="Maximum compiled resource documents admitted across the project.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_resources
     maximum_yaml_bytes: Annotated[
         int,
         Parameter(
@@ -738,6 +795,11 @@ def _config_load_limits(value: _ConfigLoadLimitArguments) -> CliConfigLoadLimits
     """Project every caller-visible project-load ceiling into the CLI contract."""
     return CliConfigLoadLimits(
         maximum_sources=value.maximum_sources,
+        maximum_discovery_entries=value.maximum_discovery_entries,
+        maximum_total_bytes=value.maximum_total_bytes,
+        maximum_total_documents=value.maximum_total_documents,
+        maximum_total_nodes=value.maximum_total_nodes,
+        maximum_resources=value.maximum_resources,
         maximum_yaml_bytes=value.maximum_yaml_bytes,
         maximum_yaml_documents=value.maximum_yaml_documents,
         maximum_yaml_depth=value.maximum_yaml_depth,
@@ -1132,7 +1194,8 @@ def _register_tui_command(cli: App) -> None:
         config: ConfigOption = Path("comparo.yaml"),
         source: SourceOption = (),
         policy: PolicyOption = None,
-        artifact_root: ExecutionArtifactRootOption = Path(".comparo/artifacts"),
+        artifact_root: TuiArtifactRootOption = Path(".comparo/artifacts"),
+        persist: TuiPersistenceOption = True,
         config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
         runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
         artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
@@ -1146,6 +1209,10 @@ def _register_tui_command(cli: App) -> None:
             DEFAULT_TUI_MAXIMUM_INPUT_CHARACTERS_V1
         ),
         maximum_input_items: MaximumInputItemsOption = DEFAULT_TUI_MAXIMUM_INPUT_ITEMS_V1,
+        maximum_output_characters: MaximumOutputCharactersOption = (
+            DEFAULT_TUI_MAXIMUM_OUTPUT_CHARACTERS_V1
+        ),
+        maximum_output_items: MaximumOutputItemsOption = DEFAULT_TUI_MAXIMUM_OUTPUT_ITEMS_V1,
         maximum_navigation_frames_per_workspace: MaximumNavigationFramesOption = (
             DEFAULT_TUI_MAXIMUM_NAVIGATION_FRAMES_V1
         ),
@@ -1157,6 +1224,7 @@ def _register_tui_command(cli: App) -> None:
             source: Additional local YAML source; repeat the option to add more.
             policy: External ExecutionPolicy path; omission uses trusted-local authority.
             artifact_root: Authenticated sanitized report archive root.
+            persist: Persist sanitized run reports; disable for a no-storage execution policy.
             config_load_limits: Caller-owned project and policy YAML admission ceilings.
             runtime_limits: Caller-owned HTTP capture and decoding ceilings.
             artifact_limits: Caller-owned artifact persistence and read ceilings.
@@ -1164,6 +1232,8 @@ def _register_tui_command(cli: App) -> None:
             maximum_outstanding_preparations: Maximum retained Compare preparations.
             maximum_input_characters: Maximum characters admitted by one Compare input.
             maximum_input_items: Maximum comma-separated items admitted by one Compare input.
+            maximum_output_characters: Maximum characters mounted by one bounded TUI projection.
+            maximum_output_items: Maximum rows/items mounted by one bounded TUI projection.
             maximum_navigation_frames_per_workspace: Maximum retained local routes per workspace.
         """
         try:
@@ -1174,7 +1244,7 @@ def _register_tui_command(cli: App) -> None:
                 policy_load=policy_load_limits(parsed_config_limits),
                 execution_settings=production_execution_settings(
                     parsed_execution_limits,
-                    persist=True,
+                    persist=persist,
                 ),
                 report_archive=ReportArchiveLimits(
                     maximum_entries=maximum_report_entries,
@@ -1183,6 +1253,8 @@ def _register_tui_command(cli: App) -> None:
                 interaction=TuiInteractionLimits(
                     maximum_input_characters=maximum_input_characters,
                     maximum_input_items=maximum_input_items,
+                    maximum_output_characters=maximum_output_characters,
+                    maximum_output_items=maximum_output_items,
                     maximum_navigation_frames_per_workspace=(
                         maximum_navigation_frames_per_workspace
                     ),

@@ -15,6 +15,11 @@ def test_callers_can_raise_and_lower_every_versioned_default() -> None:
     lower = msgspec.structs.replace(
         DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1,
         maximum_sources=2,
+        maximum_discovery_entries=21,
+        maximum_total_bytes=23,
+        maximum_total_documents=29,
+        maximum_total_nodes=31,
+        maximum_resources=37,
         maximum_yaml_bytes=3,
         maximum_yaml_documents=5,
         maximum_yaml_depth=7,
@@ -26,6 +31,11 @@ def test_callers_can_raise_and_lower_every_versioned_default() -> None:
     higher = msgspec.structs.replace(
         DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1,
         maximum_sources=8192,
+        maximum_discovery_entries=200_000,
+        maximum_total_bytes=128 * 1024 * 1024,
+        maximum_total_documents=8192,
+        maximum_total_nodes=8_000_000,
+        maximum_resources=8192,
         maximum_yaml_bytes=16 * 1024 * 1024,
         maximum_yaml_documents=256,
         maximum_yaml_depth=512,
@@ -42,18 +52,39 @@ def test_callers_can_raise_and_lower_every_versioned_default() -> None:
 
     assert (
         lowered.maximum_sources,
+        lowered.maximum_discovery_entries,
+        lowered.maximum_total_bytes,
+        lowered.maximum_total_documents,
+        lowered.maximum_total_nodes,
+        lowered.maximum_resources,
         lowered.yaml.maximum_bytes,
         lowered.yaml.maximum_documents,
         lowered.yaml.maximum_depth,
         lowered.yaml.maximum_nodes,
-    ) == (2, 3, 5, 7, 11)
+    ) == (2, 21, 23, 29, 31, 37, 3, 5, 7, 11)
     assert (
         raised.maximum_sources,
+        raised.maximum_discovery_entries,
+        raised.maximum_total_bytes,
+        raised.maximum_total_documents,
+        raised.maximum_total_nodes,
+        raised.maximum_resources,
         raised.yaml.maximum_bytes,
         raised.yaml.maximum_documents,
         raised.yaml.maximum_depth,
         raised.yaml.maximum_nodes,
-    ) == (8192, 16 * 1024 * 1024, 256, 512, 2_000_000)
+    ) == (
+        8192,
+        200_000,
+        128 * 1024 * 1024,
+        8192,
+        8_000_000,
+        8192,
+        16 * 1024 * 1024,
+        256,
+        512,
+        2_000_000,
+    )
     assert (
         lowered_policy.yaml.maximum_bytes,
         lowered_policy.yaml.maximum_documents,

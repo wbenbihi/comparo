@@ -19,6 +19,7 @@ from comparo.application.production_execution import ProductionExecutionFailureK
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionSettings
 from comparo.application.production_execution import execute_production
+from comparo.application.production_execution import persisted_production_execution_defaults_v1
 from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.core.artifacts.common import ArtifactCompletionKind
 from comparo.core.artifacts.common import ArtifactGateVerdict
@@ -123,6 +124,11 @@ def production_execution_settings(
     transport = msgspec.structs.replace(
         defaults.transport,
         capture=capture,
+        classification=(
+            persisted_production_execution_defaults_v1().transport.classification
+            if persist
+            else defaults.transport.classification
+        ),
         maximum_authorization_occurrences=PositiveCount(
             value=limits.maximum_authorization_occurrences
         ),

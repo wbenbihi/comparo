@@ -120,7 +120,8 @@ directory. `--source/-S PATH` adds an explicitly selected local YAML source and 
 automatic discovery remains confined to the Project's declared data folder.
 
 Every project-source admission default is caller-controlled through
-`--maximum-config-sources` and the `--maximum-config-yaml-*` options. The explicitly selected
+`--maximum-config-sources`, `--maximum-config-discovery-entries`, the aggregate
+`--maximum-config-total-*` options, and the per-source `--maximum-config-yaml-*` options. The explicitly selected
 operator policy has independent `--maximum-policy-yaml-*` byte, depth, and node limits; it remains
 exactly one policy document. These are finite version-owned defaults, not immutable application
 maxima, and invalid limit combinations fail before any source is opened.

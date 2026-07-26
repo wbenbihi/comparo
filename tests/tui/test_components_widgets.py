@@ -1207,6 +1207,8 @@ def test_compare_input_capacity_is_caller_owned_instead_of_a_hidden_project_cap(
     permissive = TuiInteractionLimits(
         maximum_input_characters=4096,
         maximum_input_items=100,
+        maximum_output_characters=4096,
+        maximum_output_items=100,
         maximum_navigation_frames_per_workspace=2,
     )
     subjects = ", ".join(f"request-{index}" for index in range(96))
@@ -1217,6 +1219,8 @@ def test_compare_input_capacity_is_caller_owned_instead_of_a_hidden_project_cap(
     item_limited = TuiInteractionLimits(
         maximum_input_characters=4096,
         maximum_input_items=2,
+        maximum_output_characters=4096,
+        maximum_output_items=100,
         maximum_navigation_frames_per_workspace=2,
     )
     assert (
@@ -1226,6 +1230,8 @@ def test_compare_input_capacity_is_caller_owned_instead_of_a_hidden_project_cap(
     character_limited = TuiInteractionLimits(
         maximum_input_characters=8,
         maximum_input_items=100,
+        maximum_output_characters=4096,
+        maximum_output_items=100,
         maximum_navigation_frames_per_workspace=2,
     )
     assert (

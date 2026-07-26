@@ -19,6 +19,8 @@ DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1 = 8
 DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1 = 4096
 DEFAULT_TUI_MAXIMUM_INPUT_CHARACTERS_V1 = 64 * 1024
 DEFAULT_TUI_MAXIMUM_INPUT_ITEMS_V1 = 4096
+DEFAULT_TUI_MAXIMUM_OUTPUT_CHARACTERS_V1 = 256 * 1024
+DEFAULT_TUI_MAXIMUM_OUTPUT_ITEMS_V1 = 4096
 DEFAULT_TUI_MAXIMUM_NAVIGATION_FRAMES_V1 = 256
 
 
@@ -43,11 +45,18 @@ class TuiInteractionLimits(msgspec.Struct, frozen=True, kw_only=True):
 
     maximum_input_characters: int
     maximum_input_items: int
+    maximum_output_characters: int
+    maximum_output_items: int
     maximum_navigation_frames_per_workspace: int
 
     def __post_init__(self) -> None:
         """Require exact positive limits and enough history for root plus detail."""
-        positive = (self.maximum_input_characters, self.maximum_input_items)
+        positive = (
+            self.maximum_input_characters,
+            self.maximum_input_items,
+            self.maximum_output_characters,
+            self.maximum_output_items,
+        )
         if any(type(value) is not int or value < 1 for value in positive):
             raise ValueError("TUI interaction limits must be positive integers")
         if (
@@ -62,6 +71,8 @@ def tui_interaction_limits_defaults_v1() -> TuiInteractionLimits:
     return TuiInteractionLimits(
         maximum_input_characters=DEFAULT_TUI_MAXIMUM_INPUT_CHARACTERS_V1,
         maximum_input_items=DEFAULT_TUI_MAXIMUM_INPUT_ITEMS_V1,
+        maximum_output_characters=DEFAULT_TUI_MAXIMUM_OUTPUT_CHARACTERS_V1,
+        maximum_output_items=DEFAULT_TUI_MAXIMUM_OUTPUT_ITEMS_V1,
         maximum_navigation_frames_per_workspace=DEFAULT_TUI_MAXIMUM_NAVIGATION_FRAMES_V1,
     )
 
@@ -115,6 +126,8 @@ __all__ = (
     "DEFAULT_TUI_MAXIMUM_INPUT_CHARACTERS_V1",
     "DEFAULT_TUI_MAXIMUM_INPUT_ITEMS_V1",
     "DEFAULT_TUI_MAXIMUM_NAVIGATION_FRAMES_V1",
+    "DEFAULT_TUI_MAXIMUM_OUTPUT_CHARACTERS_V1",
+    "DEFAULT_TUI_MAXIMUM_OUTPUT_ITEMS_V1",
     "DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1",
     "DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1",
     "TuiInteractionLimits",
