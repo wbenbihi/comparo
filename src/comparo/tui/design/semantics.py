@@ -46,32 +46,32 @@ class SemanticStyle(msgspec.Struct, frozen=True, kw_only=True):
 
 _STYLES: Final[dict[SemanticStatus, SemanticStyle]] = {
     SemanticStatus.SUCCESS: SemanticStyle(
-        glyph="✓", label="passed", css_class="status-success", rank=6
+        glyph="+", label="passed", css_class="status-success", rank=6
     ),
     SemanticStatus.ADVISORY: SemanticStyle(
         glyph="~", label="advisory", css_class="status-advisory", rank=3
     ),
     SemanticStatus.FAILURE: SemanticStyle(
-        glyph="✗", label="failed", css_class="status-failure", rank=0
+        glyph="x", label="failed", css_class="status-failure", rank=0
     ),
     SemanticStatus.ERROR: SemanticStyle(glyph="!", label="error", css_class="status-error", rank=1),
     SemanticStatus.RUNNING: SemanticStyle(
-        glyph="◐", label="running", css_class="status-running", rank=4
+        glyph=">", label="running", css_class="status-running", rank=4
     ),
     SemanticStatus.QUEUED: SemanticStyle(
-        glyph="○", label="queued", css_class="status-queued", rank=5
+        glyph=".", label="queued", css_class="status-queued", rank=5
     ),
     SemanticStatus.SKIPPED: SemanticStyle(
-        glyph="⊘", label="skipped", css_class="status-skipped", rank=7
+        glyph="-", label="skipped", css_class="status-skipped", rank=7
     ),
     SemanticStatus.CANCELLED: SemanticStyle(
-        glyph="■", label="cancelled", css_class="status-cancelled", rank=2
+        glyph="#", label="cancelled", css_class="status-cancelled", rank=2
     ),
     SemanticStatus.REDACTED: SemanticStyle(
-        glyph="●", label="redacted", css_class="status-redacted", rank=8
+        glyph="*", label="redacted", css_class="status-redacted", rank=8
     ),
     SemanticStatus.NEUTRAL: SemanticStyle(
-        glyph="·", label="neutral", css_class="status-neutral", rank=9
+        glyph="=", label="neutral", css_class="status-neutral", rank=9
     ),
 }
 

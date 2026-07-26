@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
 from typing import final
 from typing import override
 
 from textual import on
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Horizontal
 from textual.containers import Vertical
 
 from comparo.application.project_workspace import ProjectWorkspaceResult
+from comparo.tui.bindings import textual_bindings
+from comparo.tui.commands import CommandScope
 from comparo.tui.components import DiagnosticsList
 from comparo.tui.components import ProjectResourceDetail
 from comparo.tui.components import ProjectResourceList
@@ -22,6 +26,8 @@ from comparo.tui.components import StatePanelMode
 class ExplorerWorkspace(Vertical):
     """Compose project loading, diagnostics, resource list, and resource detail."""
 
+    BINDINGS: ClassVar[list[BindingType]] = textual_bindings(CommandScope.EXPLORER)
+
     def __init__(
         self,
         result: ProjectWorkspaceResult | None,
@@ -31,6 +37,7 @@ class ExplorerWorkspace(Vertical):
     ) -> None:
         """Initialize Explorer from a loading, failed, or successful result."""
         super().__init__(id=id, classes=classes)
+        self.can_focus = True
         self._result = result
 
     @override

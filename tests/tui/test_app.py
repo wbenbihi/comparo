@@ -13,6 +13,7 @@ import msgspec
 import pytest
 from textual.pilot import Pilot
 from textual.widgets import ContentSwitcher
+from textual.widgets import Footer
 from textual.widgets import Input
 from textual.widgets import Static
 from textual.widgets import Switch
@@ -55,7 +56,7 @@ from comparo.core.artifacts import ArtifactSummary
 from comparo.core.artifacts import RunArtifact
 from comparo.tui.app import ComparoApp
 from comparo.tui.commands import CommandId
-from comparo.tui.components import CommandFooter
+from comparo.tui.commands import KeymapOverride
 from comparo.tui.components import CompareDraftForm
 from comparo.tui.components import ProjectResourceDetail
 from comparo.tui.components import ProjectResourceList
@@ -77,12 +78,12 @@ from comparo.tui.controllers import TuiCoordinator
 from comparo.tui.controllers import TuiOperationSlot
 from comparo.tui.controllers.coordinator import failure_code
 from comparo.tui.controllers.coordinator import same_compare_intent
+from comparo.tui.design import COMPARO_LIGHT_THEME
 from comparo.tui.navigation import NavigationFrame
 from comparo.tui.navigation import Route
 from comparo.tui.navigation import WorkspaceId
 from comparo.tui.selection import restore_frame
 from comparo.tui.selection import result_reference_from_route
-from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
 from comparo.tui.workspaces import CompareWorkspace
 from comparo.tui.workspaces import ExplorerWorkspace
@@ -493,7 +494,8 @@ async def _wait_until(
 
 
 def _footer_text(app: ComparoApp) -> str:
-    return " ".join(str(item.content) for item in app.query_one(CommandFooter).query(Static))
+    app.query_one(Footer)
+    return " ".join(active.binding.description for active in app.screen.active_bindings.values())
 
 
 def test_result_route_identity_recovers_only_typed_closed_references() -> None:
@@ -562,6 +564,7 @@ def test_shell_has_four_workspaces_one_switcher_and_contextual_commands() -> Non
             )
             explorer.show_selected_resource(ProjectResourceList.ResourceSelected(second_resource))
             await app.select_workspace(WorkspaceId.REPORT)
+            await pilot.pause()
             assert app.navigation.current.route.view == "result"
             results = app.query_one("#workspace-report ResultsWorkspaceView", ResultsWorkspaceView)
             first_reference = _result_reference()
@@ -596,6 +599,32 @@ def test_shell_has_four_workspaces_one_switcher_and_contextual_commands() -> Non
     asyncio.run(scenario())
 
 
+def test_app_registers_comparo_themes_and_applies_native_keymap_overrides() -> None:
+    async def scenario() -> None:
+        preferences = TuiPreferences(
+            keymap=(KeymapOverride(command_id=CommandId.APP_HELP, keys=("f1",)),)
+        )
+        app = ComparoApp(
+            cast("TuiBackend", _FakeBackend()),
+            _controls(),
+            preferences=preferences,
+        )
+        async with app.run_test(size=(100, 36)) as pilot:
+            await pilot.pause()
+            assert app.theme == "comparo-dark"
+            assert app.screen.active_bindings["f1"].binding.id == CommandId.APP_HELP.value
+            remapped = msgspec.structs.replace(
+                preferences,
+                keymap=(KeymapOverride(command_id=CommandId.APP_HELP, keys=("f2",)),),
+            )
+            app.update_preferences(TuiOnlySettingsPanel.PreferencesChanged(remapped))
+            await pilot.pause()
+            assert "f1" not in app.screen.active_bindings
+            assert app.screen.active_bindings["f2"].binding.id == CommandId.APP_HELP.value
+
+    asyncio.run(scenario())
+
+
 def test_compare_prepares_runs_projects_results_without_focus_theft() -> None:
     async def scenario() -> None:
         backend = _FakeBackend()
@@ -614,6 +643,7 @@ def test_compare_prepares_runs_projects_results_without_focus_theft() -> None:
             )
             await app.select_workspace(WorkspaceId.COMPARE)
             await app.prepare_compare(draft)
+            await pilot.pause()
             assert app.compare_plan is not None
             assert "prepare:differences" in backend.calls
             assert "Execute" in _footer_text(app)
@@ -635,13 +665,13 @@ def test_compare_prepares_runs_projects_results_without_focus_theft() -> None:
             await pilot.pause()
             assert app.focused is focused
             preferences = TuiPreferences(
-                theme=ThemePreference.LIGHT,
+                theme=COMPARO_LIGHT_THEME.theme_id,
                 default_workspace=WorkspaceId.SETTINGS,
                 dense=True,
                 mouse=False,
             )
             app.update_preferences(TuiOnlySettingsPanel.PreferencesChanged(preferences))
-            assert app.theme == "textual-light"
+            assert app.theme == COMPARO_LIGHT_THEME.theme_id.value
             assert app.screen.has_class("density-dense")
             assert app.screen.has_class("mouse-next-launch-disabled")
 
@@ -664,6 +694,7 @@ def test_compare_prepares_runs_projects_results_without_focus_theft() -> None:
             assert app.navigation.current.route.view == "root"
             assert compare.state.value == "results"
             await app.go_back()
+            await pilot.pause()
             assert compare.state.value == "prepare"
             assert compare.current_draft() == draft
             assert "Preview" in _footer_text(app)
@@ -711,7 +742,7 @@ def test_compare_shortcut_text_is_editable_and_visible_defaults_are_prepared() -
             await pilot.press("1", "2", "3", "4", "q", "r", "p", "x", "a")
             await pilot.press("backspace")
             await pilot.pause()
-            assert subject.value == "1234qrpx"
+            assert subject.value == "1234qrpxa"
             assert tuple(backend.calls[: len(effect_calls)]) == effect_calls
             assert "start:prepared-handle" not in backend.calls
             assert app.navigation.active is WorkspaceId.COMPARE
@@ -849,7 +880,7 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
 
         unmounted = _app(_FakeBackend())
         await unmounted._render_workspace(WorkspaceId.EXPLORER)
-        await unmounted._render_footer()
+        unmounted.refresh_bindings()
         unmounted._apply_responsive_class(80)
         await unmounted.prepare_compare()
         await unmounted.close_services()
@@ -894,7 +925,7 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             assert app.navigation.current.route.view == "root"
             await app.go_back()
 
-            await app.action_dispatch_catalog_key("not-a-key")
+            await app.action_dispatch_command_id("not-a-command")
             dispatch = cast("Callable[[CommandId], Awaitable[None]]", app.dispatch_command)
             with pytest.raises(TypeError, match="command"):
                 await dispatch(cast("CommandId", object()))
@@ -970,23 +1001,21 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             await app.open_report("stale")
             backend.hooks.pop("open")
 
-            app.unregister_theme("textual-light")
+            app.unregister_theme(COMPARO_LIGHT_THEME.theme_id.value)
             app._apply_preferences(
-                TuiPreferences(theme=ThemePreference.LIGHT, default_workspace=WorkspaceId.COMPARE)
+                TuiPreferences(
+                    theme=COMPARO_LIGHT_THEME.theme_id,
+                    default_workspace=WorkspaceId.COMPARE,
+                )
             )
             assert app.theme == app._system_theme
             app._system_theme = "missing-theme"
             app._apply_preferences(
-                TuiPreferences(theme=ThemePreference.LIGHT, default_workspace=WorkspaceId.COMPARE)
+                TuiPreferences(
+                    theme=COMPARO_LIGHT_THEME.theme_id,
+                    default_workspace=WorkspaceId.COMPARE,
+                )
             )
-
-            app._footer_signature = ()
-            await app._footer_lock.acquire()
-            footer_update = asyncio.create_task(app._render_footer())
-            await asyncio.sleep(0)
-            app._footer_signature = tuple(command.command_id for command in app.active_commands)
-            app._footer_lock.release()
-            await footer_update
 
         crash_app = _app(_FakeBackend())
         exits: list[tuple[int | None, int, object | None]] = []

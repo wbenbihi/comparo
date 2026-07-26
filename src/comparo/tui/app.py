@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Coroutine
 from contextlib import suppress
 from pathlib import PurePath
@@ -16,6 +15,7 @@ from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.events import Resize
 from textual.widgets import ContentSwitcher
+from textual.widgets import Footer
 from textual.widgets import Tab
 from textual.widgets import Tabs
 
@@ -30,8 +30,9 @@ from comparo.tui.bindings import textual_bindings
 from comparo.tui.commands import COMMAND_CATALOG
 from comparo.tui.commands import CommandDescriptor
 from comparo.tui.commands import CommandId
+from comparo.tui.commands import CommandScope
+from comparo.tui.commands import resolved_primary_key
 from comparo.tui.components import COMPONENT_STYLESHEET
-from comparo.tui.components import CommandFooter
 from comparo.tui.components import CompareDraftForm
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
@@ -47,8 +48,8 @@ from comparo.tui.controllers import ReportSurface
 from comparo.tui.controllers import TuiCoordinator
 from comparo.tui.controllers import TuiOperationSlot
 from comparo.tui.controllers import available_commands
-from comparo.tui.design import LayoutClass
-from comparo.tui.design import layout_class
+from comparo.tui.layout_adapter import apply_responsive_class
+from comparo.tui.layout_adapter import focus_workspace
 from comparo.tui.navigation import NavigationFrame
 from comparo.tui.navigation import NavigationState
 from comparo.tui.navigation import Route
@@ -58,8 +59,9 @@ from comparo.tui.navigation import navigate_back
 from comparo.tui.navigation import push_route
 from comparo.tui.navigation import switch_workspace
 from comparo.tui.selection import restore_frame
-from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
+from comparo.tui.theme_adapter import apply_tui_preferences
+from comparo.tui.theme_adapter import register_builtin_themes
 from comparo.tui.workspace_views import compare_workspace_view
 from comparo.tui.workspace_views import report_workspace_view
 from comparo.tui.workspaces import CompareWorkspace
@@ -77,7 +79,7 @@ class ComparoApp(App[int]):
     #workspace-tabs { dock: top; }
     #workspace-content { height: 1fr; width: 1fr; }
     """
-    BINDINGS: ClassVar[list[BindingType]] = textual_bindings()
+    BINDINGS: ClassVar[list[BindingType]] = textual_bindings(CommandScope.GLOBAL)
 
     def __init__(
         self,
@@ -102,12 +104,11 @@ class ComparoApp(App[int]):
         selected = TuiPreferences() if preferences is None else preferences
         super().__init__()
         self._system_theme = self.theme
+        register_builtin_themes(self)
         self._preferences = selected
         self._interaction_limits = selected_limits
         self._navigation = switch_workspace(initial_navigation(), selected.default_workspace)
         self._coordinator = TuiCoordinator(backend, controls, self._render_workspace)
-        self._footer_lock = asyncio.Lock()
-        self._footer_signature = tuple(command.command_id for command in self.active_commands)
         self._shell_mounted = False
 
     @property
@@ -182,7 +183,7 @@ class ComparoApp(App[int]):
             initial=f"workspace-{active.value}",
             id="workspace-content",
         )
-        yield CommandFooter(self.active_commands, id="command-footer")
+        yield Footer(id="command-footer")
 
     def on_mount(self) -> None:
         """Apply presentation state and begin ordered project/archive loading."""
@@ -272,11 +273,22 @@ class ComparoApp(App[int]):
                 f"{message.reference.entity.value}:{message.reference.result_id}",
             )
 
-    async def action_dispatch_catalog_key(self, key: str) -> None:
-        """Resolve one physical key in the current semantic scopes."""
-        command = next((item for item in self.active_commands if key in item.keys), None)
-        if command is not None:
-            await self.dispatch_command(command.command_id)
+    async def action_dispatch_command_id(self, command_id: str) -> None:
+        """Dispatch a semantic command selected by Textual's resolved key map."""
+        with suppress(ValueError):
+            await self.dispatch_command(CommandId(command_id))
+
+    @override
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Expose only commands available in the active workspace and lifecycle."""
+        if action != "dispatch_command_id":
+            return super().check_action(action, parameters)
+        if len(parameters) != 1 or type(parameters[0]) is not str:
+            return False
+        with suppress(ValueError):
+            command_id = CommandId(parameters[0])
+            return command_id in {command.command_id for command in self.active_commands}
+        return False
 
     async def dispatch_command(self, command_id: CommandId) -> None:
         """Dispatch one typed command without redeclaring keys."""
@@ -307,7 +319,10 @@ class ComparoApp(App[int]):
             await self.go_back()
         elif command_id is CommandId.APP_HELP:
             self.notify(
-                " · ".join(f"{item.keys[0]} {item.label}" for item in self.active_commands),
+                " · ".join(
+                    f"{self._display_key(item.command_id)} {item.label}"
+                    for item in self.active_commands
+                ),
                 title="Available commands",
             )
         elif command_id is CommandId.APP_PALETTE:
@@ -341,7 +356,9 @@ class ComparoApp(App[int]):
         if tabs.active != tab_id:
             tabs.active = tab_id
         restore_frame(self, self._navigation.current)
-        await self._render_footer()
+        self._focus_active_workspace()
+        self.call_after_refresh(self._focus_active_workspace)
+        self.refresh_bindings()
 
     async def go_back(self) -> None:
         """Navigate within only the active workspace."""
@@ -405,7 +422,9 @@ class ComparoApp(App[int]):
         elif workspace is WorkspaceId.REPORT:
             self._render_report()
         if workspace is self._navigation.active:
-            await self._render_footer()
+            self._focus_active_workspace()
+            self.call_after_refresh(self._focus_active_workspace)
+            self.refresh_bindings()
 
     def _render_compare(self) -> None:
         view = self.query_one("#workspace-compare", CompareWorkspace)
@@ -437,43 +456,26 @@ class ComparoApp(App[int]):
         else:
             view.show_listing(state.report_listing)
 
-    async def _render_footer(self) -> None:
-        if not self._shell_mounted:
-            return
-        commands = self.active_commands
-        signature = tuple(command.command_id for command in commands)
-        if signature == self._footer_signature:
-            return
-        async with self._footer_lock:
-            if signature == self._footer_signature:
-                return
-            footer = self.query_one("#command-footer", CommandFooter)
-            await footer.remove()
-            await self.screen.mount(CommandFooter(commands, id="command-footer"))
-            self._footer_signature = signature
-
     def _apply_responsive_class(self, width: int) -> None:
         if not self._shell_mounted:
             return
-        switcher = self.query_one("#workspace-content", ContentSwitcher)
-        selected = layout_class(width)
-        for candidate in LayoutClass:
-            switcher.remove_class(f"layout-{candidate.value}")
-        switcher.add_class(f"layout-{selected.value}")
+        apply_responsive_class(self.query_one("#workspace-content", ContentSwitcher), width)
 
     def _apply_preferences(self, preferences: TuiPreferences) -> None:
-        requested = {
-            ThemePreference.SYSTEM: self._system_theme,
-            ThemePreference.DARK: "textual-dark",
-            ThemePreference.LIGHT: "textual-light",
-        }[preferences.theme]
-        if requested in self.available_themes:
-            self.theme = requested
-        elif self._system_theme in self.available_themes:
-            self.theme = self._system_theme
-        self.screen.set_class(preferences.dense, "density-dense")
-        self.screen.set_class(preferences.mouse, "mouse-next-launch-enabled")
-        self.screen.set_class(not preferences.mouse, "mouse-next-launch-disabled")
+        apply_tui_preferences(self, preferences, self._system_theme)
+
+    def _display_key(self, command_id: CommandId) -> str:
+        """Return the resolved primary key for help and action labels."""
+        return resolved_primary_key(command_id, self._preferences.keymap)
+
+    def _focus_active_workspace(self) -> None:
+        """Keep native contextual bindings active without stealing local focus."""
+        if not self._shell_mounted:
+            return
+        focus_workspace(
+            self.query_one(f"#workspace-{self._navigation.active.value}"),
+            self.focused,
+        )
 
     def _push_route(self, workspace: WorkspaceId, view: str, entity: str) -> None:
         self._navigation = push_route(

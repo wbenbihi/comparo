@@ -11,7 +11,6 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from comparo.application.inspection import ApplicationDiagnostic
-from comparo.tui.commands import CommandDescriptor
 from comparo.tui.design import SemanticStatus
 from comparo.tui.design import semantic_style
 from comparo.tui.presentation import safe_terminal_text
@@ -123,32 +122,7 @@ def _diagnostic_status(severity: str) -> SemanticStatus:
     return SemanticStatus.NEUTRAL
 
 
-@final
-class CommandFooter(Horizontal):
-    """Shared active-command hints sourced from the central command catalog."""
-
-    def __init__(
-        self,
-        commands: tuple[CommandDescriptor, ...],
-        *,
-        id: str | None = None,
-        classes: str | None = None,
-    ) -> None:
-        """Initialize hints from active central command descriptors."""
-        super().__init__(id=id, classes=classes)
-        self._commands = tuple(item for item in commands if item.footer)
-
-    @override
-    def compose(self) -> ComposeResult:
-        """Render command labels without declaring keys inside a screen."""
-        for command in self._commands:
-            key = safe_terminal_text(command.keys[0], maximum_characters=32)
-            label = safe_terminal_text(command.label, maximum_characters=64)
-            yield Static(f"{key} {label}", classes="command-hint", markup=False)
-
-
 __all__ = (
-    "CommandFooter",
     "DiagnosticsList",
     "StatusBadge",
     "status_for_outcome",

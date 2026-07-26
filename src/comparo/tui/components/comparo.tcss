@@ -90,18 +90,6 @@ ResultIndex {
     width: 1fr;
 }
 
-CommandFooter {
-    dock: bottom;
-    height: 1;
-    width: 1fr;
-    background: $panel;
-}
-
-.command-hint {
-    width: auto;
-    margin-right: 2;
-}
-
 .explorer-layout,
 .report-browser-layout {
     height: 1fr;

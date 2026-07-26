@@ -22,14 +22,12 @@ from comparo.tui.components.results import ResultIndexSelector as ResultIndexSel
 from comparo.tui.components.results import ResultSummary as ResultSummary
 from comparo.tui.components.results import ResultsWorkspaceView as ResultsWorkspaceView
 from comparo.tui.components.settings import TuiOnlySettingsPanel as TuiOnlySettingsPanel
-from comparo.tui.components.status import CommandFooter as CommandFooter
 from comparo.tui.components.status import DiagnosticsList as DiagnosticsList
 from comparo.tui.components.status import StatusBadge as StatusBadge
 from comparo.tui.components.status import status_for_outcome as status_for_outcome
 
 __all__ = (
     "COMPONENT_STYLESHEET",
-    "CommandFooter",
     "CompareAdvancedOptions",
     "CompareDraftForm",
     "CompareModeSelector",

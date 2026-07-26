@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 from typing import final
 from typing import override
 
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Vertical
 
 from comparo.application.execution_session import ExecutionProgressSnapshot
@@ -14,6 +16,8 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection
 from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.results import ResultProjection
+from comparo.tui.bindings import textual_bindings
+from comparo.tui.commands import CommandScope
 from comparo.tui.components import CompareDraftForm
 from comparo.tui.components import DiagnosticsList
 from comparo.tui.components import ExecutionProgress
@@ -40,6 +44,8 @@ class CompareWorkspaceState(StrEnum):
 class CompareWorkspace(Vertical):
     """Compose assertions, differences, and ExecutionProfile runs in one workspace."""
 
+    BINDINGS: ClassVar[list[BindingType]] = textual_bindings(CommandScope.COMPARE)
+
     def __init__(
         self,
         *,
@@ -57,6 +63,7 @@ class CompareWorkspace(Vertical):
     ) -> None:
         """Initialize the selected Compare mode and lifecycle surface."""
         super().__init__(id=id, classes=classes)
+        self.can_focus = True
         if type(mode) is not CompareMode:
             raise TypeError("Compare workspace mode must be typed")
         if type(state) is not CompareWorkspaceState:

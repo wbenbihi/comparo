@@ -55,9 +55,7 @@ from comparo.application.results import ResultTiming
 from comparo.application.results import ResultTimingSummary
 from comparo.core.domain.budget_contracts import BudgetResource
 from comparo.core.domain.value_references import ValueNamespace
-from comparo.tui.commands import COMMAND_CATALOG
 from comparo.tui.components import COMPONENT_STYLESHEET
-from comparo.tui.components import CommandFooter
 from comparo.tui.components import CompareAdvancedOptions
 from comparo.tui.components import CompareDraftForm
 from comparo.tui.components import CompareModeSelector
@@ -672,7 +670,7 @@ def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
 
 
 @_run_async
-async def test_shared_state_status_diagnostics_and_footer_cover_all_presentations() -> None:
+async def test_shared_state_status_and_diagnostics_cover_all_presentations() -> None:
     content = Static("stable", markup=False)
     state = StatePanel(content, mode=StatePanelMode.LOADING, message="unsafe\x1b[31m")
     badge = StatusBadge(SemanticStatus.NEUTRAL)
@@ -689,8 +687,7 @@ async def test_shared_state_status_diagnostics_and_footer_cover_all_presentation
             ApplicationDiagnostic(code="three", severity="info", stage="runtime"),
         )
     )
-    footer = CommandFooter(COMMAND_CATALOG)
-    app = _WidgetApp(state, badge, diagnostics, footer)
+    app = _WidgetApp(state, badge, diagnostics)
 
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
@@ -704,7 +701,6 @@ async def test_shared_state_status_diagnostics_and_footer_cover_all_presentation
         badge.set_status(SemanticStatus.SUCCESS, detail="safe\x1b[31m")
         assert badge.status is SemanticStatus.SUCCESS
         assert len(diagnostics.query(StatusBadge)) == 3
-        assert 0 < len(footer.query(Static)) < len(COMMAND_CATALOG)
 
 
 @_run_async

@@ -15,8 +15,10 @@ from textual.widgets import Label
 from textual.widgets import Select
 from textual.widgets import Switch
 
+from comparo.tui.design import BUILTIN_THEMES
+from comparo.tui.design import SYSTEM_THEME
+from comparo.tui.design import ThemeId
 from comparo.tui.navigation import WorkspaceId
-from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
 
 
@@ -52,7 +54,10 @@ class TuiOnlySettingsPanel(Vertical):
         yield _setting_row(
             "Theme",
             Select(
-                tuple((item.value.title(), item) for item in ThemePreference),
+                (
+                    ("System default", SYSTEM_THEME),
+                    *((item.label, item.theme_id) for item in BUILTIN_THEMES),
+                ),
                 value=self._preferences.theme,
                 allow_blank=False,
                 id="tui-setting-theme",
@@ -81,13 +86,14 @@ class TuiOnlySettingsPanel(Vertical):
         if not self.is_mounted:
             return self._preferences
         return TuiPreferences(
-            theme=cast("ThemePreference", self.query_one("#tui-setting-theme", Select).value),
+            theme=cast("ThemeId", self.query_one("#tui-setting-theme", Select).value),
             default_workspace=cast(
                 "WorkspaceId",
                 self.query_one("#tui-setting-workspace", Select).value,
             ),
             dense=self.query_one("#tui-setting-dense", Switch).value,
             mouse=self.query_one("#tui-setting-mouse", Switch).value,
+            keymap=self._preferences.keymap,
         )
 
     def show_preferences(self, preferences: TuiPreferences) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 _ROOT = Path(__file__).parents[2]
@@ -38,6 +39,7 @@ _UNSAFE_IMPORTS = (
     "traceback",
 )
 _UNSAFE_CALLS = frozenset({"breakpoint", "open", "print_exc", "print_exception", "set_trace"})
+_HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}\b")
 
 
 def _sources(root: Path) -> tuple[tuple[Path, ast.Module], ...]:
@@ -138,3 +140,27 @@ def test_tui_modules_remain_component_sized() -> None:
         if len(path.read_text(encoding="utf-8").splitlines()) > 500
     }
     assert oversized == {}
+
+
+def test_tui_theme_definitions_are_the_only_raw_color_source() -> None:
+    """Keep every feature component independent from concrete theme palettes."""
+    allowed = _TUI / "design" / "themes.py"
+    violations = [
+        str(path.relative_to(_ROOT))
+        for path in sorted((*_TUI.rglob("*.py"), *_TUI.rglob("*.tcss")))
+        if path != allowed and _HEX_COLOR.search(path.read_text(encoding="utf-8")) is not None
+    ]
+    assert violations == []
+
+
+def test_textual_binding_objects_have_one_adapter_source() -> None:
+    """Prevent physical key declarations from leaking into feature widgets."""
+    allowed = _TUI / "bindings.py"
+    violations = [
+        f"{path.relative_to(_ROOT)}:{node.lineno}"
+        for path, tree in _sources(_TUI)
+        if path != allowed
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _call_name(node) == "Binding"
+    ]
+    assert violations == []

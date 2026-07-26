@@ -49,8 +49,8 @@ from comparo.tui.components import StatePanelMode
 from comparo.tui.components import TuiOnlySettingsPanel
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import CompareMode
+from comparo.tui.design import COMPARO_DARK_THEME
 from comparo.tui.navigation import WorkspaceId
-from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
 from comparo.tui.workspaces import CompareWorkspace
 from comparo.tui.workspaces import CompareWorkspaceState
@@ -359,7 +359,7 @@ async def test_settings_controls_publish_and_update_tui_preferences_only() -> No
         assert app.preferences.dense is True
 
         updated = TuiPreferences(
-            theme=ThemePreference.DARK,
+            theme=COMPARO_DARK_THEME.theme_id,
             default_workspace=WorkspaceId.COMPARE,
             dense=True,
             mouse=False,

@@ -38,12 +38,11 @@ class CommandScope(StrEnum):
 
 @final
 class CommandDescriptor(msgspec.Struct, frozen=True, kw_only=True):
-    """Canonical label and default keys for one semantic command."""
+    """Canonical metadata for one semantic command, independent from physical keys."""
 
     command_id: CommandId
     label: str
     description: str
-    keys: tuple[str, ...]
     scope: CommandScope
     footer: bool = True
     palette: bool = True
@@ -57,14 +56,6 @@ class CommandDescriptor(msgspec.Struct, frozen=True, kw_only=True):
             for value, maximum in ((self.label, 64), (self.description, 256))
         ):
             raise ValueError("command presentation text must be bounded and non-empty")
-        if (
-            type(self.keys) is not tuple
-            or not self.keys
-            or any(type(key) is not str or not key or len(key) > 32 for key in self.keys)
-        ):
-            raise ValueError("command keys must be a non-empty immutable text tuple")
-        if len(set(self.keys)) != len(self.keys):
-            raise ValueError("command keys must be unique")
         if type(self.scope) is not CommandScope:
             raise TypeError("command scope must be typed")
         if type(self.footer) is not bool or type(self.palette) is not bool:
@@ -88,12 +79,6 @@ def commands_for_scopes(
     identifiers = tuple(command.command_id for command in active)
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("active command identifiers must be unique")
-    keys: dict[str, CommandId] = {}
-    for command in active:
-        for key in command.keys:
-            if key in keys:
-                raise ValueError("active command keys must not collide")
-            keys[key] = command.command_id
     return active
 
 

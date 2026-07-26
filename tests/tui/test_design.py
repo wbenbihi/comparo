@@ -11,6 +11,11 @@ from comparo.tui.design.breakpoints import layout_class
 from comparo.tui.design.semantics import SemanticStatus
 from comparo.tui.design.semantics import SemanticStyle
 from comparo.tui.design.semantics import semantic_style
+from comparo.tui.design.themes import BUILTIN_THEMES
+from comparo.tui.design.themes import COMPARO_DARK_THEME
+from comparo.tui.design.themes import ThemeDefinition
+from comparo.tui.design.themes import ThemeId
+from comparo.tui.design.themes import theme_definition
 
 
 @pytest.mark.parametrize(
@@ -60,3 +65,21 @@ def test_semantic_style_contract_rejects_untyped_or_invalid_values() -> None:
         SemanticStyle(glyph="", label="bad", css_class="bad", rank=0)
     with pytest.raises(ValueError, match="non-negative"):
         msgspec.structs.replace(semantic_style(SemanticStatus.SUCCESS), rank=-1)
+
+
+def test_builtin_theme_definitions_are_extensible_semantic_palettes() -> None:
+    assert theme_definition(COMPARO_DARK_THEME.theme_id) is COMPARO_DARK_THEME
+    assert theme_definition(ThemeId(value="future-community-theme")) is None
+    assert len({item.theme_id for item in BUILTIN_THEMES}) == len(BUILTIN_THEMES)
+    with pytest.raises(TypeError, match="ThemeId"):
+        theme_definition("comparo-dark")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="six-digit"):
+        msgspec.structs.replace(COMPARO_DARK_THEME, border="blue")
+    with pytest.raises(TypeError, match="darkness"):
+        ThemeDefinition(
+            **{
+                **msgspec.to_builtins(COMPARO_DARK_THEME),
+                "theme_id": COMPARO_DARK_THEME.theme_id,
+                "dark": 1,
+            }
+        )

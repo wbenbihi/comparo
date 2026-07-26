@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 from typing import final
 from typing import override
 
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Vertical
 
 from comparo.application.report_archive import ReportArchiveListing
 from comparo.application.results import ResultProjection
+from comparo.tui.bindings import textual_bindings
+from comparo.tui.commands import CommandScope
 from comparo.tui.components import ReportList
 from comparo.tui.components import ResultsWorkspaceView
 from comparo.tui.components import StatePanel
@@ -29,6 +33,8 @@ class ReportWorkspaceState(StrEnum):
 class ReportWorkspace(Vertical):
     """Browse persisted artifacts and reuse the live result composition read-only."""
 
+    BINDINGS: ClassVar[list[BindingType]] = textual_bindings(CommandScope.REPORT)
+
     def __init__(
         self,
         *,
@@ -40,6 +46,7 @@ class ReportWorkspace(Vertical):
     ) -> None:
         """Initialize the archive or one persisted result surface."""
         super().__init__(id=id, classes=classes)
+        self.can_focus = True
         if type(state) is not ReportWorkspaceState:
             raise TypeError("Report workspace state must be typed")
         self.state = state

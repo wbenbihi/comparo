@@ -19,9 +19,9 @@ from comparo.tui.contracts import TuiLaunchRequest
 from comparo.tui.contracts import tui_artifact_read_limits_defaults_v1
 from comparo.tui.contracts import tui_interaction_limits_defaults_v1
 from comparo.tui.contracts import tui_launch_limits_defaults_v1
+from comparo.tui.design import COMPARO_DARK_THEME
 from comparo.tui.launch import build_tui_app
 from comparo.tui.launch import run_tui
-from comparo.tui.state import ThemePreference
 from comparo.tui.state import TuiPreferences
 
 
@@ -132,7 +132,7 @@ def test_production_builder_rejects_untyped_contracts() -> None:
 )
 def test_run_tui_returns_only_valid_process_codes(value: object, expected: int) -> None:
     app = _FakeApp(result=value)
-    preferences = TuiPreferences(theme=ThemePreference.DARK, mouse=False)
+    preferences = TuiPreferences(theme=COMPARO_DARK_THEME.theme_id, mouse=False)
     code = run_tui(
         TuiLaunchRequest(),
         preferences=preferences,

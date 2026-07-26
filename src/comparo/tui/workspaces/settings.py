@@ -27,6 +27,7 @@ class SettingsWorkspace(Vertical):
     ) -> None:
         """Initialize Settings from local TUI preferences only."""
         super().__init__(id=id, classes=classes)
+        self.can_focus = True
         self._preferences = preferences
 
     @override
