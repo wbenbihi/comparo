@@ -11,11 +11,14 @@ import pytest
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import SourceCoordinate
+from comparo.application.project_outline import ProjectRelationship
+from comparo.application.project_outline import ProjectResourceOutline
 from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.project_workspace import ProjectSourceSummary
 from comparo.application.project_workspace import ProjectWorkspaceRequest
 from comparo.application.project_workspace import ProjectWorkspaceResult
 from comparo.application.project_workspace import ProjectWorkspaceSnapshot
+from comparo.application.project_workspace import _with_consumers
 from comparo.application.project_workspace import inspect_project_workspace
 from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS
 
@@ -240,6 +243,7 @@ def test_workspace_request_rejects_untyped_inputs(
         ({"tags": []}, "tags"),
         ({"tags": (object(),)}, "tags"),
         ({"source": object()}, "source"),
+        ({"outline": object()}, "outline"),
     ],
 )
 def test_resource_summary_rejects_untyped_state(
@@ -256,6 +260,23 @@ def test_resource_summary_rejects_untyped_state(
     values.update(changes)
     with pytest.raises(TypeError, match=message):
         ProjectResourceSummary(**values)  # type: ignore[arg-type]
+
+
+def test_consumer_projection_ignores_relationships_outside_the_snapshot() -> None:
+    owner = msgspec.structs.replace(
+        _resource("Request", "owner"),
+        outline=ProjectResourceOutline(
+            relationships=(
+                ProjectRelationship(
+                    path=("request", "body"),
+                    target=_coordinate("Value", "external"),
+                    origin="$use",
+                ),
+            ),
+        ),
+    )
+
+    assert _with_consumers((owner,)) == (owner,)
 
 
 @pytest.mark.parametrize(
