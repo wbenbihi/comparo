@@ -117,9 +117,9 @@ def compile_run_artifact(
         raise ValueError("artifact compilation inputs belong to different runs")
     if type(capture) is not ArtifactCapturingDriver or type(policy) is not ArtifactPolicy:
         raise TypeError("artifact compilation requires typed capture and policy")
-    if annotations is not None and type(annotations) is not ArtifactRunAnnotations:
-        raise TypeError("artifact compilation annotations must be typed or absent")
     try:
+        if annotations is not None and type(annotations) is not ArtifactRunAnnotations:
+            raise TypeError("artifact compilation annotations must be typed or absent")
         if capture.policy != policy:
             raise ValueError("artifact compilation policy differs from capture policy")
         batch = capture.batch
