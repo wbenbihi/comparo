@@ -7,6 +7,8 @@ metadata:
   tags: [baseline, local, protected]
 spec:
   baseUrl: http://127.0.0.1:18080/baseline
+  safety:
+    $use: SafetyProfile/local-read-only
   variables:
     environment: baseline
 ---
@@ -19,6 +21,8 @@ metadata:
   tags: [candidate, local, prerelease]
 spec:
   baseUrl: http://127.0.0.1:18080/candidate
+  safety:
+    $use: SafetyProfile/local-read-only
   variables:
     environment: candidate
 ---
@@ -31,5 +35,7 @@ metadata:
   tags: [development, local]
 spec:
   baseUrl: http://127.0.0.1:18080/development
+  safety:
+    $use: SafetyProfile/local-read-only
   variables:
     environment: development

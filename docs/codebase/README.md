@@ -52,24 +52,17 @@ promise is cross-environment validation—not replaying captured traffic.
 
 ## Current production-shaped vertical slice
 
-The currently executable project subset is intentionally narrower than the schema:
+The production composition executes `Request` resources across one or more Environments. It
+supports run-scoped method/URL/endpoint/header/query/cookie/auth/body resolution, Environment HTTP
+overlays, request policy fields, ordinary and SSE response views, local and authorized remote JSON
+Schemas, the typed assertion catalog, semantic diff pipelines, configurable gates, and attached
+Safety/Redaction/Artifact profiles. Matrices, case filters, trials, baseline-to-many comparisons,
+bounded concurrency, cancellation, artifacts, reporters, and typed invocation overlays all use the
+same planner/runtime path.
 
-- subjects are `Request` resources; `Scenario` is rejected;
-- request method must be a static literal allowed by the external ExecutionPolicy;
-- endpoint/URL, headers, and query values may use the supported value-expression language;
-- request bodies must be absent or exactly null;
-- Environments may supply `baseUrl`, explicit env sources, variables, and secrets;
-- assertions support selectors `status`/`response.status` and JSON `body`/`response.body`, with
-  `equals` and `notEquals` operators;
-- diffs support the same selectors, automatic singular/ordered pairing, and `exact` or `ignore`;
-- the initial gate is a fixed blocking zero-failure gate selected by an empty reusable
-  `GateProfile`;
-- matrices, trials, baseline-to-many comparisons, retries, bounded concurrency, cancellation,
-  ordinary HTTP observation, sanitization, artifacts, and reporters are wired; bounded SSE
-  transport/selection substrate exists but is not reachable from the current evaluation binder;
-- response schemas, configured request bodies, advanced diff pipelines, custom gates, attached
-  Safety/Redaction/Artifact profiles, and most Environment HTTP overlays are rejected before
-  effects begin.
+The intentionally unsupported product areas are stateful `Scenario` execution, WebSocket/gRPC,
+browser automation, and community plugin hosting/external judges. They remain modeled extension
+seams where useful, but fail before external effects if selected.
 
 The [capability audit](frontend-capability-audit.md) gives the complete frontend consequences.
 
@@ -81,18 +74,24 @@ current TUI backend.
 | Need | Application boundary |
 | --- | --- |
 | Load Explorer structure | `inspect_project_workspace` |
+| Read masked or explicitly exact YAML | `inspect_project_source` |
+| Read bounded effective structure | `inspect_effective_resource` |
 | Compile, authorize, and plan | `prepare_project_plan` |
-| Build primitive invocation overrides | `PlanningOptions` / `plan_project` |
+| Build invocation/resource/request/profile overrides | `PlanningOptions` / `plan_project` |
 | Prepare and start Compare | `CompareService` |
 | Inspect a plan before execution | `PlanReviewInspection` and `inspect_plan` |
-| Resolve a safe outbound preview | `render_prepared_requests` |
+| Resolve a safe outbound preview | `render_prepared_request_window` / `render_prepared_requests` |
 | Observe/cancel an interactive run | `ExecutionSession` |
 | Execute without the session facade | `execute_production` |
 | Project final results | `project_results` |
-| Build Issues/Requests/Rules/Fields/Timeline lenses | `project_*` in `application.result_analysis` (not yet re-exported by `comparo.application`) |
+| Build Issues/Requests/Rules/Fields/Timeline lenses | `project_issues` / `project_requests` / `project_rules` / `project_fields` / `project_timeline` |
 | List persisted runs | `list_report_archive` |
 | Authenticate and inspect an artifact | `verify_artifact` / `inspect_artifact` |
-| Read a sanitized body blob | `read_artifact_blob` |
+| Read a sanitized body by result coordinates | `read_artifact_body_window` |
+| Export a secret-safe cURL | `export_artifact_curl` |
+| Query paginated report history | `query_report_archive` |
+| Plan/apply/restore report retention | `plan_report_retention` / `apply_report_retention` / `restore_report` |
+| Present safe human guidance | `present_diagnostic` |
 | Export a report | `render_artifact_report` |
 
 These boundaries return immutable renderer-independent DTOs, sanitized values, or closed error

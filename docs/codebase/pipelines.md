@@ -30,18 +30,18 @@ Project files can declare these kinds:
 | Kind | Compiles today | Production execution today |
 | --- | --- | --- |
 | `Project` | Yes | Supplies discovery, value declarations, and defaults |
-| `Environment` | Yes | Partial: `baseUrl`, `env`, variables, secrets |
-| `Request` | Yes | Partial: body-free request subset |
+| `Environment` | Yes | Yes: values/env plus HTTP fields, timeout, TLS, proxy, and SafetyProfile |
+| `Request` | Yes | Yes: wire fields, bodies/auth/stream/policies, schemas, rules, and Matrices |
 | `Scenario` | Yes | No; rejected by runtime capability preflight |
 | `Matrix` | Yes | Yes |
 | `ExecutionProfile` | Yes | Yes, within the supported execution subset |
-| `Schema` | Yes | No response-schema validation in production composition |
-| `AssertionProfile` | Yes | Partial operator/selector subset |
-| `DiffProfile` | Yes | Partial pipeline subset |
-| `GateProfile` | Yes | Partial: empty profile selects one fixed strict gate |
-| `SafetyProfile` | Yes | Planning handles exist; attached profile is rejected by production runtime |
-| `RedactionProfile` | Yes | Attached profile is rejected; fixed mandatory redaction still applies |
-| `ArtifactProfile` | Yes | Attached profile is rejected; composition settings control artifacts |
+| `Schema` | Yes | Yes: local and policy-authorized remote JSON Schema |
+| `AssertionProfile` | Yes | Yes: typed deterministic operator catalog |
+| `DiffProfile` | Yes | Yes: selectors, transforms, reducers, pairing, and comparators |
+| `GateProfile` | Yes | Yes: typed thresholds and coverage requirements |
+| `SafetyProfile` | Yes | Yes: restrictive project/environment safety and response classification |
+| `RedactionProfile` | Yes | Yes: compiled rules plus mandatory credential redaction |
+| `ArtifactProfile` | Yes | Yes: restrictive capture/persistence configuration |
 | `Value` | Yes | Yes, including invocation overlays from reusable Value objects |
 
 `ExecutionPolicy` is not a project resource. It is loaded from a separate operator-controlled
@@ -72,11 +72,12 @@ The compiler recognizes but rejects reserved future directives such as `$case`, 
 `$step`, `$select`, `$transform`, `$patch`, and `$provider`. A frontend must not offer them as
 currently executable syntax.
 
-### What compilation does not retain
+### Source revision retention
 
-`ProjectSourceSet` temporarily contains `ParsedDocument` objects, but `LoadedCompilation` returns
-the compilation and a source catalog only. Exact authored documents and text are discarded. This
-is why the existing application API cannot provide a raw YAML view after loading.
+`LoadedCompilation` retains source-located parsed documents internally and a logical source
+catalog with SHA-256 and byte counts. Filesystem paths never enter frontend DTOs. Explorer source
+reads reopen the logical source with no-follow semantics, require the catalog fingerprint to
+match, and return only a caller-bounded masked or explicitly trusted exact line window.
 
 ## 2. Invocation, precedence, and planning
 
@@ -89,18 +90,20 @@ CompiledProject + PlanningOptions + ExecutionPolicy authority
   -> fingerprinted PreparedRun
 ```
 
-`PlanningOptions` is the frontend-neutral primitive override contract. It supports:
+`PlanningOptions` is the frontend-neutral override contract. It supports:
 
 - selecting an `ExecutionProfile`, or selecting ad-hoc subjects;
 - assertions-only Environments, or one baseline plus one or more candidates;
-- replacing Matrix attachments by binding name;
+- replacing Matrix attachments by binding name and selecting case IDs;
 - trials, maximum attempts, fail-fast, and planning-budget overrides;
-- global or Environment-specific `parameters`, `variables`, and `secrets` supplied through
-  reusable `Value` resources.
+- global or Environment-specific `parameters`, `variables`, and sealed `secrets` through reusable
+  Values or inline expression objects;
+- sealed per-Environment `$env` overrides;
+- typed Request field edits; and
+- assertion/diff/gate/safety/redaction/artifact profile replacement or detachment.
 
-It does **not** support ephemeral inline resources, arbitrary literal overlay mappings, request
-field patches, selecting individual Matrix case IDs, or choosing assertion/diff/gate profiles at
-invocation time.
+It deliberately does not introduce a second anonymous ExecutionProfile resource language. The
+typed controls above compile into the normal `RunInvocation` and preserve ordinary provenance.
 
 ### Separate precedence mechanisms
 
@@ -166,25 +169,26 @@ attempt scope. Effectful reads are single-flight per exact source/scope key. Res
 closed union `Present`, `Unavailable`, `Missing`, `Error`, or `Blocked`, with value-free
 provenance. Secret and env values are sealed and registered for sanitization.
 
+`LiveValueResolver` and `MaskedValueResolver` are two egress views over the same
+`ResolutionEngine`. The live view is used only by trusted execution internals. The masked view
+preserves result shape, value kind, provenance, and taint origins while irreversibly replacing
+sensitive payloads with a version-owned marker.
+
 The `steps` namespace and step scope are internal forward seams; Scenario capture production is
 not implemented.
 
 ## 4. Offline request preview
 
-`render_prepared_requests` resolves every planned request using pinned project files, isolated env
-snapshots, deterministic preview generation, and the same `ConfigurationRequestProvider` used by
-production execution. It performs no DNS lookup or network I/O. The result is sanitized before it
-crosses the application boundary.
+`render_prepared_requests` and `render_prepared_request_window` resolve planned requests using
+pinned project files, isolated env snapshots, deterministic preview generation, and the same
+request provider used by production. They perform no DNS lookup or network I/O. Results are
+sanitized before crossing the application boundary; the windowed service skips directly to a
+caller-selected canonical ordinal range.
 
 Each preview includes occurrence IDs, subject/environment coordinates, method, sanitized URL,
-ordered headers, redacted cookies, and body omission metadata. Current limitations:
-
-- the runtime admits only absent/null bodies, so preview bodies are always `no-body`;
-- query fields are represented inside the sanitized URL, not as a separate list;
-- exact per-field value provenance is not returned;
-- all occurrences are resolved as one atomic operation; one resolution diagnostic prevents a
-  partial preview collection;
-- there is no application-owned cURL formatter yet.
+ordered headers, redacted cookies, and body omission metadata. Query fields are represented inside
+the URL. Exact per-field runtime provenance is not yet returned. Body-bearing request cURL export
+therefore uses the authenticated post-run sanitized capture instead of a live preview.
 
 ## 5. Production HTTP execution
 
@@ -202,15 +206,11 @@ PreparedProjectPlan
 ```
 
 Before acquiring network effects, `preflight_runtime_capabilities` rejects unsupported compiled
-features. The current admitted Request wire fields are method, endpoint/URL, headers, query, and
-an absent/null body. The method must be a static literal and allowed by policy. Scenarios,
-response schemas, configured bodies, Environment HTTP overlays, and attached Safety,
-Redaction, or Artifact profiles are rejected.
-
-The lower-level HTTP domain and adapter support substantially more: typed request bodies,
-authentication, redirect/cookie policy, retry, deadlines, TLS, proxying, bounded storage, ordinary
-responses, and SSE/record streams. Those features are not project features until configuration
-binding and production settings honor them.
+features. The admitted Request path includes method, endpoint/URL, duplicate-preserving fields,
+cookies, auth, typed bodies, stream mode, timeout, redirects, and retries. Environments can add
+headers/cookies/auth/timeout/TLS/proxy settings. Response schemas and Safety/Redaction/Artifact
+profiles are bound before network effects. `Scenario` remains the principal selected-resource
+rejection.
 
 Shipped production defaults currently include:
 
@@ -238,30 +238,28 @@ no single ambiguous `response.timings.total` field.
 
 When selected rules require a stream view, the composition installs
 `StoredStreamSnapshotProvider` with `SseDataJsonPolicy`. The HTTP/selection substrate can preserve
-bounded stream records and decode SSE `data` as JSON according to the stream policy. The current
-configuration evaluation binder exposes only whole JSON response body and status selectors, so a
-user cannot yet author the full stream-selector/diff pipeline through the production YAML path.
+bounded stream records and decode SSE `data` as JSON according to the stream policy. Stream
+selectors and `streamProject` participate in the same semantic diff pipeline as ordinary values;
+chunk count and arrival ordering need not become comparison criteria.
 
 ## 6. Evaluation and gates
 
-The pure assertion and diff packages implement a broad typed kernel. The current
-`evaluation_binding` application adapter exposes only this initial external subset:
+The application binder exposes the deterministic typed kernel rather than maintaining a second
+special-case evaluator:
 
 | Family | Current production binding |
 | --- | --- |
-| Assertion selectors | `status`, `response.status`, `body`, `response.body` |
-| Assertion operators | `equals`, `notEquals` |
+| Assertion selectors | Request/response fields, status, timings, ordinary bodies, JSON paths, and stream sources |
+| Assertion operators | Equality, membership, ordering, tolerance/range, text/collection/key, length/cardinality, type, regex, digest, media, decode, and schema |
 | Assertion controls | `severity`, `quantifier`, `completeness` |
-| Diff selectors | same status/body selectors |
-| Diff pairing | automatic `singular` or `ordered` from selector cardinality |
-| Diff comparators | `exact`, `ignore` |
+| Diff selectors | Same selector compiler, with independent baseline/candidate side selectors |
+| Diff transforms | Projection/exclusion, normalization, shape/type/length/digest, relative select, map/filter/sort, and stream projection |
+| Diff reducers | Scalar, collection, set/multiset, grouping, and object construction reducers |
+| Diff pairing | `singular`, `ordered`, `keyed`, `set`, or `multiset` |
+| Diff comparators | exact/ignore, type/shape/subset/superset, numeric tolerance, ordered/set/multiset, and text predicate |
 | Diff controls | `severity`, `completeness` |
-| Profile composition | `include` and `rules`; other profile fields rejected |
-| Gate | one reusable, non-inline, empty profile; fixed blocking zero-tolerance thresholds |
-
-Diff transforms, reducers, explicit pairing, numeric tolerance, keyed/set/multiset comparison,
-shape/type comparison, stream projection, and other modeled operations are rejected by this
-binder even though the pure diff engine implements them.
+| Profile composition | Reusable/inline rules, includes, metadata, and typed controls |
+| Gate | Configured severity thresholds and coverage requirements |
 
 Evaluation produces stable occurrence-level facts, structured outcomes, counts, coverage,
 bounded evidence, and value-free issues. The gate consumes normalized summaries rather than live
@@ -269,17 +267,12 @@ values. It never recomputes assertions or diffs.
 
 ## 7. Live progress and cancellation
 
-`ExecutionSession` starts one production task, owns the run cancellation source, and yields
-coalesced `ExecutionProgressSnapshot` values. Snapshots expose phase, totals, queued/started/
-finished counts, latest runtime sequence, and the latest execution/comparison identity and event
-kind. A slow UI retains only the latest snapshot.
-
-Runtime events are deliberately sparse: run started; execution queued, started, or finished;
-comparison finished; run finished. They contain identities but no terminal outcome, duration,
-assertion/diff status, HTTP phase, or body/stream progress. There is no retained event history.
-
-Final detail becomes available only after `session.result()` returns a `RunArtifact`. A rich live
-table/timeline therefore requires a new bounded sanitized application progress projection.
+`ExecutionSession` starts one production task, owns cancellation, and yields coalesced
+`ExecutionProgressSnapshot` values. Snapshots contain exact aggregate counts, caller-bounded
+occurrence rows, terminal outcomes/failure codes, observer timing, a bounded recent-event window,
+explicit omitted-row counts, and the final artifact summary. A slow UI retains only the latest
+snapshot and cannot grow an unbounded queue. Raw HTTP/body content remains unavailable until the
+sanitized artifact exists.
 
 ## 8. Artifact capture and persistence
 
@@ -332,14 +325,13 @@ The Fields view is evidence-location aggregation, not a guaranteed JSON-path str
 The Timeline is causal manifest order, not timestamped live HTTP history. Request aggregates do
 not incorporate comparison verdicts and must not be presented as “validation passed.”
 
-`list_report_archive` authenticates each bounded candidate's marker, manifest, and results bytes,
-then returns newest-first summary rows plus isolated per-entry metadata failures. It validates
-blob declarations and budgets but does not read/hash every blob. `verify_artifact` performs that
-complete blob authentication before full result use. `read_artifact_blob` authenticates and reads
-one explicitly named sanitized digest under an output cap. `render_artifact_report` exports JSON,
-JUnit, SARIF, or Markdown from a completely verified artifact.
+`query_report_archive` authenticates bounded candidates and returns stable cursor pages with safe
+filters, duration, ExecutionProfile, adverse counts, title/tags, and optional sanitized VCS/CI
+context. Per-entry metadata failures remain isolated. Notes stay in the full artifact rather than
+compact rows. `verify_artifact` authenticates every blob before full use;
+`read_artifact_body_window` resolves result coordinates to a truthful bounded body window.
 
-Current archive/listing gaps include pagination/cursors, server-side search/filtering, duration,
-ExecutionProfile identity, VCS metadata, notes/tags/title, and top-issue summaries. The blob API
-is digest-oriented; it does not yet resolve a result/exchange/body reference into a decoded,
-chunked viewer model.
+`export_artifact_curl` serializes only authenticated sanitized request captures. Report retention
+is a two-phase reviewed plan/application workflow; application re-verifies coordinates and moves
+bundles into private recoverable trash. `restore_report` authenticates a restored bundle and rolls
+it back if verification fails.

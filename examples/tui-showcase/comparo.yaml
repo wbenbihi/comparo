@@ -22,5 +22,9 @@ spec:
       - $use: stable-status
     gate:
       $use: strict
+    redaction:
+      $use: RedactionProfile/demo-redaction
+    artifacts:
+      $use: ArtifactProfile/demo-artifacts
     maximumAttempts: 1
     failFast: false

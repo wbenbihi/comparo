@@ -77,8 +77,11 @@ configuration.loader.compile_project_path
   -> ProjectResourceSummary / ProjectResourceOutline
 ```
 
-This path exposes concealed compiled structure. It does not expose authored YAML or live resolved
-values.
+Use `application.source_inspection.inspect_project_source` for a revision-pinned masked or
+explicitly trusted exact source window. Use `inspect_effective_resource` for bounded compiled
+structure and `application.render_preview.render_prepared_request_window` for sanitized,
+run-scoped resolved request intent. Never collapse these three representations into one “resolved”
+label.
 
 ## Where to add a feature
 

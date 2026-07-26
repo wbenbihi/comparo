@@ -3,8 +3,8 @@ kind: Schema
 metadata:
   id: catalog-response
   name: Catalog response schema
-  description: Unbound JSON Schema resource retained for Explorer; runtime validation is deferred.
-  tags: [schema, future, unbound]
+  description: Local JSON Schema used to validate every catalog response before comparison.
+  tags: [schema, active, validation]
 spec:
   type: object
   required: [contractVersion, items]
@@ -34,17 +34,19 @@ kind: SafetyProfile
 metadata:
   id: local-read-only
   name: Local read-only safety
-  description: Unbound future project restriction; external ExecutionPolicy remains authority.
-  tags: [safety, future, unbound]
-spec: {}
+  description: Shared response-data classification attached to every local Environment.
+  tags: [safety, active, classification]
+spec:
+  classification:
+    responseBody: public
 ---
 apiVersion: comparo/v1alpha1
 kind: RedactionProfile
 metadata:
   id: demo-redaction
   name: Demo redaction
-  description: Unbound future sanitization profile represented in the resource catalog.
-  tags: [redaction, future, unbound]
+  description: Active project-level sanitization profile for future sensitive response headers.
+  tags: [redaction, active, sanitization]
 spec: {}
 ---
 apiVersion: comparo/v1alpha1
@@ -52,6 +54,8 @@ kind: ArtifactProfile
 metadata:
   id: demo-artifacts
   name: Demo artifacts
-  description: Unbound future capture and retention profile represented in Explorer.
-  tags: [artifact, future, unbound]
-spec: {}
+  description: Active project-level profile retaining response bodies in persisted artifacts.
+  tags: [artifact, active, capture]
+spec:
+  capture:
+    bodies: true

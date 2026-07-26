@@ -16,6 +16,8 @@ spec:
   matrices:
     - $use: audiences
     - $use: locales
+  responseSchema:
+    $use: Schema/catalog-response
   diffs:
     - $use: exact-body
 ---

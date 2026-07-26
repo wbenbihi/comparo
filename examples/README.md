@@ -21,7 +21,7 @@ It listens only on `127.0.0.1:18080` and exposes three logical Environment prefi
 | --- | --- | --- |
 | [`quickstart`](quickstart/README.md) | Smallest complete assertion and comparison project | Pass |
 | [`environment-drift`](environment-drift/README.md) | Mixed pass/fail results and Environment-local values | Fail deliberately |
-| [`tui-showcase`](tui-showcase/README.md) | Larger resource catalog, two Matrices, Values, profiles, and future kinds | One Matrix case drifts |
+| [`tui-showcase`](tui-showcase/README.md) | Larger catalog with two Matrices, Values, attached profiles, Schema validation, and a future Scenario | One Matrix case drifts |
 
 Open a project in a second terminal:
 
@@ -38,8 +38,8 @@ Inside the TUI:
 - `?` shows the active commands and `q` quits.
 
 The examples intentionally exercise only capabilities implemented by the current runtime. The
-larger showcase also contains unbound future resources so Explorer can represent the planned
-Scenario and policy-related kinds without pretending they can execute today.
+larger showcase also contains one unbound future Scenario so Explorer can represent that planned
+resource kind without pretending stateful workflows execute today.
 
 ## Headless equivalents
 

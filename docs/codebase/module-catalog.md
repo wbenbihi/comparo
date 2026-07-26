@@ -22,13 +22,16 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | Module | Responsibility |
 | --- | --- |
 | `application.__init__` | Curated application public exports |
-| `artifacts` | Safe artifact-root initialization/validation, authenticated artifact inspection, report rendering, and bounded blob reads |
+| `artifacts` | Artifact-root validation, authenticated inspection/reporting, digest reads, and result-coordinate body windows |
 | `compare` | Bounded one-shot prepare/review/start service for assertions, comparisons, and ExecutionProfile runs |
 | `count_presentation` | Shared exact/large count presentation contracts used by safe inspections |
+| `curl_export` | Canonical bounded POSIX cURL from authenticated sanitized request captures |
+| `diagnostic_catalog` | Static human guidance selected from closed diagnostics without interpolating live values |
 | `diagnostics` | Runs offline sensitive-value rendering/serialization containment checks for the doctor command |
 | `environment_binding` | Lowers selected Environment env sources and builds isolated run-start snapshots |
-| `evaluation_binding` | Compiles the currently executable assertion/diff/gate subset into runtime evaluation preparation |
-| `execution_session` | Async interactive session, cancellation, and latest-only progress snapshots |
+| `evaluation_assertions`, `evaluation_diffs`, `evaluation_items`, `evaluation_selectors` | Lower the typed assertion and semantic diff catalogs into pure-kernel inputs |
+| `evaluation_binding` | Composes selectors, assertions, semantic diff pipelines, gates, schemas, and budgets into runtime evaluation |
+| `execution_session` | Async session, cancellation, bounded occurrence/event progress, and terminal summaries |
 | `inspection` | Safe coordinates and projections for diagnostics, plans, resources, policies, and artifacts |
 | `plan_inspection` | Top-level safe `PreparedRun` inspection assembly |
 | `plan_inspection_authority` | ExecutionPolicy, HTTP, values, filesystem, schema, and artifact authority projections |
@@ -43,20 +46,24 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `planning` | Translates primitive frontend choices to typed `RunInvocation` and invokes the planner |
 | `preflight` | Project compilation, external policy loading, planning, and `PreparedProjectPlan` assembly |
 | `production_execution` | Concrete production composition from prepared project through HTTP, evaluation, artifact compilation, and persistence |
+| `profile_binding` | Restrictive Safety/Redaction/Artifact profile composition over caller settings |
 | `project_outline` | Secret-free compiled resource structure and dependency/used-by graph |
 | `project_workspace` | Explorer project compilation and safe resource/source snapshot facade |
-| `render_preview` | Offline run-scoped resolution and sanitization of planned outbound body-free requests |
-| `report_archive` | Bounded metadata-authenticated local report listing with per-entry failure isolation |
+| `remote_schemas`, `schema_validation`, `regex_validation`, `digest_validation` | Authorized bounded preparation of external/local evaluation capabilities |
+| `render_preview` | Offline run-scoped sanitized request previews, including lazy ordinal windows |
+| `report_archive` | Authenticated searchable cursor-paged report rows and metadata projections |
+| `report_retention` | Reviewable fingerprinted recoverable report pruning and restoration |
 | `result_analysis` | Bounded Issues, Requests, Rules, Fields, and Timeline projections |
 | `results` | Body-free final artifact projection with stable references and cross-links |
 | `runtime_capabilities` | Fail-closed admission of the production runtime's currently implemented configuration subset |
+| `source_inspection` | Revision-pinned masked/exact YAML windows and bounded effective resource projections |
 
 ## `comparo.configuration` and `comparo.policy`
 
 | Module | Responsibility |
 | --- | --- |
 | `configuration.__init__` | Public project-loading exports |
-| `configuration.loader` | Project root validation, deterministic source discovery/catalog, bounded file reads, and compiler composition |
+| `configuration.loader` | Project validation, deterministic discovery, revision-fingerprinted source catalog, bounded reads, and compiler composition |
 | `configuration.yaml_parser` | Safe source-located JSON-compatible YAML subset parser |
 | `policy.__init__` | Public operator-policy loading exports |
 | `policy.loader` | Reads and parses the separate operator-owned ExecutionPolicy document before pure compilation |
@@ -236,6 +243,7 @@ filesystem, decoding, or serialization I/O.
 | `registry` | Run-owned sensitive-value registry and immutable sanitization snapshots |
 | `provenance` | Value-free resolution source/attempt/configuration provenance |
 | `control` | Run cancellation and resolution-use guards |
+| `views` | `LiveValueResolver` and irreversible `MaskedValueResolver` over one shared engine |
 
 ## `comparo.core.runtime`
 
@@ -305,7 +313,7 @@ filesystem, decoding, or serialization I/O.
 | --- | --- |
 | `artifacts.__init__` | Artifact adapter public exports |
 | `spool` | POSIX temporary content-addressed sanitized blob spool with aggregate limits |
-| `local` | Private atomic local bundle persistence, metadata-authenticated opening/listing, complete verification, and blob reading |
+| `local` | Private atomic persistence, authenticated opening/listing, blob reading, and recoverable trash/restore moves |
 | `memory` | In-memory sanitized blob target for tests/small compositions |
 | `transient` | Reads live transient body handles for artifact capture before run cleanup |
 

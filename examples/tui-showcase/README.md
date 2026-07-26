@@ -2,8 +2,8 @@
 
 This is the deliberately dense project for assessing the current terminal interface. Explorer can
 browse all current resource kinds except operator-owned `ExecutionPolicy`. The executable catalog
-uses only supported capabilities; Schema, Scenario, SafetyProfile, RedactionProfile, and
-ArtifactProfile examples are tagged `future` and remain unbound.
+uses local Schema validation and attached SafetyProfile, RedactionProfile, and ArtifactProfile
+resources. Only the stateful Scenario example is tagged `future` and remains unbound.
 
 Start the server and TUI from the repository root:
 
@@ -16,10 +16,10 @@ uv run --frozen comparo tui --config examples/tui-showcase/comparo.yaml
 
 ### Explorer
 
-Inspect the resource kinds, metadata, tags, and source grouping. In particular, compare the two
-Matrix definitions, the reusable Values, and the unbound future resources. The current Explorer
-surface intentionally exposes safe metadata rather than raw compiled specifications; this example
-makes the consequence of that choice easy to evaluate.
+Inspect the resource kinds, metadata, tags, source grouping, dependency graph, and masked/effective
+representations. In particular, compare the two Matrix definitions, reusable Values, attached
+profiles, active response Schema, and unbound future Scenario. Trusted exact source inspection is
+explicitly separate from the default masked source view.
 
 ### Compare
 
@@ -31,8 +31,9 @@ Use Execution profile mode:
 
 The `catalog` Request attaches `audiences` and `locales` simultaneously. The planner forms their
 Cartesian product, while `$matrix` resolves `region`, `plan`, and `locale` inside a reusable query
-Value. Only the `eu` + `pro` audience differs between baseline and candidate, across its two locale
-cells, so the result contains both clean and drifted comparisons.
+Value. Every response is first validated against `Schema/catalog-response`. Only the `eu` + `pro`
+audience differs between baseline and candidate, across its two locale cells, so the result
+contains both clean and drifted comparisons.
 
 ### Report
 

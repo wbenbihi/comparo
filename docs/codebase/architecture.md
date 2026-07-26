@@ -55,12 +55,13 @@ run- or service-owned objects.
 | Owner | Lifetime | Mutable state |
 | --- | --- | --- |
 | `CompareService` | Interactive Compare workspace | Bounded map of one-shot admitted-plan handles |
-| `ExecutionSession` | One interactive run | Task, cancellation signal, and latest coalesced progress snapshot |
+| `ExecutionSession` | One interactive run | Task, cancellation, bounded occurrence rows/events, and latest coalesced snapshot |
 | `RunContext` | One run | Provider caches, environment snapshots, cancellation, and sensitive-value registry |
 | `TransientBodyStore` | One production run | Bounded memory/spooled response bodies |
 | `ArtifactCapturingDriver` | One production run | Sanitized capture batches and coverage issues |
 | `PosixSanitizedBlobSpool` | One artifact compilation | Content-addressed sanitized blobs before persistence |
 | `LocalArtifactBundleSink` | One persist operation | Atomic filesystem transaction |
+| report retention plan | One reviewed maintenance action | Fingerprinted bundle coordinates re-verified before recoverable trashing |
 
 No project-global singleton owns resolved values, cookies, network clients, or secrets. Closing a
 run releases caches, body storage, capture state, and sensitivity registry.
@@ -97,9 +98,9 @@ Environment snapshots, a `RunContext`, evaluation preparation, transient body st
 runtime, artifact compiler, and optional local persistence. It returns exactly one sanitized
 `RunArtifact` or a typed safe failure.
 
-The initial composition contains hard-coded replaceable settings from
+The composition contains versioned replaceable settings from
 `production_execution_defaults_v1` or `persisted_production_execution_defaults_v1`. Domain types
-may be broader than what this function currently binds from project configuration.
+remain independent from those operational defaults.
 
 ## The five representations of a project/run
 
@@ -108,15 +109,15 @@ is showing.
 
 | Stage | Principal type | Contains | Secret-safe to render? | Retained by current application API? |
 | --- | --- | --- | --- | --- |
-| Authored source | `ParsedDocument` / source-located YAML nodes | Exact document structure and authored literals | No; may contain literal secrets | No, discarded after compilation |
-| Compiled graph | `CompiledProject` | Linked resources and unresolved typed expressions | Not as a whole | Internally; Explorer receives a concealed outline only |
+| Authored source | `ParsedDocument` / revision-pinned source window | Exact structure and authored literals | Masked mode: yes; trusted exact mode: no | Bounded through `inspect_project_source` |
+| Compiled graph | `CompiledProject` | Linked resources and unresolved typed expressions | Not as a whole | Explorer receives a bounded value-safe effective projection |
 | Effective plan | `PreparedRun` / `RunPlan` | Selected resources, topology, matrices, counts, precedence, provenance, budgets | Safe only through inspection DTOs | Yes |
-| Resolved wire intent | `FinalizedWireRequest` | Exact destination, headers, query, cookies, body | No; may contain live secrets | Only transiently; safe preview is sanitized |
+| Resolved wire intent | `FinalizedWireRequest` | Exact destination, headers, query, cookies, body | No; may contain live secrets | Transient; request preview and cURL are separately sanitized |
 | Observed/persisted result | `RunResult` then `RunArtifact` | Live outcomes, then sanitized manifest and blobs | `RunResult`: no; `RunArtifact`: yes | Artifact and projections are retained |
 
-The current Explorer outline is compiled/effective **structure**, not raw YAML and not a resolved
-wire request. The current render preview is resolved wire intent with mandatory sanitization, but
-only for the executable body-free request subset.
+Explorer exposes authored and effective representations through separate fingerprinted contracts.
+Request preview is resolved wire intent with mandatory sanitization. None should be labelled as
+another representation.
 
 ## Security boundaries
 
@@ -147,16 +148,18 @@ The following must not cross into presentation code:
 - provider/transport exceptions;
 - `CompiledProject` or authored YAML nodes as an informal inspection shortcut.
 
-Raw-source support needs a deliberate separate service because a project may contain literal
-secrets. It cannot safely be implemented by returning loader internals to the TUI.
+Raw-source support is a deliberate separate service because a project may contain literal secrets.
+Masked mode is the default; exact mode is explicit, revision-pinned, bounded, and marked unsafe for
+implicit retention. Loader paths and AST internals still do not cross the frontend boundary.
 
 ### Persistence
 
 Live results pass through `ArtifactCapturingDriver` and `compile_run_artifact`. Artifact DTOs are
 independently serializable and cannot import live secret/run domains. Local bundles use private
-directories, no-follow checks, content digests, bounded reads, and atomic writes. Archive listing
-authenticates the marker, manifest, and results metadata; `verify_artifact` additionally reads and
-authenticates every declared blob before full result/report projection.
+directories, no-follow checks, content digests, bounded reads, and atomic writes. Archive queries
+authenticate marker, manifest, and results metadata; `verify_artifact` additionally reads every
+blob. Retention creates a fingerprinted plan, re-verifies candidates, and moves them to a private
+recoverable trash namespace instead of deleting them.
 
 The local persistence adapter is POSIX-specific. Windows persistence is not currently supported.
 
