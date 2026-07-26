@@ -32,11 +32,14 @@ from comparo.application.regex_validation import PreparedRegex
 from comparo.application.regex_validation import PreparedRegexCatalog
 from comparo.application.regex_validation import RegexValidationLimits
 from comparo.application.regex_validation import prepare_compiled_regex
+from comparo.application.remote_schemas import remote_schema_allowed
 from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
 from comparo.application.schema_validation import PreparedSchema
 from comparo.application.schema_validation import PreparedSchemaCatalog
+from comparo.application.schema_validation import RemoteSchemaDocuments
 from comparo.application.schema_validation import SchemaValidationLimits
 from comparo.application.schema_validation import prepare_local_schema
+from comparo.application.schema_validation import prepare_remote_schema
 from comparo.application.schema_validation import schema_operator
 from comparo.core.assertions.accounting import AssertionBudgets
 from comparo.core.assertions.accounting import assertion_budget_operations
@@ -54,6 +57,7 @@ from comparo.core.configuration.canonical import CanonicalValue
 from comparo.core.configuration.canonical import CompiledProject
 from comparo.core.configuration.canonical import CompiledResource
 from comparo.core.configuration.canonical import InlineResource
+from comparo.core.configuration.canonical import RemoteSchema
 from comparo.core.configuration.v1alpha1.operations import ASSERTION_OPERATION_ALIASES
 from comparo.core.configuration.v1alpha1.operations import DIFF_COMPARATOR_ALIASES
 from comparo.core.diffs.accounting import DiffBudgets
@@ -154,6 +158,7 @@ from comparo.core.planning._canonical import object_member
 from comparo.core.planning.models import DefinitionHandle
 from comparo.core.planning.models import EffectiveSubject
 from comparo.core.planning.models import PreparedRun
+from comparo.core.policy import CompiledExecutionPolicy
 from comparo.core.resolution.context import RunContext
 from comparo.core.resolution.models import ResolutionTarget
 from comparo.core.resolution.snapshots import cell_inputs
@@ -677,6 +682,9 @@ def bind_configuration_evaluation(
     schema_limits: SchemaValidationLimits = DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
     regex_limits: RegexValidationLimits = DEFAULT_REGEX_VALIDATION_LIMITS_V1,
     digest_limits: DigestValidationLimits = DEFAULT_DIGEST_VALIDATION_LIMITS_V1,
+    *,
+    policy: CompiledExecutionPolicy | None = None,
+    remote_documents: RemoteSchemaDocuments | None = None,
 ) -> EvaluationBindingResult:
     """Lower every requested profile or reject the whole run before effects begin."""
     if type(prepared) is not PreparedRun or type(context) is not RunContext:
@@ -689,10 +697,17 @@ def bind_configuration_evaluation(
         raise TypeError("evaluation binding requires RegexValidationLimits")
     if type(digest_limits) is not DigestValidationLimits:
         raise TypeError("evaluation binding requires DigestValidationLimits")
+    if policy is not None and type(policy) is not CompiledExecutionPolicy:
+        raise TypeError("evaluation binding policy must be compiled")
+    if remote_documents is not None and type(remote_documents) is not RemoteSchemaDocuments:
+        raise TypeError("evaluation binding remote schemas must be prepared documents")
     subject_rules, gate, schemas, regexes, problems = _compile_configuration(
         prepared,
         schema_limits,
         regex_limits,
+        policy,
+        remote_documents,
+        False,
     )
     if problems.diagnostics:
         return EvaluationBindingResult(
@@ -717,6 +732,8 @@ def preflight_configuration_evaluation(
     prepared: PreparedRun,
     schema_limits: SchemaValidationLimits = DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
     regex_limits: RegexValidationLimits = DEFAULT_REGEX_VALIDATION_LIMITS_V1,
+    *,
+    policy: CompiledExecutionPolicy | None = None,
 ) -> EvaluationPreflightResult:
     """Compile all selected rules and the exact gate formula without acquiring effects."""
     if type(prepared) is not PreparedRun:
@@ -725,10 +742,15 @@ def preflight_configuration_evaluation(
         raise TypeError("evaluation preflight requires SchemaValidationLimits")
     if type(regex_limits) is not RegexValidationLimits:
         raise TypeError("evaluation preflight requires RegexValidationLimits")
+    if policy is not None and type(policy) is not CompiledExecutionPolicy:
+        raise TypeError("evaluation preflight policy must be compiled")
     subject_rules, gate, _schemas, _regexes, problems = _compile_configuration(
         prepared,
         schema_limits,
         regex_limits,
+        policy,
+        None,
+        True,
     )
     if problems.diagnostics:
         return EvaluationPreflightResult(
@@ -751,6 +773,9 @@ def _compile_configuration(
     prepared: PreparedRun,
     schema_limits: SchemaValidationLimits,
     regex_limits: RegexValidationLimits,
+    policy: CompiledExecutionPolicy | None,
+    remote_documents: RemoteSchemaDocuments | None,
+    defer_remote: bool,
 ) -> tuple[
     tuple[_SubjectRules, ...],
     CompiledGateProfile | None,
@@ -766,6 +791,9 @@ def _compile_configuration(
             subject,
             schema_entries,
             schema_limits,
+            policy,
+            remote_documents,
+            defer_remote,
             problems,
         )
         for subject in prepared.effective.subjects
@@ -805,6 +833,9 @@ def _compile_subject(
     subject: EffectiveSubject,
     schema_entries: list[PreparedSchema],
     schema_limits: SchemaValidationLimits,
+    policy: CompiledExecutionPolicy | None,
+    remote_documents: RemoteSchemaDocuments | None,
+    defer_remote: bool,
     problems: _Problems,
 ) -> _SubjectRules:
     profile_assertions = tuple(
@@ -817,6 +848,9 @@ def _compile_subject(
         subject,
         schema_entries,
         schema_limits,
+        policy,
+        remote_documents,
+        defer_remote,
         problems,
     )
     assertions = (
@@ -837,6 +871,9 @@ def _compile_response_schema(
     subject: EffectiveSubject,
     entries: list[PreparedSchema],
     limits: SchemaValidationLimits,
+    policy: CompiledExecutionPolicy | None,
+    remote_documents: RemoteSchemaDocuments | None,
+    defer_remote: bool,
     problems: _Problems,
 ) -> CompiledAssertionRule | None:
     """Lower a Request responseSchema into one ordinary implicit assertion rule."""
@@ -853,7 +890,19 @@ def _compile_response_schema(
     if binding is None:
         return None
     try:
-        prepared = prepare_local_schema(project, subject.definition, binding, limits)
+        if type(binding) is RemoteSchema:
+            if policy is None or not remote_schema_allowed(binding.uri, policy):
+                raise ValueError("remote schema source is not authorized")
+            payload = None if remote_documents is None else remote_documents.get(binding.uri)
+            if payload is None and not defer_remote:
+                raise ValueError("authorized remote schema document was not prepared")
+            prepared = prepare_remote_schema(
+                binding,
+                b"{}" if payload is None else payload,
+                limits,
+            )
+        else:
+            prepared = prepare_local_schema(project, subject.definition, binding, limits)
         operator = schema_operator(prepared)
         entries.append(prepared)
         selector = _response_schema_selector(resource)

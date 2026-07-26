@@ -62,6 +62,10 @@ from comparo.application.inspection import inspect_diagnostic
 from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.regex_validation import DEFAULT_REGEX_VALIDATION_LIMITS_V1
 from comparo.application.regex_validation import RegexValidationLimits
+from comparo.application.remote_schemas import DEFAULT_REMOTE_SCHEMA_FETCH_LIMITS_V1
+from comparo.application.remote_schemas import RemoteSchemaFetchLimits
+from comparo.application.remote_schemas import RemoteSchemaLoader
+from comparo.application.remote_schemas import RemoteSchemaLoadError
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 from comparo.application.schema_validation import DEFAULT_SCHEMA_VALIDATION_LIMITS_V1
 from comparo.application.schema_validation import SchemaValidationLimits
@@ -80,8 +84,11 @@ from comparo.core.artifacts.policy import UnsafeSourceBehavior
 from comparo.core.artifacts.ports import ArtifactPersistenceOutcome
 from comparo.core.artifacts.ports import ArtifactPersistenceStatus
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
+from comparo.core.configuration.canonical import CanonicalObject
+from comparo.core.configuration.canonical import RemoteSchema
 from comparo.core.domain.budget_origins import DefaultBudgetOrigin
 from comparo.core.domain.budget_origins import VersionedDefaultSetRef
+from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
@@ -93,6 +100,7 @@ from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.values import BytesValue
+from comparo.core.planning._canonical import object_member
 from comparo.core.planning.models import PreparedRun
 from comparo.core.resolution import DeterministicGenerator
 from comparo.core.resolution import EnvironmentSnapshot
@@ -184,6 +192,7 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
         schemas=DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
         regexes=DEFAULT_REGEX_VALIDATION_LIMITS_V1,
         digests=DEFAULT_DIGEST_VALIDATION_LIMITS_V1,
+        remote_schemas=DEFAULT_REMOTE_SCHEMA_FETCH_LIMITS_V1,
         artifact=ArtifactPolicy(
             persist=ArtifactPersistMode.NEVER,
             unsafe_source=UnsafeSourceBehavior.OMIT,
@@ -224,6 +233,7 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
     schemas: SchemaValidationLimits
     regexes: RegexValidationLimits
     digests: DigestValidationLimits
+    remote_schemas: RemoteSchemaFetchLimits
     artifact: ArtifactPolicy
     artifact_io_chunk_size: PositiveCount
 
@@ -242,6 +252,7 @@ class ProductionExecutionSettings(msgspec.Struct, frozen=True, kw_only=True):
             (self.schemas, SchemaValidationLimits),
             (self.regexes, RegexValidationLimits),
             (self.digests, DigestValidationLimits),
+            (self.remote_schemas, RemoteSchemaFetchLimits),
             (self.artifact, ArtifactPolicy),
             (self.artifact_io_chunk_size, PositiveCount),
         )
@@ -450,6 +461,18 @@ async def _execute_with_resources(
         return _failure(ProductionExecutionFailureKind.INVALID, diagnostics)
     if context is None:  # pragma: no cover - preparation result invariant
         raise RuntimeError("successful context preparation omitted its context")
+    remote_documents = None
+    remote_bindings = _remote_schema_bindings(request.project.prepared)
+    if remote_bindings:
+        try:
+            remote_documents = await RemoteSchemaLoader(request.settings.remote_schemas).load(
+                remote_bindings, request.project.policy
+            )
+        except RemoteSchemaLoadError as error:
+            return _failure_code(
+                ProductionExecutionFailureKind.INVALID,
+                f"schema.remote.{error.code.value}",
+            )
     evaluation = bind_configuration_evaluation(
         request.project.prepared,
         context,
@@ -457,6 +480,8 @@ async def _execute_with_resources(
         request.settings.schemas,
         request.settings.regexes,
         request.settings.digests,
+        policy=request.project.policy,
+        remote_documents=remote_documents,
     )
     if evaluation.diagnostics:
         return _failure(
@@ -493,6 +518,24 @@ async def _execute_with_resources(
             "execution.runtime-setup-failed",
         )
     return await _run_compile_persist(request, resources, context, capture, preparation)
+
+
+def _remote_schema_bindings(prepared: PreparedRun) -> tuple[RemoteSchema, ...]:
+    """Collect selected Request response schemas without traversing unrelated resources."""
+    result: dict[str, RemoteSchema] = {}
+    for subject in prepared.effective.subjects:
+        if subject.definition.identity.kind is not ResourceKind.REQUEST:
+            continue
+        resource = prepared.project.find(
+            subject.definition.identity.kind,
+            subject.definition.identity.resource_id,
+        )
+        if resource is None or type(resource.spec) is not CanonicalObject:
+            continue
+        binding = object_member(resource.spec, "responseSchema")
+        if type(binding) is RemoteSchema:
+            result[binding.uri] = binding
+    return tuple(result[uri] for uri in sorted(result))
 
 
 async def _prepare_context(

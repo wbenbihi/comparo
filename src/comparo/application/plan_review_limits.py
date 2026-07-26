@@ -64,6 +64,23 @@ _RUNTIME_LIMIT_IDENTITIES = frozenset(
             )
         ),
         *(
+            ("schema", name)
+            for name in (
+                "document-depth",
+                "document-nodes",
+                "instance-depth",
+                "instance-nodes",
+                "violations",
+                "retained-violations",
+            )
+        ),
+        *(("regex", name) for name in ("pattern-bytes", "input-bytes")),
+        ("digest", "input-bytes"),
+        *(
+            ("remote-schema", name)
+            for name in ("document-bytes", "connect-timeout", "read-timeout", "total-timeout")
+        ),
+        *(
             ("artifacts", name)
             for name in (
                 "blobs",
@@ -150,6 +167,11 @@ class RuntimeLimitsInspection(msgspec.Struct, frozen=True, kw_only=True):
             > self.find("artifacts", "total-blob-bytes").value
         ):
             raise ValueError("artifact blob ceiling cannot exceed aggregate artifact bytes")
+        if (
+            self.find("schema", "retained-violations").value
+            > self.find("schema", "violations").value
+        ):
+            raise ValueError("retained schema violations cannot exceed the validation ceiling")
 
     def find(self, section: str, name: str) -> RuntimeLimitInspection:
         """Return one exact ceiling by its stable presentation-independent identity."""
@@ -299,6 +321,44 @@ def inspect_runtime_limits(settings: ProductionExecutionSettings) -> RuntimeLimi
                     ("pairs", settings.evaluation.pairs, "count"),
                 )
             ),
+            _limit("schema", "document-depth", settings.schemas.maximum_schema_depth, "count"),
+            _limit("schema", "document-nodes", settings.schemas.maximum_schema_nodes, "count"),
+            _limit("schema", "instance-depth", settings.schemas.maximum_instance_depth, "count"),
+            _limit("schema", "instance-nodes", settings.schemas.maximum_instance_nodes, "count"),
+            _limit("schema", "violations", settings.schemas.maximum_violations, "count"),
+            _limit(
+                "schema",
+                "retained-violations",
+                settings.schemas.retained_violations,
+                "count",
+            ),
+            _limit("regex", "pattern-bytes", settings.regexes.maximum_pattern_bytes, "bytes"),
+            _limit("regex", "input-bytes", settings.regexes.maximum_input_bytes, "bytes"),
+            _limit("digest", "input-bytes", settings.digests.maximum_input_bytes, "bytes"),
+            _limit(
+                "remote-schema",
+                "document-bytes",
+                settings.remote_schemas.maximum_document_bytes.value,
+                "bytes",
+            ),
+            _limit(
+                "remote-schema",
+                "connect-timeout",
+                settings.remote_schemas.connect_timeout.nanoseconds,
+                "ns",
+            ),
+            _limit(
+                "remote-schema",
+                "read-timeout",
+                settings.remote_schemas.read_timeout.nanoseconds,
+                "ns",
+            ),
+            _limit(
+                "remote-schema",
+                "total-timeout",
+                settings.remote_schemas.total_timeout.nanoseconds,
+                "ns",
+            ),
             _limit("artifacts", "blobs", artifacts.maximum_blobs.value, "count"),
             _limit("artifacts", "blob-bytes", artifacts.maximum_blob_bytes.value, "bytes"),
             _limit(
@@ -339,7 +399,11 @@ def _limit(
 
 
 def _runtime_limit_unit(section: str, name: str) -> str:
-    if section == "request-timeout" or (section, name) == ("http", "keepalive-expiry"):
+    if (
+        section == "request-timeout"
+        or (section == "remote-schema" and name.endswith("timeout"))
+        or (section, name) == ("http", "keepalive-expiry")
+    ):
         return "ns"
     if (section, name) == ("capture", "expansion-ratio"):
         return "ratio"

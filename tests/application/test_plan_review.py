@@ -117,7 +117,7 @@ def test_runtime_limit_inspection_projects_every_enforced_ceiling() -> None:
     assert inspected.find("artifacts", "total-blob-bytes").value == (
         settings.artifact.limits.maximum_total_blob_bytes.value
     )
-    assert len(inspected.limits) == 59
+    assert len(inspected.limits) == 72
     assert inspected.artifact_persistence == settings.artifact.persist.value
 
 

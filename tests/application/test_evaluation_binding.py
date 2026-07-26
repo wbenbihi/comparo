@@ -14,6 +14,8 @@ import pytest
 from comparo.application import evaluation_binding as binding
 from comparo.application.digest_validation import DEFAULT_DIGEST_VALIDATION_LIMITS_V1
 from comparo.application.digest_validation import prepare_digest_predicate
+from comparo.application.schema_validation import RemoteSchemaDocument
+from comparo.application.schema_validation import RemoteSchemaDocuments
 from comparo.core.assertions.inputs import PreparedOperandError as AssertionOperandError
 from comparo.core.assertions.inputs import PreparedOperandReady as AssertionOperandReady
 from comparo.core.assertions.inputs import PreparedOperandUnavailable as AssertionOperandUnavailable
@@ -69,6 +71,7 @@ from comparo.core.domain.values import Unavailable
 from comparo.core.domain.values import UnavailableReason
 from comparo.core.planning import plan_run
 from comparo.core.planning.models import PreparedRun
+from comparo.core.policy.trusted import trusted_local_policy
 from comparo.core.resolution import DeterministicGenerator
 from comparo.core.resolution import ResolutionTarget
 from comparo.core.resolution import RunContext
@@ -662,7 +665,7 @@ def test_inline_response_schema_compiles_as_an_implicit_assertion() -> None:
     assert len(preparation._schemas.entries) == 1
 
 
-def test_invalid_and_remote_response_schemas_fail_closed_before_http() -> None:
+def test_invalid_and_unprepared_remote_response_schemas_fail_closed_before_http() -> None:
     invalid = _bind(_prepared(response_schema="{type: unsupported}"))
     remote = _bind(
         _prepared(response_schema="{$use: 'https://schemas.example.test/response.json'}")
@@ -671,6 +674,36 @@ def test_invalid_and_remote_response_schemas_fail_closed_before_http() -> None:
     assert _codes(invalid) == ("evaluation.schema.invalid",)
     assert _codes(remote) == ("evaluation.schema.invalid",)
     assert invalid.rejected[0].alias == "conformsTo"
+
+
+def test_authorized_remote_response_schema_is_preflighted_and_bound_from_pinned_bytes() -> None:
+    uri = "https://schemas.example.test/response.json"
+    prepared = _prepared(response_schema=f"{{$use: '{uri}'}}")
+    policy = trusted_local_policy()
+    documents = RemoteSchemaDocuments(
+        entries=(
+            RemoteSchemaDocument(
+                uri=uri,
+                payload=b'{"type":"object","required":["ok"]}',
+            ),
+        )
+    )
+
+    preflight = binding.preflight_configuration_evaluation(prepared, policy=policy)
+    outcome = binding.bind_configuration_evaluation(
+        prepared,
+        _context(prepared),
+        _limits(),
+        policy=policy,
+        remote_documents=documents,
+    )
+
+    assert preflight.supported
+    assert preflight.assertion_rules == 1
+    assert outcome.preparation is not None, outcome.diagnostics
+    compiled = outcome.preparation._schemas.entries[0].compiled
+    assert compiled.remote_uri is not None
+    assert compiled.remote_uri.identifier == uri
 
 
 def test_assertion_topology_does_not_require_impossible_diff_coverage() -> None:

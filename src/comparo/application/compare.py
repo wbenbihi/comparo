@@ -304,7 +304,10 @@ def _admit_review(
     capabilities = preflight_runtime_capabilities(project)
     if not capabilities.supported:
         return tuple(inspect_diagnostic(item) for item in capabilities.diagnostics)
-    evaluation = preflight_configuration_evaluation(project.prepared)
+    evaluation = preflight_configuration_evaluation(
+        project.prepared,
+        policy=project.policy,
+    )
     if not evaluation.supported:
         return tuple(inspect_diagnostic(item) for item in evaluation.diagnostics)
     return PlanReviewInspection(

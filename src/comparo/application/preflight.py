@@ -137,7 +137,10 @@ def inspect_project_plan(request: ProjectPlanRequest) -> ProjectPlanResult:
         return ProjectPlanResult(
             diagnostics=tuple(inspect_diagnostic(item) for item in capabilities.diagnostics)
         )
-    evaluation = preflight_configuration_evaluation(outcome.project.prepared)
+    evaluation = preflight_configuration_evaluation(
+        outcome.project.prepared,
+        policy=outcome.project.policy,
+    )
     if not evaluation.supported:
         return ProjectPlanResult(
             diagnostics=tuple(inspect_diagnostic(item) for item in evaluation.diagnostics)

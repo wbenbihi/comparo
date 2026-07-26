@@ -152,6 +152,7 @@ def production_execution_settings(
         schemas=defaults.schemas,
         regexes=defaults.regexes,
         digests=defaults.digests,
+        remote_schemas=defaults.remote_schemas,
         artifact=artifact,
         artifact_io_chunk_size=defaults.artifact_io_chunk_size,
     )

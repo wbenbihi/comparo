@@ -345,6 +345,13 @@ def _address_class(address: IpHost) -> NetworkAddressClass:
     return NetworkAddressClass.PUBLIC
 
 
+def network_address_class(address: IpHost) -> NetworkAddressClass:
+    """Classify one canonical resolved address for other policy-bound network adapters."""
+    if type(address) not in {Ipv4Host, Ipv6Host}:
+        raise TypeError("network address classification requires an IP host")
+    return _address_class(address)
+
+
 def _canonical_addresses(values: Iterable[str]) -> tuple[IpHost, ...]:
     addresses: set[IpHost] = set()
     for value in values:

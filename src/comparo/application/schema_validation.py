@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -253,6 +254,42 @@ class PreparedSchemaCatalog:
         )
 
 
+@final
+class RemoteSchemaDocument(msgspec.Struct, frozen=True, kw_only=True):
+    """One policy-authorized remote schema payload retained only for run preparation."""
+
+    uri: str
+    payload: bytes
+
+    def __post_init__(self) -> None:
+        """Require an exact safe URI and immutable non-empty bytes."""
+        NamedCapabilityTarget(kind=CapabilityTargetKind.SCHEMA_SOURCE, identifier=self.uri)
+        if type(self.payload) is not bytes or not self.payload:
+            raise ValueError("remote schema document must contain immutable bytes")
+
+
+@final
+class RemoteSchemaDocuments(msgspec.Struct, frozen=True, kw_only=True):
+    """Unique immutable remote schema payloads fetched for one run."""
+
+    entries: tuple[RemoteSchemaDocument, ...]
+
+    def __post_init__(self) -> None:
+        """Require unique canonical URI ordering."""
+        if type(self.entries) is not tuple or any(
+            type(item) is not RemoteSchemaDocument for item in self.entries
+        ):
+            raise TypeError("remote schema documents must be an immutable typed tuple")
+        uris = tuple(item.uri for item in self.entries)
+        if uris != tuple(sorted(set(uris))):
+            raise ValueError("remote schema documents must be unique and canonical")
+
+    def get(self, uri: str) -> bytes | None:
+        """Return one exact fetched payload without any fallback lookup."""
+        found = next((item for item in self.entries if item.uri == uri), None)
+        return None if found is None else found.payload
+
+
 def prepare_local_schema(
     project: CompiledProject,
     owner: DefinitionRef,
@@ -301,6 +338,43 @@ def prepare_local_schema(
     return PreparedSchema(
         compiled=CompiledSchema(fingerprint=fingerprint, resource=resource),
         validator=validator,
+    )
+
+
+def prepare_remote_schema(
+    binding: RemoteSchema,
+    payload: bytes,
+    limits: SchemaValidationLimits,
+) -> PreparedSchema:
+    """Parse and compile one already-authorized, bounded remote JSON Schema payload."""
+    if type(binding) is not RemoteSchema or type(payload) is not bytes:
+        raise TypeError("remote schema preparation requires a binding and immutable bytes")
+    if type(limits) is not SchemaValidationLimits:
+        raise TypeError("remote schema preparation requires typed limits")
+    try:
+        document = json.loads(
+            payload.decode("utf-8"),
+            parse_float=Decimal,
+            parse_int=int,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("remote schema is not valid UTF-8 JSON") from error
+    schema = _to_builtin(
+        document,
+        maximum_depth=limits.maximum_schema_depth,
+        maximum_nodes=limits.maximum_schema_nodes,
+    )
+    _reject_remote_references(schema)
+    target = NamedCapabilityTarget(
+        kind=CapabilityTargetKind.SCHEMA_SOURCE,
+        identifier=binding.uri,
+    )
+    return PreparedSchema(
+        compiled=CompiledSchema(
+            fingerprint=_fingerprint(payload),
+            remote_uri=target,
+        ),
+        validator=_validator(schema),
     )
 
 
@@ -445,7 +519,10 @@ __all__ = (
     "DEFAULT_SCHEMA_VALIDATION_LIMITS_V1",
     "PreparedSchema",
     "PreparedSchemaCatalog",
+    "RemoteSchemaDocument",
+    "RemoteSchemaDocuments",
     "SchemaValidationLimits",
     "prepare_local_schema",
+    "prepare_remote_schema",
     "schema_operator",
 )

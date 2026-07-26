@@ -1089,7 +1089,7 @@ def test_preflight_evaluation_sink_and_setup_fail_before_network(
             patch.setattr(
                 production,
                 "bind_configuration_evaluation",
-                lambda *_arguments: SimpleNamespace(
+                lambda *_arguments, **_keywords: SimpleNamespace(
                     diagnostics=(object(),),
                     preparation=None,
                 ),
