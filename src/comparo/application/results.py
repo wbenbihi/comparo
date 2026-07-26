@@ -15,12 +15,20 @@ import msgspec
 from comparo.core.artifacts.common import ArtifactDefinition
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactMetric
+from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.facts import ArtifactEvidence
 from comparo.core.artifacts.facts import ArtifactExecution
 from comparo.core.artifacts.facts import ArtifactFact
 from comparo.core.artifacts.http import ArtifactTiming
 from comparo.core.artifacts.lifecycle import ArtifactGateCounts
 from comparo.core.artifacts.model import RunArtifact
+from comparo.core.artifacts.values import ArtifactArray
+from comparo.core.artifacts.values import ArtifactBoolean
+from comparo.core.artifacts.values import ArtifactDecimal
+from comparo.core.artifacts.values import ArtifactInteger
+from comparo.core.artifacts.values import ArtifactNull
+from comparo.core.artifacts.values import ArtifactObject
+from comparo.core.artifacts.values import ArtifactString
 from comparo.core.artifacts.values import ArtifactValue
 
 
@@ -48,6 +56,12 @@ class ResultReference(msgspec.Struct, frozen=True, kw_only=True):
 
     entity: ResultEntity
     result_id: str
+
+    def __post_init__(self) -> None:
+        """Require a typed entity and one route-safe stable occurrence token."""
+        if type(self.entity) is not ResultEntity:
+            raise TypeError("result reference entity must be typed")
+        require_stable_token(self.result_id, label="result reference ID", maximum=128)
 
 
 @final
@@ -482,6 +496,37 @@ def _gate_assessment(value: ArtifactGateCounts) -> ResultGateAssessment:
     )
 
 
+def result_value_preview(value: ArtifactValue, *, maximum_characters: int) -> str:
+    """Return one bounded scalar preview or structural summary without JSON encoding."""
+    if type(maximum_characters) is not int or maximum_characters < 1:
+        raise ValueError("result value preview limit must be a positive integer")
+    if type(value) is ArtifactNull:
+        rendered = "null"
+    elif type(value) is ArtifactBoolean:
+        rendered = "true" if value.value else "false"
+    elif type(value) is ArtifactInteger:
+        absolute = abs(value.value)
+        magnitude = (
+            f"{absolute:,}"
+            if absolute.bit_length() <= 80
+            else f"≥2^{absolute.bit_length() - 1} (exact integer retained)"
+        )
+        rendered = f"-{magnitude}" if value.value < 0 else magnitude
+    elif type(value) is ArtifactDecimal or type(value) is ArtifactString:
+        rendered = value.value
+    elif type(value) is ArtifactArray:
+        rendered = f"array · {len(value.items):,} items"
+    elif type(value) is ArtifactObject:
+        rendered = f"object · {len(value.members):,} members"
+    else:  # pragma: no cover - ArtifactValue is a closed union
+        raise TypeError("unsupported result ArtifactValue")
+    if len(rendered) <= maximum_characters:
+        return rendered
+    if maximum_characters == 1:
+        return "…"
+    return rendered[: maximum_characters - 1] + "…"
+
+
 __all__ = (
     "ComparisonResultRow",
     "ExecutionResultRow",
@@ -502,4 +547,5 @@ __all__ = (
     "ResultTiming",
     "ResultTimingSummary",
     "project_results",
+    "result_value_preview",
 )

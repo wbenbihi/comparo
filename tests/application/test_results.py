@@ -7,7 +7,16 @@ from typing import cast
 import msgspec
 import pytest
 
+from comparo.application.result_analysis import ResultProjectionWindow
+from comparo.application.result_analysis import project_fields
+from comparo.application.result_analysis import project_issues
+from comparo.application.result_analysis import project_requests
+from comparo.application.result_analysis import project_rules
+from comparo.application.result_analysis import project_timeline
 from comparo.application.results import ResultEntity
+from comparo.application.results import ResultEvidence
+from comparo.application.results import ResultNamedValue
+from comparo.application.results import ResultReference
 from comparo.application.results import ResultRelation
 from comparo.application.results import project_results
 from comparo.core.artifacts import ArtifactComparisonOutcome
@@ -21,6 +30,7 @@ from comparo.core.artifacts import ArtifactMetric
 from comparo.core.artifacts import ArtifactSeverity
 from comparo.core.artifacts import ArtifactSummary
 from comparo.core.artifacts import RunArtifact
+from comparo.core.artifacts.values import ArtifactString
 from tests.core.artifacts.test_artifact_contracts import _artifact
 
 
@@ -202,3 +212,64 @@ def test_projection_retains_unavailable_execution_and_incomplete_comparison() ->
 def test_projection_rejects_every_input_other_than_a_run_artifact() -> None:
     with pytest.raises(TypeError, match="RunArtifact"):
         project_results(cast("RunArtifact", object()))
+
+
+def test_bounded_semantic_analysis_projects_distinct_lenses_and_exact_omissions() -> None:
+    projection = project_results(_artifact())
+    first = projection.assertions[0]
+    samples = tuple(
+        ResultNamedValue(name=f"sample-{index:02d}", value=ArtifactString(value=str(index)))
+        for index in range(12)
+    )
+    evidence = (
+        msgspec.structs.replace(first.evidence[0], values=samples),
+        ResultEvidence(
+            fact_id="evidence-second",
+            outcome="satisfied",
+            location="response.headers.content-type",
+            values=(),
+        ),
+    )
+    assertion = msgspec.structs.replace(first, outcome="violated", evidence=evidence)
+    enriched = msgspec.structs.replace(projection, assertions=(assertion,))
+    window = ResultProjectionWindow(maximum_items=10)
+
+    assert project_issues(enriched, window).items[0].rule_id == assertion.effective_rule_id
+    assert project_requests(enriched, window).items[0].executions == 2
+    assert project_rules(enriched, window).items[0].applications == 1
+    fields = project_fields(enriched, window)
+    assert fields.total == 2
+    sample_field = next(item for item in fields.items if item.samples)
+    assert len(sample_field.samples) == 10
+    assert sample_field.sample_values_omitted == 3
+    timeline = project_timeline(enriched, window)
+    assert {item.phase for item in timeline.items} >= {"request", "assertion", "comparison"}
+
+
+def test_analysis_window_pins_a_selected_aggregate_beyond_the_visible_prefix() -> None:
+    projection = project_results(_artifact())
+    first = projection.assertions[0]
+    second_reference = ResultReference(entity=ResultEntity.ASSERTION, result_id="assertion-2")
+    second = msgspec.structs.replace(
+        first,
+        reference=second_reference,
+        effective_rule_id="z-last-rule",
+        evidence=(
+            ResultEvidence(
+                fact_id="evidence-z",
+                outcome="satisfied",
+                location="z.last.path",
+                values=(),
+            ),
+        ),
+    )
+    enriched = msgspec.structs.replace(projection, assertions=(first, second))
+    visible = project_fields(
+        enriched,
+        ResultProjectionWindow(maximum_items=1),
+        selected_reference=second_reference,
+    )
+
+    assert visible.total >= 2
+    assert visible.omitted == visible.total - 1
+    assert visible.items[0].path == "z.last.path"
