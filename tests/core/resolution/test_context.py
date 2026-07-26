@@ -58,6 +58,10 @@ from comparo.core.resolution import DeterministicGenerator
 from comparo.core.resolution import ExternalProviderSource
 from comparo.core.resolution import GenerationOperation
 from comparo.core.resolution import GenerationSpec
+from comparo.core.resolution import LiveValueResolver
+from comparo.core.resolution import MaskedPresent
+from comparo.core.resolution import MaskedSensitiveValue
+from comparo.core.resolution import MaskedValueResolver
 from comparo.core.resolution import ProviderError
 from comparo.core.resolution import ProviderPresent
 from comparo.core.resolution import ProviderUnavailable
@@ -213,6 +217,31 @@ def test_layered_namespace_matrix_and_secret_resolution(prepared_run: PreparedRu
             assert type(outside_secrets.value) is SensitiveValue
             assert outside_secrets.value.origins == (CONFIGURATION_SECRET_MARKER,)
             assert (await context.sanitization_snapshot()).revision.value >= 1
+
+    _run(scenario())
+
+
+def test_live_and_masked_resolvers_share_resolution_without_secret_egress(
+    prepared_run: PreparedRun,
+) -> None:
+    async def scenario() -> None:
+        async with _context(prepared_run) as context:
+            expression = _lookup(ValueNamespace.SECRETS, "token", ValueScopeKind.RUN)
+            target = _target(prepared_run)
+
+            live = await LiveValueResolver(context).resolve(expression, target)
+            masked = await MaskedValueResolver(context).resolve(expression, target)
+
+            assert type(live) is Present
+            assert type(live.value) is SensitiveValue
+            assert live.value.reveal(access=_ACCESS) == JsonString(value="hidden")
+            assert type(masked) is MaskedPresent
+            assert type(masked.value) is MaskedSensitiveValue
+            assert masked.value.kind.value == "string"
+            encoded = msgspec.json.encode(masked)
+            assert b"hidden" not in encoded
+            assert b"<masked>" in encoded
+            assert "hidden" not in repr(masked)
 
     _run(scenario())
 

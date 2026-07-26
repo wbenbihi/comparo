@@ -20,3 +20,10 @@ from comparo.core.resolution.models import SanitizationSnapshot as SanitizationS
 from comparo.core.resolution.models import WireResolution as WireResolution
 from comparo.core.resolution.models import YamlDecodeRequest as YamlDecodeRequest
 from comparo.core.resolution.snapshots import cell_inputs as cell_inputs
+from comparo.core.resolution.views import MASKED_VALUE_MARKER as MASKED_VALUE_MARKER
+from comparo.core.resolution.views import LiveValueResolver as LiveValueResolver
+from comparo.core.resolution.views import MaskedPresent as MaskedPresent
+from comparo.core.resolution.views import MaskedResolutionResult as MaskedResolutionResult
+from comparo.core.resolution.views import MaskedSensitiveValue as MaskedSensitiveValue
+from comparo.core.resolution.views import MaskedValueResolver as MaskedValueResolver
+from comparo.core.resolution.views import mask_resolution as mask_resolution
