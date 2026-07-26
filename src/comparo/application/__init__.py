@@ -99,6 +99,12 @@ from comparo.application.production_execution import (
 from comparo.application.production_execution import (
     production_execution_defaults_v1 as production_execution_defaults_v1,
 )
+from comparo.application.profile_binding import BoundExecutionProfiles as BoundExecutionProfiles
+from comparo.application.profile_binding import (
+    EnvironmentResponseClassification as EnvironmentResponseClassification,
+)
+from comparo.application.profile_binding import ProfileBindingResult as ProfileBindingResult
+from comparo.application.profile_binding import bind_execution_profiles as bind_execution_profiles
 from comparo.application.project_workspace import ProjectResourceSummary as ProjectResourceSummary
 from comparo.application.project_workspace import ProjectSourceSummary as ProjectSourceSummary
 from comparo.application.project_workspace import ProjectWorkspaceRequest as ProjectWorkspaceRequest
@@ -158,6 +164,7 @@ __all__ = (
     "ArtifactInspection",
     "ArtifactOperationError",
     "ArtifactReadLimits",
+    "BoundExecutionProfiles",
     "BudgetOverride",
     "ClearProfileSelection",
     "CompareExecutionControls",
@@ -170,6 +177,7 @@ __all__ = (
     "CompareServiceErrorCode",
     "ComparisonResultRow",
     "EnvironmentBindingResult",
+    "EnvironmentResponseClassification",
     "EnvironmentValueOverride",
     "ExecutionProgressSnapshot",
     "ExecutionResultRow",
@@ -190,6 +198,7 @@ __all__ = (
     "ProductionExecutionRequest",
     "ProductionExecutionResult",
     "ProductionExecutionSettings",
+    "ProfileBindingResult",
     "ProfileSelectionOverrides",
     "ProjectLoadLimits",
     "ProjectPlanRequest",
@@ -228,6 +237,7 @@ __all__ = (
     "RuntimeLimitsInspection",
     "SecurityCheck",
     "ValueResourceOverride",
+    "bind_execution_profiles",
     "build_environment_snapshots",
     "build_invocation",
     "clipboard_summary",

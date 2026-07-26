@@ -304,15 +304,15 @@ sanitized blobs, not embedded manifest strings.
 
 ### Important default distinction
 
-`production_execution_defaults_v1` does not persist artifacts and classifies response bodies as
-public for in-memory artifact creation. `persisted_production_execution_defaults_v1` enables
-persistence but conservatively classifies response bodies as sensitive. Because sensitive bodies
-are omitted by the current fixed redaction composition, historical persisted reports do **not**
-provide full response bodies by default. This does not yet implement the product decision that
-full sanitized response bodies should normally be available.
+`production_execution_defaults_v1` does not persist artifacts;
+`persisted_production_execution_defaults_v1` enables persistence. Both classify response bodies as
+public by default so complete bodies can be sanitized into detached blobs without accumulating in
+memory. `SafetyProfile.classification` can make a shared or Environment-specific body sensitive,
+and sensitive bodies are then omitted by the fail-closed capture boundary.
 
-Attached `RedactionProfile` and `ArtifactProfile` resources are also rejected by production
-capability preflight, so the fixed composition cannot currently be customized from project YAML.
+Attached `RedactionProfile` and `ArtifactProfile` resources are composed as restrictions over the
+caller-owned settings before any value or network effect. The capture driver receives the compiled
+redaction rules and Environment-specific response classification provider.
 
 ## 9. Result, archive, and report projections
 

@@ -129,6 +129,14 @@ class ResponseClassification:
             raise ValueError("sensitive response header classifications must be unique")
 
 
+class ResponseClassificationProvider(Protocol):
+    """Return the effective response classification for one request Environment."""
+
+    def classification_for(self, environment: DefinitionRef) -> ResponseClassification:
+        """Return one exact Environment classification."""
+        ...
+
+
 class HttpcoreTransportConfig(msgspec.Struct, frozen=True, kw_only=True):
     """Caller-owned pool, retention, and classification controls."""
 
@@ -190,6 +198,7 @@ class HttpcoreTransport:
         "_attempt_started",
         "_body_store",
         "_capture",
+        "_classifications",
         "_closed",
         "_closing",
         "_condition",
@@ -211,6 +220,7 @@ class HttpcoreTransport:
         config: HttpcoreTransportConfig,
         tls: TlsContextProvider,
         budgets: CaptureBudgetProvider,
+        classifications: ResponseClassificationProvider | None = None,
     ) -> None:
         """Compose narrow storage, TLS, and budget ports into one run-local adapter."""
         if type(body_store) is not TransientBodyStore:
@@ -221,6 +231,7 @@ class HttpcoreTransport:
             raise TypeError("HTTP transport requires TlsContextProvider")
         self._body_store = body_store
         self._config = config
+        self._classifications = classifications
         self._tls = tls
         self._renderer = RequestWireRenderer(body_store)
         self._capture = ResponseBodyCapturer(
@@ -474,10 +485,15 @@ class HttpcoreTransport:
         trace: ExchangeTraceRecorder,
     ) -> tuple[ResponseObservation, TransportFailure | None]:
         protocol = _protocol(response)
+        classification = (
+            self._config.classification
+            if self._classifications is None
+            else self._classifications.classification_for(request.request.environment)
+        )
         headers = _response_fields(
             response.headers,
             request.occurrence.exchange_id.value.hex,
-            self._config.classification.sensitive_headers,
+            classification.sensitive_headers,
         )
         media = derive_media_type(headers)
         encodings, encoding_error = derive_content_encodings(headers)
@@ -496,7 +512,7 @@ class HttpcoreTransport:
                         value=f"runtime/http-response/{request.occurrence.exchange_id.value.hex}"
                     ),
                 )
-                if self._config.classification.body is Sensitivity.SENSITIVE
+                if classification.body is Sensitivity.SENSITIVE
                 else ()
             )
             captured = await self._capture.capture(
@@ -505,7 +521,7 @@ class HttpcoreTransport:
                 media=media,
                 encodings=encodings,
                 encoding_valid=encoding_error is None,
-                sensitivity=self._config.classification.body,
+                sensitivity=classification.body,
                 origins=origins,
                 first_byte=trace.mark_first_body_byte,
             )

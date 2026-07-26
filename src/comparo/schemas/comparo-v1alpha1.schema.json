@@ -768,6 +768,9 @@
             "budgets": {
               "$ref": "#/$defs/jsonValue"
             },
+            "classification": {
+              "$ref": "#/$defs/jsonValue"
+            },
             "environment": {
               "$ref": "#/$defs/jsonValue"
             },

@@ -183,13 +183,28 @@ Import contracts enforce the boundary in both directions: artifact DTOs cannot i
 runtime, resolution, or adapter modules, and reporters cannot import the runtime, resolution,
 configuration, planning, selection, evaluation, transport, or storage adapters.
 
-## CLI integration and deferred profiles
+## CLI integration and effective profiles
 
-Step 10 exposes opt-in persistence plus authenticated artifact inspection, verification, blob
-reading, and JSON/JUnit/SARIF/Markdown reporting. The first production runtime accepts only the
-single effective artifact/redaction shape it can prove and rejects configured `ArtifactProfile` or
-`RedactionProfile` capabilities before network activity. Binding those configuration resources and
-their per-subject overrides remains deferred; the runtime does not approximate them.
+The production runtime exposes opt-in persistence plus authenticated artifact inspection,
+verification, blob reading, and JSON/JUnit/SARIF/Markdown reporting. Selected `ArtifactProfile`,
+`RedactionProfile`, and `SafetyProfile` resources are bound before any project value or network
+effect. Project profiles restrict caller-owned execution settings: capture flags intersect,
+`never` is stricter than `on-gate-failure`, which is stricter than `always`, and
+`reject-artifact` is stricter than `omit`. A project therefore cannot use a profile to enable body
+capture or persistence disabled by its caller.
+
+The supported `ArtifactProfile` shape is `capture` (`requests`, `responses`, `bodies`, `evidence`)
+plus `storage` (`persist`, `unsafeSource`). `RedactionProfile.rules` accepts stable `id`, shared
+`selector`, and `mask`, `remove`, or `omit-source` action values; the mandatory secret-matching
+floor remains enabled regardless of `backstop`. `SafetyProfile.classification` accepts
+`responseBody` (`public` or `sensitive`) and `responseHeaders`. Environment-attached safety
+classification is applied only to that Environment, while common safety profiles apply to every
+selected Environment.
+
+Complete response bodies are public-by-default capture sources and pass through the same-run
+mandatory sanitizer before entering detached artifact blobs. Declared secrets and their known wire
+derivatives are still masked. A SafetyProfile may classify a body as sensitive, in which case the
+safe default omits it rather than pretending that arbitrary application data can be sanitized.
 Retention policies, interrupted-staging discovery and cleanup commands, archives, encryption at
 rest, Windows storage, and historical artifact conversion remain explicit future capabilities;
 none is silently approximated by this module.

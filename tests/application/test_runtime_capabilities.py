@@ -164,25 +164,16 @@ def test_response_schema_passes_effect_free_runtime_capability_scan() -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "kind", "code"),
+    ("field", "kind"),
     [
-        ("safety", "SafetyProfile", "runtime.capability.safety-profile-unsupported"),
-        (
-            "redaction",
-            "RedactionProfile",
-            "runtime.capability.redaction-profile-unsupported",
-        ),
-        (
-            "artifacts",
-            "ArtifactProfile",
-            "runtime.capability.artifact-profile-unsupported",
-        ),
+        ("safety", "SafetyProfile"),
+        ("redaction", "RedactionProfile"),
+        ("artifacts", "ArtifactProfile"),
     ],
 )
-def test_effective_profiles_are_rejected_before_runtime(
+def test_effective_profiles_are_admitted_for_dedicated_binding(
     field: str,
     kind: str,
-    code: str,
 ) -> None:
     result = preflight_runtime_capabilities(
         _prepared_project(
@@ -191,33 +182,26 @@ def test_effective_profiles_are_rejected_before_runtime(
         )
     )
 
-    assert _codes(result) == (code,)
-    assert _paths(result) == ((field,),)
-    assert result.diagnostics[0].context.occurrences is not None
-    assert result.diagnostics[0].context.occurrences.value == 1
+    assert result.supported
+    assert result.diagnostics == ()
+
+
+def test_selected_environment_safety_is_admitted_for_classification_binding() -> None:
+    result = preflight_runtime_capabilities(
+        _prepared_project(
+            staging="{baseUrl: 'https://staging.example', safety: {$use: profile}}",
+            resources=(document("SafetyProfile", "profile", "{}"),),
+        )
+    )
+
+    assert result.supported
 
 
 @pytest.mark.parametrize(
-    ("field", "kind", "code"),
-    [
-        ("safety", "SafetyProfile", "runtime.capability.safety-profile-unsupported"),
-        (
-            "redaction",
-            "RedactionProfile",
-            "runtime.capability.redaction-profile-unsupported",
-        ),
-        (
-            "artifacts",
-            "ArtifactProfile",
-            "runtime.capability.artifact-profile-unsupported",
-        ),
-    ],
+    ("field", "kind"),
+    [("redaction", "RedactionProfile"), ("artifacts", "ArtifactProfile")],
 )
-def test_selected_environment_profiles_cannot_be_silently_ignored(
-    field: str,
-    kind: str,
-    code: str,
-) -> None:
+def test_environment_only_non_safety_profiles_are_rejected(field: str, kind: str) -> None:
     result = preflight_runtime_capabilities(
         _prepared_project(
             staging=f"{{baseUrl: 'https://staging.example', {field}: {{$use: profile}}}}",
@@ -225,14 +209,8 @@ def test_selected_environment_profiles_cannot_be_silently_ignored(
         )
     )
 
-    assert code in _codes(result)
-    assert any(
-        item.context.resource is not None
-        and item.context.resource.kind is ResourceKind.ENVIRONMENT
-        and tuple(cast("FieldPathSegment", segment).name for segment in item.context.field_path)
-        == (field,)
-        for item in result.diagnostics
-    )
+    assert _codes(result) == ("runtime.capability.environment-overlay-unsupported",)
+    assert _paths(result) == ((field,),)
 
 
 def test_selected_scenario_is_rejected_defensively() -> None:

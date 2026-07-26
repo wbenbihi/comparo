@@ -60,6 +60,8 @@ from comparo.application.evaluation_binding import bind_configuration_evaluation
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import inspect_diagnostic
 from comparo.application.preflight import PreparedProjectPlan
+from comparo.application.profile_binding import BoundExecutionProfiles
+from comparo.application.profile_binding import bind_execution_profiles
 from comparo.application.regex_validation import DEFAULT_REGEX_VALIDATION_LIMITS_V1
 from comparo.application.regex_validation import RegexValidationLimits
 from comparo.application.remote_schemas import DEFAULT_REMOTE_SCHEMA_FETCH_LIMITS_V1
@@ -204,17 +206,13 @@ def production_execution_defaults_v1() -> ProductionExecutionSettings:
 
 
 def persisted_production_execution_defaults_v1() -> ProductionExecutionSettings:
-    """Return persistence defaults that conservatively omit unclassified response bodies."""
+    """Return persistence defaults with complete sanitized response-body capture enabled."""
     defaults = production_execution_defaults_v1()
     artifact = msgspec.structs.replace(
         defaults.artifact,
         persist=ArtifactPersistMode.ALWAYS,
     )
-    transport = msgspec.structs.replace(
-        defaults.transport,
-        classification=ResponseClassification(body=Sensitivity.SENSITIVE),
-    )
-    return msgspec.structs.replace(defaults, artifact=artifact, transport=transport)
+    return msgspec.structs.replace(defaults, artifact=artifact)
 
 
 @final
@@ -407,7 +405,7 @@ async def execute_production(request: ProductionExecutionRequest) -> ProductionE
 
 
 class _ExecutionResources:
-    __slots__ = ("body_store", "capture", "context", "files", "sink", "spool")
+    __slots__ = ("body_store", "capture", "context", "files", "profiles", "sink", "spool")
 
     def __init__(self) -> None:
         self.sink: LocalArtifactBundleSink | None = None
@@ -416,6 +414,7 @@ class _ExecutionResources:
         self.context: RunContext | None = None
         self.body_store: TransientBodyStore | None = None
         self.capture: ArtifactCapturingDriver | None = None
+        self.profiles: BoundExecutionProfiles | None = None
 
     async def close(self) -> bool:
         """Attempt every cleanup and return only a value-free failure signal."""
@@ -456,6 +455,22 @@ async def _execute_with_resources(
     request: ProductionExecutionRequest,
     resources: _ExecutionResources,
 ) -> ProductionExecutionResult:
+    profile_binding = bind_execution_profiles(
+        request.project.prepared,
+        artifact=request.settings.artifact,
+        response=request.settings.transport.classification,
+    )
+    if profile_binding.profiles is None:
+        return _failure(
+            ProductionExecutionFailureKind.INVALID,
+            tuple(inspect_diagnostic(item) for item in profile_binding.diagnostics),
+        )
+    profiles = profile_binding.profiles
+    resources.profiles = profiles
+    request = msgspec.structs.replace(
+        request,
+        settings=msgspec.structs.replace(request.settings, artifact=profiles.artifact),
+    )
     context, diagnostics = await _prepare_context(request, resources)
     if diagnostics:
         return _failure(ProductionExecutionFailureKind.INVALID, diagnostics)
@@ -658,6 +673,7 @@ def _capture_driver(
 ) -> ArtifactCapturingDriver:
     """Compose the one real HTTP driver beneath the live-to-safe capture decorator."""
     settings = request.settings
+    profiles = resources.profiles
     store = TransientBodyStore(settings.body_store)
     resources.body_store = store
     streams = StoredStreamSnapshotProvider(
@@ -682,6 +698,7 @@ def _capture_driver(
             settings.transport.capture,
             _capture_budget_origin(settings.transport.capture),
         ),
+        classifications=profiles,
     )
     request_materializer = RequestBodyMaterializer(store, settings.request_body)
     driver = HttpExecutionDriver(
@@ -709,7 +726,7 @@ def _capture_driver(
         bodies=TransientArtifactBodyReader(store),
         blobs=spool,
         policy=settings.artifact,
-        redaction=RedactionPolicy(),
+        redaction=RedactionPolicy() if profiles is None else profiles.redaction,
     )
 
 

@@ -300,6 +300,7 @@ RESOURCE_SCHEMAS: tuple[ResourceSchema, ...] = (
             _field("filesystem", FieldMode.STATIC),
             _field("environment", FieldMode.STATIC),
             _field("schemas", FieldMode.STATIC),
+            _field("classification", FieldMode.STATIC),
             _field("budgets", FieldMode.STATIC),
         ),
     ),

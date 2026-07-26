@@ -20,15 +20,11 @@ from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.primitives import Count
 from comparo.core.planning._canonical import object_member
 from comparo.core.planning._canonical import resource_spec
-from comparo.core.planning.models import EffectiveSubject
 
 _PLAN_INCONSISTENT = DiagnosticCode(value="runtime.capability.plan-inconsistent")
 _SCENARIO = DiagnosticCode(value="runtime.capability.scenario-unsupported")
 _ENVIRONMENT_OVERLAY = DiagnosticCode(value="runtime.capability.environment-overlay-unsupported")
 _REQUEST_FIELD = DiagnosticCode(value="runtime.capability.request-field-unsupported")
-_SAFETY_PROFILE = DiagnosticCode(value="runtime.capability.safety-profile-unsupported")
-_REDACTION_PROFILE = DiagnosticCode(value="runtime.capability.redaction-profile-unsupported")
-_ARTIFACT_PROFILE = DiagnosticCode(value="runtime.capability.artifact-profile-unsupported")
 
 _REQUEST_RESOURCE_FIELDS = frozenset(
     {
@@ -69,6 +65,7 @@ _ENVIRONMENT_SUPPORTED = frozenset(
         "timeout",
         "tls",
         "proxy",
+        "safety",
     }
 )
 
@@ -111,7 +108,6 @@ def preflight_runtime_capabilities(
             diagnostics.append(_diagnostic(_SCENARIO, resource))
         else:
             _request_capabilities(resource, diagnostics)
-        _profile_capabilities(subject, resource, diagnostics)
     for definition in project.prepared.effective.environments:
         resource = _selected_resource(project, definition)
         if resource is None:
@@ -158,38 +154,11 @@ def _environment_capabilities(
     diagnostics: list[Diagnostic],
 ) -> None:
     spec = resource_spec(resource)
-    for member in spec.members:
-        if member.name not in _ENVIRONMENT_SUPPORTED:
-            code = {
-                "safety": _SAFETY_PROFILE,
-                "redaction": _REDACTION_PROFILE,
-                "artifacts": _ARTIFACT_PROFILE,
-            }.get(member.name, _ENVIRONMENT_OVERLAY)
-            diagnostics.append(_diagnostic(code, resource, member.name))
-
-
-def _profile_capabilities(
-    subject: EffectiveSubject,
-    resource: CompiledResource | None,
-    diagnostics: list[Diagnostic],
-) -> None:
-    profiles = subject.profiles
-    occurrences = (
-        (_SAFETY_PROFILE, "safety", len(profiles.safety)),
-        (_REDACTION_PROFILE, "redaction", int(profiles.redaction is not None)),
-        (_ARTIFACT_PROFILE, "artifacts", int(profiles.artifacts is not None)),
+    diagnostics.extend(
+        _diagnostic(_ENVIRONMENT_OVERLAY, resource, member.name)
+        for member in spec.members
+        if member.name not in _ENVIRONMENT_SUPPORTED
     )
-    for code, field, count in occurrences:
-        if count:
-            diagnostics.append(
-                _diagnostic_for_definition(
-                    code,
-                    subject.definition,
-                    resource,
-                    field,
-                    occurrences=count,
-                )
-            )
 
 
 def _inconsistent(definition: DefinitionRef) -> Diagnostic:

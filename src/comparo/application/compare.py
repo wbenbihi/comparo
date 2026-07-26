@@ -23,6 +23,7 @@ from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import prepare_project_plan
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionSettings
+from comparo.application.profile_binding import bind_execution_profiles
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 
 _HANDLE_ALLOCATION_ATTEMPTS = 8
@@ -304,6 +305,17 @@ def _admit_review(
     capabilities = preflight_runtime_capabilities(project)
     if not capabilities.supported:
         return tuple(inspect_diagnostic(item) for item in capabilities.diagnostics)
+    profile_binding = bind_execution_profiles(
+        project.prepared,
+        artifact=request.controls.settings.artifact,
+        response=request.controls.settings.transport.classification,
+    )
+    if profile_binding.profiles is None:
+        return tuple(inspect_diagnostic(item) for item in profile_binding.diagnostics)
+    effective_settings = msgspec.structs.replace(
+        request.controls.settings,
+        artifact=profile_binding.profiles.artifact,
+    )
     evaluation = preflight_configuration_evaluation(
         project.prepared,
         policy=project.policy,
@@ -317,9 +329,9 @@ def _admit_review(
             evaluation,
             request.controls.artifact_root,
         ),
-        runtime=inspect_runtime_limits(request.controls.settings),
+        runtime=inspect_runtime_limits(effective_settings),
         execution=inspect_execution_settings(
-            request.controls.settings,
+            effective_settings,
             request.controls.artifact_root,
         ),
         mutation_approved=request.controls.approve_mutations,
