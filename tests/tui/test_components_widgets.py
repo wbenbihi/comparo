@@ -11,6 +11,7 @@ from typing import ClassVar
 from typing import cast
 from typing import override
 
+import msgspec
 import pytest
 from textual import on
 from textual.app import App
@@ -24,6 +25,9 @@ from textual.widgets import ListView
 from textual.widgets import Select
 from textual.widgets import Static
 from textual.widgets import Switch
+from textual.widgets import Tab
+from textual.widgets import Tabs
+from textual.widgets import Tree
 
 from comparo.application import BudgetOverride
 from comparo.application import MatrixOverride
@@ -37,6 +41,9 @@ from comparo.application.inspection import PlanInspection
 from comparo.application.inspection import PlanSliceInspection
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import SourceCoordinate
+from comparo.application.project_outline import ProjectOutlineField
+from comparo.application.project_outline import ProjectRelationship
+from comparo.application.project_outline import ProjectResourceOutline
 from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.report_archive import ReportArchiveEntry
 from comparo.application.results import ComparisonResultRow
@@ -58,16 +65,22 @@ from comparo.core.domain.value_references import ValueNamespace
 from comparo.tui.components import COMPONENT_STYLESHEET
 from comparo.tui.components import CompareAdvancedOptions
 from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import CompareLifecycleBar
 from comparo.tui.components import CompareModeSelector
+from comparo.tui.components import ComparePlanPanel
+from comparo.tui.components import CompareRunPanel
+from comparo.tui.components import CompareTargetPanel
+from comparo.tui.components import ComparoShellBar
 from comparo.tui.components import DiagnosticsList
 from comparo.tui.components import ExecutionProgress
 from comparo.tui.components import FailFastChoice
 from comparo.tui.components import PlanPreview
 from comparo.tui.components import ProjectResourceDetail
-from comparo.tui.components import ProjectResourceItem
 from comparo.tui.components import ProjectResourceList
+from comparo.tui.components import ReportArchivePreview
 from comparo.tui.components import ReportList
 from comparo.tui.components import ReportListItem
+from comparo.tui.components import ResourceOverview
 from comparo.tui.components import ResultDetail
 from comparo.tui.components import ResultIndex
 from comparo.tui.components import ResultIndexKind
@@ -84,6 +97,8 @@ from comparo.tui.components.compare_input import format_selections
 from comparo.tui.components.compare_input import format_value_resources
 from comparo.tui.components.compare_input import parse_compare_draft
 from comparo.tui.components.compare_input import validation_diagnostics
+from comparo.tui.components.project_tables import ResourceOutlineTable
+from comparo.tui.components.project_tables import ResourceRelationshipTable
 from comparo.tui.components.results import ResultIndexItem
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import CompareDraftValidationCode
@@ -93,6 +108,7 @@ from comparo.tui.contracts import TuiInteractionLimits
 from comparo.tui.contracts import tui_interaction_limits_defaults_v1
 from comparo.tui.design import LayoutClass
 from comparo.tui.design import SemanticStatus
+from comparo.tui.navigation import WorkspaceId
 from comparo.tui.workspaces import CompareWorkspace
 
 _INTERACTION_LIMITS = tui_interaction_limits_defaults_v1()
@@ -145,7 +161,15 @@ class _DraftApp(App[None]):
         self.submitted = message.draft
 
 
-def _resource(kind: str, resource_id: str, *, name: str | None = None) -> ProjectResourceSummary:
+def _resource(
+    kind: str,
+    resource_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    tags: tuple[str, ...] = (),
+    outline: ProjectResourceOutline | None = None,
+) -> ProjectResourceSummary:
     return ProjectResourceSummary(
         coordinate=ResourceCoordinate(
             namespace="local",
@@ -154,14 +178,42 @@ def _resource(kind: str, resource_id: str, *, name: str | None = None) -> Projec
             fingerprint="a" * 64,
         ),
         name=name,
-        description=None,
-        tags=(),
+        description=description,
+        tags=tags,
         source=SourceCoordinate(
             source="project.yaml",
             document=1,
             line=1,
             column=1,
         ),
+        outline=outline,
+    )
+
+
+def _outline(
+    *fields: tuple[tuple[str, ...], str, str],
+    relationships: tuple[ProjectRelationship, ...] = (),
+) -> ProjectResourceOutline:
+    return ProjectResourceOutline(
+        fields=tuple(
+            ProjectOutlineField(
+                path=path,
+                label=path[-1] if path else "spec",
+                value=value,
+                depth=len(path),
+                category=category,
+            )
+            for path, value, category in fields
+        ),
+        relationships=relationships,
+    )
+
+
+def _relationship() -> ProjectRelationship:
+    return ProjectRelationship(
+        path=("environment",),
+        target=_resource("Environment", "staging").coordinate,
+        origin="link",
     )
 
 
@@ -649,14 +701,17 @@ def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
         ResultIndex(_projection(), kind=cast("ResultIndexKind", object()))
     with pytest.raises(TypeError, match="ResultIndexKind"):
         ResultIndexSelector(cast("ResultIndexKind", object()))
-    result_selector = ResultIndexSelector(ResultIndexKind.EXECUTIONS)
-    assert result_selector.kind is ResultIndexKind.EXECUTIONS
+    result_selector = ResultIndexSelector(ResultIndexKind.REQUESTS)
+    assert result_selector.kind is ResultIndexKind.REQUESTS
+    result_selector.activate_index(
+        Tabs.TabActivated(result_selector, Tab("Unrelated", id="unrelated"))
+    )
     unmounted_results = ResultsWorkspaceView(
         _projection(),
         access=ResultAccess.LIVE,
     )
     unmounted_results.follow_reference(_projection().diffs[0].reference)
-    assert unmounted_results.current_index is ResultIndexKind.DIFFS
+    assert unmounted_results.current_index is ResultIndexKind.RULES
     selected_before_clear: object = unmounted_results.selected_reference
     assert selected_before_clear == _projection().diffs[0].reference
     unmounted_results.clear_reference()
@@ -667,6 +722,14 @@ def test_unmounted_component_contracts_validate_and_preserve_state() -> None:
             _projection(),
             access=ResultAccess.LIVE,
         ).follow_reference(cast("ResultReference", object()))
+    single_environment_form = CompareDraftForm(
+        CompareDraft(mode=CompareMode.DIFFERENCES),
+        limits=_INTERACTION_LIMITS,
+        resources=(_resource("Request", "ping"), _resource("Environment", "only")),
+    )
+    assert single_environment_form.current_draft().candidates == ("only",)
+    shell = ComparoShellBar(WorkspaceId.EXPLORER, None)
+    shell.show_project(None)
 
 
 @_run_async
@@ -764,17 +827,271 @@ async def test_project_and_report_lists_emit_only_typed_safe_identifiers() -> No
 
     async with app.run_test(size=(120, 36)) as pilot:
         await pilot.pause()
-        resource_item = resources.query_one(ProjectResourceItem)
         resources.show_resource(resource)
+        resource_node = resources.cursor_node
+        assert resource_node is not None
         resources.show_resource(_resource("Request", "missing"))
         with pytest.raises(TypeError, match="selection"):
             resources.show_resource(cast("ProjectResourceSummary", object()))
-        resources.on_list_view_selected(ListView.Selected(resources, resource_item, 0))
-        resources.on_list_view_selected(ListView.Selected(resources, ListItem(), 0))
+        resources.select_resource(Tree.NodeSelected(resource_node))
+        resources.select_resource(Tree.NodeSelected(resources.root))
         report_item = reports.query_one(ReportListItem)
         reports.on_list_view_selected(ListView.Selected(reports, report_item, 0))
         reports.on_list_view_selected(ListView.Selected(reports, ListItem(), 0))
+        reports.on_list_view_highlighted(ListView.Highlighted(reports, report_item))
+        reports.on_list_view_highlighted(ListView.Highlighted(reports, ListItem()))
+        preview = ReportArchivePreview(entry)
+        with pytest.raises(TypeError, match="typed archive entry"):
+            preview.show_entry(cast("ReportArchiveEntry", object()))
         await pilot.pause()
+
+
+@_run_async
+async def test_screenshot_led_explorer_components_cover_kind_specific_surfaces() -> None:
+    relationship = _relationship()
+    request = _resource(
+        "Request",
+        "catalog",
+        name="Catalog request",
+        description="Fetch the public catalog.",
+        tags=("catalog",),
+        outline=_outline(
+            (("request", "method"), "GET", "literal"),
+            (("request", "endpoint"), "/catalog", "literal"),
+            (("request", "headers"), "object · 1 member", "container"),
+            (("request", "query"), "object · 1 member", "container"),
+            (("request", "body"), "none", "literal"),
+            (("matrices",), "array · 1 member", "container"),
+            (("assertions",), "$use AssertionProfile/status", "reference"),
+            (("diffs",), "$use DiffProfile/body", "reference"),
+            (("request", "headers", "x-client"), "$env.CLIENT", "directive"),
+            relationships=(relationship,),
+        ),
+    )
+    environment = _resource(
+        "Environment",
+        "staging",
+        description="Pre-release environment.",
+        tags=("protected",),
+        outline=_outline(
+            (("baseUrl",), "<string · 25 chars>", "literal"),
+            (("variables",), "object · 2 members", "container"),
+            (("variables", "PORT"), "8443", "literal"),
+            relationships=(relationship,),
+        ),
+    )
+    matrix = _resource(
+        "Matrix",
+        "audiences",
+        outline=_outline(
+            (("combine",), "product", "literal"),
+            (("axes",), "object · 1 member", "container"),
+            (("axes", "region"), "array · 2 members", "container"),
+            (("cases",), "array · 1 member", "container"),
+            (("cases", "0", "id"), "eu", "literal"),
+            (("include",), "array · 1 member", "container"),
+            (("exclude",), "array · 1 member", "container"),
+            relationships=(relationship,),
+        ),
+    )
+    schema = _resource(
+        "Schema",
+        "catalog-response",
+        outline=_outline(
+            (("type",), "object", "literal"),
+            (("properties",), "object · 1 member", "container"),
+            (("required",), "array · 1 member", "container"),
+            (("properties", "items", "type"), "array", "literal"),
+            (("properties", "total", "minimum"), "0", "literal"),
+            relationships=(relationship,),
+        ),
+    )
+    generic = _resource(
+        "SafetyProfile",
+        "read-only",
+        outline=_outline(
+            (("methods",), "array · 2 members", "container"),
+            (("policy",), "$use ExecutionPolicy/local", "reference"),
+            relationships=(relationship,),
+        ),
+    )
+    empty_resources = tuple(
+        _resource(kind, f"empty-{index}")
+        for index, kind in enumerate(
+            ("Request", "Environment", "Matrix", "Schema", "GateProfile"),
+        )
+    )
+    resources = (request, environment, matrix, schema, generic, *empty_resources)
+    catalog = ProjectResourceList(resources)
+    detail = ProjectResourceDetail(request)
+    widgets: tuple[Widget, ...] = (
+        catalog,
+        detail,
+        *(ResourceOverview(resource) for resource in resources),
+        ResourceOutlineTable(request),
+        ResourceOutlineTable(empty_resources[0]),
+        ResourceRelationshipTable(request),
+        ResourceRelationshipTable(empty_resources[0]),
+    )
+    app = _WidgetApp(*widgets)
+
+    async with app.run_test(size=(160, 52)) as pilot:
+        await pilot.pause()
+        catalog.show_resource(request)
+        assert catalog.selected_resource is not None
+        catalog.filter("catalog")
+        catalog.filter("catalog")
+        catalog.filter_kind("request")
+        catalog.filter_kind("request")
+        await pilot.pause()
+        assert catalog.selected_resource == request
+        catalog.filter("")
+        catalog.filter_kind("profile")
+        await pilot.pause()
+        assert catalog.selected_resource == generic
+        catalog.filter_kind("all")
+        catalog.filter("")
+        await pilot.pause()
+        node = catalog.cursor_node
+        assert node is not None
+        catalog.highlight_resource(Tree.NodeHighlighted(node))
+        catalog.highlight_resource(Tree.NodeHighlighted(catalog.root))
+        with pytest.raises(TypeError, match="filter"):
+            catalog.filter(cast("str", object()))
+        with pytest.raises(TypeError, match="kind filter"):
+            catalog.filter_kind(cast("str", object()))
+        with pytest.raises(TypeError, match="catalog"):
+            ProjectResourceList(cast("tuple[ProjectResourceSummary, ...]", []))
+        catalog.filter("does-not-exist")
+        await pilot.pause()
+        selected_after_empty: object = catalog.selected_resource
+        assert selected_after_empty is None
+
+        assert "Fetch the public catalog" in str(detail.render())
+        assert detail.resource == request
+        detail.show_resource(request)
+        facets = detail.query_one("#explorer-facets", Tabs)
+        detail.activate_facet(
+            Tabs.TabActivated(facets, facets.query_one("#explorer-facet-resolved", Tab))
+        )
+        await pilot.pause()
+        assert len(detail.query(ResourceOutlineTable)) == 1
+        facets = detail.query_one("#explorer-facets", Tabs)
+        detail.activate_facet(
+            Tabs.TabActivated(facets, facets.query_one("#explorer-facet-relationships", Tab))
+        )
+        await pilot.pause()
+        assert len(detail.query(ResourceRelationshipTable)) == 1
+        detail.request_compare()
+        detail.show_resource(environment)
+        await pilot.pause()
+        facets = detail.query_one("#explorer-facets", Tabs)
+        detail.activate_facet(
+            Tabs.TabActivated(facets, facets.query_one("#explorer-facet-sources", Tab))
+        )
+        await pilot.pause()
+        assert "Logical source" in str(detail.query_one(".explorer-provenance", Static).render())
+        detail.show_resource(None)
+        await pilot.pause()
+        detail.request_compare()
+        assert "Select a project resource" in str(detail.render())
+        with pytest.raises(TypeError, match="typed summary"):
+            detail.show_resource(cast("ProjectResourceSummary", object()))
+
+        detail.show_resource(environment)
+        detail._facet = "not-applicable"
+        detail.refresh(recompose=True)
+        await pilot.pause()
+        active_facet: object = detail._facet
+        assert active_facet == "Overview"
+
+    detached_catalog = ProjectResourceList((request,))
+    detached_catalog.filter("catalog")
+    detached_catalog.filter_kind("request")
+    detached_detail = ProjectResourceDetail(None)
+    detached_detail.show_resource(request)
+    assert detached_detail.resource == request
+    with pytest.raises(TypeError, match="typed safe summary"):
+        ResourceOverview(cast("ProjectResourceSummary", object()))
+
+
+@_run_async
+async def test_screenshot_led_compare_target_plan_and_run_are_native_and_interactive() -> None:
+    resources = (
+        *_resources(),
+        _resource("Matrix", "regions"),
+        _resource("SafetyProfile", "protected"),
+        _resource("AssertionProfile", "status"),
+        _resource("DiffProfile", "body"),
+    )
+    target = CompareTargetPanel(CompareDraft(mode=CompareMode.DIFFERENCES), resources)
+    lifecycle = tuple(CompareLifecycleBar(stage) for stage in ("Target", "Plan", "Run", "Analyze"))
+    plan = ComparePlanPanel(_plan())
+    run = CompareRunPanel(_progress(), _plan())
+    app = _WidgetApp(*lifecycle, target, plan, run)
+
+    async with app.run_test(size=(160, 52)) as pilot:
+        await pilot.pause()
+        assert target.current_draft().baseline == "staging"
+        await pilot.click("#compare-target-mode-assertions")
+        await pilot.pause()
+        assert target.current_draft().mode is CompareMode.ASSERTIONS
+        assert target.current_draft().environments == ("staging",)
+        await pilot.click("#compare-target-mode-execution-profile")
+        await pilot.pause()
+        assert target.current_draft().execution_profile == "release"
+        await pilot.click("#compare-target-mode-differences")
+        await pilot.pause()
+        assert target.current_draft().baseline == "staging"
+        target.show_draft(CompareDraft(mode=CompareMode.EXECUTION_PROFILE))
+        target.show_draft(CompareDraft(mode=CompareMode.EXECUTION_PROFILE))
+        mode_tabs = target.query_one("#compare-target-modes", Tabs)
+        target.change_mode(Tabs.TabActivated(mode_tabs, Tab("Unrelated", id="unrelated")))
+        target.show_draft(
+            CompareDraft(
+                mode=CompareMode.ASSERTIONS,
+                subjects=("checkout",),
+                environments=("prod",),
+            )
+        )
+        await pilot.pause()
+        assert target.current_draft().subjects == ("checkout",)
+        target.change_selection()
+        target.submit()
+        plan.edit()
+        plan.execute()
+        run.cancel()
+        run.show_snapshot(_progress(finished=1))
+        await pilot.pause()
+
+    no_plan_run = CompareRunPanel(_progress())
+    no_plan_app = _WidgetApp(no_plan_run)
+    async with no_plan_app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert len(no_plan_run.query(ResourceOutlineTable)) == 0
+
+    unmounted = CompareTargetPanel(CompareDraft(mode=CompareMode.ASSERTIONS), resources)
+    assert unmounted.current_draft().mode is CompareMode.ASSERTIONS
+    unmounted.show_draft(CompareDraft(mode=CompareMode.DIFFERENCES))
+    with pytest.raises(TypeError, match="typed draft"):
+        CompareTargetPanel(cast("CompareDraft", object()), resources)
+    with pytest.raises(TypeError, match="safe summaries"):
+        CompareTargetPanel(
+            CompareDraft(mode=CompareMode.DIFFERENCES),
+            cast("tuple[ProjectResourceSummary, ...]", []),
+        )
+    with pytest.raises(TypeError, match="typed draft"):
+        unmounted.show_draft(cast("CompareDraft", object()))
+    with pytest.raises(TypeError, match="PlanInspection"):
+        ComparePlanPanel(cast("PlanInspection", object()))
+    with pytest.raises(TypeError, match="ExecutionProgressSnapshot"):
+        CompareRunPanel(cast("ExecutionProgressSnapshot", object()))
+    with pytest.raises(TypeError, match="PlanInspection"):
+        CompareRunPanel(_progress(), cast("PlanInspection", object()))
+    with pytest.raises(TypeError, match="ExecutionProgressSnapshot"):
+        run.show_snapshot(cast("ExecutionProgressSnapshot", object()))
+    detached_run = CompareRunPanel(_progress())
+    detached_run.show_snapshot(_progress(finished=1))
 
 
 @_run_async
@@ -791,6 +1108,20 @@ async def test_every_result_index_and_detail_path_reuses_one_navigation_contract
             item = index.query_one(ResultIndexItem)
             index.on_list_view_selected(ListView.Selected(index, item, 0))
             index.on_list_view_selected(ListView.Selected(index, ListItem(), 0))
+            index.on_list_view_highlighted(ListView.Highlighted(index, item))
+            index.on_list_view_highlighted(ListView.Highlighted(index, ListItem()))
+
+        no_issues = msgspec.structs.replace(projection, assertions=(), diffs=())
+        fallback_issues = ResultIndex(no_issues, kind=ResultIndexKind.ISSUES)
+        await app.mount(fallback_issues)
+        assert len(fallback_issues.query(ResultIndexItem)) == len(projection.comparisons)
+        failing = msgspec.structs.replace(projection.assertions[0], outcome="failed")
+        issue_index = ResultIndex(
+            msgspec.structs.replace(projection, assertions=(failing,)),
+            kind=ResultIndexKind.ISSUES,
+        )
+        await app.mount(issue_index)
+        assert len(issue_index.query(ResultIndexItem)) == 1
 
         references = (
             projection.executions[0].reference,
@@ -1064,10 +1395,6 @@ async def test_shared_result_view_explores_every_index_and_typed_cross_reference
 
     async with app.run_test(size=(160, 52)) as pilot:
         await pilot.pause()
-        selector = view.query_one(ResultIndexSelector)
-        selector.select_index(Button.Pressed(Button("Unrelated")))
-        selector.select_index(Button.Pressed(Button("Unrelated", id="unrelated")))
-
         for kind in ResultIndexKind:
             await pilot.click(f"#result-index-{kind.value}")
             await pilot.pause()
@@ -1077,7 +1404,7 @@ async def test_shared_result_view_explores_every_index_and_typed_cross_reference
         execution = projection.executions[0].reference
         view.follow_reference(execution)
         await pilot.pause()
-        assert view.current_index.value == ResultIndexKind.EXECUTIONS.value
+        assert view.current_index.value == ResultIndexKind.REQUESTS.value
         assert "Related assertion: assertion/assertion-1" in str(
             view.query_one(ResultDetail).render()
         )
@@ -1085,7 +1412,7 @@ async def test_shared_result_view_explores_every_index_and_typed_cross_reference
         comparison = projection.comparisons[0].reference
         view.follow_reference(comparison)
         await pilot.pause()
-        assert view.current_index.value == ResultIndexKind.COMPARISONS.value
+        assert view.current_index.value == ResultIndexKind.ISSUES.value
         detail_text = str(view.query_one(ResultDetail).render())
         assert "Related baseline: execution/execution-1" in detail_text
         assert "Related diff: diff/diff-1" in detail_text

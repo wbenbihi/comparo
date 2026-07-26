@@ -57,7 +57,7 @@ from comparo.core.artifacts import RunArtifact
 from comparo.tui.app import ComparoApp
 from comparo.tui.commands import CommandId
 from comparo.tui.commands import KeymapOverride
-from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import CompareTargetPanel
 from comparo.tui.components import ProjectResourceDetail
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
@@ -682,6 +682,7 @@ def test_compare_prepares_runs_projects_results_without_focus_theft() -> None:
             )
             assert app.navigation.active is WorkspaceId.SETTINGS
             assert app.focused is focused
+            await pilot.pause()
             compare = app.query_one("#workspace-compare", CompareWorkspace)
             assert len(compare.query(ResultsWorkspaceView)) == 1
 
@@ -713,7 +714,7 @@ def test_compare_prepares_runs_projects_results_without_focus_theft() -> None:
     asyncio.run(scenario())
 
 
-def test_compare_shortcut_text_is_editable_and_visible_defaults_are_prepared() -> None:
+def test_text_input_suppresses_single_key_commands_without_hiding_compare_defaults() -> None:
     async def scenario() -> None:
         backend = _FakeBackend()
         app = _app(backend)
@@ -724,8 +725,8 @@ def test_compare_shortcut_text_is_editable_and_visible_defaults_are_prepared() -
                 lambda: app.project_result is not None,
             )
             await app.select_workspace(WorkspaceId.COMPARE)
-            form = app.query_one(CompareDraftForm)
-            displayed = form.current_draft()
+            target = app.query_one(CompareTargetPanel)
+            displayed = target.current_draft()
             assert displayed.subjects == ("ping",)
             assert displayed.baseline == "staging"
             assert displayed.candidates == ("prod",)
@@ -733,22 +734,21 @@ def test_compare_shortcut_text_is_editable_and_visible_defaults_are_prepared() -
             await app.prepare_compare()
             assert backend.prepared_drafts[-1] == displayed
 
-            form = app.query_one(CompareDraftForm)
-            subject = form.query_one("#compare-draft-subjects", Input)
-            subject.value = ""
-            subject.focus()
+            await app.select_workspace(WorkspaceId.EXPLORER)
+            search = app.query_one("#explorer-search", Input)
+            search.value = ""
+            search.focus()
             await pilot.pause()
             effect_calls = tuple(backend.calls)
             await pilot.press("1", "2", "3", "4", "q", "r", "p", "x", "a")
             await pilot.press("backspace")
             await pilot.pause()
-            assert subject.value == "1234qrpxa"
+            assert search.value == "1234qrpxa"
             assert tuple(backend.calls[: len(effect_calls)]) == effect_calls
             assert "start:prepared-handle" not in backend.calls
-            assert app.navigation.active is WorkspaceId.COMPARE
-            assert app.query_one(CompareDraftForm) is form
-            assert app.focused is subject
-            assert app.compare_plan is None
+            assert app.navigation.active is WorkspaceId.EXPLORER
+            assert app.focused is search
+            assert app.compare_plan is not None
 
     asyncio.run(scenario())
 
@@ -882,6 +882,7 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
         await unmounted._render_workspace(WorkspaceId.EXPLORER)
         unmounted.refresh_bindings()
         unmounted._apply_responsive_class(80)
+        unmounted._focus_active_workspace()
         await unmounted.prepare_compare()
         await unmounted.close_services()
         ExplorerWorkspace(None).restore_resource(None)
@@ -894,6 +895,49 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
                 cast("Pilot[object]", pilot),
                 lambda: app.project_result is not None and app.report_listing is not None,
             )
+            assert app.check_action("dispatch_command_id", ()) is False
+            assert app.check_action("dispatch_command_id", (1,)) is False
+            assert app.check_action("dispatch_command_id", ("not-a-command",)) is False
+            await app.select_workspace(WorkspaceId.EXPLORER)
+            await app.dispatch_command(CommandId.PROJECT_FILTER)
+            await pilot.pause()
+            assert app.focused is app.query_one("#explorer-search", Input)
+            project_result = app.project_result
+            assert project_result is not None
+            snapshot = project_result.snapshot
+            assert snapshot is not None
+            request = next(
+                resource for resource in snapshot.resources if resource.coordinate.kind == "Request"
+            )
+            profile = next(
+                resource
+                for resource in snapshot.resources
+                if resource.coordinate.kind == "ExecutionProfile"
+            )
+            environment = next(
+                resource
+                for resource in snapshot.resources
+                if resource.coordinate.kind == "Environment"
+            )
+            app.query_one(ProjectResourceList).show_resource(request)
+            await pilot.pause()
+            await app.dispatch_command(CommandId.PROJECT_USE_IN_COMPARE)
+            assert app.navigation.active is WorkspaceId.COMPARE
+            await app._use_resource_in_compare(profile)
+            assert (
+                app._coordinator.compare_draft.execution_profile == profile.coordinate.resource_id
+            )
+            await app._use_resource_in_compare(environment)
+            await app.use_requested_resource(ExplorerWorkspace.UseInCompareRequested(request))
+            assert app._coordinator.compare_draft.subjects == (request.coordinate.resource_id,)
+            app.compare_surface_changed()
+            await app.select_workspace(WorkspaceId.EXPLORER)
+            catalog = app.query_one(ProjectResourceList)
+            catalog.filter("does-not-exist")
+            await pilot.pause()
+            await app._dispatch_workspace(CommandId.PROJECT_USE_IN_COMPARE)
+            catalog.filter("")
+            await app._dispatch_workspace(CommandId.COMPARE_CANCEL)
             release_duplicate = asyncio.Event()
 
             async def held_project_operation() -> None:
@@ -936,7 +980,7 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             await app.dispatch_command(CommandId.APP_HELP)
             await app.dispatch_command(CommandId.APP_PALETTE)
             await app._dispatch_global(CommandId.PROJECT_RELOAD)
-            app._dispatch_workspace(CommandId.APP_HELP)
+            await app._dispatch_workspace(CommandId.APP_HELP)
             assert palette_calls == [True]
             await app.dispatch_command(CommandId.PROJECT_RELOAD)
             await app.select_workspace(WorkspaceId.REPORT)
@@ -948,8 +992,8 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             starts = backend.calls.count("start:prepared-handle")
             await app.dispatch_command(CommandId.COMPARE_START)
             assert backend.calls.count("start:prepared-handle") == starts
-            app.submit_compare_draft(
-                CompareDraftForm.Submitted(
+            app.request_compare_plan(
+                CompareWorkspace.PlanRequested(
                     CompareDraft(
                         mode=CompareMode.ASSERTIONS,
                         subjects=("ping",),
@@ -959,10 +1003,15 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             )
             await _wait_until(cast("Pilot[object]", pilot), lambda: app.compare_plan is not None)
             await _wait_until(cast("Pilot[object]", pilot), lambda: "Execute" in _footer_text(app))
+            await app.go_back()
+            await pilot.pause()
+            assert "Preview" in _footer_text(app)
+            await app.prepare_compare()
+            await _wait_until(cast("Pilot[object]", pilot), lambda: "Execute" in _footer_text(app))
             await app.dispatch_command(CommandId.COMPARE_CANCEL)
             assert app.active_session is None
             assert "Execute" in _footer_text(app)
-            await app.dispatch_command(CommandId.COMPARE_START)
+            app.request_compare_execution()
             await _wait_until(cast("Pilot[object]", pilot), lambda: app.active_session is not None)
             await _wait_until(cast("Pilot[object]", pilot), lambda: "Cancel" in _footer_text(app))
             preparations = len(backend.prepared_drafts)
@@ -972,7 +1021,7 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             assert len(backend.prepared_drafts) == preparations
             assert backend.calls.count("start:prepared-handle") == starts
             assert "Cancel" in _footer_text(app)
-            await app.dispatch_command(CommandId.COMPARE_CANCEL)
+            app.request_compare_cancellation()
             await _wait_until(cast("Pilot[object]", pilot), lambda: app.compare_result is not None)
             await app.dispatch_command(CommandId.COMPARE_START)
             await app.dispatch_command(CommandId.COMPARE_CANCEL)
@@ -984,7 +1033,7 @@ def test_app_validation_dispatch_and_render_edges(monkeypatch: pytest.MonkeyPatc
             await pilot.pause()
             compare = app.query_one("#workspace-compare", CompareWorkspace)
             assert compare.state.value == "running"
-            assert len(compare.query(CompareDraftForm)) == 0
+            assert len(compare.query(CompareTargetPanel)) == 0
             starting = compare.query_one(".state-message", Static)
             assert starting.display
             assert "Starting the admitted execution" in str(starting.content)

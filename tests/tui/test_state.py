@@ -29,6 +29,8 @@ def test_preferences_are_tui_only_immutable_and_typed() -> None:
         ("default_workspace", "compare"),
         ("dense", 1),
         ("mouse", 1),
+        ("glyphs", "auto"),
+        ("reduced_motion", 1),
     ):
         with pytest.raises(TypeError):
             msgspec.structs.replace(preferences, **{field: value})

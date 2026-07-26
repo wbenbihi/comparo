@@ -65,10 +65,12 @@ DEFAULT_KEYMAP: Final = (
     DefaultCommandBinding(command_id=CommandId.APP_PALETTE, keys=("ctrl+p",)),
     DefaultCommandBinding(command_id=CommandId.APP_QUIT, keys=("q",)),
     DefaultCommandBinding(command_id=CommandId.PROJECT_RELOAD, keys=("r",)),
+    DefaultCommandBinding(command_id=CommandId.PROJECT_FILTER, keys=("/",)),
+    DefaultCommandBinding(command_id=CommandId.PROJECT_USE_IN_COMPARE, keys=("c",)),
     DefaultCommandBinding(command_id=CommandId.COMPARE_PREVIEW, keys=("p",)),
     DefaultCommandBinding(command_id=CommandId.COMPARE_START, keys=("x",)),
     DefaultCommandBinding(command_id=CommandId.COMPARE_CANCEL, keys=("a",)),
-    DefaultCommandBinding(command_id=CommandId.REPORT_RELOAD, keys=("r",)),
+    DefaultCommandBinding(command_id=CommandId.REPORT_RELOAD, keys=("shift+r",)),
 )
 
 
@@ -106,6 +108,17 @@ def resolved_primary_key(
     return default_keys(command_id)[0] if mapped is None else mapped.partition(",")[0]
 
 
+def resolved_keys(
+    command_id: CommandId,
+    overrides: tuple[KeymapOverride, ...],
+) -> tuple[str, ...]:
+    """Return every effective physical key for one semantic command."""
+    if type(command_id) is not CommandId:
+        raise TypeError("resolved key lookup requires CommandId")
+    override = next((item for item in overrides if item.command_id is command_id), None)
+    return default_keys(command_id) if override is None else override.keys
+
+
 def _validate_contextual_collisions(effective: dict[CommandId, tuple[str, ...]]) -> None:
     from comparo.tui.commands.catalog import COMMAND_CATALOG
     from comparo.tui.commands.models import CommandScope
@@ -131,6 +144,7 @@ __all__ = (
     "DefaultCommandBinding",
     "KeymapOverride",
     "default_keys",
+    "resolved_keys",
     "resolved_primary_key",
     "textual_keymap",
 )

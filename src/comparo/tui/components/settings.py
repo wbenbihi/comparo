@@ -11,14 +11,19 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.message import Message
+from textual.widgets import Collapsible
 from textual.widgets import Label
 from textual.widgets import Select
+from textual.widgets import Static
 from textual.widgets import Switch
 
+from comparo.tui.commands import COMMAND_CATALOG
+from comparo.tui.commands import resolved_primary_key
 from comparo.tui.design import BUILTIN_THEMES
 from comparo.tui.design import SYSTEM_THEME
 from comparo.tui.design import ThemeId
 from comparo.tui.navigation import WorkspaceId
+from comparo.tui.state import GlyphPreference
 from comparo.tui.state import TuiPreferences
 
 
@@ -51,6 +56,7 @@ class TuiOnlySettingsPanel(Vertical):
     @override
     def compose(self) -> ComposeResult:
         """Compose closed theme/workspace selects and Boolean switches."""
+        yield Label("APPEARANCE", classes="settings-section-title")
         yield _setting_row(
             "Theme",
             Select(
@@ -67,6 +73,7 @@ class TuiOnlySettingsPanel(Vertical):
             "Dense layout",
             Switch(value=self._preferences.dense, id="tui-setting-dense"),
         )
+        yield Label("INTERACTION", classes="settings-section-title")
         yield _setting_row(
             "Mouse",
             Switch(value=self._preferences.mouse, id="tui-setting-mouse"),
@@ -79,6 +86,30 @@ class TuiOnlySettingsPanel(Vertical):
                 allow_blank=False,
                 id="tui-setting-workspace",
             ),
+        )
+        yield Label("ACCESSIBILITY", classes="settings-section-title")
+        yield _setting_row(
+            "Glyphs",
+            Select(
+                tuple((item.value.title(), item) for item in GlyphPreference),
+                value=self._preferences.glyphs,
+                allow_blank=False,
+                id="tui-setting-glyphs",
+            ),
+        )
+        yield _setting_row(
+            "Reduced motion",
+            Switch(
+                value=self._preferences.reduced_motion,
+                id="tui-setting-reduced-motion",
+            ),
+        )
+        yield Label("KEYBOARD", classes="settings-section-title")
+        yield Collapsible(
+            Static(_keymap_summary(self._preferences), markup=False),
+            title="Resolved command bindings",
+            collapsed=True,
+            id="tui-setting-keymap-summary",
         )
 
     def current_preferences(self) -> TuiPreferences:
@@ -93,6 +124,11 @@ class TuiOnlySettingsPanel(Vertical):
             ),
             dense=self.query_one("#tui-setting-dense", Switch).value,
             mouse=self.query_one("#tui-setting-mouse", Switch).value,
+            glyphs=cast(
+                "GlyphPreference",
+                self.query_one("#tui-setting-glyphs", Select).value,
+            ),
+            reduced_motion=self.query_one("#tui-setting-reduced-motion", Switch).value,
             keymap=self._preferences.keymap,
         )
 
@@ -107,6 +143,8 @@ class TuiOnlySettingsPanel(Vertical):
         self.query_one("#tui-setting-workspace", Select).value = preferences.default_workspace
         self.query_one("#tui-setting-dense", Switch).value = preferences.dense
         self.query_one("#tui-setting-mouse", Switch).value = preferences.mouse
+        self.query_one("#tui-setting-glyphs", Select).value = preferences.glyphs
+        self.query_one("#tui-setting-reduced-motion", Switch).value = preferences.reduced_motion
 
     @on(Select.Changed)
     @on(Switch.Changed)
@@ -121,6 +159,13 @@ def _setting_row(label: str, control: Select[object] | Switch) -> Horizontal:
         Label(label, classes="settings-label", markup=False),
         control,
         classes="settings-row",
+    )
+
+
+def _keymap_summary(preferences: TuiPreferences) -> str:
+    return "\n".join(
+        f"{resolved_primary_key(command.command_id, preferences.keymap):<12} {command.label}"
+        for command in COMMAND_CATALOG
     )
 
 

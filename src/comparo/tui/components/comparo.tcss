@@ -1,9 +1,74 @@
 /* The only concrete visual-style source for shared Comparo components and workspaces. */
 
+#shell-bar {
+    width: 1fr;
+    height: 3;
+    background: $surface;
+    border-bottom: solid $border;
+}
+
+#shell-brand {
+    width: 14;
+    height: 3;
+    padding: 1 2 0 2;
+    color: $foreground;
+    text-style: bold;
+}
+
+#workspace-tabs {
+    width: 52;
+    height: 3;
+    background: $surface;
+}
+
+#workspace-tabs Tab {
+    padding: 0 2;
+    color: $text-muted;
+}
+
+#workspace-tabs Tab.-active {
+    color: $foreground;
+    text-style: bold;
+}
+
+#shell-context {
+    width: 1fr;
+    height: 3;
+    padding: 1 2 0 1;
+    content-align: right top;
+    color: $text-muted;
+}
+
 .workspace {
     height: 1fr;
     width: 1fr;
-    padding: 1;
+    padding: 0 1;
+    background: $background;
+}
+
+.workspace-heading {
+    height: 4;
+    width: 1fr;
+    padding: 1 1 0 1;
+    border-bottom: solid $border;
+}
+
+.workspace-heading-copy {
+    width: 1fr;
+    height: auto;
+}
+
+.workspace-title {
+    width: 1fr;
+    height: 1;
+    text-style: bold;
+    color: $foreground;
+}
+
+.workspace-subtitle {
+    width: 1fr;
+    height: 1;
+    color: $text-muted;
 }
 
 StatePanel {
@@ -76,7 +141,7 @@ DiagnosticsList,
 ProjectResourceList,
 ReportList,
 ResultIndex {
-    border: round $panel-lighten-2;
+    border: solid $border;
 }
 
 .diagnostic-row,
@@ -84,6 +149,31 @@ ResultIndex {
 .report-list-row {
     width: 1fr;
     height: auto;
+}
+
+ReportListItem {
+    height: 5;
+    padding: 0 1;
+    border-bottom: solid $border;
+}
+
+.report-list-heading {
+    width: 1fr;
+    height: 2;
+}
+
+.report-list-title {
+    width: 1fr;
+    height: 1;
+    padding-top: 1;
+    text-style: bold;
+}
+
+.report-list-meta {
+    width: 1fr;
+    height: 2;
+    padding-left: 1;
+    color: $text-muted;
 }
 
 .diagnostic-text {
@@ -96,23 +186,218 @@ ResultIndex {
     width: 1fr;
 }
 
+.report-page {
+    width: 1fr;
+    height: 1fr;
+}
+
+.report-surface {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 1 1 1;
+}
+
+.explorer-page {
+    width: 1fr;
+    height: 1fr;
+}
+
+.explorer-catalog-region {
+    width: 38;
+    min-width: 28;
+    max-width: 46;
+    height: 1fr;
+    border-right: solid $border;
+    padding-right: 1;
+}
+
+#explorer-search {
+    height: 3;
+    width: 1fr;
+    border: none;
+    border-bottom: solid $border;
+    background: $surface;
+}
+
+#explorer-search:focus {
+    border-bottom: heavy $accent;
+}
+
+#explorer-filters {
+    height: 3;
+    width: 1fr;
+    background: $surface;
+    border-bottom: solid $border;
+}
+
+#explorer-filters Tab {
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#explorer-filters Tab.-active {
+    color: $foreground;
+    text-style: bold;
+}
+
 .explorer-resource-list,
 .report-archive-list {
+    width: 1fr;
+    height: 1fr;
+    border: none;
+    background: $background;
+    scrollbar-size: 1 1;
+}
+
+.report-archive-list {
     width: 2fr;
+    min-width: 44;
+    max-width: 68;
+    height: 1fr;
+    border: none;
+    border-right: solid $border;
+    background: $background;
+}
+
+.report-reading-pane {
+    width: 3fr;
+    height: 1fr;
+    border: none;
+    padding: 2 3;
+    background: $surface;
+}
+
+.explorer-resource-list:focus {
+    background-tint: $accent 4%;
 }
 
 ProjectResourceDetail,
 .report-reading-pane {
-    width: 3fr;
-    border: round $panel-lighten-2;
-    padding: 1 2;
+    width: 1fr;
+    height: 1fr;
+    border: none;
+    padding: 0 1 1 2;
+    background: $background;
+    scrollbar-size: 1 1;
+}
+
+.explorer-inspector-heading {
+    width: 1fr;
+    height: 5;
+    padding: 1 0 0 0;
+}
+
+.explorer-inspector-title-block {
+    width: 1fr;
+    height: auto;
+}
+
+.explorer-inspector-title {
+    height: 2;
+    width: 1fr;
+    text-style: bold;
+    color: $foreground;
+}
+
+.explorer-inspector-subtitle {
+    height: 1;
+    width: 1fr;
+    color: $text-muted;
+}
+
+#explorer-use-in-compare {
+    width: 20;
+    min-width: 20;
+    margin: 0;
+}
+
+.explorer-inspector-metadata {
+    height: 2;
+    width: 1fr;
+    color: $text-muted;
+    border-bottom: solid $border;
+}
+
+#explorer-facets {
+    height: 3;
+    width: 1fr;
+    border-bottom: solid $border;
+    background: $background;
+}
+
+#explorer-facets Tab {
+    padding: 0 2;
+    color: $text-muted;
+}
+
+#explorer-facets Tab.-active {
+    color: $foreground;
+    text-style: bold;
+}
+
+.explorer-section-title {
+    height: 3;
+    padding-top: 1;
+    color: $text-muted;
+    text-style: bold;
+}
+
+ResourceOverview {
+    width: 1fr;
+    height: auto;
+}
+
+.explorer-overview-grid {
+    width: 1fr;
+    height: auto;
+    border-bottom: solid $border;
+}
+
+.explorer-overview-grid-secondary {
+    border-bottom: none;
+}
+
+.explorer-overview-section {
+    width: 1fr;
+    min-height: 10;
+    height: auto;
+    padding: 0 1 1 1;
+    border-right: solid $border;
+}
+
+.explorer-overview-copy {
+    width: 1fr;
+    height: auto;
+    color: $foreground;
+}
+
+.explorer-overview,
+.explorer-composition,
+.explorer-provenance {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+    color: $foreground;
+}
+
+.explorer-composition {
+    border-bottom: solid $border;
+    padding-bottom: 1;
+}
+
+.explorer-detail-table {
+    height: 1fr;
+    min-height: 12;
+    width: 1fr;
+    margin-top: 1;
+    border: solid $border;
+    background: $background;
 }
 
 PlanPreview,
 ExecutionProgress,
-ResultSummary,
 TuiOnlySettingsPanel {
-    border: round $panel-lighten-2;
+    border: solid $border;
     padding: 1 2;
     width: 1fr;
     height: auto;
@@ -123,26 +408,258 @@ TuiOnlySettingsPanel {
     width: 1fr;
 }
 
+.compare-page {
+    width: 1fr;
+    height: 1fr;
+}
+
+.compare-surface {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 1 1 1;
+}
+
+CompareLifecycleBar {
+    height: 3;
+    width: 1fr;
+    padding: 0 1;
+    border-bottom: solid $border;
+    background: $surface;
+}
+
+.compare-lifecycle-stage {
+    width: 1fr;
+    height: 2;
+    padding: 0 1;
+    color: $text-muted;
+    content-align: center middle;
+}
+
+.compare-lifecycle-active {
+    color: $foreground;
+    text-style: bold;
+    border-bottom: heavy $accent;
+}
+
+.compare-lifecycle-complete {
+    color: $success;
+}
+
+CompareTargetPanel,
+ComparePlanPanel,
+CompareRunPanel {
+    width: 1fr;
+    height: 1fr;
+    background: $background;
+}
+
+#compare-target-modes {
+    width: 1fr;
+    height: 3;
+    border-bottom: solid $border;
+    background: $background;
+}
+
+#compare-target-modes Tab {
+    width: 1fr;
+    color: $text-muted;
+}
+
+#compare-target-modes Tab.-active {
+    color: $foreground;
+    text-style: bold;
+}
+
+.compare-target-layout {
+    width: 1fr;
+    height: 1fr;
+}
+
+.compare-target-selectors {
+    width: 2fr;
+    height: 1fr;
+    padding: 1 2 1 1;
+    border-right: solid $border;
+    overflow-y: auto;
+}
+
+.compare-target-summary {
+    width: 1fr;
+    min-width: 34;
+    height: 1fr;
+    padding: 1 1 1 2;
+    background: $surface;
+}
+
+.compare-panel-kicker {
+    height: 2;
+    padding-top: 1;
+    color: $text-muted;
+    text-style: bold;
+}
+
+.compare-field-heading {
+    width: 1fr;
+    height: 3;
+    padding-top: 1;
+}
+
+.compare-field-label {
+    width: 1fr;
+    height: 1;
+    color: $foreground;
+    text-style: bold;
+}
+
+.compare-field-description {
+    width: 1fr;
+    height: 1;
+    color: $text-muted;
+}
+
+.compare-target-selection {
+    width: 1fr;
+    height: auto;
+    min-height: 3;
+    max-height: 8;
+    border: solid $border;
+    background: $background;
+}
+
+.compare-target-selectors Select {
+    width: 1fr;
+    height: 3;
+}
+
+#compare-target-advanced {
+    width: 1fr;
+    height: auto;
+    margin-top: 1;
+    border: solid $border;
+}
+
+#compare-target-validation {
+    width: 1fr;
+    height: auto;
+    color: $success;
+    padding-bottom: 2;
+}
+
+#compare-review-plan {
+    width: 1fr;
+    dock: bottom;
+}
+
+.compare-plan-summary,
+.compare-run-metrics {
+    width: 1fr;
+    height: 5;
+    border-bottom: solid $border;
+}
+
+.compare-plan-metric,
+.compare-run-metric {
+    width: 1fr;
+    height: 4;
+    padding: 1;
+    content-align: center middle;
+    color: $foreground;
+    border-right: solid $border;
+}
+
+.compare-plan-layout,
+.compare-run-layout {
+    width: 1fr;
+    height: 1fr;
+}
+
+.compare-plan-work {
+    width: 2fr;
+    height: 1fr;
+    border: none;
+    border-right: solid $border;
+    background: $background;
+}
+
+.compare-plan-authority {
+    width: 1fr;
+    min-width: 40;
+    height: 1fr;
+    padding: 0 2;
+    background: $surface;
+    overflow-y: auto;
+}
+
+.compare-plan-actions {
+    width: 1fr;
+    height: 4;
+    padding-top: 1;
+    border-top: solid $border;
+    align-horizontal: right;
+}
+
+.compare-plan-actions Button {
+    min-width: 20;
+    margin: 0 0 0 1;
+}
+
+#compare-run-progress {
+    width: 1fr;
+    height: 3;
+    padding: 1 1 0 1;
+}
+
+.compare-run-activity {
+    width: 2fr;
+    height: 1fr;
+    padding: 1 2;
+    border-right: solid $border;
+}
+
+.compare-run-scope-table {
+    width: 1fr;
+    height: 1fr;
+    min-height: 8;
+    border: none;
+    border-bottom: solid $border;
+    background: $background;
+}
+
+.compare-run-detail {
+    width: 1fr;
+    min-width: 40;
+    height: 1fr;
+    padding: 1 2;
+    background: $surface;
+}
+
+#compare-run-cancel {
+    width: 1fr;
+    dock: bottom;
+}
+
 .result-index-selector {
     height: 3;
     width: 1fr;
+    border-bottom: solid $border;
+    background: $background;
 }
 
-.result-index-option {
+.result-index-selector Tab {
     width: 1fr;
     content-align: center middle;
-    border-bottom: solid $panel-lighten-2;
+    color: $text-muted;
 }
 
-.result-index-active {
-    border-bottom: solid $accent;
+.result-index-selector Tab.-active {
+    color: $foreground;
     text-style: bold;
 }
 
 CompareDraftForm {
     height: auto;
     width: 1fr;
-    border: round $panel-lighten-2;
+    border: solid $border;
     padding: 1 2;
 }
 
@@ -210,8 +727,11 @@ CompareAdvancedOptions {
 
 .execution-progress-heading,
 .result-summary-heading {
-    height: auto;
+    height: 3;
     width: 1fr;
+    padding: 0 1;
+    border-bottom: solid $border;
+    background: $surface;
 }
 
 .execution-progress-label,
@@ -219,9 +739,43 @@ CompareAdvancedOptions {
     width: 1fr;
 }
 
+.result-summary-copy {
+    width: 1fr;
+    height: 2;
+    padding-left: 1;
+}
+
+.result-summary-title {
+    width: 1fr;
+    height: 1;
+    color: $foreground;
+    text-style: bold;
+}
+
+.result-summary-subtitle {
+    width: 1fr;
+    height: 1;
+    color: $text-muted;
+}
+
+.result-summary-metrics {
+    width: 1fr;
+    height: 2;
+    padding: 0 1;
+    color: $text-muted;
+    border-bottom: solid $border;
+}
+
 ResultsWorkspaceView {
     height: 1fr;
     width: 1fr;
+}
+
+ResultSummary {
+    width: 1fr;
+    height: 6;
+    border-bottom: solid $border;
+    background: $background;
 }
 
 .result-layout {
@@ -230,13 +784,42 @@ ResultsWorkspaceView {
 }
 
 .result-index {
-    width: 2fr;
+    width: 1fr;
+    height: 1fr;
+    border: none;
+    background: $background;
 }
 
 .result-detail {
-    width: 3fr;
-    border: round $panel-lighten-2;
+    width: 2fr;
+    border: none;
+    border-left: solid $border;
     padding: 1 2;
+    background: $surface;
+}
+
+.result-index-region {
+    width: 1fr;
+    min-width: 38;
+    max-width: 54;
+    height: 1fr;
+    border-right: solid $border;
+}
+
+.result-list-heading {
+    width: 1fr;
+    height: 2;
+    padding: 1 1 0 1;
+    color: $foreground;
+    text-style: bold;
+}
+
+.result-index-region > Static {
+    width: 1fr;
+    height: 2;
+    padding: 0 1;
+    color: $text-muted;
+    border-bottom: solid $border;
 }
 
 .layout-compact .result-layout {
@@ -249,6 +832,13 @@ ResultsWorkspaceView {
     height: 1fr;
 }
 
+.layout-compact .result-index-region {
+    width: 1fr;
+    min-width: 0;
+    max-width: 100%;
+    height: 1fr;
+}
+
 .layout-standard .result-index {
     width: 36;
 }
@@ -257,9 +847,72 @@ ResultsWorkspaceView {
     width: 44;
 }
 
+.layout-compact .explorer-layout {
+    layout: vertical;
+}
+
+.layout-compact .explorer-overview-grid {
+    layout: vertical;
+}
+
+.layout-compact .explorer-overview-section {
+    width: 1fr;
+    border-right: none;
+    border-bottom: solid $border;
+}
+
+.layout-compact .report-browser-layout {
+    layout: vertical;
+}
+
+.layout-compact .report-archive-list,
+.layout-compact .report-reading-pane {
+    width: 1fr;
+    min-width: 0;
+    max-width: 100%;
+    height: 1fr;
+    border-right: none;
+}
+
+.layout-compact .compare-target-layout,
+.layout-compact .compare-plan-layout,
+.layout-compact .compare-run-layout {
+    layout: vertical;
+}
+
+.layout-compact .compare-target-selectors,
+.layout-compact .compare-target-summary,
+.layout-compact .compare-plan-work,
+.layout-compact .compare-plan-authority,
+.layout-compact .compare-run-activity,
+.layout-compact .compare-run-detail {
+    width: 1fr;
+    min-width: 0;
+    height: 1fr;
+    border-right: none;
+}
+
+.layout-compact .explorer-catalog-region,
+.layout-compact ProjectResourceDetail {
+    width: 1fr;
+    height: 1fr;
+    max-width: 100%;
+}
+
+.layout-compact .explorer-catalog-region {
+    border-right: none;
+    border-bottom: solid $border;
+}
+
+.layout-standard .explorer-catalog-region {
+    width: 34;
+}
+
 .settings-row {
     height: 3;
     width: 1fr;
+    padding: 0 1;
+    border-bottom: solid $border;
 }
 
 .settings-label {
@@ -269,6 +922,42 @@ ResultsWorkspaceView {
 
 .settings-row Select {
     width: 1fr;
+}
+
+.settings-page {
+    width: 1fr;
+    height: 1fr;
+}
+
+.settings-surface {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 1 1 1;
+}
+
+TuiOnlySettingsPanel {
+    width: 1fr;
+    max-width: 92;
+    height: 1fr;
+    border: none;
+    padding: 0 2;
+    overflow-y: auto;
+}
+
+.settings-section-title {
+    width: 1fr;
+    height: 3;
+    padding: 1 1 0 1;
+    color: $text-muted;
+    text-style: bold;
+    border-bottom: solid $border;
+}
+
+#tui-setting-keymap-summary {
+    width: 1fr;
+    height: auto;
+    margin-top: 1;
+    border: solid $border;
 }
 
 /* The app applies this one root class from TuiPreferences.dense. */

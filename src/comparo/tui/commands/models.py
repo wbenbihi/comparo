@@ -20,6 +20,8 @@ class CommandId(StrEnum):
     APP_PALETTE = "app.palette"
     APP_QUIT = "app.quit"
     PROJECT_RELOAD = "project.reload"
+    PROJECT_FILTER = "project.filter"
+    PROJECT_USE_IN_COMPARE = "project.use-in-compare"
     COMPARE_PREVIEW = "compare.preview"
     COMPARE_START = "compare.start"
     COMPARE_CANCEL = "compare.cancel"

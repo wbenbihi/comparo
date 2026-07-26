@@ -1,4 +1,4 @@
-"""Thin Compare composition for every execution mode and lifecycle state."""
+"""Compare's Target → Plan → Run → Analyze workspace composition."""
 
 from __future__ import annotations
 
@@ -7,9 +7,15 @@ from typing import ClassVar
 from typing import final
 from typing import override
 
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import BindingType
+from textual.containers import Horizontal
 from textual.containers import Vertical
+from textual.message import Message
+from textual.widget import Widget
+from textual.widgets import Label
+from textual.widgets import Static
 
 from comparo.application.execution_session import ExecutionProgressSnapshot
 from comparo.application.inspection import ApplicationDiagnostic
@@ -18,13 +24,15 @@ from comparo.application.project_workspace import ProjectResourceSummary
 from comparo.application.results import ResultProjection
 from comparo.tui.bindings import textual_bindings
 from comparo.tui.commands import CommandScope
-from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import CompareLifecycleBar
+from comparo.tui.components import ComparePlanPanel
+from comparo.tui.components import CompareRunPanel
+from comparo.tui.components import CompareTargetPanel
 from comparo.tui.components import DiagnosticsList
-from comparo.tui.components import ExecutionProgress
-from comparo.tui.components import PlanPreview
 from comparo.tui.components import ResultsWorkspaceView
 from comparo.tui.components import StatePanel
 from comparo.tui.components import StatePanelMode
+from comparo.tui.components import seed_compare_draft
 from comparo.tui.contracts import CompareDraft
 from comparo.tui.contracts import CompareMode
 from comparo.tui.contracts import ResultAccess
@@ -33,7 +41,7 @@ from comparo.tui.contracts import tui_interaction_limits_defaults_v1
 
 
 class CompareWorkspaceState(StrEnum):
-    """The three stable lifecycle surfaces contained in Compare."""
+    """The three controller-owned lifecycle surfaces contained in Compare."""
 
     PREPARE = "prepare"
     RUNNING = "running"
@@ -42,9 +50,39 @@ class CompareWorkspaceState(StrEnum):
 
 @final
 class CompareWorkspace(Vertical):
-    """Compose assertions, differences, and ExecutionProfile runs in one workspace."""
+    """Keep every execution mode and lifecycle phase in one persistent workspace."""
 
     BINDINGS: ClassVar[list[BindingType]] = textual_bindings(CommandScope.COMPARE)
+
+    @final
+    class DraftChanged(Message):
+        """The complete target draft changed."""
+
+        def __init__(self, draft: CompareDraft) -> None:
+            """Retain the typed draft."""
+            super().__init__()
+            self.draft = draft
+
+    @final
+    class PlanRequested(Message):
+        """The current target should be prepared."""
+
+        def __init__(self, draft: CompareDraft) -> None:
+            """Retain the exact submitted draft."""
+            super().__init__()
+            self.draft = draft
+
+    @final
+    class ExecuteRequested(Message):
+        """The admitted plan should start."""
+
+    @final
+    class CancelRequested(Message):
+        """The running execution should be cancelled."""
+
+    @final
+    class SurfaceChanged(Message):
+        """The local Target/Plan presentation changed without a backend effect."""
 
     def __init__(
         self,
@@ -61,7 +99,7 @@ class CompareWorkspace(Vertical):
         id: str | None = None,
         classes: str | None = "workspace",
     ) -> None:
-        """Initialize the selected Compare mode and lifecycle surface."""
+        """Initialize the controller-owned Compare state and local Plan orientation."""
         super().__init__(id=id, classes=classes)
         self.can_focus = True
         if type(mode) is not CompareMode:
@@ -70,72 +108,134 @@ class CompareWorkspace(Vertical):
             raise TypeError("Compare workspace state must be typed")
         if draft is not None and type(draft) is not CompareDraft:
             raise TypeError("Compare workspace draft must be typed")
-        selected_limits = (
+        limits = (
             tui_interaction_limits_defaults_v1()
             if interaction_limits is None
             else interaction_limits
         )
-        if type(selected_limits) is not TuiInteractionLimits:
+        if type(limits) is not TuiInteractionLimits:
             raise TypeError("Compare workspace interaction limits must be typed")
-        self.draft = CompareDraft(mode=mode) if draft is None else draft
+        authored_draft = CompareDraft(mode=mode) if draft is None else draft
+        self.draft = seed_compare_draft(authored_draft, resources)
         self.resources = resources
         self.state = state
         self.plan = plan
         self.progress = progress
         self.results = results
         self.diagnostics = diagnostics
-        self.interaction_limits = selected_limits
+        self.interaction_limits = limits
+        self.reviewing_plan = plan is not None
 
     @override
     def compose(self) -> ComposeResult:
-        """Compose the active lifecycle surface from shared widgets only."""
-        if self.state is CompareWorkspaceState.PREPARE:
-            yield self._prepare_panel()
-            return
+        """Compose one screenshot-led lifecycle surface under shared orientation."""
+        stage = self._stage()
+        with Vertical(classes="compare-page"):
+            with (
+                Horizontal(classes="workspace-heading"),
+                Vertical(classes="workspace-heading-copy"),
+            ):
+                yield Label("Compare", classes="workspace-title")
+                yield Static(
+                    "Define targets, review the admitted plan, run, and analyze outcomes.",
+                    classes="workspace-subtitle",
+                    markup=False,
+                )
+            yield CompareLifecycleBar(stage)
+            yield self._surface(stage)
+
+    def _stage(self) -> str:
         if self.state is CompareWorkspaceState.RUNNING:
+            return "Run"
+        if self.state is CompareWorkspaceState.RESULTS:
+            return "Analyze"
+        if self.plan is not None and self.reviewing_plan:
+            return "Plan"
+        return "Target"
+
+    @property
+    def lifecycle_stage(self) -> str:
+        """Return the product-facing lifecycle stage currently presented."""
+        return self._stage()
+
+    def _surface(self, stage: str) -> StatePanel:
+        if stage == "Target":
+            children: list[Widget] = [CompareTargetPanel(self.draft, self.resources)]
+            children.extend((DiagnosticsList(self.diagnostics),) if self.diagnostics else ())
+            return StatePanel(
+                *children,
+                mode=StatePanelMode.ERROR if self.diagnostics else StatePanelMode.CONTENT,
+                message="The target could not be compiled." if self.diagnostics else "",
+                classes="compare-surface",
+            )
+        if stage == "Plan":
+            if self.plan is None:  # pragma: no cover - closed stage invariant
+                return StatePanel(mode=StatePanelMode.ERROR, message="Plan is unavailable.")
+            return StatePanel(
+                ComparePlanPanel(self.plan),
+                mode=StatePanelMode.CONTENT,
+                classes="compare-surface",
+            )
+        if stage == "Run":
             if self.progress is None:
-                yield StatePanel(
+                return StatePanel(
                     mode=StatePanelMode.LOADING,
                     message="Starting the admitted execution…",
+                    classes="compare-surface",
                 )
-            else:
-                yield StatePanel(
-                    ExecutionProgress(self.progress),
-                    mode=StatePanelMode.CONTENT,
-                )
-            return
+            return StatePanel(
+                CompareRunPanel(self.progress, self.plan),
+                mode=StatePanelMode.CONTENT,
+                classes="compare-surface",
+            )
         if self.results is None:
-            yield StatePanel(
+            return StatePanel(
                 mode=StatePanelMode.ERROR,
                 message="The execution did not produce a safe result projection.",
+                classes="compare-surface",
             )
-            return
-        yield StatePanel(
+        return StatePanel(
             ResultsWorkspaceView(self.results, access=ResultAccess.LIVE),
             mode=StatePanelMode.CONTENT,
+            classes="compare-surface",
         )
 
-    def _prepare_panel(self) -> StatePanel:
-        children = [
-            CompareDraftForm(
-                self.draft,
-                limits=self.interaction_limits,
-                resources=self.resources,
-            ),
-            PlanPreview(self.plan),
-        ]
-        children.extend((DiagnosticsList(self.diagnostics),) if self.diagnostics else ())
-        mode = StatePanelMode.ERROR if self.diagnostics else StatePanelMode.CONTENT
-        message = "The comparison could not be prepared." if self.diagnostics else ""
-        return StatePanel(*children, mode=mode, message=message)
-
     def current_draft(self) -> CompareDraft:
-        """Return the typed shared form draft without interpreting it."""
+        """Return the current typed Target selection."""
         if self.is_mounted:
-            forms = self.query(CompareDraftForm)
-            if len(forms):
-                self.draft = forms.first().current_draft()
+            targets = self.query(CompareTargetPanel)
+            if len(targets):
+                self.draft = targets.first().current_draft()
         return self.draft
+
+    @on(CompareTargetPanel.DraftChanged)
+    def target_changed(self, message: CompareTargetPanel.DraftChanged) -> None:
+        """Forward native selector updates through a workspace-level contract."""
+        self.draft = message.draft
+        self.post_message(self.DraftChanged(message.draft))
+
+    @on(CompareTargetPanel.Submitted)
+    def target_submitted(self, message: CompareTargetPanel.Submitted) -> None:
+        """Forward the exact Target for application preparation."""
+        self.draft = message.draft
+        self.post_message(self.PlanRequested(message.draft))
+
+    @on(ComparePlanPanel.EditRequested)
+    def edit_target(self) -> None:
+        """Return locally to Target while retaining the admitted plan until edited."""
+        self.reviewing_plan = False
+        self.refresh(recompose=True)
+        self.post_message(self.SurfaceChanged())
+
+    @on(ComparePlanPanel.ExecuteRequested)
+    def execute_plan(self) -> None:
+        """Forward pointer execution through the application command path."""
+        self.post_message(self.ExecuteRequested())
+
+    @on(CompareRunPanel.CancelRequested)
+    def cancel_run(self) -> None:
+        """Forward pointer cancellation through the application command path."""
+        self.post_message(self.CancelRequested())
 
     def show_prepare(
         self,
@@ -145,11 +245,9 @@ class CompareWorkspace(Vertical):
         diagnostics: tuple[ApplicationDiagnostic, ...] = (),
         resources: tuple[ProjectResourceSummary, ...] | None = None,
     ) -> None:
-        """Keep Compare mounted while returning to its shared preparation form."""
+        """Return to Target or advance to a newly admitted Plan."""
         if type(draft) is not CompareDraft:
             raise TypeError("Compare workspace draft must be typed")
-        resources_changed = resources is not None and resources != self.resources
-        was_preparing = self.state is CompareWorkspaceState.PREPARE
         self.state = CompareWorkspaceState.PREPARE
         self.draft = draft
         self.plan = plan
@@ -158,39 +256,28 @@ class CompareWorkspace(Vertical):
         self.diagnostics = diagnostics
         if resources is not None:
             self.resources = resources
-        if not self.is_mounted:
-            return
-        if was_preparing and not resources_changed and not diagnostics:
-            forms = self.query(CompareDraftForm)
-            if len(forms):
-                form = forms.first()
-                if form.current_draft() != draft:
-                    form.show_draft(draft)
-                self.query_one(PlanPreview).show_plan(plan)
-                for diagnostic_list in self.query(DiagnosticsList):
-                    diagnostic_list.display = False
-                self.query_one(StatePanel).show_state(StatePanelMode.CONTENT)
-                return
-        self.refresh(recompose=True)
+        self.reviewing_plan = plan is not None
+        if self.is_mounted:
+            self.refresh(recompose=True)
 
     def show_running(self, snapshot: ExecutionProgressSnapshot) -> None:
-        """Keep Compare mounted and update progress in place when already running."""
+        """Keep Run mounted and update its coalesced progress in place."""
         if type(snapshot) is not ExecutionProgressSnapshot:
             raise TypeError("Compare running state requires ExecutionProgressSnapshot")
         self.progress = snapshot
         self.results = None
         self.diagnostics = ()
         if self.is_mounted and self.state is CompareWorkspaceState.RUNNING:
-            progress = self.query(ExecutionProgress)
-            if len(progress):
-                progress.first().show_snapshot(snapshot)
+            panels = self.query(CompareRunPanel)
+            if len(panels):
+                panels.first().show_snapshot(snapshot)
                 return
         self.state = CompareWorkspaceState.RUNNING
         if self.is_mounted:
             self.refresh(recompose=True)
 
     def show_starting(self) -> None:
-        """Replace preparation controls before a session emits its first snapshot."""
+        """Replace Plan before the execution emits its first progress snapshot."""
         if self.state is CompareWorkspaceState.RUNNING and self.progress is None:
             return
         self.state = CompareWorkspaceState.RUNNING
@@ -201,7 +288,7 @@ class CompareWorkspace(Vertical):
             self.refresh(recompose=True)
 
     def show_results(self, results: ResultProjection) -> None:
-        """Keep Compare mounted while switching to the shared live results component."""
+        """Advance to shared Analyze after a terminal sanitized projection."""
         if type(results) is not ResultProjection:
             raise TypeError("Compare results require ResultProjection")
         if self.state is CompareWorkspaceState.RESULTS and self.results is results:

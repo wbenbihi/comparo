@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from textual.widget import Widget
 from textual.widgets import ContentSwitcher
+from textual.widgets import DataTable
+from textual.widgets import ListView
+from textual.widgets import OptionList
+from textual.widgets import Tree
 
 from comparo.tui.design import LayoutClass
 from comparo.tui.design import layout_class
@@ -25,9 +29,14 @@ def focus_workspace(workspace: Widget, focused: Widget | None) -> None:
         raise TypeError("workspace focus requires a Widget")
     if focused is not None and workspace in focused.ancestors:
         return
+    children = tuple(
+        item
+        for item in workspace.walk_children(Widget)
+        if item.can_focus and item.display and item.visible
+    )
     candidate = next(
-        (item for item in workspace.walk_children(Widget) if item.can_focus),
-        workspace,
+        (item for item in children if isinstance(item, (Tree, DataTable, ListView, OptionList))),
+        children[0] if children else workspace,
     )
     candidate.focus()
 

@@ -10,13 +10,11 @@ from typing import final
 from typing import override
 
 from textual import on
-from textual.app import App
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.events import Resize
 from textual.widgets import ContentSwitcher
 from textual.widgets import Footer
-from textual.widgets import Tab
 from textual.widgets import Tabs
 
 from comparo.application.execution_session import ExecutionProgressSnapshot
@@ -27,13 +25,13 @@ from comparo.application.project_workspace import ProjectWorkspaceResult
 from comparo.application.report_archive import ReportArchiveListing
 from comparo.application.results import ResultProjection
 from comparo.tui.bindings import textual_bindings
+from comparo.tui.command_app import CommandRoutingApp
 from comparo.tui.commands import COMMAND_CATALOG
 from comparo.tui.commands import CommandDescriptor
 from comparo.tui.commands import CommandId
-from comparo.tui.commands import CommandScope
 from comparo.tui.commands import resolved_primary_key
 from comparo.tui.components import COMPONENT_STYLESHEET
-from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import ComparoShellBar
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
 from comparo.tui.components import ResultIndex
@@ -65,21 +63,22 @@ from comparo.tui.theme_adapter import register_builtin_themes
 from comparo.tui.workspace_views import compare_workspace_view
 from comparo.tui.workspace_views import report_workspace_view
 from comparo.tui.workspaces import CompareWorkspace
+from comparo.tui.workspaces import CompareWorkspaceState
 from comparo.tui.workspaces import ExplorerWorkspace
 from comparo.tui.workspaces import ReportWorkspace
 from comparo.tui.workspaces import SettingsWorkspace
 
 
 @final
-class ComparoApp(App[int]):
+class ComparoApp(CommandRoutingApp):
     """Translate Textual events into navigation and framework-neutral coordination."""
 
     CSS_PATH: ClassVar[str | PurePath | list[str | PurePath] | None] = COMPONENT_STYLESHEET
     DEFAULT_CSS = """
-    #workspace-tabs { dock: top; }
+    #shell-bar { dock: top; }
     #workspace-content { height: 1fr; width: 1fr; }
     """
-    BINDINGS: ClassVar[list[BindingType]] = textual_bindings(CommandScope.GLOBAL)
+    BINDINGS: ClassVar[list[BindingType]] = textual_bindings(None)
 
     def __init__(
         self,
@@ -103,6 +102,7 @@ class ComparoApp(App[int]):
             raise TypeError("Comparo app interaction limits must be typed")
         selected = TuiPreferences() if preferences is None else preferences
         super().__init__()
+        self.title = "comparo"
         self._system_theme = self.theme
         register_builtin_themes(self)
         self._preferences = selected
@@ -157,24 +157,35 @@ class ComparoApp(App[int]):
         return self._coordinator.session
 
     @property
+    @override
     def active_commands(self) -> tuple[CommandDescriptor, ...]:
         """Resolve global and workspace commands from the central catalog."""
-        return available_commands(
+        commands = available_commands(
             COMMAND_CATALOG,
             self._navigation.active,
             self._coordinator.compare_surface,
             can_execute=self._coordinator.can_execute,
         )
+        if self._navigation.active is not WorkspaceId.COMPARE or not self._shell_mounted:
+            return commands
+        stage = self.query_one("#workspace-compare", CompareWorkspace).lifecycle_stage
+        excluded = {
+            "Target": {CommandId.COMPARE_START, CommandId.COMPARE_CANCEL},
+            "Plan": {CommandId.COMPARE_PREVIEW, CommandId.COMPARE_CANCEL},
+            "Run": {CommandId.COMPARE_PREVIEW, CommandId.COMPARE_START},
+            "Analyze": {
+                CommandId.COMPARE_PREVIEW,
+                CommandId.COMPARE_START,
+                CommandId.COMPARE_CANCEL,
+            },
+        }[stage]
+        return tuple(command for command in commands if command.command_id not in excluded)
 
     @override
     def compose(self) -> ComposeResult:
         """Compose one top navigation, one switcher, and one command footer."""
         active = self._navigation.active
-        yield Tabs(
-            *(Tab(item.value.title(), id=f"tab-{item.value}") for item in WorkspaceId),
-            active=f"tab-{active.value}",
-            id="workspace-tabs",
-        )
+        yield ComparoShellBar(active, self.project_result, id="shell-bar")
         yield ContentSwitcher(
             ExplorerWorkspace(self.project_result, id="workspace-explorer"),
             compare_workspace_view(self._coordinator, self._interaction_limits),
@@ -222,18 +233,33 @@ class ComparoApp(App[int]):
             if workspace is not self._navigation.active:
                 await self.select_workspace(workspace)
 
-    @on(CompareDraftForm.CompareDraftChanged)
-    def update_compare_draft(self, message: CompareDraftForm.CompareDraftChanged) -> None:
-        """Forward the complete typed form state without interpreting fields."""
+    @on(CompareWorkspace.DraftChanged)
+    def update_compare_target(self, message: CompareWorkspace.DraftChanged) -> None:
+        """Forward the native Target panel's complete typed draft."""
         self._coordinator.update_draft(message.draft)
 
-    @on(CompareDraftForm.Submitted)
-    def submit_compare_draft(self, message: CompareDraftForm.Submitted) -> None:
-        """Prepare the exact submitted draft."""
+    @on(CompareWorkspace.PlanRequested)
+    def request_compare_plan(self, message: CompareWorkspace.PlanRequested) -> None:
+        """Prepare the exact target submitted by the native Compare surface."""
         self._spawn_operation(
             self.prepare_compare(message.draft),
             TuiOperationSlot.COMPARE,
         )
+
+    @on(CompareWorkspace.ExecuteRequested)
+    def request_compare_execution(self) -> None:
+        """Start the current admitted plan from its pointer action."""
+        self._spawn_operation(self.start_compare(), TuiOperationSlot.COMPARE)
+
+    @on(CompareWorkspace.CancelRequested)
+    def request_compare_cancellation(self) -> None:
+        """Cancel the active run from its pointer action."""
+        self.cancel_compare()
+
+    @on(CompareWorkspace.SurfaceChanged)
+    def compare_surface_changed(self) -> None:
+        """Refresh contextual commands after a local Target/Plan transition."""
+        self.refresh_bindings()
 
     @on(TuiOnlySettingsPanel.PreferencesChanged)
     def update_preferences(self, message: TuiOnlySettingsPanel.PreferencesChanged) -> None:
@@ -262,6 +288,14 @@ class ComparoApp(App[int]):
             f"{coordinate.kind}/{coordinate.resource_id}",
         )
 
+    @on(ExplorerWorkspace.UseInCompareRequested)
+    async def use_requested_resource(
+        self,
+        message: ExplorerWorkspace.UseInCompareRequested,
+    ) -> None:
+        """Seed Compare from the Explorer button through the semantic command path."""
+        await self._use_resource_in_compare(message.resource)
+
     @on(ResultIndex.ResultSelected)
     def track_result_selection(self, message: ResultIndex.ResultSelected) -> None:
         """Record result detail navigation in its active owning workspace."""
@@ -273,77 +307,7 @@ class ComparoApp(App[int]):
                 f"{message.reference.entity.value}:{message.reference.result_id}",
             )
 
-    async def action_dispatch_command_id(self, command_id: str) -> None:
-        """Dispatch a semantic command selected by Textual's resolved key map."""
-        with suppress(ValueError):
-            await self.dispatch_command(CommandId(command_id))
-
     @override
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Expose only commands available in the active workspace and lifecycle."""
-        if action != "dispatch_command_id":
-            return super().check_action(action, parameters)
-        if len(parameters) != 1 or type(parameters[0]) is not str:
-            return False
-        with suppress(ValueError):
-            command_id = CommandId(parameters[0])
-            return command_id in {command.command_id for command in self.active_commands}
-        return False
-
-    async def dispatch_command(self, command_id: CommandId) -> None:
-        """Dispatch one typed command without redeclaring keys."""
-        if type(command_id) is not CommandId:
-            raise TypeError("Comparo app command must be typed")
-        if command_id not in {command.command_id for command in self.active_commands}:
-            return
-        workspace = {
-            CommandId.WORKSPACE_EXPLORER: WorkspaceId.EXPLORER,
-            CommandId.WORKSPACE_COMPARE: WorkspaceId.COMPARE,
-            CommandId.WORKSPACE_REPORT: WorkspaceId.REPORT,
-            CommandId.WORKSPACE_SETTINGS: WorkspaceId.SETTINGS,
-        }.get(command_id)
-        if workspace is not None:
-            await self.select_workspace(workspace)
-        elif command_id in {
-            CommandId.NAVIGATION_BACK,
-            CommandId.APP_HELP,
-            CommandId.APP_PALETTE,
-            CommandId.APP_QUIT,
-        }:
-            await self._dispatch_global(command_id)
-        else:
-            self._dispatch_workspace(command_id)
-
-    async def _dispatch_global(self, command_id: CommandId) -> None:
-        if command_id is CommandId.NAVIGATION_BACK:
-            await self.go_back()
-        elif command_id is CommandId.APP_HELP:
-            self.notify(
-                " · ".join(
-                    f"{self._display_key(item.command_id)} {item.label}"
-                    for item in self.active_commands
-                ),
-                title="Available commands",
-            )
-        elif command_id is CommandId.APP_PALETTE:
-            self.action_command_palette()
-        elif command_id is CommandId.APP_QUIT:
-            await self.close_services()
-            self.exit(result=0, return_code=0)
-
-    def _dispatch_workspace(self, command_id: CommandId) -> None:
-        operations = {
-            CommandId.PROJECT_RELOAD: (self.reload_project, TuiOperationSlot.PROJECT),
-            CommandId.COMPARE_PREVIEW: (self.prepare_compare, TuiOperationSlot.COMPARE),
-            CommandId.COMPARE_START: (self.start_compare, TuiOperationSlot.COMPARE),
-            CommandId.REPORT_RELOAD: (self.reload_reports, TuiOperationSlot.REPORT),
-        }
-        if command_id is CommandId.COMPARE_CANCEL:
-            self.cancel_compare()
-        elif selected := operations.get(command_id):
-            operation, slot = selected
-            self._spawn_operation(operation(), slot)
-
     async def select_workspace(self, workspace: WorkspaceId) -> None:
         """Switch workspace without changing any other local history or effect."""
         if type(workspace) is not WorkspaceId:
@@ -360,12 +324,19 @@ class ComparoApp(App[int]):
         self.call_after_refresh(self._focus_active_workspace)
         self.refresh_bindings()
 
+    @override
     async def go_back(self) -> None:
         """Navigate within only the active workspace."""
         before = self._navigation.current
         self._navigation = navigate_back(self._navigation)
         after = self._navigation.current
         if before == after:
+            if after.route.workspace is WorkspaceId.COMPARE:
+                compare = self.query_one("#workspace-compare", CompareWorkspace)
+                if compare.state is CompareWorkspaceState.PREPARE and compare.reviewing_plan:
+                    compare.edit_target()
+                    self.refresh_bindings()
+                    return
             if (
                 after.route.workspace is WorkspaceId.COMPARE
                 and self._coordinator.compare_surface is CompareSurface.RESULTS
@@ -378,10 +349,12 @@ class ComparoApp(App[int]):
         await self._render_workspace(after.route.workspace)
         restore_frame(self, after)
 
+    @override
     async def reload_project(self) -> None:
         """Reload Explorer through the coordinator."""
         await self._coordinator.reload_project()
 
+    @override
     async def reload_reports(self) -> None:
         """Reload Report through the coordinator."""
         await self._coordinator.reload_reports()
@@ -391,24 +364,29 @@ class ComparoApp(App[int]):
         if await self._coordinator.open_report(bundle_id):
             self._push_route(WorkspaceId.REPORT, "result", bundle_id)
 
+    @override
     async def prepare_compare(self, draft: CompareDraft | None = None) -> None:
         """Prepare a Compare draft through the coordinator."""
         if draft is None and self._shell_mounted:
             draft = self.query_one("#workspace-compare", CompareWorkspace).current_draft()
         await self._coordinator.prepare_compare(draft)
 
+    @override
     async def start_compare(self) -> None:
         """Start the admitted comparison through the coordinator."""
         await self._coordinator.start_compare()
 
+    @override
     def cancel_compare(self) -> bool:
         """Request cancellation through the coordinator."""
         return self._coordinator.cancel_compare()
 
+    @override
     async def close_services(self) -> None:
         """Close the active session and backend idempotently."""
         await self._coordinator.close()
 
+    @override
     async def _render_workspace(self, workspace: WorkspaceId) -> None:
         if not self._shell_mounted:
             return
@@ -417,6 +395,7 @@ class ComparoApp(App[int]):
             view.show_loading() if self.project_result is None else view.show_result(
                 self.project_result
             )
+            self.query_one(ComparoShellBar).show_project(self.project_result)
         elif workspace is WorkspaceId.COMPARE:
             self._render_compare()
         elif workspace is WorkspaceId.REPORT:
@@ -464,6 +443,7 @@ class ComparoApp(App[int]):
     def _apply_preferences(self, preferences: TuiPreferences) -> None:
         apply_tui_preferences(self, preferences, self._system_theme)
 
+    @override
     def _display_key(self, command_id: CommandId) -> str:
         """Return the resolved primary key for help and action labels."""
         return resolved_primary_key(command_id, self._preferences.keymap)
@@ -486,6 +466,7 @@ class ComparoApp(App[int]):
             ),
         )
 
+    @override
     def _spawn_operation(
         self,
         operation: Coroutine[object, object, None],

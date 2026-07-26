@@ -6,7 +6,10 @@ from typing import final
 from typing import override
 
 from textual.app import ComposeResult
+from textual.containers import Horizontal
 from textual.containers import Vertical
+from textual.widgets import Label
+from textual.widgets import Static
 
 from comparo.tui.components import StatePanel
 from comparo.tui.components import StatePanelMode
@@ -33,10 +36,22 @@ class SettingsWorkspace(Vertical):
     @override
     def compose(self) -> ComposeResult:
         """Mount the reusable TUI-only settings panel."""
-        yield StatePanel(
-            TuiOnlySettingsPanel(self._preferences),
-            mode=StatePanelMode.CONTENT,
-        )
+        with Vertical(classes="settings-page"):
+            with (
+                Horizontal(classes="workspace-heading"),
+                Vertical(classes="workspace-heading-copy"),
+            ):
+                yield Label("Settings", classes="workspace-title")
+                yield Static(
+                    "Terminal appearance, interaction, and accessibility only.",
+                    classes="workspace-subtitle",
+                    markup=False,
+                )
+            yield StatePanel(
+                TuiOnlySettingsPanel(self._preferences),
+                mode=StatePanelMode.CONTENT,
+                classes="settings-surface",
+            )
 
     def show_preferences(self, preferences: TuiPreferences) -> None:
         """Update the existing settings component without replacing this workspace."""

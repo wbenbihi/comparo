@@ -63,6 +63,18 @@ COMMAND_CATALOG = (
         scope=CommandScope.EXPLORER,
     ),
     CommandDescriptor(
+        command_id=CommandId.PROJECT_FILTER,
+        label="Filter",
+        description="Focus the Explorer resource filter.",
+        scope=CommandScope.EXPLORER,
+    ),
+    CommandDescriptor(
+        command_id=CommandId.PROJECT_USE_IN_COMPARE,
+        label="Use in Compare",
+        description="Seed Compare with the selected Request, Scenario, or Execution Profile.",
+        scope=CommandScope.EXPLORER,
+    ),
+    CommandDescriptor(
         command_id=CommandId.COMPARE_PREVIEW,
         label="Preview",
         description="Compile the current comparison into an admitted plan preview.",

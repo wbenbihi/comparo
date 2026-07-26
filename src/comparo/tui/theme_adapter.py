@@ -8,6 +8,7 @@ from textual.theme import Theme
 from comparo.tui.commands import textual_keymap
 from comparo.tui.design.themes import BUILTIN_THEMES
 from comparo.tui.design.themes import ThemeDefinition
+from comparo.tui.state import GlyphPreference
 from comparo.tui.state import TuiPreferences
 
 
@@ -62,6 +63,9 @@ def apply_tui_preferences[ReturnType](
     app.screen.set_class(preferences.dense, "density-dense")
     app.screen.set_class(preferences.mouse, "mouse-next-launch-enabled")
     app.screen.set_class(not preferences.mouse, "mouse-next-launch-disabled")
+    app.screen.set_class(preferences.reduced_motion, "reduced-motion")
+    app.screen.set_class(preferences.glyphs is GlyphPreference.ASCII, "glyphs-ascii")
+    app.screen.set_class(preferences.glyphs is GlyphPreference.UNICODE, "glyphs-unicode")
 
 
 __all__ = ("apply_tui_preferences", "register_builtin_themes", "textual_theme")

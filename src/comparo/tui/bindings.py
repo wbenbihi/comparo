@@ -11,18 +11,22 @@ from comparo.tui.commands import CommandScope
 from comparo.tui.commands import default_keys
 
 
-def textual_bindings(scope: CommandScope = CommandScope.GLOBAL) -> list[BindingType]:
+def textual_bindings(scope: CommandScope | None = CommandScope.GLOBAL) -> list[BindingType]:
     """Build native bindings for one semantic scope from the default key map."""
-    if type(scope) is not CommandScope:
+    if scope is not None and type(scope) is not CommandScope:
         raise TypeError("Textual binding scope must be typed")
-    commands = tuple(command for command in COMMAND_CATALOG if command.scope is scope)
+    commands = (
+        COMMAND_CATALOG
+        if scope is None
+        else tuple(command for command in COMMAND_CATALOG if command.scope is scope)
+    )
     return [
         Binding(
             ",".join(default_keys(command.command_id)),
             f"app.dispatch_command_id({command.command_id.value!r})",
             command.label,
             show=command.footer,
-            priority=command.command_id.value in {"navigation.back", "app.palette"},
+            priority=True,
             tooltip=command.description,
             id=command.command_id.value,
         )

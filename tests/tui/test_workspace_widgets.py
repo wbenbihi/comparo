@@ -18,6 +18,8 @@ from textual.app import App
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Switch
+from textual.widgets import Tab
+from textual.widgets import Tabs
 
 from comparo.application.execution_session import ExecutionProgressSnapshot
 from comparo.application.execution_session import ExecutionSessionPhase
@@ -38,9 +40,11 @@ from comparo.application.results import ResultResource
 from comparo.application.results import ResultSummary
 from comparo.core.artifacts.ports import ArtifactStoreErrorCode
 from comparo.tui.components import COMPONENT_STYLESHEET
-from comparo.tui.components import CompareDraftForm
+from comparo.tui.components import ComparePlanPanel
+from comparo.tui.components import CompareRunPanel
+from comparo.tui.components import CompareTargetPanel
 from comparo.tui.components import DiagnosticsList
-from comparo.tui.components import ExecutionProgress
+from comparo.tui.components import ProjectResourceDetail
 from comparo.tui.components import ProjectResourceList
 from comparo.tui.components import ReportList
 from comparo.tui.components import ResultsWorkspaceView
@@ -258,6 +262,23 @@ async def test_explorer_updates_internal_state_without_replacing_workspace() -> 
         workspace.show_selected_resource(
             ProjectResourceList.ResourceSelected(result.snapshot.project)
         )
+        workspace.show_highlighted_resource(
+            ProjectResourceList.ResourceHighlighted(result.snapshot.project)
+        )
+        workspace.request_use_in_compare(
+            ProjectResourceDetail.UseInCompare(result.snapshot.project)
+        )
+        filters = workspace.query_one("#explorer-filters", Tabs)
+        workspace.filter_resource_kind(Tabs.TabActivated(filters, Tab("Other", id="other")))
+        workspace.filter_resource_kind(
+            Tabs.TabActivated(filters, filters.query_one("#explorer-filter-env", Tab))
+        )
+        workspace.restore_resource("Request/ping")
+        workspace.restore_resource("invalid")
+        workspace.restore_resource("Request/missing")
+        workspace.restore_resource(None)
+        assert workspace.selected_resource() is not None
+        workspace.show_result(result)
 
         workspace.show_loading()
         await pilot.pause()
@@ -292,14 +313,21 @@ async def test_compare_keeps_all_modes_and_lifecycle_states_in_one_workspace() -
         await pilot.pause()
         assert workspace.current_draft().mode is CompareMode.EXECUTION_PROFILE
         assert workspace.current_draft().execution_profile == "release"
-        assert workspace.query_one(CompareDraftForm).query_one(".compare-field-profile").display
+        assert len(workspace.query(ComparePlanPanel)) == 1
+        workspace.target_changed(CompareTargetPanel.DraftChanged(profile_draft))
+        workspace.target_submitted(CompareTargetPanel.Submitted(profile_draft))
+        workspace.execute_plan()
+        workspace.cancel_run()
+        workspace.edit_target()
+        await pilot.pause()
+        assert workspace.query_one(CompareTargetPanel).query_one("#compare-target-profile").display
 
         workspace.show_running(_progress())
         await pilot.pause()
-        progress_widget = workspace.query_one(ExecutionProgress)
+        progress_widget = workspace.query_one(CompareRunPanel)
         workspace.show_running(_progress(finished=1))
         await pilot.pause()
-        assert workspace.query_one(ExecutionProgress) is progress_widget
+        assert workspace.query_one(CompareRunPanel) is progress_widget
 
         workspace.show_results(projection)
         await pilot.pause()
@@ -395,6 +423,7 @@ def test_unmounted_workspace_and_settings_contracts_are_typed() -> None:
     progress = _progress()
 
     explorer = ExplorerWorkspace(None)
+    assert explorer.selected_resource() is None
     explorer.show_loading()
     explorer.show_result(project)
     with pytest.raises(TypeError, match="ProjectWorkspaceResult"):
@@ -472,11 +501,11 @@ async def test_compare_composes_every_absent_and_diagnostic_state() -> None:
 
         preparing_error.show_prepare(CompareDraft(mode=CompareMode.ASSERTIONS))
         await pilot.pause()
-        assert not preparing_error.query_one(DiagnosticsList).display
+        assert len(preparing_error.query(DiagnosticsList)) == 0
 
         starting.show_running(_progress())
         await pilot.pause()
-        assert len(starting.query(ExecutionProgress)) == 1
+        assert len(starting.query(CompareRunPanel)) == 1
 
         preparing_error.show_prepare(
             CompareDraft(mode=CompareMode.ASSERTIONS),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import final
 
 import msgspec
@@ -13,6 +14,14 @@ from comparo.tui.design.themes import ThemeId
 from comparo.tui.navigation.routes import WorkspaceId
 
 
+class GlyphPreference(StrEnum):
+    """Portable ASCII, verified Unicode, or terminal-derived glyph selection."""
+
+    AUTO = "auto"
+    ASCII = "ascii"
+    UNICODE = "unicode"
+
+
 @final
 class TuiPreferences(msgspec.Struct, frozen=True, kw_only=True):
     """Presentation preferences that never alter project execution semantics."""
@@ -21,6 +30,8 @@ class TuiPreferences(msgspec.Struct, frozen=True, kw_only=True):
     default_workspace: WorkspaceId = WorkspaceId.EXPLORER
     dense: bool = False
     mouse: bool = True
+    glyphs: GlyphPreference = GlyphPreference.AUTO
+    reduced_motion: bool = False
     keymap: tuple[KeymapOverride, ...] = ()
 
     def __post_init__(self) -> None:
@@ -31,10 +42,14 @@ class TuiPreferences(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("TUI default workspace must be typed")
         if type(self.dense) is not bool or type(self.mouse) is not bool:
             raise TypeError("TUI boolean preferences must be bool")
+        if type(self.glyphs) is not GlyphPreference:
+            raise TypeError("TUI glyph preference must be typed")
+        if type(self.reduced_motion) is not bool:
+            raise TypeError("TUI reduced motion preference must be bool")
         textual_keymap(self.keymap)
 
 
 DEFAULT_TUI_PREFERENCES = TuiPreferences()
 
 
-__all__ = ("DEFAULT_TUI_PREFERENCES", "TuiPreferences")
+__all__ = ("DEFAULT_TUI_PREFERENCES", "GlyphPreference", "TuiPreferences")

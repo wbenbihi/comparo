@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import final
 from typing import override
 
@@ -11,48 +10,34 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.message import Message
-from textual.widgets import Button
 from textual.widgets import Label
 from textual.widgets import ListItem
 from textual.widgets import ListView
 from textual.widgets import Static
+from textual.widgets import Tab
+from textual.widgets import Tabs
 
 from comparo.application.results import ComparisonResultRow
 from comparo.application.results import ExecutionResultRow
-from comparo.application.results import ResultEntity
 from comparo.application.results import ResultFact
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
 from comparo.application.results import ResultSummary as ResultSummaryModel
 from comparo.tui.components.base import ResponsiveWidget
+from comparo.tui.components.result_lenses import ResultIndexKind
+from comparo.tui.components.result_lenses import analysis_lenses
+from comparo.tui.components.result_lenses import is_issue
+from comparo.tui.components.result_lenses import lens_heading
+from comparo.tui.components.result_lenses import lens_summary
 from comparo.tui.components.status import StatusBadge
 from comparo.tui.components.status import status_for_outcome
 from comparo.tui.contracts import ResultAccess
 from comparo.tui.presentation import safe_terminal_text
 
 
-class ResultIndexKind(StrEnum):
-    """The four artifact-owned result collections available for navigation."""
-
-    EXECUTIONS = "executions"
-    ASSERTIONS = "assertions"
-    COMPARISONS = "comparisons"
-    DIFFS = "diffs"
-
-    @classmethod
-    def for_reference(cls, reference: ResultReference) -> ResultIndexKind:
-        """Return the collection containing one typed result reference."""
-        return {
-            ResultEntity.EXECUTION: cls.EXECUTIONS,
-            ResultEntity.ASSERTION: cls.ASSERTIONS,
-            ResultEntity.COMPARISON: cls.COMPARISONS,
-            ResultEntity.DIFF: cls.DIFFS,
-        }[reference.entity]
-
-
 @final
-class ResultIndexSelector(Horizontal):
-    """Shared control exposing every result collection in live and stored runs."""
+class ResultIndexSelector(Tabs):
+    """Native analysis-lens tabs shared by live and stored runs."""
 
     @final
     class IndexSelected(Message):
@@ -73,38 +58,32 @@ class ResultIndexSelector(Horizontal):
         """Initialize the selector with one active result collection."""
         if type(kind) is not ResultIndexKind:
             raise TypeError("result index selector requires ResultIndexKind")
-        super().__init__(id=id, classes=classes)
-        self._kind = kind
+        visible = analysis_lenses()
+        selected = kind if kind in visible else ResultIndexKind.ISSUES
+        super().__init__(
+            *(Tab(item.value.title(), id=f"result-index-{item.value}") for item in visible),
+            active=f"result-index-{selected.value}",
+            id=id,
+            classes=classes,
+        )
+        self._kind = selected
 
     @property
     def kind(self) -> ResultIndexKind:
         """Return the currently active result collection."""
         return self._kind
 
-    @override
-    def compose(self) -> ComposeResult:
-        """Compose all result collections from the closed kind vocabulary."""
-        for kind in ResultIndexKind:
-            classes = "result-index-option"
-            if kind is self._kind:
-                classes += " result-index-active"
-            yield Button(
-                kind.value.title(),
-                id=f"result-index-{kind.value}",
-                classes=classes,
-            )
-
-    @on(Button.Pressed)
-    def select_index(self, event: Button.Pressed) -> None:
-        """Translate one shared control press into a typed index message."""
+    @on(Tabs.TabActivated)
+    def activate_index(self, event: Tabs.TabActivated) -> None:
+        """Translate one native tab activation into a typed lens message."""
         prefix = "result-index-"
-        button_id = event.button.id or ""
-        if not button_id.startswith(prefix):
+        tab_id = event.tab.id or ""
+        if not tab_id.startswith(prefix):
             return
-        kind = ResultIndexKind(button_id.removeprefix(prefix))
+        kind = ResultIndexKind(tab_id.removeprefix(prefix))
+        if kind is self._kind:
+            return
         self._kind = kind
-        for button in self.query(Button):
-            button.set_class(button.id == button_id, "result-index-active")
         self.post_message(self.IndexSelected(kind))
 
 
@@ -133,13 +112,18 @@ class ResultSummary(Vertical):
                 status_for_outcome(self._summary.gate_verdict),
                 detail=self._summary.gate_verdict,
             )
-            yield Static(
-                safe_terminal_text(
-                    f"Run {self._summary.run_id} · {self._access.value}",
-                    maximum_characters=256,
-                ),
-                markup=False,
-            )
+            with Vertical(classes="result-summary-copy"):
+                yield Label(
+                    safe_terminal_text(f"Run {self._summary.run_id}", maximum_characters=256),
+                    classes="result-summary-title",
+                    markup=False,
+                )
+                yield Static(
+                    f"{self._summary.completion} · {self._access.value} · "
+                    f"{self._summary.coverage_issues} coverage issues",
+                    classes="result-summary-subtitle",
+                    markup=False,
+                )
         yield Static(
             _summary_metrics(self._summary),
             classes="result-summary-metrics",
@@ -193,7 +177,7 @@ class ResultIndex(ListView):
         self,
         projection: ResultProjection,
         *,
-        kind: ResultIndexKind = ResultIndexKind.EXECUTIONS,
+        kind: ResultIndexKind = ResultIndexKind.REQUESTS,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
@@ -205,16 +189,29 @@ class ResultIndex(ListView):
         super().__init__(*self._items(), id=id, classes=classes)
 
     def _items(self) -> tuple[ResultIndexItem, ...]:
-        if self.kind is ResultIndexKind.EXECUTIONS:
+        if self.kind in {ResultIndexKind.REQUESTS, ResultIndexKind.TIMELINE}:
             return tuple(_execution_item(item) for item in self.projection.executions)
-        if self.kind is ResultIndexKind.ASSERTIONS:
-            return tuple(_fact_item(item) for item in self.projection.assertions)
-        if self.kind is ResultIndexKind.COMPARISONS:
+        if self.kind is ResultIndexKind.ISSUES:
+            facts = tuple(
+                item
+                for item in (*self.projection.assertions, *self.projection.diffs)
+                if is_issue(item)
+            )
+            if facts:
+                return tuple(_fact_item(item) for item in facts)
             return tuple(_comparison_item(item) for item in self.projection.comparisons)
-        return tuple(_fact_item(item) for item in self.projection.diffs)
+        return tuple(
+            _fact_item(item, include_location=self.kind is ResultIndexKind.FIELDS)
+            for item in (*self.projection.assertions, *self.projection.diffs)
+        )
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Expose framework selection as one typed result reference."""
+        if type(event.item) is ResultIndexItem:
+            self.post_message(self.ResultSelected(event.item.reference))
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """Update analysis detail immediately as the native cursor moves."""
         if type(event.item) is ResultIndexItem:
             self.post_message(self.ResultSelected(event.item.reference))
 
@@ -230,11 +227,14 @@ def _execution_item(row: ExecutionResultRow) -> ResultIndexItem:
     )
 
 
-def _fact_item(fact: ResultFact) -> ResultIndexItem:
+def _fact_item(fact: ResultFact, *, include_location: bool = False) -> ResultIndexItem:
+    location = ""
+    if include_location and fact.evidence:
+        location = f" · {fact.evidence[0].location}"
     return ResultIndexItem(
         fact.reference,
         fact.outcome,
-        f"{fact.effective_rule_id} · {fact.severity} · {fact.outcome}",
+        f"{fact.effective_rule_id} · {fact.severity} · {fact.outcome}{location}",
     )
 
 
@@ -313,11 +313,20 @@ def _detail_lines(
         None,
     )
     if fact is not None:
-        evidence = ", ".join(item.location for item in fact.evidence) or "none"
+        evidence = tuple(f"  {item.location:<34} {item.outcome}" for item in fact.evidence) or (
+            "  No manifest-resident evidence",
+        )
+        counts = ", ".join(f"{item.name}={item.value}" for item in fact.counts) or "none"
+        coverage = ", ".join(f"{item.name}={item.value}" for item in fact.coverage) or "none"
         return (
             f"{fact.engine} rule {fact.effective_rule_id}",
             f"Severity: {fact.severity} · outcome: {fact.outcome}",
-            f"Evidence: {evidence}",
+            f"Rule source: {fact.rule.kind}/{fact.rule.resource_id}",
+            f"Counts: {counts}",
+            f"Coverage: {coverage}",
+            "",
+            "EVIDENCE",
+            *evidence,
             f"Evidence omitted: {fact.evidence_omitted}",
         )
     comparison = next(
@@ -346,7 +355,7 @@ class ResultsWorkspaceView(ResponsiveWidget):
         projection: ResultProjection,
         *,
         access: ResultAccess,
-        index: ResultIndexKind = ResultIndexKind.EXECUTIONS,
+        index: ResultIndexKind = ResultIndexKind.ISSUES,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
@@ -354,16 +363,19 @@ class ResultsWorkspaceView(ResponsiveWidget):
         super().__init__(id=id, classes=classes)
         self._projection = projection
         self._access = access
-        self._index = index
+        self._index = index if index in analysis_lenses() else ResultIndexKind.ISSUES
         self._selected_reference: ResultReference | None = None
 
     @override
     def compose(self) -> ComposeResult:
-        """Compose one summary/index/detail hierarchy for every result origin."""
+        """Compose outcome → issue → occurrence → evidence for every result origin."""
         yield ResultSummary(self._projection.summary, access=self._access)
         yield ResultIndexSelector(self._index, classes="result-index-selector")
         with Horizontal(classes="result-layout"):
-            yield ResultIndex(self._projection, kind=self._index, classes="result-index")
+            with Vertical(classes="result-index-region"):
+                yield Label(lens_heading(self._index), classes="result-list-heading")
+                yield Static(lens_summary(self._projection, self._index), markup=False)
+                yield ResultIndex(self._projection, kind=self._index, classes="result-index")
             yield ResultDetail(
                 self._projection,
                 self._selected_reference,
