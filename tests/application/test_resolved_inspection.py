@@ -559,7 +559,7 @@ def test_value_fingerprint_guards_multi_page_consistency(tmp_path: Path) -> None
             expected_projection_fingerprint="0" * 64,
         )
     )
-    assert changed.diagnostics[0].code == "resolution.inspect.value-changed"
+    assert changed.diagnostics[0].code == "resolution.inspect.projection-changed"
 
 
 @pytest.mark.parametrize(
@@ -638,6 +638,139 @@ def test_wide_value_traversal_uses_depth_bounded_auxiliary_memory() -> None:
     assert projection.nodes[0].ordinal == 0
     assert projection.nodes[1].path == ("0",)
     assert projection_peak < 1_000_000
+
+
+def test_deep_single_child_traversal_memory_scales_linearly_with_depth() -> None:
+    def peak_at_depth(depth: int) -> int:
+        value: JsonArray | JsonNull = JsonNull()
+        for _ in range(depth):
+            value = JsonArray(items=(value,))
+        settings = _settings(
+            maximum_path_segments=depth + 1,
+            maximum_traversal_nodes=depth + 2,
+        )
+
+        tracemalloc.start()
+        projection = asyncio.run(
+            inspection_module._project_public_value(value, settings, start=0, maximum=1)
+        )
+        _current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        assert projection.nodes[0].path == ()
+        return peak
+
+    shallow_peak = peak_at_depth(1_000)
+    deep_peak = peak_at_depth(4_000)
+
+    assert deep_peak < shallow_peak * 6
+    assert deep_peak < 1_500_000
+
+
+def test_deep_projection_preserves_preorder_paths_and_fingerprint() -> None:
+    value = JsonObject(
+        members=(
+            JsonObjectMember(
+                name="alpha",
+                value=JsonArray(items=(JsonNull(), JsonString(value="x"))),
+            ),
+            JsonObjectMember(
+                name="beta",
+                value=JsonObject(
+                    members=(
+                        JsonObjectMember(name="n", value=JsonInteger(value=7)),
+                        JsonObjectMember(name="ok", value=JsonBoolean(value=True)),
+                    )
+                ),
+            ),
+        )
+    )
+
+    projection = asyncio.run(
+        inspection_module._project_public_value(
+            value,
+            _settings(maximum_page_nodes=16),
+            start=0,
+            maximum=16,
+        )
+    )
+
+    assert projection.fingerprint == (
+        "751351de429c77b4efcd2be85b8c1198f0be68ec392d5011dc30ff7ad7825279"
+    )
+    assert tuple(node.path for node in projection.nodes) == (
+        (),
+        ("alpha",),
+        ("alpha", "0"),
+        ("alpha", "1"),
+        ("beta",),
+        ("beta", "n"),
+        ("beta", "ok"),
+    )
+    assert tuple(node.ordinal for node in projection.nodes) == tuple(range(7))
+
+
+def test_projection_validates_each_path_segment_once_when_descending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked: list[str] = []
+    original = inspection_module._utf8_exceeds
+
+    def record_check(value: str, maximum_bytes: int) -> bool:
+        checked.append(value)
+        return original(value, maximum_bytes)
+
+    monkeypatch.setattr(inspection_module, "_utf8_exceeds", record_check)
+    value = JsonObject(
+        members=(
+            JsonObjectMember(
+                name="a",
+                value=JsonObject(
+                    members=(
+                        JsonObjectMember(
+                            name="b",
+                            value=JsonObject(
+                                members=(JsonObjectMember(name="c", value=JsonNull()),)
+                            ),
+                        ),
+                    )
+                ),
+            ),
+        )
+    )
+
+    projection = asyncio.run(
+        inspection_module._project_public_value(
+            value,
+            _settings(),
+            start=0,
+            maximum=1,
+        )
+    )
+
+    assert projection.fingerprint
+    assert checked == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize(
+    ("settings", "value"),
+    [
+        (
+            _settings(maximum_path_segments=2),
+            JsonArray(items=(JsonArray(items=(JsonArray(items=(JsonNull(),)),)),)),
+        ),
+        (
+            _settings(maximum_path_segment_bytes=1),
+            JsonObject(members=(JsonObjectMember(name="é", value=JsonNull()),)),
+        ),
+    ],
+)
+def test_projection_rejects_depth_and_utf8_segment_path_budgets(
+    settings: ResolvedValueInspectionSettings,
+    value: JsonArray | JsonObject,
+) -> None:
+    with pytest.raises(inspection_module._ProjectionBudgetExceededError):
+        asyncio.run(inspection_module._project_public_value(value, settings, start=0, maximum=1))
 
 
 def test_wide_flat_siblings_keep_independent_paths() -> None:

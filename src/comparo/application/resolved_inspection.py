@@ -739,7 +739,7 @@ async def _inspect_with_resources(
         request.expected_projection_fingerprint is not None
         and request.expected_projection_fingerprint != inspection.projection_fingerprint
     ):
-        return _failure("resolution.inspect.value-changed")
+        return _failure("resolution.inspect.projection-changed")
     return ResolvedValueInspectionResult(inspection=inspection)
 
 
@@ -1110,30 +1110,39 @@ async def _project_public_value(
     digest = hashlib.sha256()
     digest.update(b"comparo.resolved-inspection.public-projection/v1alpha2\0")
     budget = _TraversalBudget(settings)
-    stack: list[Iterator[tuple[tuple[str, ...], ResolvedValue, str | None]]] = [
-        iter((((), value, None),))
-    ]
+    stack = [_TraversalFrame(value=value, object_key=None)]
+    path: list[str] = []
     page: list[ResolvedValueNode] = []
     ordinal = 0
     while stack:
-        try:
-            path, current, object_key = next(stack[-1])
-        except StopIteration:
+        frame = stack[-1]
+        if frame.next_child < 0:
+            await budget.consume_node()
+            if frame.object_key is not None:
+                digest.update(b"K")
+                await _hash_text(digest, frame.object_key, budget)
+            await _hash_value_node(digest, frame.value, budget)
+            if start <= ordinal < start + maximum:
+                page.append(
+                    _node(
+                        ordinal,
+                        tuple(path),
+                        frame.value,
+                        settings.maximum_scalar_bytes.value,
+                    )
+                )
+            ordinal += 1
+            frame.next_child = 0
+        child = _next_value_child(frame)
+        if child is None:
             stack.pop()
+            if stack:
+                path.pop()
             continue
-        await budget.consume_node()
-        _validate_output_path(path, settings)
-        if object_key is not None:
-            digest.update(b"K")
-            await _hash_text(digest, object_key, budget)
-        await _hash_value_node(digest, current, budget)
-        if start <= ordinal < start + maximum:
-            page.append(_node(ordinal, path, current, settings.maximum_scalar_bytes.value))
-        ordinal += 1
-        if type(current) is JsonArray:
-            stack.append(_array_value_children(path, current))
-        elif type(current) is JsonObject:
-            stack.append(_object_value_children(path, current))
+        segment, child_value, object_key = child
+        _validate_output_path_segment(path, segment, settings)
+        path.append(segment)
+        stack.append(_TraversalFrame(value=child_value, object_key=object_key))
     next_node = start + len(page) if ordinal > start + len(page) else None
     return _PublicProjection(
         fingerprint=digest.hexdigest(),
@@ -1142,22 +1151,32 @@ async def _project_public_value(
     )
 
 
-def _array_value_children(
-    parent: tuple[str, ...],
-    value: JsonArray,
-) -> Iterator[tuple[tuple[str, ...], ResolvedValue, str | None]]:
-    """Yield array children while capturing one immutable parent path."""
-    for index, item in enumerate(value.items):
-        yield (*parent, str(index)), item, None
+@final
+class _TraversalFrame:
+    """Compact mutable cursor for one node in a depth-first traversal."""
+
+    __slots__ = ("next_child", "object_key", "value")
+
+    def __init__(self, *, value: ResolvedValue, object_key: str | None) -> None:
+        self.value = value
+        self.object_key = object_key
+        self.next_child = -1
 
 
-def _object_value_children(
-    parent: tuple[str, ...],
-    value: JsonObject,
-) -> Iterator[tuple[tuple[str, ...], ResolvedValue, str | None]]:
-    """Yield object children while capturing one immutable parent path."""
-    for member in value.members:
-        yield (*parent, member.name), member.value, member.name
+def _next_value_child(
+    frame: _TraversalFrame,
+) -> tuple[str, ResolvedValue, str | None] | None:
+    """Advance one container cursor without retaining or copying an ancestor path."""
+    value = frame.value
+    index = frame.next_child
+    if type(value) is JsonArray and index < len(value.items):
+        frame.next_child += 1
+        return str(index), value.items[index], None
+    if type(value) is JsonObject and index < len(value.members):
+        frame.next_child += 1
+        member = value.members[index]
+        return member.name, member.value, member.name
+    return None
 
 
 async def _hash_value_node(  # noqa: C901 - exhaustive closed resolved-value framing
@@ -1512,13 +1531,15 @@ def _decimal_length(value: Decimal) -> int:
     return length + sign
 
 
-def _validate_output_path(
-    path: tuple[str, ...],
+def _validate_output_path_segment(
+    parent: list[str],
+    segment: str,
     settings: _ResolvedValueInspectionSettings,
 ) -> None:
-    if len(path) > settings.maximum_path_segments.value:
+    """Validate exactly one new path component before retaining it."""
+    if len(parent) >= settings.maximum_path_segments.value:
         raise _ProjectionBudgetExceededError
-    if any(_utf8_exceeds(segment, settings.maximum_path_segment_bytes.value) for segment in path):
+    if _utf8_exceeds(segment, settings.maximum_path_segment_bytes.value):
         raise _ProjectionBudgetExceededError
 
 
