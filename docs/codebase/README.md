@@ -83,7 +83,7 @@ current TUI backend.
 | Resolve a safe outbound preview | `render_prepared_request_window` / `render_prepared_requests` |
 | Observe/cancel an interactive run | `ExecutionSession` |
 | Execute without the session facade | `execute_production` |
-| Project final results | `project_results` |
+| Project final results and sanitized HTTP metadata | `project_results` |
 | Build Issues/Requests/Rules/Fields/Timeline lenses | `project_issues` / `project_requests` / `project_rules` / `project_fields` / `project_timeline` |
 | List persisted runs | `list_report_archive` |
 | Authenticate and inspect an artifact | `verify_artifact` / `inspect_artifact` |

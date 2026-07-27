@@ -15,17 +15,27 @@ The only result input is `application.results.ResultProjection`, derived from a 
 - render exception text or enable Rich markup for data-bearing content.
 
 Detached request and response bodies are never loaded by the manifest result projection. Each
-execution projects only immutable `ArtifactBodyReference` coordinates and a capture-presence flag
-for its retained sanitized HTTP messages. A frontend must pass those coordinates to the separate,
-authenticated, bounded `read_artifact_body_window` service to obtain content; request coordinates
-may also be passed to `export_artifact_curl`.
+exchange instead has closed request and response slots. A slot is either retained sanitized
+metadata, an explicit typed omission reason, or—for a response only—not produced because the
+exchange failed. Retained request metadata contains method, sanitized URL, ordered sanitized
+headers and masked cookies. Retained response metadata contains status, protocol, ordered
+sanitized headers and trailers. Both sides expose only whether capture metadata exists; neither
+side contains body bytes, blob descriptors, or storage locators.
+
+Each retained exchange message also projects an immutable `ArtifactBodyReference` coordinate. A
+frontend must pass that coordinate to the separate, authenticated, bounded
+`read_artifact_body_window` service to obtain content; request coordinates may also be passed to
+`export_artifact_curl`.
 
 The coordinate types live in the pure `application.artifact_references` contract rather than the
 effectful artifact service. Each execution also projects every attempt and exchange with canonical
 zero-based ordinals and explicit terminal markers. Message rows repeat their owning ordinals and
-markers and are validated against that topology. A final pre-send attempt remains visible with its
-closed failure and `pre_send_terminal` marker even when it produced no HTTP message; a frontend
-must not infer terminal state from the last visible message.
+markers and are validated against the retained metadata in canonical wire order. A final pre-send
+attempt remains visible with its closed failure, explicit retained-or-omitted request slot, and
+`pre_send_terminal` marker even when it produced no exchange body coordinate; a frontend must not
+infer terminal state from the last visible message. Terminal pre-send bodies are metadata-only in
+this contract: `has_body_capture` may report artifact capture metadata, but the body-window service
+accepts only exchange coordinates and must not be bypassed.
 
 ## Component ownership
 
@@ -67,6 +77,8 @@ No result widget may declare a private breakpoint.
 - Runtime progress is a latest-value mailbox, not an event log.
 - Report listing bounds every physical directory entry, including rejected names.
 - Stored reports are authenticated before listing and verified before opening.
+- Result metadata mirrors the already bounded and sanitized artifact manifest; it does not load
+  detached captures or retain live runtime objects.
 - Text is bounded and terminal-control-safe.
 - A transport error remains distinct from a failed assertion or diff.
 - A missing comparison side remains unavailable; it is not synthesized as drift.

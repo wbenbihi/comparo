@@ -17,11 +17,18 @@ from comparo.application.artifact_references import ArtifactBodyReference
 from comparo.core.artifacts.common import ArtifactDefinition
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactMetric
+from comparo.core.artifacts.common import ArtifactOmissionReason
 from comparo.core.artifacts.common import require_stable_token
+from comparo.core.artifacts.common import require_text
 from comparo.core.artifacts.facts import ArtifactEvidence
 from comparo.core.artifacts.facts import ArtifactExecution
 from comparo.core.artifacts.facts import ArtifactFact
 from comparo.core.artifacts.http import ArtifactAttempt
+from comparo.core.artifacts.http import ArtifactCookie
+from comparo.core.artifacts.http import ArtifactExchange
+from comparo.core.artifacts.http import ArtifactField
+from comparo.core.artifacts.http import ArtifactRequest
+from comparo.core.artifacts.http import ArtifactResponse
 from comparo.core.artifacts.http import ArtifactTiming
 from comparo.core.artifacts.lifecycle import ArtifactGateCounts
 from comparo.core.artifacts.model import RunArtifact
@@ -51,6 +58,27 @@ class ResultRelation(StrEnum):
     BASELINE = "baseline"
     CANDIDATE = "candidate"
     DIFF = "diff"
+
+
+class ResultHttpMessageState(StrEnum):
+    """Closed persistence state for one sanitized HTTP message side."""
+
+    RETAINED = "retained"
+    OMITTED = "omitted"
+    NOT_PRODUCED = "not-produced"
+
+
+class ResultHttpOmissionReason(StrEnum):
+    """Value-free reason one sanitized HTTP message was not retained."""
+
+    POLICY = "policy"
+    SOURCE_UNAVAILABLE = "source-unavailable"
+    SOURCE_INCOMPLETE = "source-incomplete"
+    REDACTION_FAILED = "redaction-failed"
+    DECODE_FAILED = "decode-failed"
+    BUDGET_EXCEEDED = "budget-exceeded"
+    STORAGE_FAILED = "storage-failed"
+    CANCELLED = "cancelled"
 
 
 @final
@@ -130,22 +158,198 @@ class ResultTimingSummary(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ResultHttpField(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """One ordered, sanitized HTTP field occurrence safe for presentation."""
+
+    name: str
+    value: str
+    redacted: bool
+
+    def __post_init__(self) -> None:
+        """Preserve the artifact field's bounded text and redaction invariants."""
+        ArtifactField(name=self.name, value=self.value, redacted=self.redacted)
+
+
+@final
+class ResultHttpCookie(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """One sanitized cookie whose value is always the fixed redaction marker."""
+
+    name: str
+    value: str
+    redacted: bool
+
+    def __post_init__(self) -> None:
+        """Preserve the artifact cookie's unconditional masking invariant."""
+        ArtifactCookie(name=self.name, value=self.value, redacted=self.redacted)
+
+
+@final
+class ResultHttpRequestMetadata(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    forbid_unknown_fields=True,
+):
+    """Sanitized request metadata without body content or storage locators."""
+
+    method: str
+    url: str
+    headers: tuple[ResultHttpField, ...]
+    cookies: tuple[ResultHttpCookie, ...]
+    has_body_capture: bool
+
+    def __post_init__(self) -> None:
+        """Require immutable typed metadata and preserve aggregate redaction rules."""
+        if type(self.headers) is not tuple or any(
+            type(item) is not ResultHttpField for item in self.headers
+        ):
+            raise TypeError("result HTTP request headers must be immutable and typed")
+        if type(self.cookies) is not tuple or any(
+            type(item) is not ResultHttpCookie for item in self.cookies
+        ):
+            raise TypeError("result HTTP request cookies must be immutable and typed")
+        if type(self.has_body_capture) is not bool:
+            raise TypeError("result HTTP request capture flag must be bool")
+        ArtifactRequest(
+            method=self.method,
+            url=self.url,
+            headers=tuple(_artifact_field(item) for item in self.headers),
+            cookies=tuple(_artifact_cookie(item) for item in self.cookies),
+            body=None,
+        )
+
+
+@final
+class ResultHttpResponseMetadata(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    forbid_unknown_fields=True,
+):
+    """Sanitized response metadata without body content or storage locators."""
+
+    status: int
+    protocol: str
+    headers: tuple[ResultHttpField, ...]
+    trailers: tuple[ResultHttpField, ...]
+    has_body_capture: bool
+
+    def __post_init__(self) -> None:
+        """Require immutable typed metadata and preserve aggregate redaction rules."""
+        for values, label in (
+            (self.headers, "headers"),
+            (self.trailers, "trailers"),
+        ):
+            if type(values) is not tuple or any(
+                type(item) is not ResultHttpField for item in values
+            ):
+                raise TypeError(f"result HTTP response {label} must be immutable and typed")
+        if type(self.has_body_capture) is not bool:
+            raise TypeError("result HTTP response capture flag must be bool")
+        ArtifactResponse(
+            status=self.status,
+            protocol=self.protocol,
+            headers=tuple(_artifact_field(item) for item in self.headers),
+            trailers=tuple(_artifact_field(item) for item in self.trailers),
+            body=None,
+        )
+
+
+@final
+class ResultHttpRequestSlot(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    forbid_unknown_fields=True,
+):
+    """Exactly one retained request or one explicit request omission."""
+
+    state: ResultHttpMessageState
+    metadata: ResultHttpRequestMetadata | None
+    omission_reason: ResultHttpOmissionReason | None
+
+    def __post_init__(self) -> None:
+        """Reject contradictory or impossible request persistence states."""
+        if type(self.state) is not ResultHttpMessageState:
+            raise TypeError("result HTTP request state must be typed")
+        if self.metadata is not None and type(self.metadata) is not ResultHttpRequestMetadata:
+            raise TypeError("result HTTP request metadata must be typed or absent")
+        if (
+            self.omission_reason is not None
+            and type(self.omission_reason) is not ResultHttpOmissionReason
+        ):
+            raise TypeError("result HTTP request omission reason must be typed or absent")
+        if self.state is ResultHttpMessageState.RETAINED:
+            valid = self.metadata is not None and self.omission_reason is None
+        elif self.state is ResultHttpMessageState.OMITTED:
+            valid = self.metadata is None and self.omission_reason is not None
+        else:
+            valid = False
+        if not valid:
+            raise ValueError("result HTTP request state contradicts its payload")
+
+
+@final
+class ResultHttpResponseSlot(
+    msgspec.Struct,
+    frozen=True,
+    kw_only=True,
+    forbid_unknown_fields=True,
+):
+    """Exactly one retained, omitted, or not-produced response state."""
+
+    state: ResultHttpMessageState
+    metadata: ResultHttpResponseMetadata | None
+    omission_reason: ResultHttpOmissionReason | None
+
+    def __post_init__(self) -> None:
+        """Reject contradictory response persistence states."""
+        if type(self.state) is not ResultHttpMessageState:
+            raise TypeError("result HTTP response state must be typed")
+        if self.metadata is not None and type(self.metadata) is not ResultHttpResponseMetadata:
+            raise TypeError("result HTTP response metadata must be typed or absent")
+        if (
+            self.omission_reason is not None
+            and type(self.omission_reason) is not ResultHttpOmissionReason
+        ):
+            raise TypeError("result HTTP response omission reason must be typed or absent")
+        if self.state is ResultHttpMessageState.RETAINED:
+            valid = self.metadata is not None and self.omission_reason is None
+        elif self.state is ResultHttpMessageState.OMITTED:
+            valid = self.metadata is None and self.omission_reason is not None
+        else:
+            valid = self.metadata is None and self.omission_reason is None
+        if not valid:
+            raise ValueError("result HTTP response state contradicts its payload")
+
+
+@final
 class ResultHttpExchange(msgspec.Struct, frozen=True, kw_only=True):
-    """Body-free identity and ordering for one retained HTTP exchange."""
+    """Body-free identity, metadata, and ordering for one HTTP exchange."""
 
     exchange_id: str
     ordinal: int
     terminal: bool
     failure: ResultFailure | None
+    request: ResultHttpRequestSlot
+    response: ResultHttpResponseSlot
 
     def __post_init__(self) -> None:
-        """Require a stable identity and explicit position and terminal state."""
-        require_stable_token(self.exchange_id, label="result HTTP exchange ID", maximum=64)
+        """Require one valid artifact identity, message state, and terminal outcome."""
+        require_text(self.exchange_id, label="result HTTP exchange ID", maximum=64)
         _require_http_ordinal(self.ordinal, label="result HTTP exchange ordinal")
         if type(self.terminal) is not bool:
             raise TypeError("result HTTP exchange terminal marker must be bool")
         if self.failure is not None and type(self.failure) is not ResultFailure:
             raise TypeError("result HTTP exchange failure must be typed or absent")
+        if type(self.request) is not ResultHttpRequestSlot:
+            raise TypeError("result HTTP exchange request must be typed")
+        if type(self.response) is not ResultHttpResponseSlot:
+            raise TypeError("result HTTP exchange response must be typed")
+        if (self.response.state is ResultHttpMessageState.NOT_PRODUCED) != (
+            self.failure is not None
+        ):
+            raise ValueError("result HTTP response state and exchange failure must agree")
 
 
 @final
@@ -158,17 +362,27 @@ class ResultHttpAttempt(msgspec.Struct, frozen=True, kw_only=True):
     pre_send_terminal: bool
     failure: ResultFailure | None
     exchanges: tuple[ResultHttpExchange, ...]
+    terminal_pre_send: ResultHttpRequestSlot | None
 
     def __post_init__(self) -> None:
         """Require canonical exchange order and truthful pre-send state."""
-        require_stable_token(self.attempt_id, label="result HTTP attempt ID", maximum=64)
+        require_text(self.attempt_id, label="result HTTP attempt ID", maximum=64)
         _require_http_ordinal(self.ordinal, label="result HTTP attempt ordinal")
         if type(self.terminal) is not bool or type(self.pre_send_terminal) is not bool:
             raise TypeError("result HTTP attempt terminal markers must be bool")
         if self.failure is not None and type(self.failure) is not ResultFailure:
             raise TypeError("result HTTP attempt failure must be typed or absent")
-        if self.pre_send_terminal != (self.failure is not None):
-            raise ValueError("result HTTP pre-send terminal and failure must agree")
+        if (
+            self.terminal_pre_send is not None
+            and type(self.terminal_pre_send) is not ResultHttpRequestSlot
+        ):
+            raise TypeError("result HTTP terminal pre-send request must be typed or absent")
+        if not (
+            self.pre_send_terminal
+            == (self.failure is not None)
+            == (self.terminal_pre_send is not None)
+        ):
+            raise ValueError("result HTTP pre-send terminal, request, and failure must agree")
         if type(self.exchanges) is not tuple or any(
             type(item) is not ResultHttpExchange for item in self.exchanges
         ):
@@ -323,6 +537,40 @@ def _require_messages_match_http_topology(
             or message.terminal_exchange is not exchange.terminal
         ):
             raise ValueError("result HTTP message metadata must match execution topology")
+        slot: ResultHttpRequestSlot | ResultHttpResponseSlot
+        if message.reference.message is ArtifactBodyMessage.REQUEST:
+            slot = exchange.request
+        else:
+            slot = exchange.response
+        if slot.state is not ResultHttpMessageState.RETAINED or slot.metadata is None:
+            raise ValueError("result HTTP message must identify retained metadata")
+        if message.has_body_capture is not slot.metadata.has_body_capture:
+            raise ValueError("result HTTP message capture flag must match retained metadata")
+
+    expected = tuple(
+        (
+            attempt.attempt_id,
+            exchange.exchange_id,
+            side,
+        )
+        for attempt in attempts
+        for exchange in attempt.exchanges
+        for side, slot in (
+            (ArtifactBodyMessage.REQUEST, exchange.request),
+            (ArtifactBodyMessage.RESPONSE, exchange.response),
+        )
+        if slot.state is ResultHttpMessageState.RETAINED
+    )
+    actual = tuple(
+        (
+            message.reference.attempt_id,
+            message.reference.exchange_id,
+            message.reference.message,
+        )
+        for message in messages
+    )
+    if actual != expected:
+        raise ValueError("result HTTP messages must completely match retained metadata in order")
 
 
 @final
@@ -562,16 +810,133 @@ def _http_attempt(
             or attempt.terminal_pre_send_omission is not None
         ),
         failure=None if attempt.failure is None else _failure(attempt.failure),
+        terminal_pre_send=_request_slot(
+            attempt.terminal_pre_send_request,
+            attempt.terminal_pre_send_omission,
+            optional=True,
+        ),
         exchanges=tuple(
-            ResultHttpExchange(
-                exchange_id=exchange.exchange_id,
+            _http_exchange(
+                exchange,
                 ordinal=exchange_ordinal,
                 terminal=exchange_ordinal == terminal_exchange_ordinal,
-                failure=None if exchange.failure is None else _failure(exchange.failure),
             )
             for exchange_ordinal, exchange in enumerate(attempt.exchanges)
         ),
     )
+
+
+def _http_exchange(
+    exchange: ArtifactExchange,
+    *,
+    ordinal: int,
+    terminal: bool,
+) -> ResultHttpExchange:
+    request = _request_slot(exchange.request, exchange.request_omission, optional=False)
+    if request is None:  # pragma: no cover - authenticated artifact invariant
+        raise AssertionError("authenticated artifact exchange requires a request state")
+    return ResultHttpExchange(
+        exchange_id=exchange.exchange_id,
+        ordinal=ordinal,
+        terminal=terminal,
+        failure=None if exchange.failure is None else _failure(exchange.failure),
+        request=request,
+        response=_response_slot(
+            exchange.response,
+            exchange.response_omission,
+            failed=exchange.failure is not None,
+        ),
+    )
+
+
+def _request_slot(
+    request: ArtifactRequest | None,
+    omission: ArtifactOmissionReason | None,
+    *,
+    optional: bool,
+) -> ResultHttpRequestSlot | None:
+    if request is not None:
+        return ResultHttpRequestSlot(
+            state=ResultHttpMessageState.RETAINED,
+            metadata=_request_metadata(request),
+            omission_reason=None,
+        )
+    if omission is not None:
+        return ResultHttpRequestSlot(
+            state=ResultHttpMessageState.OMITTED,
+            metadata=None,
+            omission_reason=ResultHttpOmissionReason(omission.value),
+        )
+    if optional:
+        return None
+    raise AssertionError(  # pragma: no cover - authenticated artifact invariant
+        "authenticated artifact exchange requires a request state"
+    )
+
+
+def _response_slot(
+    response: ArtifactResponse | None,
+    omission: ArtifactOmissionReason | None,
+    *,
+    failed: bool,
+) -> ResultHttpResponseSlot:
+    if response is not None:
+        return ResultHttpResponseSlot(
+            state=ResultHttpMessageState.RETAINED,
+            metadata=_response_metadata(response),
+            omission_reason=None,
+        )
+    if omission is not None:
+        return ResultHttpResponseSlot(
+            state=ResultHttpMessageState.OMITTED,
+            metadata=None,
+            omission_reason=ResultHttpOmissionReason(omission.value),
+        )
+    if failed:
+        return ResultHttpResponseSlot(
+            state=ResultHttpMessageState.NOT_PRODUCED,
+            metadata=None,
+            omission_reason=None,
+        )
+    raise AssertionError(  # pragma: no cover - authenticated artifact invariant
+        "authenticated artifact exchange requires a response state"
+    )
+
+
+def _request_metadata(request: ArtifactRequest) -> ResultHttpRequestMetadata:
+    return ResultHttpRequestMetadata(
+        method=request.method,
+        url=request.url,
+        headers=tuple(_http_field(item) for item in request.headers),
+        cookies=tuple(_http_cookie(item) for item in request.cookies),
+        has_body_capture=request.body is not None,
+    )
+
+
+def _response_metadata(response: ArtifactResponse) -> ResultHttpResponseMetadata:
+    return ResultHttpResponseMetadata(
+        status=response.status,
+        protocol=response.protocol,
+        headers=tuple(_http_field(item) for item in response.headers),
+        trailers=tuple(_http_field(item) for item in response.trailers),
+        has_body_capture=response.body is not None,
+    )
+
+
+def _http_field(field: ArtifactField) -> ResultHttpField:
+    return ResultHttpField(name=field.name, value=field.value, redacted=field.redacted)
+
+
+def _http_cookie(cookie: ArtifactCookie) -> ResultHttpCookie:
+    return ResultHttpCookie(name=cookie.name, value=cookie.value, redacted=cookie.redacted)
+
+
+def _artifact_field(field: ResultHttpField) -> ArtifactField:
+    return ArtifactField(name=field.name, value=field.value, redacted=field.redacted)
+
+
+def _artifact_cookie(cookie: ResultHttpCookie) -> ArtifactCookie:
+    return ArtifactCookie(name=cookie.name, value=cookie.value, redacted=cookie.redacted)
 
 
 def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...]:
@@ -788,8 +1153,16 @@ __all__ = (
     "ResultFailure",
     "ResultGateAssessment",
     "ResultHttpAttempt",
+    "ResultHttpCookie",
     "ResultHttpExchange",
+    "ResultHttpField",
     "ResultHttpMessage",
+    "ResultHttpMessageState",
+    "ResultHttpOmissionReason",
+    "ResultHttpRequestMetadata",
+    "ResultHttpRequestSlot",
+    "ResultHttpResponseMetadata",
+    "ResultHttpResponseSlot",
     "ResultMetric",
     "ResultNamedValue",
     "ResultProjection",

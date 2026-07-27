@@ -13,8 +13,16 @@ import pytest
 from comparo.application import ArtifactBodyMessage as ExportedArtifactBodyMessage
 from comparo.application import ArtifactBodyReference as ExportedArtifactBodyReference
 from comparo.application import ResultHttpAttempt as ExportedResultHttpAttempt
+from comparo.application import ResultHttpCookie as ExportedResultHttpCookie
 from comparo.application import ResultHttpExchange as ExportedResultHttpExchange
+from comparo.application import ResultHttpField as ExportedResultHttpField
 from comparo.application import ResultHttpMessage as ExportedResultHttpMessage
+from comparo.application import ResultHttpMessageState as ExportedResultHttpMessageState
+from comparo.application import ResultHttpOmissionReason as ExportedResultHttpOmissionReason
+from comparo.application import ResultHttpRequestMetadata as ExportedResultHttpRequestMetadata
+from comparo.application import ResultHttpRequestSlot as ExportedResultHttpRequestSlot
+from comparo.application import ResultHttpResponseMetadata as ExportedResultHttpResponseMetadata
+from comparo.application import ResultHttpResponseSlot as ExportedResultHttpResponseSlot
 from comparo.application import result_analysis as analysis_module
 from comparo.application.artifact_references import ArtifactBodyMessage
 from comparo.application.artifact_references import ArtifactBodyReference
@@ -31,18 +39,29 @@ from comparo.application.result_analysis import project_issues
 from comparo.application.result_analysis import project_requests
 from comparo.application.result_analysis import project_rules
 from comparo.application.result_analysis import project_timeline
+from comparo.application.results import ExecutionResultRow
 from comparo.application.results import ResultEntity
 from comparo.application.results import ResultEvidence
 from comparo.application.results import ResultFailure
 from comparo.application.results import ResultHttpAttempt
+from comparo.application.results import ResultHttpCookie
 from comparo.application.results import ResultHttpExchange
+from comparo.application.results import ResultHttpField
 from comparo.application.results import ResultHttpMessage
+from comparo.application.results import ResultHttpMessageState
+from comparo.application.results import ResultHttpOmissionReason
+from comparo.application.results import ResultHttpRequestMetadata
+from comparo.application.results import ResultHttpRequestSlot
+from comparo.application.results import ResultHttpResponseMetadata
+from comparo.application.results import ResultHttpResponseSlot
 from comparo.application.results import ResultNamedValue
+from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
 from comparo.application.results import ResultRelation
 from comparo.application.results import project_results
 from comparo.core.artifacts import ArtifactAttempt
 from comparo.core.artifacts import ArtifactComparisonOutcome
+from comparo.core.artifacts import ArtifactCookie as CoreArtifactCookie
 from comparo.core.artifacts import ArtifactDefinition
 from comparo.core.artifacts import ArtifactExchange
 from comparo.core.artifacts import ArtifactExecutionOutcome
@@ -136,23 +155,44 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
             has_body_capture=True,
         ),
     )
-    assert first.attempts == (
-        ResultHttpAttempt(
-            attempt_id="attempt-0",
-            ordinal=0,
-            terminal=True,
-            pre_send_terminal=False,
-            failure=None,
-            exchanges=(
-                ResultHttpExchange(
-                    exchange_id="exchange-0",
-                    ordinal=0,
-                    terminal=True,
-                    failure=None,
-                ),
-            ),
-        ),
+    assert len(first.attempts) == 1
+    attempt = first.attempts[0]
+    assert (
+        attempt.attempt_id,
+        attempt.ordinal,
+        attempt.terminal,
+        attempt.pre_send_terminal,
+        attempt.failure,
+        attempt.terminal_pre_send,
+    ) == ("attempt-0", 0, True, False, None, None)
+    assert len(attempt.exchanges) == 1
+    exchange = attempt.exchanges[0]
+    assert (exchange.exchange_id, exchange.ordinal, exchange.terminal, exchange.failure) == (
+        "exchange-0",
+        0,
+        True,
+        None,
     )
+    assert exchange.request.state is ResultHttpMessageState.RETAINED
+    assert exchange.request.omission_reason is None
+    assert exchange.request.metadata is not None
+    assert exchange.request.metadata.method == "GET"
+    assert exchange.request.metadata.url == "https://example.test/items"
+    assert exchange.request.metadata.headers == (
+        ResultHttpField(name="accept", value="application/json", redacted=False),
+    )
+    assert exchange.request.metadata.cookies == ()
+    assert exchange.request.metadata.has_body_capture is True
+    assert exchange.response.state is ResultHttpMessageState.RETAINED
+    assert exchange.response.omission_reason is None
+    assert exchange.response.metadata is not None
+    assert exchange.response.metadata.status == 200
+    assert exchange.response.metadata.protocol == "HTTP/2"
+    assert exchange.response.metadata.headers == (
+        ResultHttpField(name="content-type", value="application/json", redacted=False),
+    )
+    assert exchange.response.metadata.trailers == ()
+    assert exchange.response.metadata.has_body_capture is True
     assert first.failure is None
     assert first.assertions == (projection.assertions[0].reference,)
     assert first.comparisons == (projection.comparisons[0].reference,)
@@ -296,6 +336,11 @@ def test_projection_distinguishes_message_presence_from_body_capture_presence() 
     )
     assert tuple(item.has_body_capture for item in messages) == (False, False)
     assert all(item.reference.execution_id == "execution-0" for item in messages)
+    projected_exchange = project_results(artifact).executions[0].attempts[0].exchanges[0]
+    assert projected_exchange.request.metadata is not None
+    assert projected_exchange.request.metadata.has_body_capture is False
+    assert projected_exchange.response.metadata is not None
+    assert projected_exchange.response.metadata.has_body_capture is False
     encoded = msgspec.json.encode(messages)
     assert b"example.test" not in encoded
     assert b"application/json" not in encoded
@@ -318,7 +363,7 @@ def test_projection_omits_message_coordinates_for_explicitly_absent_messages() -
         response_omission=ArtifactOmissionReason.POLICY,
     )
 
-    def messages_for(updated_exchange: ArtifactExchange) -> tuple[ResultHttpMessage, ...]:
+    def projected_for(updated_exchange: ArtifactExchange) -> ExecutionResultRow:
         updated = msgspec.structs.replace(
             execution,
             attempts=(
@@ -332,17 +377,25 @@ def test_projection_omits_message_coordinates_for_explicitly_absent_messages() -
             artifact,
             executions=(updated, artifact.executions[1]),
         )
-        return project_results(updated_artifact).executions[0].messages
+        return project_results(updated_artifact).executions[0]
 
-    request_absent = messages_for(request_omitted)
-    response_absent = messages_for(response_omitted)
+    request_absent = projected_for(request_omitted)
+    response_absent = projected_for(response_omitted)
 
-    assert tuple(item.reference.message for item in request_absent) == (
+    assert tuple(item.reference.message for item in request_absent.messages) == (
         ArtifactBodyMessage.RESPONSE,
     )
-    assert tuple(item.reference.message for item in response_absent) == (
+    request_slot = request_absent.attempts[0].exchanges[0].request
+    assert request_slot.state is ResultHttpMessageState.OMITTED
+    assert request_slot.metadata is None
+    assert request_slot.omission_reason is ResultHttpOmissionReason.POLICY
+    assert tuple(item.reference.message for item in response_absent.messages) == (
         ArtifactBodyMessage.REQUEST,
     )
+    response_slot = response_absent.attempts[0].exchanges[0].response
+    assert response_slot.state is ResultHttpMessageState.OMITTED
+    assert response_slot.metadata is None
+    assert response_slot.omission_reason is ResultHttpOmissionReason.POLICY
 
 
 def test_projection_retains_a_terminal_pre_send_attempt_without_fabricating_messages() -> None:
@@ -388,8 +441,40 @@ def test_projection_retains_a_terminal_pre_send_attempt_without_fabricating_mess
     )
     assert projected.attempts[-1].failure is not None
     assert projected.attempts[-1].failure.code == "destination-denied"
+    assert projected.attempts[-1].terminal_pre_send is not None
+    assert projected.attempts[-1].terminal_pre_send.state is ResultHttpMessageState.RETAINED
+    assert projected.attempts[-1].terminal_pre_send.metadata is not None
+    assert projected.attempts[-1].terminal_pre_send.metadata.method == "GET"
+    assert projected.attempts[-1].terminal_pre_send.metadata.url == "https://example.test/items"
+    assert projected.attempts[-1].terminal_pre_send.metadata.has_body_capture is True
     assert all(not item.terminal_attempt for item in projected.messages)
     assert not any(item.reference.attempt_id == "attempt-pre-send" for item in projected.messages)
+
+
+def test_projection_retains_an_explicitly_omitted_terminal_pre_send_request() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    failure = ArtifactFailure(stage="authorization", code="destination-denied", retryable=False)
+    attempt = ArtifactAttempt(
+        attempt_id="attempt-pre-send",
+        exchanges=(),
+        terminal_pre_send_omission=ArtifactOmissionReason.POLICY,
+        failure=failure,
+    )
+    execution = msgspec.structs.replace(execution, attempts=(attempt,))
+    artifact = msgspec.structs.replace(
+        artifact,
+        executions=(execution, artifact.executions[1]),
+    )
+
+    projected = project_results(artifact).executions[0]
+
+    assert projected.messages == ()
+    slot = projected.attempts[0].terminal_pre_send
+    assert slot is not None
+    assert slot.state is ResultHttpMessageState.OMITTED
+    assert slot.metadata is None
+    assert slot.omission_reason is ResultHttpOmissionReason.POLICY
 
 
 def test_projected_coordinates_directly_drive_body_reads_and_curl_export(
@@ -445,8 +530,16 @@ def test_result_http_message_and_execution_message_contracts_fail_closed() -> No
     assert ExportedArtifactBodyMessage is ServiceArtifactBodyMessage is ArtifactBodyMessage
     assert ExportedArtifactBodyReference is ServiceArtifactBodyReference is ArtifactBodyReference
     assert ExportedResultHttpAttempt is ResultHttpAttempt
+    assert ExportedResultHttpCookie is ResultHttpCookie
     assert ExportedResultHttpExchange is ResultHttpExchange
+    assert ExportedResultHttpField is ResultHttpField
     assert ExportedResultHttpMessage is ResultHttpMessage
+    assert ExportedResultHttpMessageState is ResultHttpMessageState
+    assert ExportedResultHttpOmissionReason is ResultHttpOmissionReason
+    assert ExportedResultHttpRequestMetadata is ResultHttpRequestMetadata
+    assert ExportedResultHttpRequestSlot is ResultHttpRequestSlot
+    assert ExportedResultHttpResponseMetadata is ResultHttpResponseMetadata
+    assert ExportedResultHttpResponseSlot is ResultHttpResponseSlot
     with pytest.raises(TypeError, match="reference must be typed"):
         msgspec.structs.replace(
             message,
@@ -499,6 +592,23 @@ def test_result_http_message_and_execution_message_contracts_fail_closed() -> No
         mismatched = msgspec.structs.replace(message, **changes)
         with pytest.raises(ValueError, match="metadata must match"):
             msgspec.structs.replace(execution, messages=(mismatched,))
+    capture_mismatch = msgspec.structs.replace(message, has_body_capture=False)
+    with pytest.raises(ValueError, match="capture flag must match"):
+        msgspec.structs.replace(
+            execution,
+            messages=(capture_mismatch, *execution.messages[1:]),
+        )
+    with pytest.raises(ValueError, match="completely match"):
+        msgspec.structs.replace(execution, messages=(message,))
+    omitted_request = ResultHttpRequestSlot(
+        state=ResultHttpMessageState.OMITTED,
+        metadata=None,
+        omission_reason=ResultHttpOmissionReason.POLICY,
+    )
+    exchange = msgspec.structs.replace(execution.attempts[0].exchanges[0], request=omitted_request)
+    attempt = msgspec.structs.replace(execution.attempts[0], exchanges=(exchange,))
+    with pytest.raises(ValueError, match="must identify retained metadata"):
+        msgspec.structs.replace(execution, attempts=(attempt,))
     with pytest.raises(AttributeError):
         message.has_body_capture = False  # type: ignore[misc]
 
@@ -528,12 +638,12 @@ def test_result_http_attempt_and_exchange_contracts_fail_closed() -> None:
         (
             {"pre_send_terminal": True},
             ValueError,
-            "pre-send terminal and failure must agree",
+            "pre-send terminal, request, and failure must agree",
         ),
         (
             {"failure": ResultFailure(stage="dns", code="failed", retryable=True)},
             ValueError,
-            "pre-send terminal and failure must agree",
+            "pre-send terminal, request, and failure must agree",
         ),
         ({"exchanges": []}, TypeError, "exchanges must be immutable and typed"),
         ({"exchanges": (object(),)}, TypeError, "exchanges must be immutable and typed"),
@@ -568,6 +678,248 @@ def test_result_http_attempt_and_exchange_contracts_fail_closed() -> None:
     ):
         with pytest.raises(ValueError, match=match):
             msgspec.structs.replace(execution, attempts=attempts)
+
+
+def test_result_http_metadata_and_message_slots_fail_closed() -> None:
+    execution = project_results(_artifact()).executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    request = exchange.request
+    response = exchange.response
+    assert request.metadata is not None
+    assert response.metadata is not None
+    request_metadata = request.metadata
+    response_metadata = response.metadata
+    field = request_metadata.headers[0]
+
+    for field_changes, error, match in (
+        ({"name": "INVALID"}, ValueError, "canonical lowercase HTTP token"),
+        ({"value": cast("str", object())}, ValueError, "bounded text"),
+        ({"redacted": cast("bool", 1)}, TypeError, "redaction marker must be bool"),
+    ):
+        with pytest.raises(error, match=match):
+            msgspec.structs.replace(field, **field_changes)
+
+    cookie = ResultHttpCookie(name="SessionID", value="<redacted>", redacted=True)
+    assert cookie.name == "SessionID"
+    for cookie_changes, match in (
+        ({"name": "invalid cookie"}, "cookie name"),
+        ({"value": "unsafe"}, "cookie values"),
+        ({"redacted": False}, "cookie values"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            msgspec.structs.replace(cookie, **cookie_changes)
+
+    for request_changes, error, match in (
+        ({"headers": []}, TypeError, "headers must be immutable and typed"),
+        ({"headers": (object(),)}, TypeError, "headers must be immutable and typed"),
+        ({"cookies": []}, TypeError, "cookies must be immutable and typed"),
+        ({"cookies": (object(),)}, TypeError, "cookies must be immutable and typed"),
+        ({"has_body_capture": 1}, TypeError, "capture flag must be bool"),
+        ({"url": "relative"}, ValueError, "absolute HTTP"),
+    ):
+        with pytest.raises(error, match=match):
+            msgspec.structs.replace(request_metadata, **request_changes)
+    unsafe = ResultHttpField(name="authorization", value="LEAK", redacted=False)
+    with pytest.raises(ValueError, match="credential artifact fields"):
+        msgspec.structs.replace(request_metadata, headers=(unsafe,))
+
+    for response_changes, error, match in (
+        ({"headers": []}, TypeError, "headers must be immutable and typed"),
+        ({"trailers": (object(),)}, TypeError, "trailers must be immutable and typed"),
+        ({"has_body_capture": 1}, TypeError, "capture flag must be bool"),
+        ({"status": 99}, ValueError, "HTTP status"),
+    ):
+        with pytest.raises(error, match=match):
+            msgspec.structs.replace(response_metadata, **response_changes)
+    unsafe_set_cookie = ResultHttpField(name="set-cookie", value="LEAK", redacted=False)
+    with pytest.raises(ValueError, match="credential artifact fields"):
+        msgspec.structs.replace(response_metadata, trailers=(unsafe_set_cookie,))
+
+    for request_slot_changes, error, match in (
+        ({"state": "retained"}, TypeError, "state must be typed"),
+        ({"metadata": object()}, TypeError, "metadata must be typed or absent"),
+        ({"omission_reason": object()}, TypeError, "reason must be typed or absent"),
+        ({"metadata": None}, ValueError, "state contradicts"),
+        (
+            {"omission_reason": ResultHttpOmissionReason.POLICY},
+            ValueError,
+            "state contradicts",
+        ),
+        (
+            {
+                "state": ResultHttpMessageState.OMITTED,
+                "metadata": request_metadata,
+                "omission_reason": ResultHttpOmissionReason.POLICY,
+            },
+            ValueError,
+            "state contradicts",
+        ),
+        (
+            {
+                "state": ResultHttpMessageState.OMITTED,
+                "metadata": None,
+                "omission_reason": None,
+            },
+            ValueError,
+            "state contradicts",
+        ),
+        (
+            {
+                "state": ResultHttpMessageState.NOT_PRODUCED,
+                "metadata": None,
+                "omission_reason": None,
+            },
+            ValueError,
+            "state contradicts",
+        ),
+    ):
+        with pytest.raises(error, match=match):
+            msgspec.structs.replace(request, **request_slot_changes)
+
+    for response_slot_changes, error, match in (
+        ({"state": "retained"}, TypeError, "state must be typed"),
+        ({"metadata": object()}, TypeError, "metadata must be typed or absent"),
+        ({"omission_reason": object()}, TypeError, "reason must be typed or absent"),
+        ({"metadata": None}, ValueError, "state contradicts"),
+        (
+            {
+                "state": ResultHttpMessageState.OMITTED,
+                "metadata": None,
+                "omission_reason": None,
+            },
+            ValueError,
+            "state contradicts",
+        ),
+        (
+            {
+                "state": ResultHttpMessageState.NOT_PRODUCED,
+                "metadata": response_metadata,
+                "omission_reason": None,
+            },
+            ValueError,
+            "state contradicts",
+        ),
+        (
+            {
+                "state": ResultHttpMessageState.NOT_PRODUCED,
+                "metadata": None,
+                "omission_reason": ResultHttpOmissionReason.POLICY,
+            },
+            ValueError,
+            "state contradicts",
+        ),
+    ):
+        with pytest.raises(error, match=match):
+            msgspec.structs.replace(response, **response_slot_changes)
+
+    with pytest.raises(TypeError, match="exchange request must be typed"):
+        msgspec.structs.replace(exchange, request=object())
+    with pytest.raises(TypeError, match="exchange response must be typed"):
+        msgspec.structs.replace(exchange, response=object())
+    failure = ResultFailure(stage="transport", code="unavailable", retryable=True)
+    with pytest.raises(ValueError, match="response state and exchange failure must agree"):
+        msgspec.structs.replace(exchange, failure=failure)
+    not_produced = ResultHttpResponseSlot(
+        state=ResultHttpMessageState.NOT_PRODUCED,
+        metadata=None,
+        omission_reason=None,
+    )
+    with pytest.raises(ValueError, match="response state and exchange failure must agree"):
+        msgspec.structs.replace(exchange, response=not_produced)
+    failed_exchange = msgspec.structs.replace(
+        exchange,
+        failure=failure,
+        response=not_produced,
+    )
+    assert failed_exchange.failure is failure
+
+    with pytest.raises(TypeError, match="terminal pre-send request must be typed or absent"):
+        msgspec.structs.replace(attempt, terminal_pre_send=object())
+    with pytest.raises(ValueError, match="terminal, request, and failure must agree"):
+        msgspec.structs.replace(attempt, terminal_pre_send=request)
+    terminal = msgspec.structs.replace(
+        attempt,
+        pre_send_terminal=True,
+        failure=failure,
+        terminal_pre_send=request,
+    )
+    assert terminal.terminal_pre_send is request
+
+
+def test_projection_exposes_failed_response_state_without_fabricating_a_response() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    failure = ArtifactFailure(stage="transport", code="read-failed", retryable=True)
+    failed = msgspec.structs.replace(
+        exchange,
+        response=None,
+        response_omission=None,
+        failure=failure,
+    )
+    execution = msgspec.structs.replace(
+        execution,
+        attempts=(msgspec.structs.replace(attempt, exchanges=(failed,)),),
+    )
+    artifact = msgspec.structs.replace(
+        artifact,
+        executions=(execution, artifact.executions[1]),
+    )
+
+    projected = project_results(artifact).executions[0]
+
+    assert tuple(item.reference.message for item in projected.messages) == (
+        ArtifactBodyMessage.REQUEST,
+    )
+    projected_exchange = projected.attempts[0].exchanges[0]
+    assert projected_exchange.failure is not None
+    assert projected_exchange.failure.code == "read-failed"
+    assert projected_exchange.response.state is ResultHttpMessageState.NOT_PRODUCED
+    assert projected_exchange.response.metadata is None
+    assert projected_exchange.response.omission_reason is None
+
+
+def test_projection_is_total_for_valid_bounded_http_ids_and_round_trips() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    retained_request = attempt.exchanges[0].request
+    assert retained_request is not None
+    retained_request = msgspec.structs.replace(
+        retained_request,
+        cookies=(CoreArtifactCookie(name="SessionID", value="<redacted>", redacted=True),),
+    )
+    exchange = msgspec.structs.replace(
+        attempt.exchanges[0],
+        exchange_id="exchange with space λ",
+        request=retained_request,
+    )
+    attempt = msgspec.structs.replace(
+        attempt,
+        attempt_id="attempt with space λ",
+        exchanges=(exchange,),
+    )
+    execution = msgspec.structs.replace(execution, attempts=(attempt,))
+    artifact = msgspec.structs.replace(
+        artifact,
+        executions=(execution, artifact.executions[1]),
+    )
+
+    projection = project_results(artifact)
+    projected = projection.executions[0]
+
+    assert projected.attempts[0].attempt_id == "attempt with space λ"
+    assert projected.attempts[0].exchanges[0].exchange_id == "exchange with space λ"
+    assert projected.messages[0].reference.attempt_id == "attempt with space λ"
+    assert projected.messages[0].reference.exchange_id == "exchange with space λ"
+    projected_request = projected.attempts[0].exchanges[0].request.metadata
+    assert projected_request is not None
+    assert projected_request.cookies == (
+        ResultHttpCookie(name="SessionID", value="<redacted>", redacted=True),
+    )
+    assert msgspec.json.decode(msgspec.json.encode(projection), type=ResultProjection) == projection
 
 
 def test_projection_preserves_requested_gate_verdict_and_assessments_exactly() -> None:
