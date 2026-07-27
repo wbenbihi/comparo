@@ -83,9 +83,12 @@ Project configuration cannot supply its own ExecutionPolicy authority.
 ### Compare preparation and start
 
 `CompareService.prepare` adds intent validation, runtime-capability admission, evaluation
-capability admission, and a safe `PlanReviewInspection`. It retains the admitted plan behind a
-bounded opaque handle. `start` consumes that handle only when the controls exactly match the
-reviewed controls, then creates an `ExecutionSession`.
+capability admission, and a safe `PlanReviewInspection`. It retains the admitted plan and one
+immutable ambient-environment snapshot behind a bounded opaque handle. `preview_requests`
+resolves bounded sanitized pages from that exact retained state without consuming the handle;
+it remains available when execution is blocked by a missing approval or artifact destination.
+`start` consumes the handle only when the controls exactly match the reviewed controls, then
+creates an `ExecutionSession` from the same environment snapshot.
 
 This prevents a UI from reviewing one set of mutation, artifact, or resource-limit settings and
 executing another.

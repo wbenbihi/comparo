@@ -62,7 +62,7 @@ precedence-applied structure; resolved request preview is run-scoped and sanitiz
 | Ephemeral full ExecutionProfile resource | Partial | Compose the typed controls above | There is no second anonymous profile language; controls compile into the normal invocation model |
 | Preview exact topology and authority | Supported | `PlanReviewInspection` | Includes counts, profiles, limits, provenance, policy, and mutation approval |
 | Review/start checkpoint | Supported | `CompareService` one-shot handle | Start rejects controls that differ from the reviewed checkpoint |
-| Preview very large runs | Supported | `render_prepared_request_window` | Resolves only the requested ordinal window |
+| Preview very large runs | Supported | `CompareService.preview_requests` | Resolves only the requested ordinal window from the exact retained plan and reviewed controls; the handle remains usable for later pages or execution |
 
 No frontend may mutate `CompiledProject` or synthesize `PreparedRun` internals. Every ad-hoc edit
 must use the typed invocation surface so normal precedence, provenance, policy, and budgets apply.

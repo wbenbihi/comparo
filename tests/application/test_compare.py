@@ -29,8 +29,11 @@ from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import prepare_project_plan
 from comparo.application.production_execution import ProductionExecutionFailure
 from comparo.application.production_execution import ProductionExecutionFailureKind
+from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
 from comparo.application.production_execution import production_execution_defaults_v1
+from comparo.application.render_preview import RenderPreviewWindowRequest
+from comparo.application.render_preview import RenderPreviewWindowResult
 from comparo.core.artifacts.policy import ArtifactPersistMode
 
 _INVOCATION_ID = UUID("10000000-0000-0000-0000-000000000001")
@@ -260,6 +263,160 @@ def test_compare_start_consumes_the_exact_prepared_handle(
     asyncio.run(scenario())
 
 
+def test_compare_preview_uses_retained_plan_controls_and_admission_environment_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_environment = (("TOKEN", _SECRET_CANARY),)
+    capture_calls: list[tuple[object, object]] = []
+    preview_requests: list[RenderPreviewWindowRequest] = []
+    execution_requests: list[ProductionExecutionRequest] = []
+
+    def capture(project: object, limits: object) -> tuple[tuple[str, str], ...]:
+        capture_calls.append((project, limits))
+        return captured_environment
+
+    async def render(request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+        preview_requests.append(request)
+        return RenderPreviewWindowResult(total_executions=1)
+
+    def start(request: ProductionExecutionRequest) -> object:
+        execution_requests.append(request)
+        return object()
+
+    monkeypatch.setattr(compare, "capture_process_environment", capture)
+    monkeypatch.setattr(compare, "render_prepared_request_window", render)
+    monkeypatch.setattr(compare, "start_execution_session", start)
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+    retained = service._prepared[prepared.handle]
+
+    result = asyncio.run(
+        service.preview_requests(
+            prepared.handle,
+            controls,
+            start_ordinal=0,
+            maximum_previews=7,
+        )
+    )
+
+    assert result == RenderPreviewWindowResult(total_executions=1)
+    assert service.outstanding == 1
+    assert len(capture_calls) == 1
+    assert capture_calls[0] == (retained.project, controls.settings.environment)
+    assert len(preview_requests) == 1
+    preview = preview_requests[0]
+    assert preview.start_ordinal == 0
+    assert preview.maximum_previews == 7
+    assert preview.preview.project is retained.project
+    assert preview.preview.ambient_environment == captured_environment
+    assert preview.preview.settings.files == controls.settings.files
+    assert preview.preview.settings.environment == controls.settings.environment
+    assert preview.preview.settings.yaml == controls.settings.yaml
+    assert preview.preview.settings.sanitization == controls.settings.artifact.limits.sanitization
+
+    session = service.start(prepared.handle, controls)
+    assert type(session) is object
+    assert service.outstanding == 0
+    assert len(capture_calls) == 1
+    assert len(execution_requests) == 1
+    execution = execution_requests[0]
+    assert execution.project is retained.project
+    assert execution.settings is retained.controls.settings
+    assert execution.ambient_environment == captured_environment
+
+
+def test_compare_preview_is_available_when_execution_checkpoint_is_blocked(
+    tmp_path: Path,
+) -> None:
+    settings = production_execution_defaults_v1()
+    controls = msgspec.structs.replace(
+        _controls(),
+        settings=msgspec.structs.replace(
+            settings,
+            artifact=msgspec.structs.replace(
+                settings.artifact,
+                persist=ArtifactPersistMode.ALWAYS,
+            ),
+        ),
+    )
+    request = msgspec.structs.replace(
+        _assertion_request(_write_project(tmp_path)),
+        controls=controls,
+    )
+    service = CompareService(maximum_outstanding=1)
+    prepared = service.prepare(request)
+    assert prepared.handle is not None
+    assert prepared.review is not None
+    assert not prepared.review.execution_allowed
+
+    preview = asyncio.run(
+        service.preview_requests(
+            prepared.handle,
+            controls,
+            start_ordinal=0,
+            maximum_previews=1,
+        )
+    )
+
+    assert not preview.diagnostics
+    assert len(preview.previews) == 1
+    assert preview.previews[0].url == "https://staging.example.test/ping"
+    assert preview.total_executions == 1
+    assert preview.next_ordinal is None
+    assert service.outstanding == 1
+    with pytest.raises(CompareServiceError) as blocked:
+        service.validate_start(prepared.handle, controls)
+    assert blocked.value.code is CompareServiceErrorCode.PREPARATION_BLOCKED
+
+
+def test_compare_preview_validates_retained_authority_without_consuming_it(
+    tmp_path: Path,
+) -> None:
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+    unknown = ComparePreparationHandle(value=str(_HANDLE_ID))
+    mismatched = msgspec.structs.replace(controls, tool_version="different")
+
+    with pytest.raises(CompareServiceError) as missing:
+        asyncio.run(
+            service.preview_requests(
+                unknown,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+    assert missing.value.code is CompareServiceErrorCode.HANDLE_UNKNOWN
+    with pytest.raises(CompareServiceError) as mismatch:
+        asyncio.run(
+            service.preview_requests(
+                prepared.handle,
+                mismatched,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+    assert mismatch.value.code is CompareServiceErrorCode.PREPARATION_MISMATCH
+    assert service.outstanding == 1
+
+    service.close()
+    with pytest.raises(CompareServiceError) as closed:
+        asyncio.run(
+            service.preview_requests(
+                prepared.handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+    assert closed.value.code is CompareServiceErrorCode.CLOSED
+
+
 def test_compare_start_rejects_an_artifact_root_not_shown_by_the_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -349,6 +506,26 @@ def test_compare_contains_project_failures_and_handle_allocation_exhaustion(
     monkeypatch.setattr(compare, "prepare_project_plan", fail_safely)
     failed = another.prepare(_assertion_request(config))
     assert tuple(item.code for item in failed.diagnostics) == ("compare.preparation.internal",)
+    assert _SECRET_CANARY not in msgspec.json.encode(failed).decode()
+
+
+def test_compare_contains_ambient_capture_failure_without_retaining_a_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_safely(*_args: object) -> tuple[tuple[str, str], ...]:
+        raise RuntimeError(_SECRET_CANARY)
+
+    monkeypatch.setattr(compare, "capture_process_environment", fail_safely)
+    service = CompareService(maximum_outstanding=1)
+    failed = service.prepare(_assertion_request(_write_project(tmp_path)))
+
+    assert failed.handle is None
+    assert failed.review is None
+    assert tuple(item.code for item in failed.diagnostics) == (
+        "compare.preparation.environment-capture-failed",
+    )
+    assert service.outstanding == 0
     assert _SECRET_CANARY not in msgspec.json.encode(failed).decode()
 
 
@@ -468,6 +645,24 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
         )
     with pytest.raises(TypeError, match="discard handle"):
         service.discard(cast("ComparePreparationHandle", object()))
+    with pytest.raises(TypeError, match="preview handle"):
+        asyncio.run(
+            service.preview_requests(
+                cast("ComparePreparationHandle", object()),
+                _controls(),
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+    with pytest.raises(TypeError, match="preview controls"):
+        asyncio.run(
+            service.preview_requests(
+                ComparePreparationHandle(value=str(_HANDLE_ID)),
+                cast("CompareExecutionControls", object()),
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
     with pytest.raises(TypeError, match="start handle"):
         service.validate_start(cast("ComparePreparationHandle", object()), _controls())
     with pytest.raises(TypeError, match="start controls"):
@@ -483,6 +678,38 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
     with pytest.raises(CompareServiceError) as captured:
         service.start(ComparePreparationHandle(value=str(_HANDLE_ID)), _controls())
     assert captured.value.code is CompareServiceErrorCode.HANDLE_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("start_ordinal", "maximum_previews", "message"),
+    [
+        (-1, 1, "start ordinal"),
+        (True, 1, "start ordinal"),
+        (0, 0, "window size"),
+        (0, True, "window size"),
+    ],
+)
+def test_compare_preview_rejects_invalid_page_bounds_without_consuming_handle(
+    tmp_path: Path,
+    start_ordinal: object,
+    maximum_previews: object,
+    message: str,
+) -> None:
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+
+    with pytest.raises(ValueError, match=message):
+        asyncio.run(
+            service.preview_requests(
+                prepared.handle,
+                controls,
+                start_ordinal=cast("int", start_ordinal),
+                maximum_previews=cast("int", maximum_previews),
+            )
+        )
+    assert service.outstanding == 1
 
 
 def test_compare_blocks_start_when_review_requires_missing_artifact_root(tmp_path: Path) -> None:
@@ -520,6 +747,8 @@ def test_retained_comparison_contract_rejects_untyped_components(tmp_path: Path)
         ({"project": object()}, "project"),
         ({"controls": object()}, "controls"),
         ({"review": object()}, "review"),
+        ({"ambient_environment": []}, "ambient environment"),
+        ({"ambient_environment": (("NAME", object()),)}, "ambient environment"),
     ):
         with pytest.raises(TypeError, match=message):
             msgspec.structs.replace(retained, **changes)

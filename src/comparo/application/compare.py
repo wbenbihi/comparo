@@ -10,6 +10,7 @@ from uuid import uuid4
 import msgspec
 
 from comparo.application.environment_binding import capture_process_environment
+from comparo.application.environment_binding import validate_ambient_environment
 from comparo.application.evaluation_binding import preflight_configuration_evaluation
 from comparo.application.execution_session import ExecutionSession
 from comparo.application.execution_session import start_execution_session
@@ -25,6 +26,11 @@ from comparo.application.preflight import prepare_project_plan
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionSettings
 from comparo.application.profile_binding import bind_execution_profiles
+from comparo.application.render_preview import RenderPreviewRequest
+from comparo.application.render_preview import RenderPreviewSettings
+from comparo.application.render_preview import RenderPreviewWindowRequest
+from comparo.application.render_preview import RenderPreviewWindowResult
+from comparo.application.render_preview import render_prepared_request_window
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 
 _HANDLE_ALLOCATION_ATTEMPTS = 8
@@ -190,10 +196,18 @@ class CompareService:
         handle = self._allocate_handle()
         if handle is None:
             return _rejected("compare.preparation.handle-unavailable")
+        try:
+            ambient_environment = capture_process_environment(
+                outcome.project,
+                request.controls.settings.environment,
+            )
+        except Exception:  # noqa: BLE001 - ambient values never cross the safe boundary
+            return _rejected("compare.preparation.environment-capture-failed")
         self._prepared[handle] = _PreparedComparison(
             project=outcome.project,
             controls=request.controls,
             review=admitted,
+            ambient_environment=ambient_environment,
         )
         return ComparePreparationResult(
             handle=handle,
@@ -215,14 +229,43 @@ class CompareService:
         return start_execution_session(
             ProductionExecutionRequest(
                 project=prepared.project,
-                settings=controls.settings,
-                ambient_environment=capture_process_environment(
-                    prepared.project,
-                    controls.settings.environment,
+                settings=prepared.controls.settings,
+                ambient_environment=prepared.ambient_environment,
+                artifact_root=prepared.controls.artifact_root,
+                approve_mutations=prepared.controls.approve_mutations,
+                tool_version=prepared.controls.tool_version,
+            )
+        )
+
+    async def preview_requests(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        *,
+        start_ordinal: int,
+        maximum_previews: int,
+    ) -> RenderPreviewWindowResult:
+        """Render one safe page from the exact retained plan without consuming its handle."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare preview handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare preview controls must be typed")
+        prepared = self._validate_retained(handle, controls)
+        settings = prepared.controls.settings
+        return await render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=RenderPreviewRequest(
+                    project=prepared.project,
+                    settings=RenderPreviewSettings(
+                        files=settings.files,
+                        environment=settings.environment,
+                        yaml=settings.yaml,
+                        sanitization=settings.artifact.limits.sanitization,
+                    ),
+                    ambient_environment=prepared.ambient_environment,
                 ),
-                artifact_root=controls.artifact_root,
-                approve_mutations=controls.approve_mutations,
-                tool_version=controls.tool_version,
+                start_ordinal=start_ordinal,
+                maximum_previews=maximum_previews,
             )
         )
 
@@ -261,6 +304,16 @@ class CompareService:
         handle: ComparePreparationHandle,
         controls: CompareExecutionControls,
     ) -> _PreparedComparison:
+        prepared = self._validate_retained(handle, controls)
+        if not prepared.review.execution_allowed:
+            raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BLOCKED)
+        return prepared
+
+    def _validate_retained(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+    ) -> _PreparedComparison:
         if self._closed:
             raise CompareServiceError(CompareServiceErrorCode.CLOSED)
         prepared = self._prepared.get(handle)
@@ -268,8 +321,6 @@ class CompareService:
             raise CompareServiceError(CompareServiceErrorCode.HANDLE_UNKNOWN)
         if controls != prepared.controls:
             raise CompareServiceError(CompareServiceErrorCode.PREPARATION_MISMATCH)
-        if not prepared.review.execution_allowed:
-            raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BLOCKED)
         return prepared
 
 
@@ -280,6 +331,7 @@ class _PreparedComparison(msgspec.Struct, frozen=True, kw_only=True):
     project: PreparedProjectPlan
     controls: CompareExecutionControls
     review: PlanReviewInspection
+    ambient_environment: tuple[tuple[str, str], ...]
 
     def __post_init__(self) -> None:
         if type(self.project) is not PreparedProjectPlan:
@@ -288,6 +340,12 @@ class _PreparedComparison(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("prepared comparison controls must be typed")
         if type(self.review) is not PlanReviewInspection:
             raise TypeError("prepared comparison review must be typed")
+        if type(self.ambient_environment) is not tuple:
+            raise TypeError("prepared comparison ambient environment must be immutable text pairs")
+        validate_ambient_environment(
+            self.ambient_environment,
+            self.controls.settings.environment,
+        )
 
 
 def _intent_request_diagnostic(request: ComparePrepareRequest) -> ApplicationDiagnostic | None:
