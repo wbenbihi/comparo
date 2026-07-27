@@ -121,9 +121,11 @@ class LocalArtifactBundleSink:
                     _BundleTransaction.create,
                     transaction_root_fd,
                     bundle_id,
-                    owns_root_fd=True,
-                )
+                    owns_root_fd=False,
+                ),
+                dispose_cancelled_result=_dispose_bundle_transaction,
             )
+            transaction.claim_root_ownership()
             transaction_root_fd = -1
             await transaction.write(artifact, blobs, limits)
             await _run_blocking(transaction.publish)
@@ -222,7 +224,8 @@ class LocalArtifactBundle:
                         directory_fd,
                         blob.sha256,
                         maximum=blob.byte_count,
-                    )
+                    ),
+                    dispose_cancelled_result=_close_descriptor,
                 )
                 await _run_blocking(partial(_verify_blob_descriptor, descriptor, blob))
                 await _run_blocking(partial(os.lseek, descriptor, 0, os.SEEK_SET))
@@ -396,6 +399,10 @@ class _BundleTransaction:
         await _run_blocking(partial(_write_file, self._staging_fd, "COMPLETE", marker))
         self._created_files.append("COMPLETE")
         await _run_blocking(partial(os.fsync, self._staging_fd))
+
+    def claim_root_ownership(self) -> None:
+        """Accept the root descriptor after the creating coroutine claims this result."""
+        self._owns_root_fd = True
 
     async def _write_blob(
         self,
@@ -846,15 +853,63 @@ def _verify_blob_descriptor(descriptor: int, blob: ArtifactBlob) -> None:
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.DIGEST_MISMATCH)
 
 
-async def _run_blocking[ResultT](operation: Callable[[], ResultT]) -> ResultT:
+async def _run_blocking[ResultT](
+    operation: Callable[[], ResultT],
+    *,
+    dispose_cancelled_result: Callable[[ResultT], None] | None = None,
+) -> ResultT:
     """Run one descriptor operation without blocking or racing cancellation cleanup."""
     task = asyncio.create_task(asyncio.to_thread(operation))
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        with suppress(Exception):
-            await task
+        await _settle_after_cancellation(task)
+        try:
+            result = task.result()
+        except BaseException as error:  # noqa: BLE001 - cancellation remains authoritative
+            del error
+        else:
+            if dispose_cancelled_result is not None:
+                await _dispose_after_cancellation(dispose_cancelled_result, result)
         raise
+
+
+async def _settle_after_cancellation[ResultT](task: asyncio.Task[ResultT]) -> None:
+    """Wait through repeated cancellation until one blocking worker has settled."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:  # noqa: BLE001 - original cancellation remains authoritative
+            break
+
+
+async def _dispose_after_cancellation[ResultT](
+    dispose: Callable[[ResultT], None],
+    result: ResultT,
+) -> None:
+    """Dispose an unclaimed worker result off-loop despite repeated cancellation."""
+    disposal = asyncio.create_task(asyncio.to_thread(dispose, result))
+    await _settle_after_cancellation(disposal)
+    try:
+        disposal.result()
+    except BaseException as error:  # noqa: BLE001 - original cancellation remains authoritative
+        del error
+
+
+def _close_descriptor(descriptor: int) -> None:
+    """Release one successfully opened descriptor whose ownership was never transferred."""
+    with suppress(OSError):
+        os.close(descriptor)
+
+
+def _dispose_bundle_transaction(transaction: _BundleTransaction) -> None:
+    """Abort and close one transaction whose ownership was never transferred."""
+    try:
+        transaction.abort()
+    finally:
+        transaction.close()
 
 
 def _validate_root_fd(descriptor: int) -> None:

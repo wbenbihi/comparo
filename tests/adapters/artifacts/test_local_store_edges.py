@@ -189,6 +189,16 @@ def test_constructor_context_manager_and_error_boundaries(
     assert unsupported.value.code is ArtifactStoreErrorCode.UNSUPPORTED_PLATFORM
     monkeypatch.undo()
 
+    monkeypatch.setattr(
+        local_module,
+        "_validate_root_fd",
+        lambda _descriptor: (_ for _ in ()).throw(OSError()),
+    )
+    with pytest.raises(LocalArtifactStoreError) as invalid_root_descriptor:
+        LocalArtifactBundleSink(root)
+    assert invalid_root_descriptor.value.code is ArtifactStoreErrorCode.ROOT_UNSAFE
+    monkeypatch.undo()
+
     with LocalArtifactBundleSink(root) as sink:
         assert sink._closed is False
     sink.close()
@@ -380,7 +390,7 @@ def test_resealed_manifest_artifact_identity_must_match_bundle(tmp_path: Path) -
 
 
 def test_blocking_io_helper_finishes_worker_before_propagating_cancellation() -> None:
-    async def scenario() -> None:
+    async def failure_scenario() -> None:
         started = threading.Event()
         release = threading.Event()
 
@@ -396,7 +406,182 @@ def test_blocking_io_helper_finishes_worker_before_propagating_cancellation() ->
         with pytest.raises(asyncio.CancelledError):
             await task
 
+    async def success_scenario() -> None:
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        def finish_later() -> None:
+            started.set()
+            release.wait(timeout=5)
+            finished.set()
+
+        task = asyncio.create_task(local_module._run_blocking(finish_later))
+        assert await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set()
+
+    async def disposal_failure_scenario() -> None:
+        started = threading.Event()
+        release = threading.Event()
+        disposal_attempted = threading.Event()
+
+        def finish_later() -> object:
+            started.set()
+            release.wait(timeout=5)
+            return object()
+
+        def fail_disposal(_result: object) -> None:
+            disposal_attempted.set()
+            raise OSError("sensitive")
+
+        task = asyncio.create_task(
+            local_module._run_blocking(
+                finish_later,
+                dispose_cancelled_result=fail_disposal,
+            )
+        )
+        assert await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert disposal_attempted.is_set()
+
+    asyncio.run(failure_scenario())
+    asyncio.run(success_scenario())
+    asyncio.run(disposal_failure_scenario())
+
+
+def test_cancelled_blob_open_disposes_descriptor_before_ownership_transfer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _secure_root(tmp_path / "root")
+    artifact, _bundle_path = _persisted(root)
+    started = threading.Event()
+    release = threading.Event()
+    descriptors: list[int] = []
+    original = local_module._open_read_file
+
+    def delayed_open(
+        directory_fd: int,
+        name: str,
+        *,
+        maximum: int,
+    ) -> int:
+        descriptor = original(directory_fd, name, maximum=maximum)
+        if name != artifact.blobs[0].sha256:
+            return descriptor
+        descriptors.append(descriptor)
+        started.set()
+        release.wait(timeout=5)
+        return descriptor
+
+    monkeypatch.setattr(local_module, "_open_read_file", delayed_open)
+
+    async def scenario() -> None:
+        with open_local_artifact_bundle(root, "artifact-0", limits=_limits()) as bundle:
+            task = asyncio.create_task(_collect(bundle, artifact.blobs[0]))
+            assert await asyncio.to_thread(started.wait, 5)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
     asyncio.run(scenario())
+
+    assert len(descriptors) == 1
+    with pytest.raises(OSError, match=re.escape(os.strerror(errno.EBADF))):
+        os.fstat(descriptors[0])
+
+
+def test_cancelled_transaction_creation_disposes_unclaimed_transaction_off_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _secure_root(tmp_path / "root")
+    artifact, blobs = asyncio.run(_stored_artifact())
+    create_finished = threading.Event()
+    release_create = threading.Event()
+    disposal_started = threading.Event()
+    release_disposal = threading.Event()
+    descriptors: list[int] = []
+    staging_names: list[str] = []
+    unclaimed_root_ownership: list[bool] = []
+    closed_staging_descriptors: list[int] = []
+    reused_descriptors: list[int] = []
+    original_create = local_module._BundleTransaction.create
+    original_dispose = local_module._dispose_bundle_transaction
+
+    def delayed_create(
+        root_fd: int,
+        bundle_id: str,
+        *,
+        owns_root_fd: bool,
+    ) -> local_module._BundleTransaction:
+        transaction = original_create(
+            root_fd,
+            bundle_id,
+            owns_root_fd=owns_root_fd,
+        )
+        assert owns_root_fd is False
+        descriptors.extend((transaction._root_fd, transaction._staging_fd, transaction._blob_fd))
+        staging_names.append(transaction._staging_name)
+        create_finished.set()
+        release_create.wait(timeout=5)
+        return transaction
+
+    def delayed_dispose(transaction: local_module._BundleTransaction) -> None:
+        unclaimed_root_ownership.append(transaction._owns_root_fd)
+        disposal_started.set()
+        release_disposal.wait(timeout=5)
+        original_dispose(transaction)
+        for descriptor in (transaction._staging_fd, transaction._blob_fd):
+            with pytest.raises(OSError, match=re.escape(os.strerror(errno.EBADF))):
+                os.fstat(descriptor)
+            closed_staging_descriptors.append(descriptor)
+        reused_descriptors.append(os.open(root / "reuse-sentinel", os.O_RDONLY | os.O_CREAT, 0o600))
+
+    monkeypatch.setattr(local_module._BundleTransaction, "create", delayed_create)
+    monkeypatch.setattr(local_module, "_dispose_bundle_transaction", delayed_dispose)
+
+    async def scenario() -> None:
+        sink = LocalArtifactBundleSink(root)
+        task = asyncio.create_task(sink.persist(artifact, blobs, _limits()))
+        assert await asyncio.to_thread(create_finished.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release_create.set()
+        assert await asyncio.to_thread(disposal_started.wait, 5)
+
+        loop_progressed = asyncio.Event()
+        asyncio.get_running_loop().call_soon(loop_progressed.set)
+        await asyncio.wait_for(loop_progressed.wait(), timeout=1)
+        task.cancel()
+        release_disposal.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        sink.close()
+
+    asyncio.run(scenario())
+
+    assert len(staging_names) == 1
+    assert unclaimed_root_ownership == [False]
+    assert not (root / staging_names[0]).exists()
+    assert not tuple(root.glob(".staging-*"))
+    assert closed_staging_descriptors == descriptors[1:]
+    with pytest.raises(OSError, match=re.escape(os.strerror(errno.EBADF))):
+        os.fstat(descriptors[0])
+    assert len(reused_descriptors) == 1
+    os.fstat(reused_descriptors[0])
+    os.close(reused_descriptors[0])
 
 
 def test_open_bundle_exposes_only_declared_verified_blobs_for_its_lifetime(
