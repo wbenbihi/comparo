@@ -7,6 +7,7 @@ from collections.abc import Coroutine
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
+from sys import float_info
 from typing import Any
 from typing import cast
 from typing import final
@@ -325,10 +326,10 @@ class CompareService:
             )
         )
         lease = self._begin_inspection(handle, operation)
-        try:
-            return cast("RenderPreviewWindowResult", await self._await_inspection(lease))
-        finally:
-            self._end_inspection(handle, lease)
+        return cast(
+            "RenderPreviewWindowResult",
+            await self._run_inspection(handle, lease),
+        )
 
     async def inspect_resolved_value(
         self,
@@ -356,10 +357,10 @@ class CompareService:
             )
         )
         lease = self._begin_inspection(handle, operation)
-        try:
-            return cast("ResolvedValueInspectionResult", await self._await_inspection(lease))
-        finally:
-            self._end_inspection(handle, lease)
+        return cast(
+            "ResolvedValueInspectionResult",
+            await self._run_inspection(handle, lease),
+        )
 
     def validate_start(
         self,
@@ -406,13 +407,9 @@ class CompareService:
         )
         if not leases:
             return CompareCloseResult(drained=True)
-        try:
-            seconds: float | None = timeout.nanoseconds / 1_000_000_000
-        except OverflowError:
-            seconds = None
         _done, pending = await asyncio.wait(
             tuple(lease.task for _handle, lease in leases),
-            timeout=seconds,
+            timeout=_finite_timeout_seconds(timeout),
         )
         for handle, lease in leases:
             if lease.task.done():
@@ -485,18 +482,55 @@ class CompareService:
 
     async def _await_inspection(self, lease: _InspectionLease) -> object:
         """Keep service cancellation from cancelling an arbitrary caller orchestration task."""
+        caller = asyncio.current_task()
+        cancellation_count = 0 if caller is None else caller.cancelling()
         try:
             outcome = await asyncio.shield(lease.task)
         except asyncio.CancelledError:
-            caller = asyncio.current_task()
-            if caller is not None and caller.cancelling():
+            if caller is not None and caller.cancelling() > cancellation_count:
                 lease.cancel()
-                await _drain_cancelled_task(lease.task)
                 raise
             raise CompareServiceError(CompareServiceErrorCode.INSPECTION_CANCELLED) from None
         if lease.cancel_requested:
             raise CompareServiceError(CompareServiceErrorCode.INSPECTION_CANCELLED)
         return outcome
+
+    async def _run_inspection(
+        self,
+        handle: ComparePreparationHandle,
+        lease: _InspectionLease,
+    ) -> object:
+        deferred = False
+        try:
+            return await self._await_inspection(lease)
+        except asyncio.CancelledError:
+            self._retain_inspection_until_done(handle, lease)
+            deferred = True
+            raise
+        finally:
+            if not deferred:
+                self._end_inspection(handle, lease)
+
+    def _retain_inspection_until_done(
+        self,
+        handle: ComparePreparationHandle,
+        lease: _InspectionLease,
+    ) -> None:
+        """Keep cancelled child authority alive until its terminal outcome is observed."""
+        lease.task.add_done_callback(
+            lambda task: self._finish_retained_inspection(handle, lease, task)
+        )
+
+    def _finish_retained_inspection(
+        self,
+        handle: ComparePreparationHandle,
+        lease: _InspectionLease,
+        task: asyncio.Task[object],
+    ) -> None:
+        """Observe a detached child exactly once before releasing its prepared plan lease."""
+        with suppress(BaseException):
+            task.result()
+        self._end_inspection(handle, lease)
 
     def _cancel_inspections(self, handle: ComparePreparationHandle) -> None:
         for lease in self._inspections.get(handle, set()):
@@ -561,17 +595,12 @@ class _InspectionLease:
         return self._cancel_requested
 
 
-async def _drain_cancelled_task(task: asyncio.Task[object]) -> None:
-    """Observe one child to completion despite repeated cancellation of its caller."""
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            continue
-        except Exception:  # noqa: BLE001 - child outcome is superseded by caller cancellation
-            break
-    with suppress(BaseException):
-        task.result()
+def _finite_timeout_seconds(timeout: Duration) -> float:
+    """Convert an exact duration to a finite timeout accepted by asyncio."""
+    try:
+        return timeout.nanoseconds / 1_000_000_000
+    except OverflowError:
+        return float_info.max
 
 
 def _intent_request_diagnostic(request: ComparePrepareRequest) -> ApplicationDiagnostic | None:

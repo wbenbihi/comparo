@@ -52,6 +52,7 @@ from comparo.adapters.values import SafeYamlValueDecoder
 from comparo.adapters.values import SecureGenerator
 from comparo.adapters.values import SystemRunClock
 from comparo.adapters.values import YamlValueLimits
+from comparo.application._async_cleanup import finish_cleanup
 from comparo.application.digest_validation import DEFAULT_DIGEST_VALIDATION_LIMITS_V1
 from comparo.application.digest_validation import DigestValidationLimits
 from comparo.application.environment_binding import CapturedAmbientEnvironment
@@ -513,16 +514,13 @@ class _ExecutionResources:
     async def close(self) -> bool:
         """Attempt every cleanup and return only a value-free failure signal."""
         failed = _release_capture(self.capture)
-        cancelled: asyncio.CancelledError | None = None
+        cancellation_received = False
         for async_resource in (self.spool, self.body_store, self.context):
             if async_resource is None:
                 continue
-            try:
-                await async_resource.close()
-            except asyncio.CancelledError as error:
-                cancelled = error
-            except Exception:  # noqa: BLE001 - cleanup must continue across adapters
-                failed = True
+            outcome = await finish_cleanup(async_resource.close())
+            failed = failed or outcome.failed
+            cancellation_received = cancellation_received or outcome.cancellation_received
         for sync_resource in (self.files, self.sink):
             if sync_resource is None:
                 continue
@@ -530,8 +528,8 @@ class _ExecutionResources:
                 sync_resource.close()
             except Exception:  # noqa: BLE001 - cleanup must continue across adapters
                 failed = True
-        if cancelled is not None:
-            raise cancelled
+        if cancellation_received:
+            raise asyncio.CancelledError
         return failed
 
 

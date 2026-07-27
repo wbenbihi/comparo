@@ -19,6 +19,7 @@ from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import prepare_project_plan
 from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionRequest
+from comparo.application.production_execution import ProductionExecutionResult
 from comparo.application.production_execution import ProductionExecutionSettings
 from comparo.application.production_execution import execute_production
 from comparo.application.production_execution import persisted_production_execution_defaults_v1
@@ -207,6 +208,27 @@ def _summary(
     )
 
 
+def _outcome(result: ProductionExecutionResult) -> CliExecutionOutcome:
+    """Translate one sanitized production result into the CLI's closed result contract."""
+    if result.artifact is None:
+        failure = result.failure
+        if failure is None:  # pragma: no cover - production result invariant
+            raise RuntimeError("failed production result omitted its typed failure")
+        exit_code = {
+            ProductionExecutionFailureKind.INVALID: CliExitCode.INVALID_INVOCATION,
+            ProductionExecutionFailureKind.INCOMPLETE: CliExitCode.EXECUTION_INCOMPLETE,
+            ProductionExecutionFailureKind.INTERNAL: CliExitCode.INTERNAL_ERROR,
+        }[failure.kind]
+        return CliExecutionOutcome(
+            exit_code=exit_code,
+            diagnostics=failure.diagnostics,
+        )
+    return CliExecutionOutcome(
+        exit_code=_exit_code(result.artifact),
+        summary=_summary(result.artifact, result.persistence),
+    )
+
+
 async def execute_cli_request(
     request: ExecutionRequest,
     options: PlanningOptions,
@@ -274,36 +296,33 @@ async def execute_cli_request(
             exit_code=CliExitCode.INVALID_INVOCATION,
             diagnostics=(topology,),
         )
+    try:
+        ambient_environment = capture_process_environment(
+            prepared.project,
+            settings.environment,
+        )
+    except Exception:  # noqa: BLE001 - ambient values never cross the CLI boundary
+        return CliExecutionOutcome(
+            exit_code=CliExitCode.INVALID_INVOCATION,
+            diagnostics=(
+                ApplicationDiagnostic(
+                    code="cli.execution.environment-capture-failed",
+                    severity="error",
+                    stage="invocation",
+                ),
+            ),
+        )
     result = await execute_production(
         ProductionExecutionRequest(
             project=prepared.project,
             settings=settings,
-            ambient_environment=capture_process_environment(
-                prepared.project,
-                settings.environment,
-            ),
+            ambient_environment=ambient_environment,
             artifact_root=request.artifact_root,
             approve_mutations=request.approve_mutations,
             tool_version=request.tool_version,
         )
     )
-    if result.artifact is None:
-        failure = result.failure
-        if failure is None:  # pragma: no cover - production result invariant
-            raise RuntimeError("failed production result omitted its typed failure")
-        exit_code = {
-            ProductionExecutionFailureKind.INVALID: CliExitCode.INVALID_INVOCATION,
-            ProductionExecutionFailureKind.INCOMPLETE: CliExitCode.EXECUTION_INCOMPLETE,
-            ProductionExecutionFailureKind.INTERNAL: CliExitCode.INTERNAL_ERROR,
-        }[failure.kind]
-        return CliExecutionOutcome(
-            exit_code=exit_code,
-            diagnostics=failure.diagnostics,
-        )
-    return CliExecutionOutcome(
-        exit_code=_exit_code(result.artifact),
-        summary=_summary(result.artifact, result.persistence),
-    )
+    return _outcome(result)
 
 
 __all__ = (

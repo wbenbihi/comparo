@@ -107,14 +107,18 @@ async def render_cli_request(
     )
     if prepared.project is None:
         return RenderPreviewResult(diagnostics=prepared.diagnostics)
+    try:
+        ambient_environment = capture_process_environment(
+            prepared.project,
+            settings.environment,
+        )
+    except Exception:  # noqa: BLE001 - ambient values never cross the CLI boundary
+        return _failure("cli.render.environment-capture-failed")
     return await render_prepared_requests(
         RenderPreviewRequest(
             project=prepared.project,
             settings=settings,
-            ambient_environment=capture_process_environment(
-                prepared.project,
-                settings.environment,
-            ),
+            ambient_environment=ambient_environment,
         )
     )
 

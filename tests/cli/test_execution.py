@@ -237,6 +237,46 @@ def test_command_topology_is_rejected_before_production_execution(
     assert not called
 
 
+def test_ambient_capture_failure_is_a_value_free_execution_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canary = "ambient-execution-canary"
+    executed = False
+
+    def capture(*_arguments: object, **_keywords: object) -> object:
+        raise RuntimeError(canary)
+
+    async def execute(_request_value: object) -> ProductionExecutionResult:
+        nonlocal executed
+        executed = True
+        return ProductionExecutionResult(artifact=_artifact())
+
+    monkeypatch.setattr(execution_module, "capture_process_environment", capture)
+    monkeypatch.setattr(execution_module, "execute_production", execute)
+
+    result = asyncio.run(
+        execute_cli_request(
+            _request(_write_project(tmp_path), CliExecutionCommandKind.DIFF),
+            PlanningOptions(),
+            invocation_id=_INVOCATION_ID,
+            run_id=_RUN_ID,
+        )
+    )
+
+    assert result.exit_code is CliExitCode.INVALID_INVOCATION
+    assert result.summary is None
+    assert result.diagnostics == (
+        ApplicationDiagnostic(
+            code="cli.execution.environment-capture-failed",
+            severity="error",
+            stage="invocation",
+        ),
+    )
+    assert canary not in repr(result)
+    assert not executed
+
+
 @pytest.mark.parametrize(
     ("kind", "exit_code"),
     [

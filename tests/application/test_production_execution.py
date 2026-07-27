@@ -890,6 +890,126 @@ def test_cleanup_preserves_cancellation_after_attempting_later_resources() -> No
     assert events == ["capture", "spool", "body", "context", "files", "sink"]
 
 
+def test_cleanup_finishes_every_resource_under_repeated_cancellation() -> None:
+    async def scenario() -> None:
+        events: list[str] = []
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowClose:
+            async def close(self) -> None:
+                events.append("spool")
+                entered.set()
+                await release.wait()
+
+        resources = production._ExecutionResources()
+        resources.spool = cast("PosixSanitizedBlobSpool", SlowClose())
+        resources.body_store = cast("TransientBodyStore", _AsyncClose(events, "body"))
+        resources.context = cast("RunContext", _AsyncClose(events, "context"))
+        resources.files = cast("PinnedProjectFiles", _SyncClose(events, "files"))
+        resources.sink = cast("LocalArtifactBundleSink", _SyncClose(events, "sink"))
+
+        task = asyncio.create_task(resources.close())
+        await entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert events == ["spool", "body", "context", "files", "sink"]
+
+    asyncio.run(scenario())
+
+
+def test_cleanup_removes_real_transient_store_under_repeated_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        config = msgspec.structs.replace(
+            production.production_execution_defaults_v1().body_store,
+            root=tmp_path,
+        )
+        store = TransientBodyStore(config)
+        directory = store._directory
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_finish = TransientBodyStore._finish_close
+
+        async def controlled_finish(
+            close_store: TransientBodyStore,
+            entries: tuple[object, ...],
+        ) -> None:
+            entered.set()
+            await release.wait()
+            await original_finish(close_store, entries)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(TransientBodyStore, "_finish_close", controlled_finish)
+        resources = production._ExecutionResources()
+        resources.body_store = store
+        task = asyncio.create_task(resources.close())
+        await entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert store._closed
+        assert not directory.exists()
+
+    asyncio.run(scenario())
+
+
+def test_execute_finishes_cleanup_when_cancellation_is_repeated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        events: list[str] = []
+        executing = asyncio.Event()
+        cleaning = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowClose:
+            async def close(self) -> None:
+                events.append("spool")
+                cleaning.set()
+                await release.wait()
+
+        async def execute(
+            _request_value: object,
+            resources: production._ExecutionResources,
+        ) -> production.ProductionExecutionResult:
+            resources.spool = cast("PosixSanitizedBlobSpool", SlowClose())
+            resources.body_store = cast("TransientBodyStore", _AsyncClose(events, "body"))
+            resources.context = cast("RunContext", _AsyncClose(events, "context"))
+            resources.files = cast("PinnedProjectFiles", _SyncClose(events, "files"))
+            resources.sink = cast("LocalArtifactBundleSink", _SyncClose(events, "sink"))
+            executing.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(production, "_execute_with_resources", execute)
+        task = asyncio.create_task(production.execute_production(_request(tmp_path)))
+        await executing.wait()
+        task.cancel()
+        await cleaning.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert events == ["spool", "body", "context", "files", "sink"]
+
+    asyncio.run(scenario())
+
+
 def test_partial_driver_construction_keeps_body_store_owned_for_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

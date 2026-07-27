@@ -203,6 +203,45 @@ def test_bridge_applies_every_caller_limit_and_stays_offline(
     assert settings.sanitization.maximum_value_nodes.value == 47
 
 
+def test_ambient_capture_failure_is_a_value_free_render_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canary = "ambient-render-canary"
+    rendered = False
+
+    def capture(*_arguments: object, **_keywords: object) -> object:
+        raise ValueError(canary)
+
+    async def render(_request_value: object) -> RenderPreviewResult:
+        nonlocal rendered
+        rendered = True
+        return RenderPreviewResult(previews=(_preview(),))
+
+    monkeypatch.setattr(rendering_module, "capture_process_environment", capture)
+    monkeypatch.setattr(rendering_module, "render_prepared_requests", render)
+
+    result = asyncio.run(
+        render_cli_request(
+            _request(_write_project(tmp_path)),
+            PlanningOptions(),
+            invocation_id=_INVOCATION_ID,
+            run_id=_RUN_ID,
+        )
+    )
+
+    assert result.previews == ()
+    assert result.diagnostics == (
+        ApplicationDiagnostic(
+            code="cli.render.environment-capture-failed",
+            severity="error",
+            stage="invocation",
+        ),
+    )
+    assert canary not in repr(result)
+    assert not rendered
+
+
 def test_bridge_renders_a_real_project_end_to_end_without_network(tmp_path: Path) -> None:
     result = asyncio.run(
         render_cli_request(

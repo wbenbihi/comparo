@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+from sys import float_info
 from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
@@ -780,15 +781,17 @@ def test_compare_close_contract_and_empty_service_are_closed_and_typed() -> None
         asyncio.run(service.aclose(timeout=cast("Duration", object())))
     outcome = asyncio.run(service.aclose(timeout=Duration(nanoseconds=0)))
     assert outcome.drained is True
+    assert compare._finite_timeout_seconds(Duration(nanoseconds=10**10_000)) == float_info.max
 
 
-def test_caller_cancellation_drains_the_service_child_without_leaking_its_error(
+def test_caller_cancellation_returns_promptly_and_retains_child_until_done(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
         entered = asyncio.Event()
         cancellation_seen = asyncio.Event()
+        child_finished = asyncio.Event()
         release = asyncio.Event()
 
         async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
@@ -798,6 +801,7 @@ def test_caller_cancellation_drains_the_service_child_without_leaking_its_error(
             except asyncio.CancelledError:
                 cancellation_seen.set()
                 await release.wait()
+                child_finished.set()
                 raise RuntimeError("child failure after cancellation") from None
             raise AssertionError("test child unexpectedly resumed")
 
@@ -817,14 +821,120 @@ def test_caller_cancellation_drains_the_service_child_without_leaking_its_error(
         await entered.wait()
         caller.cancel()
         await cancellation_seen.wait()
-        caller.cancel()
-        await asyncio.sleep(0)
-        release.set()
 
+        done, _pending = await asyncio.wait({caller}, timeout=0.1)
+        assert done == {caller}
         with pytest.raises(asyncio.CancelledError):
             await caller
+        assert prepared.handle in service._inspections
+        assert prepared.handle in service._prepared
+
+        release.set()
+        await child_finished.wait()
+        await asyncio.sleep(0)
         assert prepared.handle not in service._inspections
+        assert prepared.handle in service._prepared
         assert service.discard(prepared.handle) is True
+
+    asyncio.run(scenario())
+
+
+def test_stale_suppressed_cancellation_does_not_mask_service_child_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        suppress_first = asyncio.Event()
+        entered = asyncio.Event()
+
+        async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+            entered.set()
+            await asyncio.Event().wait()
+            raise AssertionError("test child unexpectedly resumed")
+
+        monkeypatch.setattr(compare, "render_prepared_request_window", render)
+        service = CompareService(maximum_outstanding=1)
+        controls = _controls()
+        prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+        assert prepared.handle is not None
+        handle = prepared.handle
+
+        async def orchestrate() -> RenderPreviewWindowResult:
+            try:
+                suppress_first.set()
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                pass
+            return await service.preview_requests(
+                handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+
+        caller = asyncio.create_task(orchestrate())
+        await suppress_first.wait()
+        caller.cancel()
+        await entered.wait()
+        assert caller.cancelling() == 1
+
+        service.close()
+
+        with pytest.raises(CompareServiceError) as cancelled:
+            await caller
+        assert cancelled.value.code is CompareServiceErrorCode.INSPECTION_CANCELLED
+        assert handle not in service._inspections
+        assert handle not in service._prepared
+
+    asyncio.run(scenario())
+
+
+def test_new_caller_cancellation_wins_a_simultaneous_service_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            return RenderPreviewWindowResult(total_executions=1)
+
+        monkeypatch.setattr(compare, "render_prepared_request_window", render)
+        service = CompareService(maximum_outstanding=1)
+        controls = _controls()
+        prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+        assert prepared.handle is not None
+        caller = asyncio.create_task(
+            service.preview_requests(
+                prepared.handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+        await entered.wait()
+
+        service.close()
+        caller.cancel()
+
+        done, _pending = await asyncio.wait({caller}, timeout=0.1)
+        assert done == {caller}
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert prepared.handle in service._inspections
+        assert prepared.handle in service._prepared
+
+        release.set()
+        await service.aclose(timeout=Duration(nanoseconds=1_000_000_000))
+        await asyncio.sleep(0)
+        assert prepared.handle not in service._inspections
+        assert prepared.handle not in service._prepared
 
     asyncio.run(scenario())
 
@@ -862,7 +972,6 @@ def test_inspection_lease_cancellation_is_idempotent() -> None:
         assert lease.cancel() is False
         with pytest.raises(asyncio.CancelledError):
             await task
-        await compare._drain_cancelled_task(cast("asyncio.Task[object]", task))
         assert lease.cancel() is False
 
     asyncio.run(scenario())
