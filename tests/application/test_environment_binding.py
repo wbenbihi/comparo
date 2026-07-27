@@ -11,6 +11,7 @@ import pytest
 
 from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.adapters.values import PinnedProjectFiles
+from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.environment_binding import EnvironmentBindingResult
 from comparo.application.environment_binding import build_environment_snapshots
 from comparo.application.environment_binding import capture_process_environment
@@ -59,7 +60,14 @@ def _build(
         build_environment_snapshots(
             project,
             files,
-            ambient=None if ambient is None else tuple(sorted(ambient.items())),
+            ambient=(
+                None
+                if ambient is None
+                else CapturedAmbientEnvironment(
+                    tuple(sorted(ambient.items())),
+                    limits=EnvironmentSourceLimits(),
+                )
+            ),
             limits=EnvironmentSourceLimits(),
         )
     )
@@ -158,16 +166,33 @@ def test_process_environment_is_frozen_only_when_selected_sources_inherit_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(os, "environ", {"TOKEN": "captured"})
+    ambient_canary = "ambient-value-canary"
+    monkeypatch.setattr(os, "environ", {"TOKEN": ambient_canary})
     (tmp_path / "without").mkdir()
     (tmp_path / "with").mkdir()
     without_inheritance = _project(tmp_path / "without", "{}")
     with_inheritance = _project(tmp_path / "with", "{inheritProcess: true}")
 
-    assert capture_process_environment(without_inheritance, EnvironmentSourceLimits()) == ()
-    assert capture_process_environment(with_inheritance, EnvironmentSourceLimits()) == (
-        ("TOKEN", "captured"),
-    )
+    without = capture_process_environment(without_inheritance, EnvironmentSourceLimits())
+    captured = capture_process_environment(with_inheritance, EnvironmentSourceLimits())
+
+    assert type(without) is CapturedAmbientEnvironment
+    assert type(captured) is CapturedAmbientEnvironment
+    assert repr(without) == "<captured-ambient-environment>"
+    assert ambient_canary not in repr(captured)
+    with PinnedProjectFiles((tmp_path / "with").resolve()) as files:
+        result = asyncio.run(
+            build_environment_snapshots(
+                with_inheritance,
+                files,
+                ambient=captured,
+                limits=EnvironmentSourceLimits(),
+            )
+        )
+    access = SensitiveValueAccess(purpose="test.captured-ambient")
+    token = result.snapshots[0].entries[0].value
+    assert is_sensitive_value(token)
+    assert cast("JsonString", token.reveal(access=access)).value == ambient_canary
 
 
 def test_safety_profiles_are_bound_before_environment_adapter_admission(tmp_path: Path) -> None:

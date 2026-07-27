@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 from comparo.adapters.values import EnvironmentSourceLimits
+from comparo.adapters.values import PinnedProjectFiles
+from comparo.application.environment_binding import CapturedAmbientEnvironment
+from comparo.application.environment_binding import build_environment_snapshots
 from comparo.application.environment_binding import capture_process_environment
 from comparo.application.environment_binding import validate_ambient_environment
 from comparo.application.preflight import PreparedProjectPlan
@@ -24,6 +28,49 @@ def test_process_capture_requires_exact_boundary_types(tmp_path: Path) -> None:
         capture_process_environment(cast("PreparedProjectPlan", object()), limits)
     with pytest.raises(TypeError, match="EnvironmentSourceLimits"):
         capture_process_environment(project, cast("EnvironmentSourceLimits", object()))
+
+
+def test_captured_ambient_is_redacted_immutable_and_exactly_typed() -> None:
+    canary = "captured-ambient-secret-canary"
+    captured = CapturedAmbientEnvironment(
+        (("TOKEN", canary),),
+        limits=EnvironmentSourceLimits(),
+    )
+
+    assert repr(captured) == "<captured-ambient-environment>"
+    assert str(captured) == "<captured-ambient-environment>"
+    assert canary not in repr(captured)
+    with pytest.raises(AttributeError, match="immutable"):
+        captured.anything = object()
+    with pytest.raises(AttributeError, match="immutable"):
+        del captured.anything  # type: ignore[attr-defined]
+    with pytest.raises(TypeError, match="limits"):
+        CapturedAmbientEnvironment(
+            (),
+            limits=cast("EnvironmentSourceLimits", object()),
+        )
+
+
+def test_captured_ambient_cannot_launder_permissive_limits(tmp_path: Path) -> None:
+    project = _project(tmp_path, "{inheritProcess: true}")
+    captured = CapturedAmbientEnvironment(
+        (("TOKEN", "large"),),
+        limits=EnvironmentSourceLimits(),
+    )
+    tighter = EnvironmentSourceLimits(maximum_value_bytes=ByteCount(value=2))
+
+    with (
+        PinnedProjectFiles(tmp_path.resolve()) as files,
+        pytest.raises(ValueError, match="value exceeds"),
+    ):
+        asyncio.run(
+            build_environment_snapshots(
+                project,
+                files,
+                ambient=captured,
+                limits=tighter,
+            )
+        )
 
 
 @pytest.mark.parametrize(

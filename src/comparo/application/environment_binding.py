@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+from typing import Never
 from typing import cast
 from typing import final
+from typing import override
 
 import msgspec
 
@@ -28,6 +30,9 @@ from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import SensitiveValueAccess
+from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.values import JsonArray
 from comparo.core.domain.values import JsonBoolean
@@ -38,6 +43,71 @@ from comparo.core.planning._canonical import resource_spec
 from comparo.core.resolution.models import EnvironmentSnapshot
 
 _ENV_SHAPE = DiagnosticCode(value="environment.source.shape-invalid")
+_CAPTURED_AMBIENT_ORIGIN = TaintOriginId(value="runtime/application-ambient-snapshot")
+_CAPTURED_AMBIENT_ACCESS = SensitiveValueAccess(purpose="application-ambient-snapshot")
+
+
+@final
+class CapturedAmbientEnvironment:
+    """A bounded ambient snapshot that is value-free in repr and debug containers."""
+
+    __slots__ = ("_values",)
+    _values: SensitiveValue[tuple[tuple[str, str], ...]]
+
+    def __init__(
+        self,
+        values: tuple[tuple[str, str], ...],
+        *,
+        limits: EnvironmentSourceLimits,
+    ) -> None:
+        """Validate and seal one immutable ambient snapshot."""
+        if type(limits) is not EnvironmentSourceLimits:
+            raise TypeError("captured ambient limits must be EnvironmentSourceLimits")
+        validate_ambient_environment(values, limits)
+        object.__setattr__(
+            self,
+            "_values",
+            SensitiveValue(values, origins=(_CAPTURED_AMBIENT_ORIGIN,)),
+        )
+
+    @override
+    def __repr__(self) -> str:
+        """Return a permanently value-free debug representation."""
+        return "<captured-ambient-environment>"
+
+    @override
+    def __str__(self) -> str:
+        """Return a permanently value-free display representation."""
+        return "<captured-ambient-environment>"
+
+    @override
+    def __setattr__(self, name: str, value: object) -> Never:
+        """Reject mutation after construction."""
+        del name, value
+        raise AttributeError("captured ambient environment is immutable")
+
+    @override
+    def __delattr__(self, name: str) -> Never:
+        """Reject deletion after construction."""
+        del name
+        raise AttributeError("captured ambient environment is immutable")
+
+
+def _reveal_captured_ambient(
+    value: CapturedAmbientEnvironment,
+) -> tuple[tuple[str, str], ...]:
+    if type(value) is not CapturedAmbientEnvironment:
+        raise TypeError("ambient reveal requires CapturedAmbientEnvironment")
+    return value._values.reveal(access=_CAPTURED_AMBIENT_ACCESS)
+
+
+def _validate_captured_ambient(
+    value: CapturedAmbientEnvironment,
+    limits: EnvironmentSourceLimits,
+) -> None:
+    if type(value) is not CapturedAmbientEnvironment:
+        raise TypeError("ambient validation requires CapturedAmbientEnvironment")
+    validate_ambient_environment(_reveal_captured_ambient(value), limits)
 
 
 @final
@@ -65,7 +135,7 @@ async def build_environment_snapshots(
     project: PreparedProjectPlan,
     files: PinnedProjectFiles,
     *,
-    ambient: tuple[tuple[str, str], ...] | None,
+    ambient: CapturedAmbientEnvironment | None,
     limits: EnvironmentSourceLimits,
 ) -> EnvironmentBindingResult:
     """Validate every selected source before reading files, then build all snapshots."""
@@ -75,13 +145,21 @@ async def build_environment_snapshots(
         raise TypeError("Environment binding requires PinnedProjectFiles")
     if type(limits) is not EnvironmentSourceLimits:
         raise TypeError("Environment binding requires EnvironmentSourceLimits")
+    if ambient is not None and type(ambient) is not CapturedAmbientEnvironment:
+        raise TypeError("ambient environment must be a captured sealed snapshot or absent")
     lowered, diagnostics = _lower_requests(project)
     if diagnostics:
         return EnvironmentBindingResult(diagnostics=diagnostics)
+    inherits_process = any(item.inherit_process for item in lowered)
+    if ambient is not None and inherits_process:
+        _validate_captured_ambient(ambient, limits)
+    ambient_values = (
+        _reveal_captured_ambient(ambient) if ambient is not None and inherits_process else ()
+    )
     builder = RunEnvironmentSnapshotBuilder(
         files,
         project.policy,
-        ambient=(ambient or ()) if any(item.inherit_process for item in lowered) else (),
+        ambient=ambient_values,
         limits=limits,
     )
     snapshots, failures = await _build_requests(project, builder, lowered)
@@ -93,16 +171,19 @@ async def build_environment_snapshots(
 def capture_process_environment(
     project: PreparedProjectPlan,
     limits: EnvironmentSourceLimits,
-) -> tuple[tuple[str, str], ...]:
+) -> CapturedAmbientEnvironment:
     """Capture selected process values once, before asynchronous execution can begin."""
     if type(project) is not PreparedProjectPlan:
         raise TypeError("process environment capture requires PreparedProjectPlan")
     if type(limits) is not EnvironmentSourceLimits:
         raise TypeError("process environment capture requires EnvironmentSourceLimits")
     lowered, _diagnostics = _lower_requests(project)
-    if not any(item.inherit_process for item in lowered):
-        return ()
-    return capture_ambient_environment(os.environ, project.policy, limits=limits)
+    values = (
+        capture_ambient_environment(os.environ, project.policy, limits=limits)
+        if any(item.inherit_process for item in lowered)
+        else ()
+    )
+    return CapturedAmbientEnvironment(values, limits=limits)
 
 
 def validate_ambient_environment(
@@ -329,6 +410,7 @@ def _diagnostic(code: DiagnosticCode, resource: CompiledResource) -> Diagnostic:
 
 
 __all__ = (
+    "CapturedAmbientEnvironment",
     "EnvironmentBindingResult",
     "build_environment_snapshots",
     "capture_process_environment",

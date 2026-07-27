@@ -10,6 +10,7 @@ from uuid import UUID
 import msgspec
 import pytest
 
+from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.planning import PlanningOptions
@@ -183,7 +184,7 @@ def test_bridge_applies_every_caller_limit_and_stays_offline(
     )
     assert result.previews == (_preview(),)
     application = captured[0]
-    assert application.ambient_environment == ()
+    assert type(application.ambient_environment) is CapturedAmbientEnvironment
     settings = application.settings
     assert settings.files.maximum_bytes.value == 2
     assert settings.files.maximum_path_bytes.value == 3

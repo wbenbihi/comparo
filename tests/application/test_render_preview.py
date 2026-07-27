@@ -19,6 +19,7 @@ from comparo.adapters.values import LocalFilesystemError
 from comparo.adapters.values import LocalFilesystemErrorCode
 from comparo.adapters.values import YamlValueLimits
 from comparo.application import render_preview as rendering
+from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.preflight import PreparedProjectPlan
@@ -146,7 +147,14 @@ def _render(
             RenderPreviewRequest(
                 project=project,
                 settings=_settings() if settings is None else settings,
-                ambient_environment=None if ambient is None else tuple(sorted(ambient.items())),
+                ambient_environment=(
+                    None
+                    if ambient is None
+                    else CapturedAmbientEnvironment(
+                        tuple(sorted(ambient.items())),
+                        limits=EnvironmentSourceLimits(),
+                    )
+                ),
             )
         )
     )
@@ -473,13 +481,13 @@ def test_public_contracts_reject_untyped_or_ambiguous_state(tmp_path: Path) -> N
         RenderPreviewRequest(project=cast("PreparedProjectPlan", object()), settings=settings)
     with pytest.raises(TypeError, match="RenderPreviewSettings"):
         RenderPreviewRequest(project=project, settings=cast("RenderPreviewSettings", object()))
-    with pytest.raises(TypeError, match="immutable text pairs"):
+    with pytest.raises(TypeError, match="captured and sealed"):
         RenderPreviewRequest(
             project=project,
             settings=settings,
             ambient_environment=cast("Any", []),
         )
-    with pytest.raises(TypeError, match="immutable text pairs"):
+    with pytest.raises(TypeError, match="captured and sealed"):
         RenderPreviewRequest(
             project=project,
             settings=settings,
@@ -766,3 +774,33 @@ def test_resource_cleanup_is_best_effort(failing: str | None) -> None:
     assert files.closed
     assert context.closed
     assert provider.closed
+
+
+def test_render_cleanup_finishes_all_resources_under_repeated_cancellation() -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowProvider:
+            async def close(self) -> None:
+                entered.set()
+                await release.wait()
+
+        resources = rendering._RenderResources()
+        files = _SyncClose()
+        context = _AsyncClose()
+        resources.provider = cast("Any", SlowProvider())
+        resources.context = cast("Any", context)
+        resources.files = cast("Any", files)
+        task = asyncio.create_task(resources.close())
+        await entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert context.closed
+        assert files.closed
+
+    asyncio.run(scenario())

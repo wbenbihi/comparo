@@ -20,8 +20,10 @@ from comparo.adapters.values import SafeYamlValueDecoder
 from comparo.adapters.values import SecureGenerator
 from comparo.adapters.values import SystemRunClock
 from comparo.adapters.values import YamlValueLimits
+from comparo.application._async_cleanup import finish_cleanup
+from comparo.application.environment_binding import CapturedAmbientEnvironment
+from comparo.application.environment_binding import _validate_captured_ambient
 from comparo.application.environment_binding import build_environment_snapshots
-from comparo.application.environment_binding import validate_ambient_environment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import inspect_diagnostic
@@ -92,7 +94,7 @@ class RenderPreviewRequest(msgspec.Struct, frozen=True, kw_only=True):
 
     project: PreparedProjectPlan
     settings: RenderPreviewSettings
-    ambient_environment: tuple[tuple[str, str], ...] | None = None
+    ambient_environment: CapturedAmbientEnvironment | None = None
 
     def __post_init__(self) -> None:
         """Validate the complete application boundary without copying live values."""
@@ -100,7 +102,12 @@ class RenderPreviewRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("render preview requires PreparedProjectPlan")
         if type(self.settings) is not RenderPreviewSettings:
             raise TypeError("render preview requires RenderPreviewSettings")
-        validate_ambient_environment(self.ambient_environment, self.settings.environment)
+        if self.ambient_environment is not None and (
+            type(self.ambient_environment) is not CapturedAmbientEnvironment
+        ):
+            raise TypeError("render preview ambient environment must be captured and sealed")
+        if self.ambient_environment is not None:
+            _validate_captured_ambient(self.ambient_environment, self.settings.environment)
 
 
 @final
@@ -351,26 +358,27 @@ class _RenderResources:
     async def close(self) -> bool:
         """Close every acquired resource best-effort and report only value-free failure state."""
         failed = False
+        cancellation_received = False
         if self.boundary is not None:
             try:
                 self.boundary.close()
             except Exception:  # noqa: BLE001 - cleanup details never cross the safe boundary
                 failed = True
         if self.provider is not None:
-            try:
-                await self.provider.close()
-            except Exception:  # noqa: BLE001 - continue closing independent resources
-                failed = True
+            outcome = await finish_cleanup(self.provider.close())
+            failed = failed or outcome.failed
+            cancellation_received = cancellation_received or outcome.cancellation_received
         if self.context is not None:
-            try:
-                await self.context.close()
-            except Exception:  # noqa: BLE001 - continue closing independent resources
-                failed = True
+            outcome = await finish_cleanup(self.context.close())
+            failed = failed or outcome.failed
+            cancellation_received = cancellation_received or outcome.cancellation_received
         if self.files is not None:
             try:
                 self.files.close()
             except Exception:  # noqa: BLE001 - cleanup details never cross the safe boundary
                 failed = True
+        if cancellation_received:
+            raise asyncio.CancelledError
         return failed
 
 
