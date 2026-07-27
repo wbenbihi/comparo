@@ -158,6 +158,7 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
     parts: list[str] = []
     used = len(prefix)
     used = _append(parts, "curl", used, request.export_limits.maximum_command_characters)
+    used = _append(parts, "--disable", used, request.export_limits.maximum_command_characters)
     used = _append(
         parts,
         "--no-progress-meter",

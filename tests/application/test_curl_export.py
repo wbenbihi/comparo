@@ -70,7 +70,12 @@ def test_curl_embeds_complete_utf8_sanitized_body_without_live_values(tmp_path: 
 
     assert exported.executable is True
     assert exported.exact_for_sanitized_capture is True
-    assert exported.command.startswith("printf '%s' 'left' | curl ")
+    assert exported.command.startswith("printf '%s' 'left' | curl --disable --no-progress-meter ")
+    assert exported.command.split(" | ", 1)[1].split()[:3] == [
+        "curl",
+        "--disable",
+        "--no-progress-meter",
+    ]
     assert "--data-binary '@-'" in exported.command
     assert "right" not in exported.command
     assert "accept: application/json" in exported.command
