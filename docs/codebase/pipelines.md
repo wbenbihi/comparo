@@ -198,19 +198,24 @@ For Request resources it applies the same typed `RequestOverride` expression rep
 production request preparation. It creates one inspection-owned `RunContext` and resolves through
 `MaskedValueResolver`, which shares the production resolution engine. A sensitive result,
 including a sensitive composite, collapses to `<masked>`, its value kind, bounded opaque source
-categories, and an omitted-origin count; no source-derived origin identifier, sensitive child
-value, or sensitive digest is returned. This collapse is deliberately fail-closed. A frontend that
-needs to show public siblings inside a sensitive composite inspects the known effective child
-field paths independently and never attempts to expand the collapsed aggregate.
+categories, and a count of origins skipped before classification because the caller's origin-count
+or category-byte ceiling was reached; origins represented by an already retained category are not
+counted as omitted. No source-derived origin identifier, sensitive child value, or sensitive
+digest is returned. This collapse is deliberately fail-closed. A frontend that needs to show
+public siblings inside a sensitive composite inspects the known effective child field paths
+independently and never attempts to expand the collapsed aggregate.
 
 Public results are emitted as pre-order scalar/container nodes with caller-owned page, scalar,
 path-depth, path-segment, complete-traversal node/byte, and taint-lineage limits. Continuation pages
 require the previous `projection_fingerprint`, so a changed public projection fails closed instead
 of combining inconsistent pages. For masked results that fingerprint covers only disclosed masked
 metadata; it intentionally makes no claim about undisclosed secret-content identity. A single
-cancellable traversal computes the public fingerprint and page, with iterator-frame auxiliary
-memory proportional to nesting depth rather than sibling count. Traversal ceilings bound the work
-needed even for a deep page; source/resolution budgets separately bound value construction.
+cancellable traversal computes the public fingerprint and page. It keeps one compact cursor per
+nesting level and one mutable current path, copying that path only for nodes returned in the bounded
+page. Path depth and each new segment are validated once as the traversal descends, so auxiliary
+memory and path-validation work do not grow quadratically with nesting depth. Traversal ceilings
+bound the work needed even for a deep page; source/resolution budgets separately bound value
+construction.
 
 The returned `freshness` is explicit: the plan checkpoint and captured ambient-process input are
 exact. Dotenv files, project files, and generated values are sampled for inspection; production
@@ -337,7 +342,8 @@ The artifact manifest contains:
 - executions with Matrix coordinates, outcomes, failures, timings, attempts, exchanges, and
   assertions;
 - comparisons with exact baseline/candidate links and diff facts;
-- sanitized wire request/response metadata and optional body captures;
+- sanitized wire request/response metadata, exact request URL/header/cookie redaction-and-omission
+  accounting, and optional body captures;
 - blob descriptors and capture-coverage issues.
 
 Every body capture says whether it is complete, partial, or omitted and why. Bodies are detached
@@ -361,8 +367,11 @@ redaction rules and Environment-specific response classification provider.
 model with summary, execution rows, comparison rows, assertion/diff facts, evidence, stable
 references, and cross-links. Execution rows expose canonical attempt/exchange topology and closed
 HTTP message slots: retained sanitized metadata, a typed omission reason, or a response that was
-not produced because transport failed. Retained exchange messages also expose immutable body
-coordinates and capture-presence flags. Terminal pre-send request metadata remains inspectable
+not produced because transport failed. Attempt and exchange timing sequences are preserved
+exactly. Retained exchange messages also expose immutable body coordinates bound to the artifact
+version, artifact ID, and exact canonical-results SHA-256; replacement reports cannot reuse stale
+coordinates. Request metadata carries exact URL, header, and cookie redaction counts. Terminal
+pre-send request metadata remains inspectable
 without fabricating an exchange. The projection contains no body bytes, blob descriptors, storage
 locators, or live runtime objects; it never opens blobs or changes verdicts.
 
@@ -384,7 +393,9 @@ context. Per-entry metadata failures remain isolated. Notes stay in the full art
 compact rows. `verify_artifact` authenticates every blob before full use;
 `read_artifact_body_window` resolves result coordinates to a truthful bounded body window.
 
-`export_artifact_curl` serializes only authenticated sanitized request captures. Report retention
+`export_artifact_curl` serializes only authenticated sanitized request captures and sums their typed
+URL, header, cookie, and body provenance for its redaction count and warning; marker text is never
+used as inferred provenance. Report retention
 is a two-phase reviewed plan/application workflow; application re-verifies coordinates and moves
 bundles into private recoverable trash. `restore_report` authenticates a restored bundle and rolls
 it back if verification fails. Trash is deliberately recoverable archive removal, not permanent

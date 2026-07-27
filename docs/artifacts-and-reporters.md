@@ -46,6 +46,7 @@ The manifest retains:
 - terminal completion and gate outcomes without collapsing absence into success;
 - every execution, attempt, redirect exchange, comparison, assertion fact, and diff fact in
   deterministic order;
+- exact execution-, attempt-, and exchange-level duration-or-absence timing facts;
 - exact gate, summary, and resource-budget counts;
 - explicit partial and omitted coverage;
 - content descriptors for sanitized blobs, with no path or transient storage locator.
@@ -76,6 +77,19 @@ and the built-in credential query-name catalog cannot be weakened by project con
 The artifact DTOs enforce that fixed credential floor again during construction and decoding;
 the runtime registry and literal matcher provide the broader backstop for project-declared and
 observed sensitive values.
+
+Sanitized requests retain required `url_redaction_count`, `header_redaction_count`, and
+`cookie_redaction_count` provenance alongside the safe values. URL accounting includes literal
+substitutions, mandatory credential-query masking, and each query parameter omitted by a
+source-wide custom rule. Header and cookie accounting includes every literal substitution and
+mandatory value mask; a source-wide rule counts each omitted field or cookie occurrence. These are
+trusted producer-owned operation counts, not values a consumer can reconstruct from sanitized
+data. Artifact decoding fail-closes when a declared count is below the mandatory query masking or
+retained masked-field/cookie lower bound that remains observable. It cannot prove generic
+literal-substitution or source-wide-omission counts after originals have been discarded. The typed
+provenance lets result views and cURL export disclose that a request was changed without retaining
+the original values. Consumers never scan for `<redacted>`: outside mandatory credential semantics
+that text may be an ordinary public literal with a zero count and no redaction warning.
 
 Literal matching has four explicit caller-owned ceilings: retained pattern count, aggregate
 retained pattern bytes, bytes in one source sensitive value, and nodes in one structured sensitive
@@ -148,8 +162,15 @@ artifact version, reconstructs blob names only from validated digests, and verif
 fixed-size chunks without retaining whole bodies. `open_local_artifact_bundle` also exposes a
 lifetime-bound `SanitizedBlobSource` for offline body consumers. It accepts only descriptors
 declared by that artifact and performs a complete digest pass before yielding any bytes.
+Application body references additionally retain that same canonical results SHA-256. Body-window
+and authenticated-request services compare it before nested coordinate lookup, preventing a stale
+reference from selecting a different authenticated report that reuses an artifact ID.
 The first adapter intentionally rejects unsupported platforms rather than falling back to unsafe
-pathname checks. Network-filesystem durability and Windows persistence are not claimed.
+pathname checks. It is an availability contract for responsive local POSIX filesystems: once a
+blocking descriptor operation has started, cancellation waits for that operation and any required
+ownership disposal to settle before propagating, preventing abandoned or double-closed resources.
+Unbounded syscall latency on FUSE or network-backed roots, network-filesystem durability, and
+Windows persistence are not claimed.
 
 ## Reporters
 

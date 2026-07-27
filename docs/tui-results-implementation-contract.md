@@ -18,11 +18,17 @@ Detached request and response bodies are never loaded by the manifest result pro
 exchange instead has closed request and response slots. A slot is either retained sanitized
 metadata, an explicit typed omission reason, or—for a response only—not produced because the
 exchange failed. Retained request metadata contains method, sanitized URL, ordered sanitized
-headers and masked cookies. Retained response metadata contains status, protocol, ordered
-sanitized headers and trailers. Both sides expose only whether capture metadata exists; neither
+headers and masked cookies, plus exact retained URL/header/cookie redaction-and-omission counts.
+Those counts are typed producer provenance; a frontend must not infer redaction from marker text.
+Retained response
+metadata contains status, protocol, ordered sanitized headers and trailers. Both sides expose only
+whether capture metadata exists; neither
 side contains body bytes, blob descriptors, or storage locators.
 
-Each retained exchange message also projects an immutable `ArtifactBodyReference` coordinate. A
+Each retained exchange message also projects an immutable `ArtifactBodyReference` coordinate
+bound to the owning artifact ID, artifact API version, and SHA-256 of the exact canonical
+`RunArtifact` results document. A stale coordinate therefore cannot select a replacement report
+that reuses the same bundle ID and nested execution coordinates. A
 frontend must pass that coordinate to the separate, authenticated, bounded
 `read_artifact_body_window` service to obtain content; request coordinates may also be passed to
 `export_artifact_curl`.
@@ -30,7 +36,9 @@ frontend must pass that coordinate to the separate, authenticated, bounded
 The coordinate types live in the pure `application.artifact_references` contract rather than the
 effectful artifact service. Each execution also projects every attempt and exchange with canonical
 zero-based ordinals and explicit terminal markers. Message rows repeat their owning ordinals and
-markers and are validated against the retained metadata in canonical wire order. A final pre-send
+markers and are validated against the retained metadata in canonical wire order. Attempt and
+exchange rows retain their exact artifact timing sequences, including explicit not-measured
+reasons; frontends must not derive those values from the execution aggregate. A final pre-send
 attempt remains visible with its closed failure, explicit retained-or-omitted request slot, and
 `pre_send_terminal` marker even when it produced no exchange body coordinate; a frontend must not
 infer terminal state from the last visible message. Terminal pre-send bodies are metadata-only in

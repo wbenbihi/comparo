@@ -56,7 +56,7 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `report_archive` | Authenticated searchable cursor-paged report rows and metadata projections |
 | `report_retention` | Reviewable fingerprinted recoverable report pruning and restoration |
 | `result_analysis` | Bounded Issues, Requests, Rules, Fields, and Timeline projections |
-| `results` | Body-free final artifact projection with stable references, cross-links, sanitized HTTP metadata, explicit omission states, and canonical retry/redirect/pre-send topology |
+| `results` | Body-free final artifact projection with artifact-bound references, cross-links, sanitized HTTP metadata and typed URL/header/cookie redaction counts, exact timings, explicit omission states, and canonical retry/redirect/pre-send topology |
 | `runtime_capabilities` | Fail-closed admission of the production runtime's currently implemented configuration subset |
 | `source_inspection` | Revision-pinned masked/exact YAML windows and bounded effective resource projections |
 
