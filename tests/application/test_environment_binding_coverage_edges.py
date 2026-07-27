@@ -10,6 +10,7 @@ import pytest
 
 from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.adapters.values import PinnedProjectFiles
+from comparo.application import environment_binding
 from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.environment_binding import build_environment_snapshots
 from comparo.application.environment_binding import capture_process_environment
@@ -28,6 +29,25 @@ def test_process_capture_requires_exact_boundary_types(tmp_path: Path) -> None:
         capture_process_environment(cast("PreparedProjectPlan", object()), limits)
     with pytest.raises(TypeError, match="EnvironmentSourceLimits"):
         capture_process_environment(project, cast("EnvironmentSourceLimits", object()))
+    with pytest.raises(TypeError, match="ambient reveal"):
+        environment_binding._reveal_captured_ambient(cast("CapturedAmbientEnvironment", object()))
+    with pytest.raises(TypeError, match="ambient validation"):
+        environment_binding._validate_captured_ambient(
+            cast("CapturedAmbientEnvironment", object()),
+            limits,
+        )
+    with (
+        PinnedProjectFiles(tmp_path.resolve()) as files,
+        pytest.raises(TypeError, match="captured sealed snapshot"),
+    ):
+        asyncio.run(
+            build_environment_snapshots(
+                project,
+                files,
+                ambient=cast("CapturedAmbientEnvironment", object()),
+                limits=limits,
+            )
+        )
 
 
 def test_captured_ambient_is_redacted_immutable_and_exactly_typed() -> None:

@@ -19,6 +19,7 @@ from comparo.adapters.values import LocalFilesystemError
 from comparo.adapters.values import LocalFilesystemErrorCode
 from comparo.adapters.values import YamlValueLimits
 from comparo.application import render_preview as rendering
+from comparo.application._async_cleanup import finish_cleanup
 from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
@@ -804,3 +805,13 @@ def test_render_cleanup_finishes_all_resources_under_repeated_cancellation() -> 
         assert files.closed
 
     asyncio.run(scenario())
+
+
+def test_cleanup_helper_reports_a_self_cancelled_cleanup_without_failure() -> None:
+    async def cancelled_cleanup() -> None:
+        raise asyncio.CancelledError
+
+    outcome = asyncio.run(finish_cleanup(cancelled_cleanup()))
+
+    assert outcome.cancellation_received is True
+    assert outcome.failed is False

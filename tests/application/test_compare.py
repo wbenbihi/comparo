@@ -15,6 +15,7 @@ import pytest
 from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.application import compare
 from comparo.application import execution_session
+from comparo.application.compare import CompareCloseResult
 from comparo.application.compare import CompareExecutionControls
 from comparo.application.compare import CompareIntent
 from comparo.application.compare import ComparePreparationHandle
@@ -760,6 +761,74 @@ def test_compare_aclose_has_caller_owned_timeout_and_eventual_drain(
     asyncio.run(scenario())
 
 
+def test_compare_close_contract_and_empty_service_are_closed_and_typed() -> None:
+    diagnostic = ApplicationDiagnostic(code="close.timeout", severity="error", stage="runtime")
+    with pytest.raises(TypeError, match="drained state"):
+        CompareCloseResult(drained=cast("bool", object()))
+    with pytest.raises(TypeError, match="diagnostics"):
+        CompareCloseResult(
+            drained=False,
+            diagnostics=cast("tuple[ApplicationDiagnostic, ...]", (1,)),
+        )
+    with pytest.raises(ValueError, match="either drained state or diagnostics"):
+        CompareCloseResult(drained=True, diagnostics=(diagnostic,))
+    with pytest.raises(ValueError, match="either drained state or diagnostics"):
+        CompareCloseResult(drained=False)
+
+    service = CompareService(maximum_outstanding=1)
+    with pytest.raises(TypeError, match="timeout must be Duration"):
+        asyncio.run(service.aclose(timeout=cast("Duration", object())))
+    outcome = asyncio.run(service.aclose(timeout=Duration(nanoseconds=0)))
+    assert outcome.drained is True
+
+
+def test_caller_cancellation_drains_the_service_child_without_leaking_its_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        cancellation_seen = asyncio.Event()
+        release = asyncio.Event()
+
+        async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+                await release.wait()
+                raise RuntimeError("child failure after cancellation") from None
+            raise AssertionError("test child unexpectedly resumed")
+
+        monkeypatch.setattr(compare, "render_prepared_request_window", render)
+        service = CompareService(maximum_outstanding=1)
+        controls = _controls()
+        prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+        assert prepared.handle is not None
+        caller = asyncio.create_task(
+            service.preview_requests(
+                prepared.handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+        await entered.wait()
+        caller.cancel()
+        await cancellation_seen.wait()
+        caller.cancel()
+        await asyncio.sleep(0)
+        release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert prepared.handle not in service._inspections
+        assert service.discard(prepared.handle) is True
+
+    asyncio.run(scenario())
+
+
 def test_compare_ambient_snapshot_repr_and_nested_debug_state_are_redacted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -793,6 +862,7 @@ def test_inspection_lease_cancellation_is_idempotent() -> None:
         assert lease.cancel() is False
         with pytest.raises(asyncio.CancelledError):
             await task
+        await compare._drain_cancelled_task(cast("asyncio.Task[object]", task))
         assert lease.cancel() is False
 
     asyncio.run(scenario())

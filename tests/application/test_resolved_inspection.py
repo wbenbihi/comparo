@@ -768,6 +768,47 @@ def test_taint_lineage_is_bounded_and_discloses_only_opaque_categories() -> None
     assert "bbbbbbbb" not in encoded
 
 
+def test_taint_lineage_work_and_byte_egress_are_independently_bounded() -> None:
+    repeated_category = tuple(TaintOriginId(value=f"secret/source-{index}") for index in range(300))
+    sources, omitted = asyncio.run(
+        inspection_module._bounded_taint_sources(
+            repeated_category,
+            _settings(maximum_taint_origins=300, maximum_taint_origin_bytes=32),
+        )
+    )
+    assert sources == (ResolvedTaintSource.SECRET,)
+    assert omitted == 0
+
+    denied, denied_count = asyncio.run(
+        inspection_module._bounded_taint_sources(
+            (
+                TaintOriginId(value="secret/one"),
+                TaintOriginId(value="environment/two"),
+            ),
+            _settings(maximum_taint_origins=2, maximum_taint_origin_bytes=1),
+        )
+    )
+    assert denied == ()
+    assert denied_count == 2
+
+
+def test_private_node_window_skips_prefix_and_detects_continuation() -> None:
+    nodes = tuple(
+        inspection_module._node(
+            ordinal,
+            (str(ordinal),),
+            JsonNull(),
+            8,
+        )
+        for ordinal in range(3)
+    )
+
+    page, next_node = inspection_module._window(iter(nodes), start=1, maximum=1)
+
+    assert tuple(item.ordinal for item in page) == (1,)
+    assert next_node == 2
+
+
 def test_masked_projection_fingerprint_does_not_claim_secret_content_identity() -> None:
     first = inspection_module._masked_projection_fingerprint(
         ValueKind.STRING,
@@ -1280,6 +1321,7 @@ def test_output_contracts_are_closed_and_serializable(tmp_path: Path) -> None:
         {"masked": object()},
         {"taint_sources": object()},
         {"taint_sources": (object(),)},
+        {"taint_sources": (ResolvedTaintSource.SECRET, ResolvedTaintSource.SECRET)},
         {"omitted_taint_origin_count": -1},
         {"start_node": -1},
         {"nodes": object()},

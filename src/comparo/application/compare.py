@@ -570,9 +570,8 @@ async def _drain_cancelled_task(task: asyncio.Task[object]) -> None:
             continue
         except Exception:  # noqa: BLE001 - child outcome is superseded by caller cancellation
             break
-    if task.done():
-        with suppress(BaseException):
-            task.result()
+    with suppress(BaseException):
+        task.result()
 
 
 def _intent_request_diagnostic(request: ComparePrepareRequest) -> ApplicationDiagnostic | None:
