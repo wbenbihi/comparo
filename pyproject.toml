@@ -381,6 +381,20 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Artifact reference contracts remain pure and independently reusable"
+type = "forbidden"
+source_modules = ["comparo.application.artifact_references"]
+forbidden_modules = [
+  "comparo.adapters",
+  "comparo.application.artifacts",
+  "comparo.core",
+  "comparo.reporters",
+  "asyncio",
+  "os",
+  "pathlib",
+]
+
+[[tool.importlinter.contracts]]
 name = "Application services remain independent from terminal frontends"
 type = "forbidden"
 source_modules = ["comparo.application"]

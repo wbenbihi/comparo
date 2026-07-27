@@ -1,7 +1,7 @@
 """Framework-neutral application services shared by CLI and future frontends."""
 
-from comparo.application.artifacts import ArtifactBodyMessage as ArtifactBodyMessage
-from comparo.application.artifacts import ArtifactBodyReference as ArtifactBodyReference
+from comparo.application.artifact_references import ArtifactBodyMessage as ArtifactBodyMessage
+from comparo.application.artifact_references import ArtifactBodyReference as ArtifactBodyReference
 from comparo.application.artifacts import ArtifactBodyWindow as ArtifactBodyWindow
 from comparo.application.artifacts import ArtifactInspection as ArtifactInspection
 from comparo.application.artifacts import ArtifactOperationError as ArtifactOperationError
@@ -200,6 +200,41 @@ from comparo.application.report_retention import ReportRetentionPolicy as Report
 from comparo.application.report_retention import apply_report_retention as apply_report_retention
 from comparo.application.report_retention import plan_report_retention as plan_report_retention
 from comparo.application.report_retention import restore_report as restore_report
+from comparo.application.resolved_inspection import (
+    ResolutionProvenanceInspection as ResolutionProvenanceInspection,
+)
+from comparo.application.resolved_inspection import (
+    ResolvedExecutionCoordinate as ResolvedExecutionCoordinate,
+)
+from comparo.application.resolved_inspection import ResolvedInputTiming as ResolvedInputTiming
+from comparo.application.resolved_inspection import (
+    ResolvedInspectionState as ResolvedInspectionState,
+)
+from comparo.application.resolved_inspection import ResolvedValueFormat as ResolvedValueFormat
+from comparo.application.resolved_inspection import ResolvedValueFreshness as ResolvedValueFreshness
+from comparo.application.resolved_inspection import (
+    ResolvedValueInspection as ResolvedValueInspection,
+)
+from comparo.application.resolved_inspection import (
+    ResolvedValueInspectionRequest as ResolvedValueInspectionRequest,
+)
+from comparo.application.resolved_inspection import (
+    ResolvedValueInspectionResult as ResolvedValueInspectionResult,
+)
+from comparo.application.resolved_inspection import (
+    ResolvedValueInspectionSettings as ResolvedValueInspectionSettings,
+)
+from comparo.application.resolved_inspection import (
+    ResolvedValueInspectionTarget as ResolvedValueInspectionTarget,
+)
+from comparo.application.resolved_inspection import ResolvedValueNode as ResolvedValueNode
+from comparo.application.resolved_inspection import (
+    ResolvedValueProjectionLimits as ResolvedValueProjectionLimits,
+)
+from comparo.application.resolved_inspection import (
+    bind_resolved_value_target as bind_resolved_value_target,
+)
+from comparo.application.resolved_inspection import inspect_resolved_value as inspect_resolved_value
 from comparo.application.result_analysis import AnalysisProjection as AnalysisProjection
 from comparo.application.result_analysis import FieldPathAggregate as FieldPathAggregate
 from comparo.application.result_analysis import IssueAggregate as IssueAggregate
@@ -217,6 +252,8 @@ from comparo.application.results import ExecutionResultRow as ExecutionResultRow
 from comparo.application.results import ResultCrossLink as ResultCrossLink
 from comparo.application.results import ResultEntity as ResultEntity
 from comparo.application.results import ResultFact as ResultFact
+from comparo.application.results import ResultHttpAttempt as ResultHttpAttempt
+from comparo.application.results import ResultHttpExchange as ResultHttpExchange
 from comparo.application.results import ResultHttpMessage as ResultHttpMessage
 from comparo.application.results import ResultProjection as ResultProjection
 from comparo.application.results import ResultReference as ResultReference
@@ -359,9 +396,24 @@ __all__ = (
     "RequestAggregate",
     "RequestBodyOmissionReason",
     "RequestOverride",
+    "ResolutionProvenanceInspection",
+    "ResolvedExecutionCoordinate",
+    "ResolvedInputTiming",
+    "ResolvedInspectionState",
+    "ResolvedValueFormat",
+    "ResolvedValueFreshness",
+    "ResolvedValueInspection",
+    "ResolvedValueInspectionRequest",
+    "ResolvedValueInspectionResult",
+    "ResolvedValueInspectionSettings",
+    "ResolvedValueInspectionTarget",
+    "ResolvedValueNode",
+    "ResolvedValueProjectionLimits",
     "ResultCrossLink",
     "ResultEntity",
     "ResultFact",
+    "ResultHttpAttempt",
+    "ResultHttpExchange",
     "ResultHttpMessage",
     "ResultProjection",
     "ResultProjectionWindow",
@@ -383,6 +435,7 @@ __all__ = (
     "ValueResourceOverride",
     "apply_report_retention",
     "bind_execution_profiles",
+    "bind_resolved_value_target",
     "build_environment_snapshots",
     "build_invocation",
     "capture_process_environment",
@@ -402,6 +455,7 @@ __all__ = (
     "inspect_project_plan",
     "inspect_project_source",
     "inspect_project_workspace",
+    "inspect_resolved_value",
     "inspect_runtime_limits",
     "list_report_archive",
     "persisted_production_execution_defaults_v1",

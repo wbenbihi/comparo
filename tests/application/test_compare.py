@@ -23,6 +23,7 @@ from comparo.application.compare import CompareService
 from comparo.application.compare import CompareServiceError
 from comparo.application.compare import CompareServiceErrorCode
 from comparo.application.inspection import ApplicationDiagnostic
+from comparo.application.inspection import ResourceCoordinate
 from comparo.application.plan_review import PlanReviewInspection
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
@@ -34,7 +35,14 @@ from comparo.application.production_execution import ProductionExecutionResult
 from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
+from comparo.application.resolved_inspection import ResolvedValueInspectionRequest
+from comparo.application.resolved_inspection import ResolvedValueInspectionResult
+from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
+from comparo.application.resolved_inspection import ResolvedValueProjectionLimits
 from comparo.core.artifacts.policy import ArtifactPersistMode
+from comparo.core.configuration.canonical import CompiledResource
+from comparo.core.domain.primitives import ByteCount
+from comparo.core.domain.primitives import PositiveCount
 
 _INVOCATION_ID = UUID("10000000-0000-0000-0000-000000000001")
 _RUN_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -126,6 +134,46 @@ def _controls() -> CompareExecutionControls:
         artifact_root=None,
         approve_mutations=False,
         tool_version="test",
+    )
+
+
+def _coordinate(resource: CompiledResource) -> ResourceCoordinate:
+    definition = resource.definition
+    identity = definition.identity
+    return ResourceCoordinate(
+        namespace=identity.namespace.value,
+        kind=identity.kind.value,
+        resource_id=identity.resource_id.value,
+        fingerprint=definition.fingerprint.digest.hex_value,
+    )
+
+
+def _resolved_target(
+    service: CompareService,
+    handle: ComparePreparationHandle,
+) -> ResolvedValueInspectionTarget:
+    project = service._prepared[handle].project.prepared.project
+    request = next(
+        item for item in project.resources if item.definition.identity.resource_id.value == "ping"
+    )
+    environment = next(
+        item
+        for item in project.resources
+        if item.definition.identity.resource_id.value == "staging"
+    )
+    return ResolvedValueInspectionTarget(
+        resource=_coordinate(request),
+        field_path=("request", "endpoint"),
+        execution_ordinal=0,
+        environment=_coordinate(environment),
+        limits=ResolvedValueProjectionLimits(
+            maximum_page_nodes=PositiveCount(value=8),
+            maximum_scalar_bytes=ByteCount(value=1024),
+            maximum_path_segments=PositiveCount(value=16),
+            maximum_path_segment_bytes=ByteCount(value=128),
+        ),
+        start_node=0,
+        maximum_nodes=8,
     )
 
 
@@ -372,6 +420,227 @@ def test_compare_preview_is_available_when_execution_checkpoint_is_blocked(
     assert blocked.value.code is CompareServiceErrorCode.PREPARATION_BLOCKED
 
 
+def test_compare_resolved_inspection_uses_retained_plan_controls_and_frozen_ambient(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_environment = (("TOKEN", _SECRET_CANARY),)
+    requests: list[ResolvedValueInspectionRequest] = []
+    expected = ResolvedValueInspectionResult(
+        diagnostics=(
+            ApplicationDiagnostic(
+                code="resolution.inspect.test",
+                severity="error",
+                stage="resolution",
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        compare,
+        "capture_process_environment",
+        lambda _project, _limits: captured_environment,
+    )
+
+    async def inspect(request: ResolvedValueInspectionRequest) -> ResolvedValueInspectionResult:
+        requests.append(request)
+        return expected
+
+    monkeypatch.setattr(compare, "inspect_prepared_resolved_value", inspect)
+    settings = production_execution_defaults_v1()
+    controls = msgspec.structs.replace(
+        _controls(),
+        settings=msgspec.structs.replace(
+            settings,
+            artifact=msgspec.structs.replace(
+                settings.artifact,
+                persist=ArtifactPersistMode.ALWAYS,
+            ),
+        ),
+    )
+    service = CompareService(maximum_outstanding=1)
+    prepared = service.prepare(
+        msgspec.structs.replace(
+            _assertion_request(_write_project(tmp_path)),
+            controls=controls,
+        )
+    )
+    assert prepared.handle is not None
+    assert prepared.review is not None
+    assert prepared.review.execution_allowed is False
+    target = _resolved_target(service, prepared.handle)
+
+    result = asyncio.run(service.inspect_resolved_value(prepared.handle, controls, target))
+
+    assert result is expected
+    assert service.outstanding == 1
+    assert len(requests) == 1
+    request = requests[0]
+    retained = service._prepared[prepared.handle]
+    assert request.project is retained.project
+    assert request.ambient_environment == captured_environment
+    assert request.resource == target.resource
+    assert request.field_path == target.field_path
+    assert request.settings.files == controls.settings.files
+    assert request.settings.environment == controls.settings.environment
+    assert request.settings.yaml == controls.settings.yaml
+
+
+@pytest.mark.parametrize("operation", ["preview", "resolved"])
+@pytest.mark.parametrize("revocation", ["discard", "close"])
+def test_compare_revocation_cancels_in_flight_inspections_and_blocks_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    revocation: str,
+) -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        released = asyncio.Event()
+
+        async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+            entered.set()
+            await released.wait()
+            return RenderPreviewWindowResult(total_executions=1)
+
+        async def inspect(
+            _request: ResolvedValueInspectionRequest,
+        ) -> ResolvedValueInspectionResult:
+            entered.set()
+            await released.wait()
+            return ResolvedValueInspectionResult(
+                diagnostics=(
+                    ApplicationDiagnostic(
+                        code="resolution.inspect.test",
+                        severity="error",
+                        stage="resolution",
+                    ),
+                )
+            )
+
+        monkeypatch.setattr(compare, "render_prepared_request_window", render)
+        monkeypatch.setattr(compare, "inspect_prepared_resolved_value", inspect)
+        service = CompareService(maximum_outstanding=1)
+        controls = _controls()
+        prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+        assert prepared.handle is not None
+        handle = prepared.handle
+        task: asyncio.Task[RenderPreviewWindowResult] | asyncio.Task[ResolvedValueInspectionResult]
+        if operation == "preview":
+            task = asyncio.create_task(
+                service.preview_requests(
+                    handle,
+                    controls,
+                    start_ordinal=0,
+                    maximum_previews=1,
+                )
+            )
+        else:
+            task = asyncio.create_task(
+                service.inspect_resolved_value(
+                    handle,
+                    controls,
+                    _resolved_target(service, handle),
+                )
+            )
+        await entered.wait()
+        with pytest.raises(CompareServiceError) as busy:
+            service.validate_start(handle, controls)
+        assert busy.value.code is CompareServiceErrorCode.PREPARATION_BUSY
+        if revocation == "discard":
+            assert service.discard(handle)
+            assert service.discard(handle) is False
+        else:
+            service.close()
+        assert service.outstanding == 1
+        assert handle in service._prepared
+        assert handle in service._inspections
+        assert handle in service._revoked
+        with pytest.raises(CompareServiceError) as revoked:
+            await service.preview_requests(
+                handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        expected = (
+            CompareServiceErrorCode.HANDLE_UNKNOWN
+            if revocation == "discard"
+            else CompareServiceErrorCode.CLOSED
+        )
+        assert revoked.value.code is expected
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert handle not in service._inspections
+        assert handle not in service._revoked
+        assert handle not in service._prepared
+        assert service.outstanding == 0
+        current = asyncio.current_task()
+        assert current is not None
+        service._end_inspection(
+            handle,
+            compare._InspectionLease(cast("asyncio.Task[object]", current)),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_compare_tracks_concurrent_inspection_leases_independently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        entered = 0
+        both_entered = asyncio.Event()
+        released = asyncio.Event()
+
+        async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await released.wait()
+            return RenderPreviewWindowResult(total_executions=1)
+
+        monkeypatch.setattr(compare, "render_prepared_request_window", render)
+        service = CompareService(
+            maximum_outstanding=1,
+            maximum_inspections_per_preparation=2,
+        )
+        controls = _controls()
+        prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+        assert prepared.handle is not None
+        handle = prepared.handle
+        tasks = tuple(
+            asyncio.create_task(
+                service.preview_requests(
+                    handle,
+                    controls,
+                    start_ordinal=0,
+                    maximum_previews=1,
+                )
+            )
+            for _index in range(2)
+        )
+
+        await both_entered.wait()
+        assert len(service._inspections[handle]) == 2
+        with pytest.raises(CompareServiceError) as busy:
+            await service.preview_requests(
+                handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        assert busy.value.code is CompareServiceErrorCode.PREPARATION_BUSY
+        released.set()
+        await asyncio.gather(*tasks)
+
+        assert handle not in service._inspections
+
+    asyncio.run(scenario())
+
+
 def test_compare_preview_validates_retained_authority_without_consuming_it(
     tmp_path: Path,
 ) -> None:
@@ -533,6 +802,11 @@ def test_compare_contains_ambient_capture_failure_without_retaining_a_plan(
 def test_compare_service_rejects_invalid_limits(value: object) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         CompareService(maximum_outstanding=cast("int", value))
+    with pytest.raises(ValueError, match="positive integer"):
+        CompareService(
+            maximum_outstanding=1,
+            maximum_inspections_per_preparation=cast("int", value),
+        )
 
 
 def test_compare_service_error_requires_typed_code() -> None:
@@ -661,6 +935,30 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
                 cast("CompareExecutionControls", object()),
                 start_ordinal=0,
                 maximum_previews=1,
+            )
+        )
+    with pytest.raises(TypeError, match="resolved inspection handle"):
+        asyncio.run(
+            service.inspect_resolved_value(
+                cast("ComparePreparationHandle", object()),
+                _controls(),
+                cast("ResolvedValueInspectionTarget", object()),
+            )
+        )
+    with pytest.raises(TypeError, match="resolved inspection controls"):
+        asyncio.run(
+            service.inspect_resolved_value(
+                ComparePreparationHandle(value=str(_HANDLE_ID)),
+                cast("CompareExecutionControls", object()),
+                cast("ResolvedValueInspectionTarget", object()),
+            )
+        )
+    with pytest.raises(TypeError, match="resolved inspection target"):
+        asyncio.run(
+            service.inspect_resolved_value(
+                ComparePreparationHandle(value=str(_HANDLE_ID)),
+                _controls(),
+                cast("ResolvedValueInspectionTarget", object()),
             )
         )
     with pytest.raises(TypeError, match="start handle"):

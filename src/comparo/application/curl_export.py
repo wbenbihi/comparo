@@ -8,8 +8,8 @@ from typing import final
 
 import msgspec
 
-from comparo.application.artifacts import ArtifactBodyMessage
-from comparo.application.artifacts import ArtifactBodyReference
+from comparo.application.artifact_references import ArtifactBodyMessage
+from comparo.application.artifact_references import ArtifactBodyReference
 from comparo.application.artifacts import ArtifactOperationError
 from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.application.artifacts import ArtifactReadLimits

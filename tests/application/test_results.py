@@ -10,10 +10,16 @@ from typing import cast
 import msgspec
 import pytest
 
+from comparo.application import ArtifactBodyMessage as ExportedArtifactBodyMessage
+from comparo.application import ArtifactBodyReference as ExportedArtifactBodyReference
+from comparo.application import ResultHttpAttempt as ExportedResultHttpAttempt
+from comparo.application import ResultHttpExchange as ExportedResultHttpExchange
 from comparo.application import ResultHttpMessage as ExportedResultHttpMessage
 from comparo.application import result_analysis as analysis_module
-from comparo.application.artifacts import ArtifactBodyMessage
-from comparo.application.artifacts import ArtifactBodyReference
+from comparo.application.artifact_references import ArtifactBodyMessage
+from comparo.application.artifact_references import ArtifactBodyReference
+from comparo.application.artifacts import ArtifactBodyMessage as ServiceArtifactBodyMessage
+from comparo.application.artifacts import ArtifactBodyReference as ServiceArtifactBodyReference
 from comparo.application.artifacts import read_artifact_body_window
 from comparo.application.curl_export import CurlExportLimits
 from comparo.application.curl_export import CurlExportRequest
@@ -27,11 +33,15 @@ from comparo.application.result_analysis import project_rules
 from comparo.application.result_analysis import project_timeline
 from comparo.application.results import ResultEntity
 from comparo.application.results import ResultEvidence
+from comparo.application.results import ResultFailure
+from comparo.application.results import ResultHttpAttempt
+from comparo.application.results import ResultHttpExchange
 from comparo.application.results import ResultHttpMessage
 from comparo.application.results import ResultNamedValue
 from comparo.application.results import ResultReference
 from comparo.application.results import ResultRelation
 from comparo.application.results import project_results
+from comparo.core.artifacts import ArtifactAttempt
 from comparo.core.artifacts import ArtifactComparisonOutcome
 from comparo.core.artifacts import ArtifactDefinition
 from comparo.core.artifacts import ArtifactExchange
@@ -106,6 +116,10 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
                 exchange_id="exchange-0",
                 message=ArtifactBodyMessage.REQUEST,
             ),
+            attempt_ordinal=0,
+            exchange_ordinal=0,
+            terminal_attempt=True,
+            terminal_exchange=True,
             has_body_capture=True,
         ),
         ResultHttpMessage(
@@ -115,7 +129,28 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
                 exchange_id="exchange-0",
                 message=ArtifactBodyMessage.RESPONSE,
             ),
+            attempt_ordinal=0,
+            exchange_ordinal=0,
+            terminal_attempt=True,
+            terminal_exchange=True,
             has_body_capture=True,
+        ),
+    )
+    assert first.attempts == (
+        ResultHttpAttempt(
+            attempt_id="attempt-0",
+            ordinal=0,
+            terminal=True,
+            pre_send_terminal=False,
+            failure=None,
+            exchanges=(
+                ResultHttpExchange(
+                    exchange_id="exchange-0",
+                    ordinal=0,
+                    terminal=True,
+                    failure=None,
+                ),
+            ),
         ),
     )
     assert first.failure is None
@@ -201,6 +236,35 @@ def test_projection_exposes_every_exchange_message_in_artifact_order() -> None:
         ("attempt-retry", "exchange-retry", ArtifactBodyMessage.RESPONSE),
     )
     assert all(item.has_body_capture for item in messages)
+    assert tuple(
+        (
+            item.attempt_ordinal,
+            item.exchange_ordinal,
+            item.terminal_attempt,
+            item.terminal_exchange,
+        )
+        for item in messages
+    ) == (
+        (0, 0, False, False),
+        (0, 0, False, False),
+        (0, 1, False, True),
+        (0, 1, False, True),
+        (1, 0, True, True),
+        (1, 0, True, True),
+    )
+
+    attempts = project_results(artifact).executions[0].attempts
+    assert tuple((item.attempt_id, item.ordinal, item.terminal) for item in attempts) == (
+        ("attempt-0", 0, False),
+        ("attempt-retry", 1, True),
+    )
+    assert tuple(
+        (exchange.exchange_id, exchange.ordinal, exchange.terminal)
+        for exchange in attempts[0].exchanges
+    ) == (
+        ("exchange-0", 0, False),
+        ("exchange-redirect", 1, True),
+    )
 
 
 def test_projection_distinguishes_message_presence_from_body_capture_presence() -> None:
@@ -281,6 +345,53 @@ def test_projection_omits_message_coordinates_for_explicitly_absent_messages() -
     )
 
 
+def test_projection_retains_a_terminal_pre_send_attempt_without_fabricating_messages() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    first_attempt = execution.attempts[0]
+    request = first_attempt.exchanges[0].request
+    assert request is not None
+    pre_send_failure = ArtifactFailure(
+        stage="authorization",
+        code="destination-denied",
+        retryable=False,
+    )
+    pre_send_attempt = ArtifactAttempt(
+        attempt_id="attempt-pre-send",
+        exchanges=(),
+        terminal_pre_send_request=request,
+        failure=pre_send_failure,
+    )
+    execution = msgspec.structs.replace(
+        execution,
+        attempts=(first_attempt, pre_send_attempt),
+    )
+    artifact = msgspec.structs.replace(
+        artifact,
+        executions=(execution, artifact.executions[1]),
+    )
+
+    projected = project_results(artifact).executions[0]
+
+    assert tuple(
+        (
+            item.attempt_id,
+            item.ordinal,
+            item.terminal,
+            item.pre_send_terminal,
+            len(item.exchanges),
+        )
+        for item in projected.attempts
+    ) == (
+        ("attempt-0", 0, False, False, 1),
+        ("attempt-pre-send", 1, True, True, 0),
+    )
+    assert projected.attempts[-1].failure is not None
+    assert projected.attempts[-1].failure.code == "destination-denied"
+    assert all(not item.terminal_attempt for item in projected.messages)
+    assert not any(item.reference.attempt_id == "attempt-pre-send" for item in projected.messages)
+
+
 def test_projected_coordinates_directly_drive_body_reads_and_curl_export(
     tmp_path: Path,
 ) -> None:
@@ -331,6 +442,10 @@ def test_result_http_message_and_execution_message_contracts_fail_closed() -> No
     execution = projection.executions[0]
     message = execution.messages[0]
 
+    assert ExportedArtifactBodyMessage is ServiceArtifactBodyMessage is ArtifactBodyMessage
+    assert ExportedArtifactBodyReference is ServiceArtifactBodyReference is ArtifactBodyReference
+    assert ExportedResultHttpAttempt is ResultHttpAttempt
+    assert ExportedResultHttpExchange is ResultHttpExchange
     assert ExportedResultHttpMessage is ResultHttpMessage
     with pytest.raises(TypeError, match="reference must be typed"):
         msgspec.structs.replace(
@@ -339,9 +454,19 @@ def test_result_http_message_and_execution_message_contracts_fail_closed() -> No
         )
     with pytest.raises(TypeError, match="capture flag must be bool"):
         msgspec.structs.replace(message, has_body_capture=cast("bool", 1))
-    for invalid in (cast("tuple[ResultHttpMessage, ...]", []), (object(),)):
+    for field in ("attempt_ordinal", "exchange_ordinal"):
+        for invalid in (-1, cast("int", True)):
+            with pytest.raises(ValueError, match="non-negative integer"):
+                msgspec.structs.replace(message, **{field: invalid})
+    for field in ("terminal_attempt", "terminal_exchange"):
+        with pytest.raises(TypeError, match="terminal markers must be bool"):
+            msgspec.structs.replace(message, **{field: cast("bool", 1)})
+    for invalid_attempts in (cast("tuple[ResultHttpAttempt, ...]", []), (object(),)):
+        with pytest.raises(TypeError, match="attempts must be immutable and typed"):
+            msgspec.structs.replace(execution, attempts=invalid_attempts)
+    for invalid_messages in (cast("tuple[ResultHttpMessage, ...]", []), (object(),)):
         with pytest.raises(TypeError, match="immutable and typed"):
-            msgspec.structs.replace(execution, messages=invalid)
+            msgspec.structs.replace(execution, messages=invalid_messages)
     with pytest.raises(ValueError, match="must be unique"):
         msgspec.structs.replace(execution, messages=(message, message))
     foreign = msgspec.structs.replace(
@@ -353,8 +478,96 @@ def test_result_http_message_and_execution_message_contracts_fail_closed() -> No
     )
     with pytest.raises(ValueError, match="belong to the execution"):
         msgspec.structs.replace(execution, messages=(foreign,))
+    missing_attempt = msgspec.structs.replace(
+        message,
+        reference=msgspec.structs.replace(message.reference, attempt_id="attempt-missing"),
+    )
+    with pytest.raises(ValueError, match="attempt must exist"):
+        msgspec.structs.replace(execution, messages=(missing_attempt,))
+    missing_exchange = msgspec.structs.replace(
+        message,
+        reference=msgspec.structs.replace(message.reference, exchange_id="exchange-missing"),
+    )
+    with pytest.raises(ValueError, match="exchange must exist"):
+        msgspec.structs.replace(execution, messages=(missing_exchange,))
+    for changes in (
+        {"attempt_ordinal": 1},
+        {"exchange_ordinal": 1},
+        {"terminal_attempt": False},
+        {"terminal_exchange": False},
+    ):
+        mismatched = msgspec.structs.replace(message, **changes)
+        with pytest.raises(ValueError, match="metadata must match"):
+            msgspec.structs.replace(execution, messages=(mismatched,))
     with pytest.raises(AttributeError):
         message.has_body_capture = False  # type: ignore[misc]
+
+
+def test_result_http_attempt_and_exchange_contracts_fail_closed() -> None:
+    execution = project_results(_artifact()).executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+
+    for exchange_changes, error, match in (
+        ({"exchange_id": ""}, ValueError, "bounded non-empty"),
+        ({"ordinal": -1}, ValueError, "non-negative integer"),
+        ({"ordinal": cast("int", True)}, ValueError, "non-negative integer"),
+        ({"terminal": cast("bool", 1)}, TypeError, "terminal marker must be bool"),
+        ({"failure": object()}, TypeError, "failure must be typed or absent"),
+    ):
+        with pytest.raises(error, match=match):
+            msgspec.structs.replace(exchange, **exchange_changes)
+
+    for attempt_changes, error, match in (
+        ({"attempt_id": ""}, ValueError, "bounded non-empty"),
+        ({"ordinal": -1}, ValueError, "non-negative integer"),
+        ({"ordinal": cast("int", True)}, ValueError, "non-negative integer"),
+        ({"terminal": cast("bool", 1)}, TypeError, "terminal markers must be bool"),
+        ({"pre_send_terminal": cast("bool", 1)}, TypeError, "terminal markers must be bool"),
+        ({"failure": object()}, TypeError, "failure must be typed or absent"),
+        (
+            {"pre_send_terminal": True},
+            ValueError,
+            "pre-send terminal and failure must agree",
+        ),
+        (
+            {"failure": ResultFailure(stage="dns", code="failed", retryable=True)},
+            ValueError,
+            "pre-send terminal and failure must agree",
+        ),
+        ({"exchanges": []}, TypeError, "exchanges must be immutable and typed"),
+        ({"exchanges": (object(),)}, TypeError, "exchanges must be immutable and typed"),
+    ):
+        with pytest.raises(error, match=match):
+            msgspec.structs.replace(attempt, **attempt_changes)
+
+    noncanonical_exchange = msgspec.structs.replace(
+        exchange,
+        ordinal=2,
+        terminal=True,
+    )
+    for exchanges, match in (
+        ((msgspec.structs.replace(exchange, terminal=False), exchange), "IDs must be unique"),
+        (
+            (exchange, msgspec.structs.replace(noncanonical_exchange, exchange_id="exchange-1")),
+            "ordinals must be canonical",
+        ),
+        ((msgspec.structs.replace(exchange, terminal=False),), "terminal marker"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            msgspec.structs.replace(attempt, exchanges=exchanges)
+
+    noncanonical_attempt = msgspec.structs.replace(attempt, ordinal=2, terminal=True)
+    for attempts, match in (
+        ((msgspec.structs.replace(attempt, terminal=False), attempt), "IDs must be unique"),
+        (
+            (attempt, msgspec.structs.replace(noncanonical_attempt, attempt_id="attempt-1")),
+            "ordinals must be canonical",
+        ),
+        ((msgspec.structs.replace(attempt, terminal=False),), "terminal marker"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            msgspec.structs.replace(execution, attempts=attempts)
 
 
 def test_projection_preserves_requested_gate_verdict_and_assessments_exactly() -> None:

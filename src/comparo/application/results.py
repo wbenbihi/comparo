@@ -12,8 +12,8 @@ from typing import final
 
 import msgspec
 
-from comparo.application.artifacts import ArtifactBodyMessage
-from comparo.application.artifacts import ArtifactBodyReference
+from comparo.application.artifact_references import ArtifactBodyMessage
+from comparo.application.artifact_references import ArtifactBodyReference
 from comparo.core.artifacts.common import ArtifactDefinition
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactMetric
@@ -21,6 +21,7 @@ from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.facts import ArtifactEvidence
 from comparo.core.artifacts.facts import ArtifactExecution
 from comparo.core.artifacts.facts import ArtifactFact
+from comparo.core.artifacts.http import ArtifactAttempt
 from comparo.core.artifacts.http import ArtifactTiming
 from comparo.core.artifacts.lifecycle import ArtifactGateCounts
 from comparo.core.artifacts.model import RunArtifact
@@ -129,16 +130,71 @@ class ResultTimingSummary(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ResultHttpExchange(msgspec.Struct, frozen=True, kw_only=True):
+    """Body-free identity and ordering for one retained HTTP exchange."""
+
+    exchange_id: str
+    ordinal: int
+    terminal: bool
+    failure: ResultFailure | None
+
+    def __post_init__(self) -> None:
+        """Require a stable identity and explicit position and terminal state."""
+        require_stable_token(self.exchange_id, label="result HTTP exchange ID", maximum=64)
+        _require_http_ordinal(self.ordinal, label="result HTTP exchange ordinal")
+        if type(self.terminal) is not bool:
+            raise TypeError("result HTTP exchange terminal marker must be bool")
+        if self.failure is not None and type(self.failure) is not ResultFailure:
+            raise TypeError("result HTTP exchange failure must be typed or absent")
+
+
+@final
+class ResultHttpAttempt(msgspec.Struct, frozen=True, kw_only=True):
+    """Body-free identity and topology for one retry attempt."""
+
+    attempt_id: str
+    ordinal: int
+    terminal: bool
+    pre_send_terminal: bool
+    failure: ResultFailure | None
+    exchanges: tuple[ResultHttpExchange, ...]
+
+    def __post_init__(self) -> None:
+        """Require canonical exchange order and truthful pre-send state."""
+        require_stable_token(self.attempt_id, label="result HTTP attempt ID", maximum=64)
+        _require_http_ordinal(self.ordinal, label="result HTTP attempt ordinal")
+        if type(self.terminal) is not bool or type(self.pre_send_terminal) is not bool:
+            raise TypeError("result HTTP attempt terminal markers must be bool")
+        if self.failure is not None and type(self.failure) is not ResultFailure:
+            raise TypeError("result HTTP attempt failure must be typed or absent")
+        if self.pre_send_terminal != (self.failure is not None):
+            raise ValueError("result HTTP pre-send terminal and failure must agree")
+        if type(self.exchanges) is not tuple or any(
+            type(item) is not ResultHttpExchange for item in self.exchanges
+        ):
+            raise TypeError("result HTTP attempt exchanges must be immutable and typed")
+        _require_canonical_http_exchanges(self.exchanges)
+
+
+@final
 class ResultHttpMessage(msgspec.Struct, frozen=True, kw_only=True):
-    """Body-free coordinates for one retained sanitized HTTP message."""
+    """Body-free coordinates and topology for one retained sanitized HTTP message."""
 
     reference: ArtifactBodyReference
+    attempt_ordinal: int
+    exchange_ordinal: int
+    terminal_attempt: bool
+    terminal_exchange: bool
     has_body_capture: bool
 
     def __post_init__(self) -> None:
-        """Require a typed coordinate and an exact capture-presence flag."""
+        """Require a typed coordinate and exact ordering and presence metadata."""
         if type(self.reference) is not ArtifactBodyReference:
             raise TypeError("result HTTP message reference must be typed")
+        _require_http_ordinal(self.attempt_ordinal, label="result HTTP message attempt ordinal")
+        _require_http_ordinal(self.exchange_ordinal, label="result HTTP message exchange ordinal")
+        if type(self.terminal_attempt) is not bool or type(self.terminal_exchange) is not bool:
+            raise TypeError("result HTTP message terminal markers must be bool")
         if type(self.has_body_capture) is not bool:
             raise TypeError("result HTTP message capture flag must be bool")
 
@@ -196,10 +252,16 @@ class ExecutionResultRow(msgspec.Struct, frozen=True, kw_only=True):
     timing: ResultTimingSummary
     assertions: tuple[ResultReference, ...]
     comparisons: tuple[ResultReference, ...]
+    attempts: tuple[ResultHttpAttempt, ...] = ()
     messages: tuple[ResultHttpMessage, ...] = ()
 
     def __post_init__(self) -> None:
-        """Keep message coordinates immutable, unique, and owned by this execution."""
+        """Keep HTTP topology canonical and message coordinates consistent with it."""
+        if type(self.attempts) is not tuple or any(
+            type(item) is not ResultHttpAttempt for item in self.attempts
+        ):
+            raise TypeError("execution result attempts must be immutable and typed")
+        _require_canonical_http_attempts(self.attempts)
         if type(self.messages) is not tuple or any(
             type(item) is not ResultHttpMessage for item in self.messages
         ):
@@ -209,6 +271,58 @@ class ExecutionResultRow(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("execution result message coordinates must be unique")
         if any(item.execution_id != self.reference.result_id for item in coordinates):
             raise ValueError("execution result message coordinates must belong to the execution")
+        _require_messages_match_http_topology(self.messages, self.attempts)
+
+
+def _require_http_ordinal(value: object, *, label: str) -> None:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+
+
+def _require_canonical_http_exchanges(exchanges: tuple[ResultHttpExchange, ...]) -> None:
+    ids = tuple(item.exchange_id for item in exchanges)
+    if len(set(ids)) != len(ids):
+        raise ValueError("result HTTP exchange IDs must be unique within an attempt")
+    if tuple(item.ordinal for item in exchanges) != tuple(range(len(exchanges))):
+        raise ValueError("result HTTP exchange ordinals must be canonical")
+    if tuple(item.terminal for item in exchanges) != tuple(
+        index == len(exchanges) - 1 for index in range(len(exchanges))
+    ):
+        raise ValueError("result HTTP exchange terminal marker must identify the final exchange")
+
+
+def _require_canonical_http_attempts(attempts: tuple[ResultHttpAttempt, ...]) -> None:
+    ids = tuple(item.attempt_id for item in attempts)
+    if len(set(ids)) != len(ids):
+        raise ValueError("result HTTP attempt IDs must be unique")
+    if tuple(item.ordinal for item in attempts) != tuple(range(len(attempts))):
+        raise ValueError("result HTTP attempt ordinals must be canonical")
+    if tuple(item.terminal for item in attempts) != tuple(
+        index == len(attempts) - 1 for index in range(len(attempts))
+    ):
+        raise ValueError("result HTTP attempt terminal marker must identify the final attempt")
+
+
+def _require_messages_match_http_topology(
+    messages: tuple[ResultHttpMessage, ...],
+    attempts: tuple[ResultHttpAttempt, ...],
+) -> None:
+    attempts_by_id = {item.attempt_id: item for item in attempts}
+    for message in messages:
+        attempt = attempts_by_id.get(message.reference.attempt_id)
+        if attempt is None:
+            raise ValueError("result HTTP message attempt must exist in execution topology")
+        exchanges_by_id = {item.exchange_id: item for item in attempt.exchanges}
+        exchange = exchanges_by_id.get(message.reference.exchange_id)
+        if exchange is None:
+            raise ValueError("result HTTP message exchange must exist in attempt topology")
+        if (
+            message.attempt_ordinal != attempt.ordinal
+            or message.exchange_ordinal != exchange.ordinal
+            or message.terminal_attempt is not attempt.terminal
+            or message.terminal_exchange is not exchange.terminal
+        ):
+            raise ValueError("result HTTP message metadata must match execution topology")
 
 
 @final
@@ -415,14 +529,57 @@ def _execution_row(
             for item in execution.assertions
         ),
         comparisons=comparisons,
+        attempts=_http_attempts(execution),
         messages=_http_messages(execution),
+    )
+
+
+def _http_attempts(execution: ArtifactExecution) -> tuple[ResultHttpAttempt, ...]:
+    terminal_attempt_ordinal = len(execution.attempts) - 1
+    return tuple(
+        _http_attempt(
+            attempt,
+            ordinal=attempt_ordinal,
+            terminal=attempt_ordinal == terminal_attempt_ordinal,
+        )
+        for attempt_ordinal, attempt in enumerate(execution.attempts)
+    )
+
+
+def _http_attempt(
+    attempt: ArtifactAttempt,
+    *,
+    ordinal: int,
+    terminal: bool,
+) -> ResultHttpAttempt:
+    terminal_exchange_ordinal = len(attempt.exchanges) - 1
+    return ResultHttpAttempt(
+        attempt_id=attempt.attempt_id,
+        ordinal=ordinal,
+        terminal=terminal,
+        pre_send_terminal=(
+            attempt.terminal_pre_send_request is not None
+            or attempt.terminal_pre_send_omission is not None
+        ),
+        failure=None if attempt.failure is None else _failure(attempt.failure),
+        exchanges=tuple(
+            ResultHttpExchange(
+                exchange_id=exchange.exchange_id,
+                ordinal=exchange_ordinal,
+                terminal=exchange_ordinal == terminal_exchange_ordinal,
+                failure=None if exchange.failure is None else _failure(exchange.failure),
+            )
+            for exchange_ordinal, exchange in enumerate(attempt.exchanges)
+        ),
     )
 
 
 def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...]:
     messages: list[ResultHttpMessage] = []
-    for attempt in execution.attempts:
-        for exchange in attempt.exchanges:
+    terminal_attempt_ordinal = len(execution.attempts) - 1
+    for attempt_ordinal, attempt in enumerate(execution.attempts):
+        terminal_exchange_ordinal = len(attempt.exchanges) - 1
+        for exchange_ordinal, exchange in enumerate(attempt.exchanges):
             if exchange.request is not None:
                 messages.append(
                     _http_message(
@@ -430,6 +587,10 @@ def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...
                         attempt.attempt_id,
                         exchange.exchange_id,
                         ArtifactBodyMessage.REQUEST,
+                        attempt_ordinal=attempt_ordinal,
+                        exchange_ordinal=exchange_ordinal,
+                        terminal_attempt=attempt_ordinal == terminal_attempt_ordinal,
+                        terminal_exchange=exchange_ordinal == terminal_exchange_ordinal,
                         has_body_capture=exchange.request.body is not None,
                     )
                 )
@@ -440,6 +601,10 @@ def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...
                         attempt.attempt_id,
                         exchange.exchange_id,
                         ArtifactBodyMessage.RESPONSE,
+                        attempt_ordinal=attempt_ordinal,
+                        exchange_ordinal=exchange_ordinal,
+                        terminal_attempt=attempt_ordinal == terminal_attempt_ordinal,
+                        terminal_exchange=exchange_ordinal == terminal_exchange_ordinal,
                         has_body_capture=exchange.response.body is not None,
                     )
                 )
@@ -452,6 +617,10 @@ def _http_message(
     exchange_id: str,
     message: ArtifactBodyMessage,
     *,
+    attempt_ordinal: int,
+    exchange_ordinal: int,
+    terminal_attempt: bool,
+    terminal_exchange: bool,
     has_body_capture: bool,
 ) -> ResultHttpMessage:
     return ResultHttpMessage(
@@ -461,6 +630,10 @@ def _http_message(
             exchange_id=exchange_id,
             message=message,
         ),
+        attempt_ordinal=attempt_ordinal,
+        exchange_ordinal=exchange_ordinal,
+        terminal_attempt=terminal_attempt,
+        terminal_exchange=terminal_exchange,
         has_body_capture=has_body_capture,
     )
 
@@ -614,6 +787,8 @@ __all__ = (
     "ResultFact",
     "ResultFailure",
     "ResultGateAssessment",
+    "ResultHttpAttempt",
+    "ResultHttpExchange",
     "ResultHttpMessage",
     "ResultMetric",
     "ResultNamedValue",

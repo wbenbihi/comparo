@@ -15,6 +15,8 @@ import msgspec
 from comparo.adapters.artifacts import LocalArtifactStoreError
 from comparo.adapters.artifacts import open_local_artifact_bundle
 from comparo.adapters.artifacts import read_local_artifact_bundle
+from comparo.application.artifact_references import ArtifactBodyMessage
+from comparo.application.artifact_references import ArtifactBodyReference
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.common import ArtifactCapture
 from comparo.core.artifacts.model import RunArtifact
@@ -108,33 +110,6 @@ class ArtifactInspection(msgspec.Struct, frozen=True, kw_only=True):
     blobs: int
     blob_bytes: int
     coverage_issues: int
-
-
-class ArtifactBodyMessage(StrEnum):
-    """The sanitized HTTP message body selected for inspection."""
-
-    REQUEST = "request"
-    RESPONSE = "response"
-
-
-@final
-class ArtifactBodyReference(msgspec.Struct, frozen=True, kw_only=True):
-    """Stable artifact HTTP coordinates for one request or response body."""
-
-    execution_id: str
-    attempt_id: str
-    exchange_id: str
-    message: ArtifactBodyMessage
-
-    def __post_init__(self) -> None:
-        """Require bounded structural identifiers and one typed message side."""
-        if any(
-            type(value) is not str or not value or len(value) > 64
-            for value in (self.execution_id, self.attempt_id, self.exchange_id)
-        ):
-            raise ValueError("artifact body coordinates must be bounded non-empty text")
-        if type(self.message) is not ArtifactBodyMessage:
-            raise TypeError("artifact body message must be typed")
 
 
 @final

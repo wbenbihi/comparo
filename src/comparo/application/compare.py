@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 from typing import final
 from uuid import uuid4
 
@@ -31,6 +33,12 @@ from comparo.application.render_preview import RenderPreviewSettings
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
 from comparo.application.render_preview import render_prepared_request_window
+from comparo.application.resolved_inspection import ResolvedValueInspectionResult
+from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
+from comparo.application.resolved_inspection import bind_resolved_value_target
+from comparo.application.resolved_inspection import (
+    inspect_resolved_value as inspect_prepared_resolved_value,
+)
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 
 _HANDLE_ALLOCATION_ATTEMPTS = 8
@@ -51,6 +59,7 @@ class CompareServiceErrorCode(StrEnum):
     HANDLE_UNKNOWN = "handle-unknown"
     PREPARATION_MISMATCH = "preparation-mismatch"
     PREPARATION_BLOCKED = "preparation-blocked"
+    PREPARATION_BUSY = "preparation-busy"
 
 
 class CompareServiceError(RuntimeError):
@@ -153,14 +162,37 @@ class ComparePreparationResult(msgspec.Struct, frozen=True, kw_only=True):
 class CompareService:
     """Retain a bounded set of admitted plans until start, discard, or service closure."""
 
-    __slots__ = ("_closed", "_maximum_outstanding", "_prepared")
+    __slots__ = (
+        "_closed",
+        "_inspections",
+        "_maximum_inspections_per_preparation",
+        "_maximum_outstanding",
+        "_prepared",
+        "_revoked",
+    )
 
-    def __init__(self, *, maximum_outstanding: int) -> None:
-        """Create an open service with one explicit retained-plan ceiling."""
+    def __init__(
+        self,
+        *,
+        maximum_outstanding: int,
+        maximum_inspections_per_preparation: int = 1,
+    ) -> None:
+        """Create an open service with explicit retained-plan and inspection ceilings."""
         if type(maximum_outstanding) is not int or maximum_outstanding < 1:
             raise ValueError("Compare outstanding preparation limit must be a positive integer")
+        if (
+            type(maximum_inspections_per_preparation) is not int
+            or maximum_inspections_per_preparation < 1
+        ):
+            raise ValueError("Compare per-preparation inspection limit must be a positive integer")
         self._maximum_outstanding = maximum_outstanding
+        self._maximum_inspections_per_preparation = maximum_inspections_per_preparation
         self._prepared: dict[ComparePreparationHandle, _PreparedComparison] = {}
+        self._inspections: dict[
+            ComparePreparationHandle,
+            set[_InspectionLease],
+        ] = {}
+        self._revoked: set[ComparePreparationHandle] = set()
         self._closed = False
 
     @property
@@ -250,24 +282,56 @@ class CompareService:
             raise TypeError("Compare preview handle must be typed")
         if type(controls) is not CompareExecutionControls:
             raise TypeError("Compare preview controls must be typed")
-        prepared = self._validate_retained(handle, controls)
-        settings = prepared.controls.settings
-        return await render_prepared_request_window(
-            RenderPreviewWindowRequest(
-                preview=RenderPreviewRequest(
-                    project=prepared.project,
-                    settings=RenderPreviewSettings(
-                        files=settings.files,
-                        environment=settings.environment,
-                        yaml=settings.yaml,
-                        sanitization=settings.artifact.limits.sanitization,
+        prepared, lease = self._begin_inspection(handle, controls)
+        try:
+            settings = prepared.controls.settings
+            return await render_prepared_request_window(
+                RenderPreviewWindowRequest(
+                    preview=RenderPreviewRequest(
+                        project=prepared.project,
+                        settings=RenderPreviewSettings(
+                            files=settings.files,
+                            environment=settings.environment,
+                            yaml=settings.yaml,
+                            sanitization=settings.artifact.limits.sanitization,
+                        ),
+                        ambient_environment=prepared.ambient_environment,
                     ),
-                    ambient_environment=prepared.ambient_environment,
-                ),
-                start_ordinal=start_ordinal,
-                maximum_previews=maximum_previews,
+                    start_ordinal=start_ordinal,
+                    maximum_previews=maximum_previews,
+                )
             )
-        )
+        finally:
+            self._end_inspection(handle, lease)
+
+    async def inspect_resolved_value(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        target: ResolvedValueInspectionTarget,
+    ) -> ResolvedValueInspectionResult:
+        """Inspect one masked value from the retained plan without consuming its handle."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare resolved inspection handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare resolved inspection controls must be typed")
+        if type(target) is not ResolvedValueInspectionTarget:
+            raise TypeError("Compare resolved inspection target must be typed")
+        prepared, lease = self._begin_inspection(handle, controls)
+        try:
+            settings = prepared.controls.settings
+            return await inspect_prepared_resolved_value(
+                bind_resolved_value_target(
+                    prepared.project,
+                    target,
+                    files=settings.files,
+                    environment=settings.environment,
+                    yaml=settings.yaml,
+                    ambient_environment=prepared.ambient_environment,
+                )
+            )
+        finally:
+            self._end_inspection(handle, lease)
 
     def validate_start(
         self,
@@ -285,12 +349,24 @@ class CompareService:
         """Release one unused prepared plan and report whether it was retained."""
         if type(handle) is not ComparePreparationHandle:
             raise TypeError("Compare discard handle must be typed")
-        return self._prepared.pop(handle, None) is not None
+        if handle in self._revoked or handle not in self._prepared:
+            return False
+        if self._inspections.get(handle):
+            self._revoked.add(handle)
+            self._cancel_inspections(handle)
+        else:
+            del self._prepared[handle]
+        return True
 
     def close(self) -> None:
-        """Idempotently discard every outstanding plan and reject future preparation."""
-        self._prepared.clear()
+        """Reject new work and request cancellation while active plans drain cleanup."""
         self._closed = True
+        for handle in tuple(self._prepared):
+            if self._inspections.get(handle):
+                self._revoked.add(handle)
+                self._cancel_inspections(handle)
+            else:
+                del self._prepared[handle]
 
     def _allocate_handle(self) -> ComparePreparationHandle | None:
         for _attempt in range(_HANDLE_ALLOCATION_ATTEMPTS):
@@ -305,9 +381,49 @@ class CompareService:
         controls: CompareExecutionControls,
     ) -> _PreparedComparison:
         prepared = self._validate_retained(handle, controls)
+        if self._inspections.get(handle):
+            raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BUSY)
         if not prepared.review.execution_allowed:
             raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BLOCKED)
         return prepared
+
+    def _begin_inspection(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+    ) -> tuple[_PreparedComparison, _InspectionLease]:
+        prepared = self._validate_retained(handle, controls)
+        tasks = self._inspections.get(handle)
+        if tasks is not None and len(tasks) >= self._maximum_inspections_per_preparation:
+            raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BUSY)
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover - async public methods always run in one Task
+            raise RuntimeError("Compare inspection requires an asyncio Task")
+        lease = _InspectionLease(cast("asyncio.Task[object]", task))
+        if tasks is None:
+            tasks = self._inspections.setdefault(handle, set())
+        tasks.add(lease)
+        return prepared, lease
+
+    def _end_inspection(
+        self,
+        handle: ComparePreparationHandle,
+        lease: _InspectionLease,
+    ) -> None:
+        tasks = self._inspections.get(handle)
+        if tasks is None:
+            return
+        tasks.discard(lease)
+        if tasks:
+            return
+        del self._inspections[handle]
+        if handle in self._revoked:
+            self._revoked.remove(handle)
+            self._prepared.pop(handle, None)
+
+    def _cancel_inspections(self, handle: ComparePreparationHandle) -> None:
+        for lease in self._inspections.get(handle, set()):
+            lease.task.cancel()
 
     def _validate_retained(
         self,
@@ -316,6 +432,8 @@ class CompareService:
     ) -> _PreparedComparison:
         if self._closed:
             raise CompareServiceError(CompareServiceErrorCode.CLOSED)
+        if handle in self._revoked:
+            raise CompareServiceError(CompareServiceErrorCode.HANDLE_UNKNOWN)
         prepared = self._prepared.get(handle)
         if prepared is None:
             raise CompareServiceError(CompareServiceErrorCode.HANDLE_UNKNOWN)
@@ -346,6 +464,16 @@ class _PreparedComparison(msgspec.Struct, frozen=True, kw_only=True):
             self.ambient_environment,
             self.controls.settings.environment,
         )
+
+
+@final
+class _InspectionLease:
+    """One identity-distinct task lease retained until its caller's finalizer runs."""
+
+    __slots__ = ("task",)
+
+    def __init__(self, task: asyncio.Task[object]) -> None:
+        self.task = task
 
 
 def _intent_request_diagnostic(request: ComparePrepareRequest) -> ApplicationDiagnostic | None:

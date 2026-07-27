@@ -101,3 +101,16 @@ raise SystemExit("\\n".join(loaded) if loaded else 0)
         text=True,
     )
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_body_free_results_depend_on_pure_coordinates_not_artifact_io() -> None:
+    path = _ROOT / "src" / "comparo" / "application" / "results.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "comparo.application.artifact_references" in imports
+    assert "comparo.application.artifacts" not in imports
