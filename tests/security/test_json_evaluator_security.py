@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from tests.core.selection.json_evaluator_factories import selection_meter
-
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.selectors.results import SelectionBudgetExceeded
 from comparo.core.domain.values import JsonArray
@@ -13,6 +11,7 @@ from comparo.core.domain.values import JsonValue
 from comparo.core.selection import compile_jsonpath
 from comparo.core.selection.json_evaluator import JsonEvaluationReady
 from comparo.core.selection.json_evaluator import evaluate_json
+from tests.core.selection.json_evaluator_factories import selection_meter
 
 
 def test_descendant_traversal_is_iterative_for_deep_adversarial_json() -> None:

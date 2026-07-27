@@ -6,14 +6,6 @@ from uuid import UUID
 
 import msgspec
 import pytest
-from tests.core.domain.http.factories import policies
-from tests.core.domain.http.observation_factories import authorized_request
-from tests.core.domain.http.observation_factories import exchange_timings
-from tests.core.domain.http.observation_factories import occurrence
-from tests.core.domain.http.observation_factories import proxy_request_route_endpoint
-from tests.core.domain.http.observation_factories import request
-from tests.core.domain.http.observation_factories import response
-from tests.core.domain.http.observation_factories import tls
 
 from comparo.core.domain.http.observations import HttpExchange
 from comparo.core.domain.http.policies import ClientIdentityRef
@@ -26,6 +18,14 @@ from comparo.core.domain.http.transport import TlsLayers
 from comparo.core.domain.http.transport import TlsVersion as ObservedTlsVersion
 from comparo.core.domain.http.url import HttpScheme
 from comparo.core.domain.identity import ExchangeId
+from tests.core.domain.http.factories import policies
+from tests.core.domain.http.observation_factories import authorized_request
+from tests.core.domain.http.observation_factories import exchange_timings
+from tests.core.domain.http.observation_factories import occurrence
+from tests.core.domain.http.observation_factories import proxy_request_route_endpoint
+from tests.core.domain.http.observation_factories import request
+from tests.core.domain.http.observation_factories import response
+from tests.core.domain.http.observation_factories import tls
 
 
 def _tls_policy(identity: str, *, minimum: PolicyTlsVersion) -> TlsPolicy:

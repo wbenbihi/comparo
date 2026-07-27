@@ -4,8 +4,6 @@ from enum import StrEnum
 
 import msgspec
 import pytest
-from tests.core.domain.analysis_factories import _capability
-from tests.core.domain.analysis_factories import _destination
 
 from comparo.core.domain.budgets import BudgetContribution
 from comparo.core.domain.budgets import BudgetContributionKind
@@ -15,6 +13,8 @@ from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
+from tests.core.domain.analysis_factories import _capability
+from tests.core.domain.analysis_factories import _destination
 
 
 class _AttackerControlledEnum(StrEnum):

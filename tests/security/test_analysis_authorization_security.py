@@ -7,7 +7,6 @@ from uuid import UUID
 
 import msgspec
 import pytest
-from tests.core.domain.budget_origin_factories import default_budget_origin
 
 from comparo.core.domain.analysis import ANALYSIS_CAPABILITY_ID
 from comparo.core.domain.analysis import ANALYSIS_EXECUTE_OPERATION
@@ -56,6 +55,7 @@ from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
+from tests.core.domain.budget_origin_factories import default_budget_origin
 
 
 def _fingerprint(character: str) -> Fingerprint:

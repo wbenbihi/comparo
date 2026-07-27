@@ -7,12 +7,6 @@ from uuid import UUID
 
 import msgspec
 import pytest
-from tests.core.domain.http.budget_factories import capture_exhaustion
-from tests.core.domain.http.budget_factories import exhaustion
-from tests.core.domain.http.budget_factories import view_exhaustion
-from tests.core.domain.http.observation_factories import body_handle
-from tests.core.domain.http.observation_factories import response
-from tests.core.domain.http.stream_factories import decoder
 
 from comparo.core.domain.budget_contracts import BudgetExhaustionEffect
 from comparo.core.domain.budget_contracts import BudgetResource
@@ -32,6 +26,12 @@ from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Ratio
 from comparo.core.domain.scopes import BodyBudgetScope
 from comparo.core.domain.scopes import RunScope
+from tests.core.domain.http.budget_factories import capture_exhaustion
+from tests.core.domain.http.budget_factories import exhaustion
+from tests.core.domain.http.budget_factories import view_exhaustion
+from tests.core.domain.http.observation_factories import body_handle
+from tests.core.domain.http.observation_factories import response
+from tests.core.domain.http.stream_factories import decoder
 
 
 def test_capture_exhaustion_binds_full_budget_derivation_to_body_identity_and_counts() -> None:

@@ -6,14 +6,6 @@ from typing import cast
 
 import msgspec
 import pytest
-from tests.core.domain.http.factories import authority
-from tests.core.domain.http.factories import destination
-from tests.core.domain.http.factories import fingerprint
-from tests.core.domain.http.factories import provenance
-from tests.core.domain.http.factories import proxy_request_and_route
-from tests.core.domain.http.factories import request_occurrence
-from tests.core.domain.http.observation_factories import authorized_request
-from tests.core.domain.http.observation_factories import request
 
 from comparo.core.domain.http.authorization import HttpAuthorizationIntent
 from comparo.core.domain.http.authorization import ProxyDnsApproval
@@ -43,6 +35,14 @@ from comparo.core.domain.http.url import UrlPath
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.sensitivity import TaintOriginId
+from tests.core.domain.http.factories import authority
+from tests.core.domain.http.factories import destination
+from tests.core.domain.http.factories import fingerprint
+from tests.core.domain.http.factories import provenance
+from tests.core.domain.http.factories import proxy_request_and_route
+from tests.core.domain.http.factories import request_occurrence
+from tests.core.domain.http.observation_factories import authorized_request
+from tests.core.domain.http.observation_factories import request
 
 
 def test_cross_origin_redirect_rejects_custom_authored_sensitive_fields() -> None:

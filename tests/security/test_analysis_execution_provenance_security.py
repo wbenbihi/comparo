@@ -5,12 +5,6 @@ from typing import get_type_hints
 
 import msgspec
 import pytest
-from tests.core.domain.analysis_factories import _analysis_id
-from tests.core.domain.analysis_factories import _analysis_scope
-from tests.core.domain.analysis_factories import _budget
-from tests.core.domain.analysis_factories import _grant
-from tests.core.domain.analysis_factories import _request
-from tests.core.domain.analysis_factories import _usage_report
 
 from comparo.core.domain.analysis import AnalysisBudgetExhausted
 from comparo.core.domain.analysis import AnalysisBudgetUsageReport
@@ -30,6 +24,12 @@ from comparo.core.domain.budgets import BudgetResource
 from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
+from tests.core.domain.analysis_factories import _analysis_id
+from tests.core.domain.analysis_factories import _analysis_scope
+from tests.core.domain.analysis_factories import _budget
+from tests.core.domain.analysis_factories import _grant
+from tests.core.domain.analysis_factories import _request
+from tests.core.domain.analysis_factories import _usage_report
 
 
 def _authorized() -> AuthorizedAnalysisRequest:

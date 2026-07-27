@@ -7,7 +7,6 @@ from typing import cast
 
 import msgspec
 import pytest
-from tests.core.domain.http.factories import provenance
 
 from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.http.auth import BasicAuthentication
@@ -25,6 +24,7 @@ from comparo.core.domain.http.url import HttpScheme
 from comparo.core.domain.http.url import UrlPath
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
+from tests.core.domain.http.factories import provenance
 
 _SECRET = "hostile-subclass-secret"
 

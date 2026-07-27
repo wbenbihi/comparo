@@ -4,12 +4,6 @@ from __future__ import annotations
 
 import msgspec
 import pytest
-from tests.core.domain.http.stream_factories import location
-from tests.core.domain.http.stream_factories import records_handle
-from tests.core.domain.http.stream_factories import redirect_stream_execution
-from tests.core.domain.http.stream_factories import segment
-from tests.core.domain.http.stream_factories import stream_execution
-from tests.core.domain.http.stream_factories import stream_timings
 
 from comparo.core.domain.http.bodies import BodyText
 from comparo.core.domain.http.stream_items import JsonStreamRecord
@@ -31,6 +25,12 @@ from comparo.core.domain.primitives import Count
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.values import JsonInteger
+from tests.core.domain.http.stream_factories import location
+from tests.core.domain.http.stream_factories import records_handle
+from tests.core.domain.http.stream_factories import redirect_stream_execution
+from tests.core.domain.http.stream_factories import segment
+from tests.core.domain.http.stream_factories import stream_execution
+from tests.core.domain.http.stream_factories import stream_timings
 
 
 def _full_extent() -> StreamExtent:

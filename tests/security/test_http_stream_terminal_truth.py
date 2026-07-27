@@ -4,17 +4,6 @@ from __future__ import annotations
 
 import msgspec
 import pytest
-from tests.core.domain.http.budget_factories import capture_exhaustion
-from tests.core.domain.http.observation_factories import attempt_timings
-from tests.core.domain.http.observation_factories import body_handle
-from tests.core.domain.http.observation_factories import exchange
-from tests.core.domain.http.observation_factories import failure
-from tests.core.domain.http.observation_factories import request
-from tests.core.domain.http.observation_factories import response
-from tests.core.domain.http.stream_factories import segment
-from tests.core.domain.http.stream_factories import stream_execution
-from tests.core.domain.http.stream_factories import stream_timings
-from tests.core.domain.http.stream_factories import view_handle
 
 from comparo.core.domain.expressions import SymbolPath
 from comparo.core.domain.http.fields import HeaderName
@@ -64,6 +53,17 @@ from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
+from tests.core.domain.http.budget_factories import capture_exhaustion
+from tests.core.domain.http.observation_factories import attempt_timings
+from tests.core.domain.http.observation_factories import body_handle
+from tests.core.domain.http.observation_factories import exchange
+from tests.core.domain.http.observation_factories import failure
+from tests.core.domain.http.observation_factories import request
+from tests.core.domain.http.observation_factories import response
+from tests.core.domain.http.stream_factories import segment
+from tests.core.domain.http.stream_factories import stream_execution
+from tests.core.domain.http.stream_factories import stream_timings
+from tests.core.domain.http.stream_factories import view_handle
 
 
 def _single_owner(

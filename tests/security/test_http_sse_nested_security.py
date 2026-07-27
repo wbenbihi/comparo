@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from tests.core.domain.http.stream_factories import location
 
 from comparo.core.domain.http.bodies import BodyText
 from comparo.core.domain.http.stream_items import ByteRange
@@ -12,6 +11,7 @@ from comparo.core.domain.http.stream_items import SseFieldName
 from comparo.core.domain.http.stream_items import SseFieldOccurrence
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import PositiveCount
+from tests.core.domain.http.stream_factories import location
 
 
 def _field(

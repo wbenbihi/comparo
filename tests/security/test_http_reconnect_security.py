@@ -7,20 +7,6 @@ from uuid import UUID
 
 import msgspec
 import pytest
-from tests.core.domain.http.factories import authority
-from tests.core.domain.http.factories import destination
-from tests.core.domain.http.factories import fingerprint
-from tests.core.domain.http.factories import proxy_request_and_route
-from tests.core.domain.http.factories import request_occurrence
-from tests.core.domain.http.observation_factories import attempt_timings
-from tests.core.domain.http.observation_factories import exchange
-from tests.core.domain.http.observation_factories import request
-from tests.core.domain.http.observation_factories import response
-from tests.core.domain.http.stream_factories import records_handle
-from tests.core.domain.http.stream_factories import segment
-from tests.core.domain.http.stream_factories import stream_execution
-from tests.core.domain.http.stream_factories import stream_timings
-from tests.core.domain.http.stream_factories import view_handle
 
 from comparo.core.domain.http.attempt_transitions import StreamReconnectTransition
 from comparo.core.domain.http.authorization import AuthorizedExchangeRequest
@@ -52,6 +38,20 @@ from comparo.core.domain.identity import AttemptId
 from comparo.core.domain.identity import ExchangeId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
+from tests.core.domain.http.factories import authority
+from tests.core.domain.http.factories import destination
+from tests.core.domain.http.factories import fingerprint
+from tests.core.domain.http.factories import proxy_request_and_route
+from tests.core.domain.http.factories import request_occurrence
+from tests.core.domain.http.observation_factories import attempt_timings
+from tests.core.domain.http.observation_factories import exchange
+from tests.core.domain.http.observation_factories import request
+from tests.core.domain.http.observation_factories import response
+from tests.core.domain.http.stream_factories import records_handle
+from tests.core.domain.http.stream_factories import segment
+from tests.core.domain.http.stream_factories import stream_execution
+from tests.core.domain.http.stream_factories import stream_timings
+from tests.core.domain.http.stream_factories import view_handle
 
 
 def _authorized(

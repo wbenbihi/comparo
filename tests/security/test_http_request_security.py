@@ -7,14 +7,6 @@ from uuid import uuid4
 
 import msgspec
 import pytest
-from tests.core.domain.http.factories import authority
-from tests.core.domain.http.factories import definition
-from tests.core.domain.http.factories import digest
-from tests.core.domain.http.factories import fingerprint
-from tests.core.domain.http.factories import materialization_fingerprint
-from tests.core.domain.http.factories import policies
-from tests.core.domain.http.factories import provenance
-from tests.core.domain.http.factories import request_occurrence
 
 from comparo.core.domain.capabilities import ExecutionPolicyAuthority
 from comparo.core.domain.http.auth import ApiKeyCredential
@@ -77,6 +69,14 @@ from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.primitives import Ratio
 from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
+from tests.core.domain.http.factories import authority
+from tests.core.domain.http.factories import definition
+from tests.core.domain.http.factories import digest
+from tests.core.domain.http.factories import fingerprint
+from tests.core.domain.http.factories import materialization_fingerprint
+from tests.core.domain.http.factories import policies
+from tests.core.domain.http.factories import provenance
+from tests.core.domain.http.factories import request_occurrence
 
 
 def sensitive[ValueT](value: ValueT, origin: str = "security-test") -> SensitiveValue[ValueT]:

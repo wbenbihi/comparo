@@ -7,19 +7,6 @@ from uuid import UUID
 
 import msgspec
 import pytest
-from tests.core.domain.http.budget_factories import capture_exhaustion
-from tests.core.domain.http.observation_factories import attempt_timings
-from tests.core.domain.http.observation_factories import authorization_denial
-from tests.core.domain.http.observation_factories import body_handle
-from tests.core.domain.http.observation_factories import exchange
-from tests.core.domain.http.observation_factories import failure
-from tests.core.domain.http.observation_factories import occurrence
-from tests.core.domain.http.observation_factories import request
-from tests.core.domain.http.observation_factories import response
-from tests.core.domain.http.stream_factories import segment
-from tests.core.domain.http.stream_factories import stream_execution
-from tests.core.domain.http.stream_factories import stream_timings
-from tests.core.domain.http.stream_factories import view_handle
 
 from comparo.core.domain.http.attempt_transitions import StreamReconnectTransition
 from comparo.core.domain.http.fields import HeaderText
@@ -66,6 +53,19 @@ from comparo.core.domain.identity import ViewId
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.primitives import Duration
+from tests.core.domain.http.budget_factories import capture_exhaustion
+from tests.core.domain.http.observation_factories import attempt_timings
+from tests.core.domain.http.observation_factories import authorization_denial
+from tests.core.domain.http.observation_factories import body_handle
+from tests.core.domain.http.observation_factories import exchange
+from tests.core.domain.http.observation_factories import failure
+from tests.core.domain.http.observation_factories import occurrence
+from tests.core.domain.http.observation_factories import request
+from tests.core.domain.http.observation_factories import response
+from tests.core.domain.http.stream_factories import segment
+from tests.core.domain.http.stream_factories import stream_execution
+from tests.core.domain.http.stream_factories import stream_timings
+from tests.core.domain.http.stream_factories import view_handle
 
 
 def _captured_response(*, status: int = 200) -> ResponseObservation:

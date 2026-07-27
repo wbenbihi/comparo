@@ -7,13 +7,6 @@ from uuid import UUID
 
 import msgspec
 import pytest
-from tests.core.domain.gates.test_normalization import _assertion_fact
-from tests.core.domain.gates.test_normalization import _diff_counts
-from tests.core.domain.gates.test_normalization import _diff_coverage
-from tests.core.domain.gates.test_normalization import _diff_fact
-from tests.core.domain.gates.test_normalization import _predicate_rule
-from tests.core.gates.test_engine import _profile
-from tests.core.gates.test_engine import _threshold
 
 from comparo.core.domain.assertions.results import AssertionCounts
 from comparo.core.domain.assertions.results import AssertionEvidence
@@ -45,6 +38,13 @@ from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.values import JsonInteger
 from comparo.core.gates import evaluate_gate
+from tests.core.domain.gates.test_normalization import _assertion_fact
+from tests.core.domain.gates.test_normalization import _diff_counts
+from tests.core.domain.gates.test_normalization import _diff_coverage
+from tests.core.domain.gates.test_normalization import _diff_fact
+from tests.core.domain.gates.test_normalization import _predicate_rule
+from tests.core.gates.test_engine import _profile
+from tests.core.gates.test_engine import _threshold
 
 _SECRET = "998877665544332211"
 

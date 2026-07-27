@@ -2,6 +2,7 @@
 
 import msgspec
 import pytest
+
 from tests.core.domain.planning_factories import _definition
 from tests.core.domain.planning_factories import _run_plan_for_slices
 from tests.core.domain.planning_factories import _slice
