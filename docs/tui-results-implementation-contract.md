@@ -14,8 +14,11 @@ The only result input is `application.results.ResultProjection`, derived from a 
 - infer missing facts;
 - render exception text or enable Rich markup for data-bearing content.
 
-Detached response bodies require a future explicit, bounded content-lease application service.
-They are not loaded by the manifest result projection.
+Detached request and response bodies are never loaded by the manifest result projection. Each
+execution projects only immutable `ArtifactBodyReference` coordinates and a capture-presence flag
+for its retained sanitized HTTP messages. A frontend must pass those coordinates to the separate,
+authenticated, bounded `read_artifact_body_window` service to obtain content; request coordinates
+may also be passed to `export_artifact_curl`.
 
 ## Component ownership
 

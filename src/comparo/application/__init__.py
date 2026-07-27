@@ -217,6 +217,7 @@ from comparo.application.results import ExecutionResultRow as ExecutionResultRow
 from comparo.application.results import ResultCrossLink as ResultCrossLink
 from comparo.application.results import ResultEntity as ResultEntity
 from comparo.application.results import ResultFact as ResultFact
+from comparo.application.results import ResultHttpMessage as ResultHttpMessage
 from comparo.application.results import ResultProjection as ResultProjection
 from comparo.application.results import ResultReference as ResultReference
 from comparo.application.results import ResultRelation as ResultRelation
@@ -361,6 +362,7 @@ __all__ = (
     "ResultCrossLink",
     "ResultEntity",
     "ResultFact",
+    "ResultHttpMessage",
     "ResultProjection",
     "ResultProjectionWindow",
     "ResultReference",

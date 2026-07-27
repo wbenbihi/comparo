@@ -327,7 +327,9 @@ redaction rules and Environment-specific response classification provider.
 
 `project_results` converts one sanitized `RunArtifact` into a body-free, renderer-independent
 model with summary, execution rows, comparison rows, assertion/diff facts, evidence, stable
-references, and cross-links. It never opens blobs or changes verdicts.
+references, and cross-links. Execution rows also expose immutable request/response coordinates
+and whether each retained message has capture metadata; they do not contain body bytes or storage
+locators. The projection never opens blobs or changes verdicts.
 
 `result_analysis` derives bounded views:
 

@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import Any
 from typing import cast
 
 import msgspec
 import pytest
 
+from comparo.application import ResultHttpMessage as ExportedResultHttpMessage
 from comparo.application import result_analysis as analysis_module
+from comparo.application.artifacts import ArtifactBodyMessage
+from comparo.application.artifacts import ArtifactBodyReference
+from comparo.application.artifacts import read_artifact_body_window
+from comparo.application.curl_export import CurlExportLimits
+from comparo.application.curl_export import CurlExportRequest
+from comparo.application.curl_export import export_artifact_curl
 from comparo.application.result_analysis import AnalysisProjection
 from comparo.application.result_analysis import ResultProjectionWindow
 from comparo.application.result_analysis import project_fields
@@ -18,22 +27,27 @@ from comparo.application.result_analysis import project_rules
 from comparo.application.result_analysis import project_timeline
 from comparo.application.results import ResultEntity
 from comparo.application.results import ResultEvidence
+from comparo.application.results import ResultHttpMessage
 from comparo.application.results import ResultNamedValue
 from comparo.application.results import ResultReference
 from comparo.application.results import ResultRelation
 from comparo.application.results import project_results
 from comparo.core.artifacts import ArtifactComparisonOutcome
 from comparo.core.artifacts import ArtifactDefinition
+from comparo.core.artifacts import ArtifactExchange
 from comparo.core.artifacts import ArtifactExecutionOutcome
 from comparo.core.artifacts import ArtifactFailure
 from comparo.core.artifacts import ArtifactGate
 from comparo.core.artifacts import ArtifactGateCounts
 from comparo.core.artifacts import ArtifactGateVerdict
 from comparo.core.artifacts import ArtifactMetric
+from comparo.core.artifacts import ArtifactOmissionReason
 from comparo.core.artifacts import ArtifactSeverity
 from comparo.core.artifacts import ArtifactSummary
 from comparo.core.artifacts import RunArtifact
 from comparo.core.artifacts.values import ArtifactString
+from tests.application.test_artifacts import _bundle
+from tests.application.test_artifacts import _limits
 from tests.core.artifacts.test_artifact_contracts import _artifact
 
 
@@ -84,6 +98,26 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     assert first.timing.measurements[0].nanoseconds == 10
     assert first.timing.attempts == 1
     assert first.timing.exchanges == 1
+    assert first.messages == (
+        ResultHttpMessage(
+            reference=ArtifactBodyReference(
+                execution_id="execution-0",
+                attempt_id="attempt-0",
+                exchange_id="exchange-0",
+                message=ArtifactBodyMessage.REQUEST,
+            ),
+            has_body_capture=True,
+        ),
+        ResultHttpMessage(
+            reference=ArtifactBodyReference(
+                execution_id="execution-0",
+                attempt_id="attempt-0",
+                exchange_id="exchange-0",
+                message=ArtifactBodyMessage.RESPONSE,
+            ),
+            has_body_capture=True,
+        ),
+    )
     assert first.failure is None
     assert first.assertions == (projection.assertions[0].reference,)
     assert first.comparisons == (projection.comparisons[0].reference,)
@@ -124,6 +158,203 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     assert b'"body"' not in encoded
     with pytest.raises(AttributeError):
         projection.executions = ()  # type: ignore[misc]
+
+
+def test_projection_exposes_every_exchange_message_in_artifact_order() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    redirected = msgspec.structs.replace(exchange, exchange_id="exchange-redirect")
+    retried = msgspec.structs.replace(exchange, exchange_id="exchange-retry")
+    execution = msgspec.structs.replace(
+        execution,
+        attempts=(
+            msgspec.structs.replace(attempt, exchanges=(exchange, redirected)),
+            msgspec.structs.replace(
+                attempt,
+                attempt_id="attempt-retry",
+                exchanges=(retried,),
+            ),
+        ),
+    )
+    artifact = msgspec.structs.replace(
+        artifact,
+        executions=(execution, artifact.executions[1]),
+    )
+
+    messages = project_results(artifact).executions[0].messages
+
+    assert tuple(
+        (
+            item.reference.attempt_id,
+            item.reference.exchange_id,
+            item.reference.message,
+        )
+        for item in messages
+    ) == (
+        ("attempt-0", "exchange-0", ArtifactBodyMessage.REQUEST),
+        ("attempt-0", "exchange-0", ArtifactBodyMessage.RESPONSE),
+        ("attempt-0", "exchange-redirect", ArtifactBodyMessage.REQUEST),
+        ("attempt-0", "exchange-redirect", ArtifactBodyMessage.RESPONSE),
+        ("attempt-retry", "exchange-retry", ArtifactBodyMessage.REQUEST),
+        ("attempt-retry", "exchange-retry", ArtifactBodyMessage.RESPONSE),
+    )
+    assert all(item.has_body_capture for item in messages)
+
+
+def test_projection_distinguishes_message_presence_from_body_capture_presence() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    assert exchange.request is not None
+    assert exchange.response is not None
+    bodyless = msgspec.structs.replace(
+        exchange,
+        request=msgspec.structs.replace(exchange.request, body=None),
+        response=msgspec.structs.replace(exchange.response, body=None),
+    )
+    execution = msgspec.structs.replace(
+        execution,
+        attempts=(msgspec.structs.replace(attempt, exchanges=(bodyless,)),),
+    )
+    artifact = msgspec.structs.replace(
+        artifact,
+        executions=(execution, artifact.executions[1]),
+    )
+
+    messages = project_results(artifact).executions[0].messages
+
+    assert tuple(item.reference.message for item in messages) == (
+        ArtifactBodyMessage.REQUEST,
+        ArtifactBodyMessage.RESPONSE,
+    )
+    assert tuple(item.has_body_capture for item in messages) == (False, False)
+    assert all(item.reference.execution_id == "execution-0" for item in messages)
+    encoded = msgspec.json.encode(messages)
+    assert b"example.test" not in encoded
+    assert b"application/json" not in encoded
+    assert b"b" * 64 not in encoded
+
+
+def test_projection_omits_message_coordinates_for_explicitly_absent_messages() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    request_omitted = msgspec.structs.replace(
+        exchange,
+        request=None,
+        request_omission=ArtifactOmissionReason.POLICY,
+    )
+    response_omitted = msgspec.structs.replace(
+        exchange,
+        response=None,
+        response_omission=ArtifactOmissionReason.POLICY,
+    )
+
+    def messages_for(updated_exchange: ArtifactExchange) -> tuple[ResultHttpMessage, ...]:
+        updated = msgspec.structs.replace(
+            execution,
+            attempts=(
+                msgspec.structs.replace(
+                    attempt,
+                    exchanges=(updated_exchange,),
+                ),
+            ),
+        )
+        updated_artifact = msgspec.structs.replace(
+            artifact,
+            executions=(updated, artifact.executions[1]),
+        )
+        return project_results(updated_artifact).executions[0].messages
+
+    request_absent = messages_for(request_omitted)
+    response_absent = messages_for(response_omitted)
+
+    assert tuple(item.reference.message for item in request_absent) == (
+        ArtifactBodyMessage.RESPONSE,
+    )
+    assert tuple(item.reference.message for item in response_absent) == (
+        ArtifactBodyMessage.REQUEST,
+    )
+
+
+def test_projected_coordinates_directly_drive_body_reads_and_curl_export(
+    tmp_path: Path,
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    messages = project_results(artifact).executions[0].messages
+    request = next(
+        item for item in messages if item.reference.message is ArtifactBodyMessage.REQUEST
+    )
+    response = next(
+        item for item in messages if item.reference.message is ArtifactBodyMessage.RESPONSE
+    )
+
+    window = asyncio.run(
+        read_artifact_body_window(
+            root,
+            artifact.metadata.artifact_id,
+            response.reference,
+            _limits(),
+            offset=0,
+            maximum_output_bytes=16,
+        )
+    )
+    exported = asyncio.run(
+        export_artifact_curl(
+            CurlExportRequest(
+                root=root,
+                bundle_id=artifact.metadata.artifact_id,
+                reference=request.reference,
+                artifact_limits=_limits(),
+                export_limits=CurlExportLimits(
+                    maximum_embedded_body_bytes=16,
+                    maximum_command_characters=4096,
+                ),
+            )
+        )
+    )
+
+    assert request.has_body_capture is True
+    assert response.has_body_capture is True
+    assert window.reference is response.reference
+    assert window.content == b"right"
+    assert "left" in exported.command
+    assert "right" not in exported.command
+
+
+def test_result_http_message_and_execution_message_contracts_fail_closed() -> None:
+    projection = project_results(_artifact())
+    execution = projection.executions[0]
+    message = execution.messages[0]
+
+    assert ExportedResultHttpMessage is ResultHttpMessage
+    with pytest.raises(TypeError, match="reference must be typed"):
+        msgspec.structs.replace(
+            message,
+            reference=cast("ArtifactBodyReference", object()),
+        )
+    with pytest.raises(TypeError, match="capture flag must be bool"):
+        msgspec.structs.replace(message, has_body_capture=cast("bool", 1))
+    for invalid in (cast("tuple[ResultHttpMessage, ...]", []), (object(),)):
+        with pytest.raises(TypeError, match="immutable and typed"):
+            msgspec.structs.replace(execution, messages=invalid)
+    with pytest.raises(ValueError, match="must be unique"):
+        msgspec.structs.replace(execution, messages=(message, message))
+    foreign = msgspec.structs.replace(
+        message,
+        reference=msgspec.structs.replace(
+            message.reference,
+            execution_id="execution-foreign",
+        ),
+    )
+    with pytest.raises(ValueError, match="belong to the execution"):
+        msgspec.structs.replace(execution, messages=(foreign,))
+    with pytest.raises(AttributeError):
+        message.has_body_capture = False  # type: ignore[misc]
 
 
 def test_projection_preserves_requested_gate_verdict_and_assessments_exactly() -> None:

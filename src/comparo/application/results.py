@@ -12,6 +12,8 @@ from typing import final
 
 import msgspec
 
+from comparo.application.artifacts import ArtifactBodyMessage
+from comparo.application.artifacts import ArtifactBodyReference
 from comparo.core.artifacts.common import ArtifactDefinition
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactMetric
@@ -127,6 +129,21 @@ class ResultTimingSummary(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ResultHttpMessage(msgspec.Struct, frozen=True, kw_only=True):
+    """Body-free coordinates for one retained sanitized HTTP message."""
+
+    reference: ArtifactBodyReference
+    has_body_capture: bool
+
+    def __post_init__(self) -> None:
+        """Require a typed coordinate and an exact capture-presence flag."""
+        if type(self.reference) is not ArtifactBodyReference:
+            raise TypeError("result HTTP message reference must be typed")
+        if type(self.has_body_capture) is not bool:
+            raise TypeError("result HTTP message capture flag must be bool")
+
+
+@final
 class ResultNamedValue(msgspec.Struct, frozen=True, kw_only=True):
     """One manifest-resident sanitized evidence value."""
 
@@ -179,6 +196,19 @@ class ExecutionResultRow(msgspec.Struct, frozen=True, kw_only=True):
     timing: ResultTimingSummary
     assertions: tuple[ResultReference, ...]
     comparisons: tuple[ResultReference, ...]
+    messages: tuple[ResultHttpMessage, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Keep message coordinates immutable, unique, and owned by this execution."""
+        if type(self.messages) is not tuple or any(
+            type(item) is not ResultHttpMessage for item in self.messages
+        ):
+            raise TypeError("execution result messages must be immutable and typed")
+        coordinates = tuple(item.reference for item in self.messages)
+        if len(set(coordinates)) != len(coordinates):
+            raise ValueError("execution result message coordinates must be unique")
+        if any(item.execution_id != self.reference.result_id for item in coordinates):
+            raise ValueError("execution result message coordinates must belong to the execution")
 
 
 @final
@@ -385,6 +415,53 @@ def _execution_row(
             for item in execution.assertions
         ),
         comparisons=comparisons,
+        messages=_http_messages(execution),
+    )
+
+
+def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...]:
+    messages: list[ResultHttpMessage] = []
+    for attempt in execution.attempts:
+        for exchange in attempt.exchanges:
+            if exchange.request is not None:
+                messages.append(
+                    _http_message(
+                        execution.execution_id,
+                        attempt.attempt_id,
+                        exchange.exchange_id,
+                        ArtifactBodyMessage.REQUEST,
+                        has_body_capture=exchange.request.body is not None,
+                    )
+                )
+            if exchange.response is not None:
+                messages.append(
+                    _http_message(
+                        execution.execution_id,
+                        attempt.attempt_id,
+                        exchange.exchange_id,
+                        ArtifactBodyMessage.RESPONSE,
+                        has_body_capture=exchange.response.body is not None,
+                    )
+                )
+    return tuple(messages)
+
+
+def _http_message(
+    execution_id: str,
+    attempt_id: str,
+    exchange_id: str,
+    message: ArtifactBodyMessage,
+    *,
+    has_body_capture: bool,
+) -> ResultHttpMessage:
+    return ResultHttpMessage(
+        reference=ArtifactBodyReference(
+            execution_id=execution_id,
+            attempt_id=attempt_id,
+            exchange_id=exchange_id,
+            message=message,
+        ),
+        has_body_capture=has_body_capture,
     )
 
 
@@ -537,6 +614,7 @@ __all__ = (
     "ResultFact",
     "ResultFailure",
     "ResultGateAssessment",
+    "ResultHttpMessage",
     "ResultMetric",
     "ResultNamedValue",
     "ResultProjection",
