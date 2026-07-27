@@ -19,6 +19,8 @@ from comparo.application.artifact_references import ArtifactBodyMessage
 from comparo.application.artifact_references import ArtifactBodyReference
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.common import ArtifactCapture
+from comparo.core.artifacts.common import ArtifactCaptureExtent
+from comparo.core.artifacts.http import ArtifactRequest
 from comparo.core.artifacts.model import RunArtifact
 from comparo.core.artifacts.policy import ArtifactLimits
 from comparo.core.artifacts.policy import SanitizationLimits
@@ -152,6 +154,35 @@ class ArtifactBodyWindow(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("artifact body continuation must name a remaining byte")
         if type(self.redaction_count) is not int or self.redaction_count < 0:
             raise ValueError("artifact body redaction count must be non-negative")
+
+
+@final
+class AuthenticatedArtifactRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """One request and optional complete body pinned to the same authenticated bundle."""
+
+    reference: ArtifactBodyReference
+    request: ArtifactRequest
+    body_content: bytes | None
+
+    def __post_init__(self) -> None:
+        """Keep the body product consistent with the selected sanitized request capture."""
+        if (
+            type(self.reference) is not ArtifactBodyReference
+            or self.reference.message is not ArtifactBodyMessage.REQUEST
+        ):
+            raise TypeError("authenticated artifact request requires request coordinates")
+        if type(self.request) is not ArtifactRequest:
+            raise TypeError("authenticated artifact request must be typed")
+        if self.body_content is not None and type(self.body_content) is not bytes:
+            raise TypeError("authenticated artifact request body must be bytes or absent")
+        body = self.request.body
+        if self.body_content is not None and (
+            body is None
+            or body.blob is None
+            or body.extent is not ArtifactCaptureExtent.COMPLETE
+            or len(self.body_content) != body.blob.byte_count
+        ):
+            raise ValueError("authenticated artifact request body contradicts its capture")
 
 
 def initialize_project_artifact_root(project_root: Path, selected: Path) -> Path:
@@ -458,6 +489,54 @@ async def read_artifact_body_window(
     raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE)
 
 
+async def read_authenticated_artifact_request(
+    root: Path,
+    bundle_id: str,
+    reference: ArtifactBodyReference,
+    limits: ArtifactReadLimits,
+    *,
+    maximum_body_bytes: int,
+) -> AuthenticatedArtifactRequest:
+    """Read request metadata and an eligible complete body through one pinned bundle lease."""
+    if (
+        type(reference) is not ArtifactBodyReference
+        or reference.message is not ArtifactBodyMessage.REQUEST
+    ):
+        raise TypeError("authenticated artifact request requires request coordinates")
+    if type(maximum_body_bytes) is not int or maximum_body_bytes < 0:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
+    unavailable = False
+    try:
+        with open_local_artifact_bundle(root, bundle_id, limits=_limits(limits)) as bundle:
+            request = _find_request(bundle.artifact, reference)
+            content: bytes | None = None
+            body = request.body
+            if (
+                body is not None
+                and body.blob is not None
+                and body.extent is ArtifactCaptureExtent.COMPLETE
+                and body.blob.byte_count <= maximum_body_bytes
+            ):
+                chunks = [chunk async for chunk in bundle.read(body.blob)]
+                content = b"".join(chunks)
+                if len(content) != body.blob.byte_count:  # pragma: no cover - adapter invariant
+                    raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE)
+            return AuthenticatedArtifactRequest(
+                reference=reference,
+                request=request,
+                body_content=content,
+            )
+    except ArtifactOperationError:
+        raise
+    except LocalArtifactStoreError:
+        unavailable = True
+    if unavailable:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE)
+    raise ArtifactOperationError(  # pragma: no cover - exhaustive adapter outcome
+        ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE
+    )
+
+
 async def _read_blob_window(
     chunks: AsyncIterable[bytes],
     *,
@@ -508,6 +587,35 @@ def _find_body_capture(
     return message.body
 
 
+def _find_request(
+    artifact: RunArtifact,
+    reference: ArtifactBodyReference,
+) -> ArtifactRequest:
+    execution = next(
+        (item for item in artifact.executions if item.execution_id == reference.execution_id),
+        None,
+    )
+    attempt = (
+        None
+        if execution is None
+        else next(
+            (item for item in execution.attempts if item.attempt_id == reference.attempt_id),
+            None,
+        )
+    )
+    exchange = (
+        None
+        if attempt is None
+        else next(
+            (item for item in attempt.exchanges if item.exchange_id == reference.exchange_id),
+            None,
+        )
+    )
+    if exchange is None or exchange.request is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.BODY_NOT_FOUND)
+    return exchange.request
+
+
 def _find_blob(artifact: RunArtifact, sha256: str) -> ArtifactBlob:
     if type(sha256) is not str:
         raise ArtifactOperationError(ArtifactOperationErrorCode.BLOB_NOT_FOUND)
@@ -543,10 +651,12 @@ __all__ = (
     "ArtifactOperationError",
     "ArtifactOperationErrorCode",
     "ArtifactReadLimits",
+    "AuthenticatedArtifactRequest",
     "initialize_project_artifact_root",
     "inspect_artifact",
     "read_artifact_blob",
     "read_artifact_body_window",
+    "read_authenticated_artifact_request",
     "render_artifact_report",
     "validate_existing_artifact_root",
     "validate_project_artifact_root",

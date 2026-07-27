@@ -18,10 +18,12 @@ from comparo.application.artifacts import ArtifactBodyWindow
 from comparo.application.artifacts import ArtifactOperationError
 from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.application.artifacts import ArtifactReadLimits
+from comparo.application.artifacts import AuthenticatedArtifactRequest
 from comparo.application.artifacts import initialize_project_artifact_root
 from comparo.application.artifacts import inspect_artifact
 from comparo.application.artifacts import read_artifact_blob
 from comparo.application.artifacts import read_artifact_body_window
+from comparo.application.artifacts import read_authenticated_artifact_request
 from comparo.application.artifacts import render_artifact_report
 from comparo.application.artifacts import validate_existing_artifact_root
 from comparo.application.artifacts import validate_project_artifact_root
@@ -471,6 +473,129 @@ def test_body_read_rejects_invalid_limits_offsets_and_nested_coordinates(tmp_pat
                 _limits(),
                 offset=0,
                 maximum_output_bytes=1,
+            )
+        )
+    assert unavailable.value.code is ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE
+
+
+def test_authenticated_request_pins_metadata_and_complete_body_to_one_bundle(
+    tmp_path: Path,
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    reference = ArtifactBodyReference(
+        execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id,
+        exchange_id=exchange.exchange_id,
+        message=ArtifactBodyMessage.REQUEST,
+    )
+
+    snapshot = asyncio.run(
+        read_authenticated_artifact_request(
+            root,
+            artifact.metadata.artifact_id,
+            reference,
+            _limits(),
+            maximum_body_bytes=4,
+        )
+    )
+    deferred = asyncio.run(
+        read_authenticated_artifact_request(
+            root,
+            artifact.metadata.artifact_id,
+            reference,
+            _limits(),
+            maximum_body_bytes=3,
+        )
+    )
+
+    assert snapshot.reference == reference
+    assert snapshot.request == exchange.request
+    assert snapshot.body_content == b"left"
+    assert deferred.request == snapshot.request
+    assert deferred.body_content is None
+
+
+def test_authenticated_request_contract_and_rejections_are_closed(tmp_path: Path) -> None:
+    root, artifact = _bundle(tmp_path)
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    reference = ArtifactBodyReference(
+        execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id,
+        exchange_id=exchange.exchange_id,
+        message=ArtifactBodyMessage.REQUEST,
+    )
+    snapshot = asyncio.run(
+        read_authenticated_artifact_request(
+            root,
+            artifact.metadata.artifact_id,
+            reference,
+            _limits(),
+            maximum_body_bytes=4,
+        )
+    )
+    for changes, error in (
+        ({"reference": cast("ArtifactBodyReference", object())}, TypeError),
+        (
+            {"reference": msgspec.structs.replace(reference, message=ArtifactBodyMessage.RESPONSE)},
+            TypeError,
+        ),
+        ({"request": object()}, TypeError),
+        ({"body_content": cast("bytes", bytearray())}, TypeError),
+        ({"body_content": b"short"}, ValueError),
+    ):
+        with pytest.raises(error):
+            msgspec.structs.replace(snapshot, **changes)
+    assert isinstance(snapshot, AuthenticatedArtifactRequest)
+
+    response_reference = msgspec.structs.replace(
+        reference,
+        message=ArtifactBodyMessage.RESPONSE,
+    )
+    with pytest.raises(TypeError, match="request coordinates"):
+        asyncio.run(
+            read_authenticated_artifact_request(
+                root,
+                artifact.metadata.artifact_id,
+                response_reference,
+                _limits(),
+                maximum_body_bytes=4,
+            )
+        )
+    with pytest.raises(ArtifactOperationError) as invalid_limit:
+        asyncio.run(
+            read_authenticated_artifact_request(
+                root,
+                artifact.metadata.artifact_id,
+                reference,
+                _limits(),
+                maximum_body_bytes=-1,
+            )
+        )
+    assert invalid_limit.value.code is ArtifactOperationErrorCode.INVALID_LIMIT
+    with pytest.raises(ArtifactOperationError) as missing:
+        asyncio.run(
+            read_authenticated_artifact_request(
+                root,
+                artifact.metadata.artifact_id,
+                msgspec.structs.replace(reference, exchange_id="missing"),
+                _limits(),
+                maximum_body_bytes=4,
+            )
+        )
+    assert missing.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
+    with pytest.raises(ArtifactOperationError) as unavailable:
+        asyncio.run(
+            read_authenticated_artifact_request(
+                tmp_path / "missing",
+                artifact.metadata.artifact_id,
+                reference,
+                _limits(),
+                maximum_body_bytes=4,
             )
         )
     assert unavailable.value.code is ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE

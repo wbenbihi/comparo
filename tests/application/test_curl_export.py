@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 
 import msgspec
@@ -13,10 +12,10 @@ import pytest
 from comparo.application import curl_export as curl_module
 from comparo.application.artifacts import ArtifactBodyMessage
 from comparo.application.artifacts import ArtifactBodyReference
-from comparo.application.artifacts import ArtifactBodyWindow
 from comparo.application.artifacts import ArtifactOperationError
 from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.application.artifacts import ArtifactReadLimits
+from comparo.application.artifacts import AuthenticatedArtifactRequest
 from comparo.application.curl_export import CurlDialect
 from comparo.application.curl_export import CurlExport
 from comparo.application.curl_export import CurlExportError
@@ -31,6 +30,7 @@ from comparo.core.artifacts.common import ArtifactOmissionReason
 from comparo.core.artifacts.common import ArtifactSourceCaptureState
 from comparo.core.artifacts.http import ArtifactCookie
 from comparo.core.artifacts.http import ArtifactField
+from comparo.core.artifacts.http import ArtifactRequest
 from comparo.core.artifacts.model import RunArtifact
 from tests.application.test_artifacts import _bundle
 from tests.application.test_artifacts import _limits
@@ -60,6 +60,25 @@ def _request(
             maximum_embedded_body_bytes=body,
             maximum_command_characters=command,
         ),
+    )
+
+
+def _captured(artifact: RunArtifact) -> ArtifactRequest:
+    captured = artifact.executions[0].attempts[0].exchanges[0].request
+    assert captured is not None
+    return captured
+
+
+def _snapshot(
+    request: CurlExportRequest,
+    captured: ArtifactRequest,
+    *,
+    body_content: bytes | None,
+) -> AuthenticatedArtifactRequest:
+    return AuthenticatedArtifactRequest(
+        reference=request.reference,
+        request=captured,
+        body_content=body_content,
     )
 
 
@@ -209,13 +228,13 @@ def test_curl_collapses_artifact_failures_without_retaining_adapter_details(
     root, artifact = _bundle(tmp_path)
     canary = "curl-source-secret-canary"
 
-    def fail(*_args: object, **_kwargs: object) -> RunArtifact:
+    async def fail(*_args: object, **_kwargs: object) -> AuthenticatedArtifactRequest:
         try:
             raise OSError(2, canary, str(tmp_path / canary))
         except OSError as source:
             raise ArtifactOperationError(operation_code) from source
 
-    monkeypatch.setattr(curl_module, "verify_artifact", fail)
+    monkeypatch.setattr(curl_module, "read_authenticated_artifact_request", fail)
     with pytest.raises(CurlExportError) as caught:
         asyncio.run(export_artifact_curl(_request(root, artifact)))
 
@@ -226,54 +245,23 @@ def test_curl_collapses_artifact_failures_without_retaining_adapter_details(
 
 
 def test_curl_request_selection_rejects_each_unknown_coordinate(tmp_path: Path) -> None:
-    _root, artifact = _bundle(tmp_path)
-    request = _request(_root, artifact)
+    root, artifact = _bundle(tmp_path)
+    request = _request(root, artifact)
     for changes in (
         {"execution_id": "unknown"},
         {"attempt_id": "unknown"},
         {"exchange_id": "unknown"},
     ):
         with pytest.raises(CurlExportError) as caught:
-            curl_module._request(
-                artifact,
-                msgspec.structs.replace(request.reference, **changes),
-            )
-        assert caught.value.code is CurlExportErrorCode.REQUEST_NOT_FOUND
-
-    with pytest.raises(CurlExportError) as exported_missing:
-        asyncio.run(
-            export_artifact_curl(
-                msgspec.structs.replace(
-                    request,
-                    reference=msgspec.structs.replace(
-                        request.reference,
-                        execution_id="unknown",
-                    ),
+            asyncio.run(
+                export_artifact_curl(
+                    msgspec.structs.replace(
+                        request,
+                        reference=msgspec.structs.replace(request.reference, **changes),
+                    )
                 )
             )
-        )
-    assert exported_missing.value.code is CurlExportErrorCode.REQUEST_NOT_FOUND
-
-    execution = artifact.executions[0]
-    attempt = execution.attempts[0]
-    exchange = attempt.exchanges[0]
-    assert exchange.request is not None
-    assert exchange.request.body is not None
-    assert exchange.request.body.blob is not None
-    omitted_exchange = msgspec.structs.replace(
-        exchange,
-        request=None,
-        request_omission=ArtifactOmissionReason.POLICY,
-    )
-    omitted_attempt = msgspec.structs.replace(attempt, exchanges=(omitted_exchange,))
-    omitted_execution = msgspec.structs.replace(execution, attempts=(omitted_attempt,))
-    omitted_artifact = cast(
-        "RunArtifact",
-        SimpleNamespace(executions=(omitted_execution,)),
-    )
-    with pytest.raises(CurlExportError) as omitted:
-        curl_module._request(omitted_artifact, request.reference)
-    assert omitted.value.code is CurlExportErrorCode.REQUEST_NOT_FOUND
+        assert caught.value.code is CurlExportErrorCode.REQUEST_NOT_FOUND
 
 
 def test_curl_body_variants_are_explicit_and_never_silently_truncated(
@@ -282,25 +270,22 @@ def test_curl_body_variants_are_explicit_and_never_silently_truncated(
 ) -> None:
     root, artifact = _bundle(tmp_path)
     request = _request(root, artifact)
-    captured = curl_module._request(artifact, request.reference)
+    captured = _captured(artifact)
     assert captured.body is not None
 
     no_body = msgspec.structs.replace(captured, body=None)
-    assert asyncio.run(curl_module._body(request, no_body)) == ("", None, True, True, ())
-    execution = artifact.executions[0]
-    attempt = execution.attempts[0]
-    exchange = attempt.exchanges[0]
-    no_body_exchange = msgspec.structs.replace(exchange, request=no_body)
-    no_body_attempt = msgspec.structs.replace(attempt, exchanges=(no_body_exchange,))
-    no_body_execution = msgspec.structs.replace(execution, attempts=(no_body_attempt,))
-    monkeypatch.setattr(
-        curl_module,
-        "verify_artifact",
-        lambda *_args, **_kwargs: cast(
-            "RunArtifact",
-            SimpleNamespace(executions=(no_body_execution,)),
-        ),
+    assert asyncio.run(curl_module._body(request, no_body, None)) == (
+        "",
+        None,
+        True,
+        True,
+        (),
     )
+
+    async def no_body_snapshot(*_args: object, **_kwargs: object) -> AuthenticatedArtifactRequest:
+        return _snapshot(request, no_body, body_content=None)
+
+    monkeypatch.setattr(curl_module, "read_authenticated_artifact_request", no_body_snapshot)
     no_body_export = asyncio.run(export_artifact_curl(request))
     assert "--data-binary" not in no_body_export.command
     assert no_body_export.redaction_count == 0
@@ -312,50 +297,20 @@ def test_curl_body_variants_are_explicit_and_never_silently_truncated(
         reason=ArtifactOmissionReason.SOURCE_INCOMPLETE,
     )
     incomplete = asyncio.run(
-        curl_module._body(request, msgspec.structs.replace(captured, body=partial))
+        curl_module._body(request, msgspec.structs.replace(captured, body=partial), None)
     )
     assert incomplete[2:4] == (False, False)
     assert incomplete[-1] == (CurlExportWarning.BODY_CAPTURE_INCOMPLETE,)
 
-    async def binary_window(*_args: object, **_kwargs: object) -> ArtifactBodyWindow:
-        return ArtifactBodyWindow(
-            reference=request.reference,
-            source_state="complete",
-            extent="complete",
-            reason=None,
-            media_type="application/octet-stream",
-            total_bytes=1,
-            offset=0,
-            content=b"\xff",
-            next_offset=None,
-            redaction_count=0,
-        )
-
-    monkeypatch.setattr(curl_module, "read_artifact_body_window", binary_window)
-    binary = asyncio.run(curl_module._body(request, captured))
+    binary = asyncio.run(curl_module._body(request, captured, b"\xff"))
     assert binary[-1] == (
         CurlExportWarning.BODY_NOT_TEXT,
         CurlExportWarning.BODY_FILE_REQUIRED,
     )
 
-    async def partial_window(*_args: object, **_kwargs: object) -> ArtifactBodyWindow:
-        return ArtifactBodyWindow(
-            reference=request.reference,
-            source_state="complete",
-            extent="complete",
-            reason=None,
-            media_type="text/plain",
-            total_bytes=2,
-            offset=0,
-            content=b"a",
-            next_offset=1,
-            redaction_count=0,
-        )
-
-    monkeypatch.setattr(curl_module, "read_artifact_body_window", partial_window)
-    with pytest.raises(CurlExportError) as truncated:
-        asyncio.run(curl_module._body(request, captured))
-    assert truncated.value.code is CurlExportErrorCode.OUTPUT_LIMIT_EXCEEDED
+    with pytest.raises(CurlExportError) as unavailable:
+        asyncio.run(curl_module._body(request, captured, None))
+    assert unavailable.value.code is CurlExportErrorCode.ARTIFACT_UNAVAILABLE
 
 
 def test_curl_counts_sanitized_headers_cookies_and_body_redactions(
@@ -384,17 +339,17 @@ def test_curl_counts_sanitized_headers_cookies_and_body_redactions(
         ),
         body=msgspec.structs.replace(exchange.request.body, redaction_count=2),
     )
-    sanitized_exchange = msgspec.structs.replace(exchange, request=sanitized)
-    sanitized_attempt = msgspec.structs.replace(attempt, exchanges=(sanitized_exchange,))
-    sanitized_execution = msgspec.structs.replace(execution, attempts=(sanitized_attempt,))
-    sanitized_artifact = msgspec.structs.replace(
-        artifact,
-        executions=(sanitized_execution, *artifact.executions[1:]),
-    )
+
+    async def sanitized_snapshot(
+        *_args: object,
+        **_kwargs: object,
+    ) -> AuthenticatedArtifactRequest:
+        return _snapshot(request, sanitized, body_content=b"left")
+
     monkeypatch.setattr(
         curl_module,
-        "verify_artifact",
-        lambda *_args, **_kwargs: sanitized_artifact,
+        "read_authenticated_artifact_request",
+        sanitized_snapshot,
     )
 
     exported = asyncio.run(export_artifact_curl(request))

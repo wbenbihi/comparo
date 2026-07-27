@@ -13,11 +13,10 @@ from comparo.application.artifact_references import ArtifactBodyReference
 from comparo.application.artifacts import ArtifactOperationError
 from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.application.artifacts import ArtifactReadLimits
-from comparo.application.artifacts import read_artifact_body_window
-from comparo.application.artifacts import verify_artifact
+from comparo.application.artifacts import AuthenticatedArtifactRequest
+from comparo.application.artifacts import read_authenticated_artifact_request
 from comparo.core.artifacts.common import ArtifactCaptureExtent
 from comparo.core.artifacts.http import ArtifactRequest
-from comparo.core.artifacts.model import RunArtifact
 
 
 class CurlDialect(StrEnum):
@@ -138,7 +137,7 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
     """Render one canonical command using only authenticated sanitized artifact values."""
     if type(request) is not CurlExportRequest:
         raise CurlExportError(CurlExportErrorCode.INVALID_REQUEST)
-    captured: ArtifactRequest | None = None
+    snapshot: AuthenticatedArtifactRequest | None = None
     prefix = ""
     body_argument: str | None = None
     body_exact = False
@@ -146,11 +145,18 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
     body_warnings: tuple[CurlExportWarning, ...] = ()
     failure: CurlExportErrorCode | None = None
     try:
-        artifact = verify_artifact(request.root, request.bundle_id, request.artifact_limits)
-        captured = _request(artifact, request.reference)
+        snapshot = await read_authenticated_artifact_request(
+            request.root,
+            request.bundle_id,
+            request.reference,
+            request.artifact_limits,
+            maximum_body_bytes=request.export_limits.maximum_embedded_body_bytes,
+        )
+        captured = snapshot.request
         prefix, body_argument, body_exact, body_executable, body_warnings = await _body(
             request,
             captured,
+            snapshot.body_content,
         )
     except CurlExportError as error:
         failure = error.code
@@ -160,8 +166,9 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
             if error.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
             else CurlExportErrorCode.ARTIFACT_UNAVAILABLE
         )
-    if failure is not None or captured is None:
+    if failure is not None or snapshot is None:
         raise CurlExportError(failure or CurlExportErrorCode.ARTIFACT_UNAVAILABLE)
+    captured = snapshot.request
 
     parts: list[str] = []
     used = len(prefix)
@@ -233,35 +240,10 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
     )
 
 
-def _request(artifact: RunArtifact, reference: ArtifactBodyReference) -> ArtifactRequest:
-    execution = next(
-        (item for item in artifact.executions if item.execution_id == reference.execution_id),
-        None,
-    )
-    attempt = (
-        None
-        if execution is None
-        else next(
-            (item for item in execution.attempts if item.attempt_id == reference.attempt_id),
-            None,
-        )
-    )
-    exchange = (
-        None
-        if attempt is None
-        else next(
-            (item for item in attempt.exchanges if item.exchange_id == reference.exchange_id),
-            None,
-        )
-    )
-    if exchange is None or exchange.request is None:
-        raise CurlExportError(CurlExportErrorCode.REQUEST_NOT_FOUND)
-    return exchange.request
-
-
 async def _body(
     request: CurlExportRequest,
     captured: ArtifactRequest,
+    body_content: bytes | None,
 ) -> tuple[str, str | None, bool, bool, tuple[CurlExportWarning, ...]]:
     body = captured.body
     if body is None:
@@ -282,21 +264,13 @@ async def _body(
             False,
             (CurlExportWarning.BODY_FILE_REQUIRED,),
         )
-    window = await read_artifact_body_window(
-        request.root,
-        request.bundle_id,
-        request.reference,
-        request.artifact_limits,
-        offset=0,
-        maximum_output_bytes=max(1, request.export_limits.maximum_embedded_body_bytes),
-    )
-    if window.next_offset is not None:
-        raise CurlExportError(CurlExportErrorCode.OUTPUT_LIMIT_EXCEEDED)
+    if body_content is None:
+        raise CurlExportError(CurlExportErrorCode.ARTIFACT_UNAVAILABLE)
     try:
-        text = window.content.decode("utf-8")
+        text = body_content.decode("utf-8")
     except UnicodeDecodeError:
         text = ""
-    if (not text and window.content) or "\0" in text:
+    if (not text and body_content) or "\0" in text:
         return (
             "",
             _quote("@<path-to-sanitized-body>"),
