@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from typing import Protocol
 from typing import cast
 from typing import final
@@ -151,6 +152,8 @@ class RequestBodyMaterializer:
             return NoMaterializedBody()
         origins = request_body_taint_origins(body)
         sensitivity = Sensitivity.SENSITIVE if origins else Sensitivity.PUBLIC
+        source: RepeatableByteSource | None = None
+        store_failure: BodyStoreFailureCode | None = None
         try:
             writer = await self._store.begin(
                 body_id,
@@ -163,10 +166,12 @@ class RequestBodyMaterializer:
                     await writer.append(chunk)
                 source = await writer.commit_request(provenance)
         except BodyStoreError as error:
+            store_failure = error.code
+        if store_failure is not None or source is None:
             raise BodyMaterializationError(
                 BodyMaterializationFailureCode.STORE_FAILED,
-                store_code=error.code,
-            ) from error
+                store_code=store_failure or BodyStoreFailureCode.IO_FAILED,
+            )
         multipart = None
         if type(body) is MultipartBody:
             multipart = MultipartBoundaryValidation(
@@ -203,13 +208,14 @@ class RequestBodyMaterializer:
         value: BytesValue | SensitiveValue[BytesValue] | RepeatableByteSource,
     ) -> AsyncIterator[bytes]:
         if type(value) is RepeatableByteSource:
+            failure = False
             try:
                 async for chunk in self._reader.open_request(value):
                     yield chunk
-            except BodyStoreError as error:
-                raise BodyMaterializationError(
-                    BodyMaterializationFailureCode.SOURCE_FAILED
-                ) from error
+            except BodyStoreError:
+                failure = True
+            if failure:
+                raise BodyMaterializationError(BodyMaterializationFailureCode.SOURCE_FAILED)
             return
         exact = (
             cast(BytesValue, value.reveal(access=_BODY_ACCESS))
@@ -266,21 +272,25 @@ def _reveal_json(value: JsonValue | SensitiveValue[JsonValue]) -> JsonValue:
 
 
 def _encode_text(value: BodyText) -> bytes:
-    try:
-        return value.value.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise BodyMaterializationError(BodyMaterializationFailureCode.INVALID_TEXT) from error
+    encoded: bytes | None = None
+    with suppress(UnicodeEncodeError):
+        encoded = value.value.encode("utf-8")
+    if encoded is None:
+        raise BodyMaterializationError(BodyMaterializationFailureCode.INVALID_TEXT)
+    return encoded
 
 
 def _encode_form(body: FormBody) -> bytes:
-    try:
-        return "&".join(
+    encoded: bytes | None = None
+    with suppress(UnicodeEncodeError):
+        encoded = "&".join(
             f"{quote_plus(field.name.value, safe='')}="
             f"{quote_plus(_reveal_text(field.value).value, safe='')}"
             for field in body.fields
         ).encode("ascii")
-    except UnicodeEncodeError as error:  # pragma: no cover - quote_plus emits ASCII
-        raise BodyMaterializationError(BodyMaterializationFailureCode.INVALID_TEXT) from error
+    if encoded is None:  # pragma: no cover - quote_plus emits ASCII
+        raise BodyMaterializationError(BodyMaterializationFailureCode.INVALID_TEXT)
+    return encoded
 
 
 def _text_part_headers(part: MultipartTextPart) -> bytes:
@@ -297,13 +307,20 @@ def _file_part_headers(part: MultipartFilePart) -> bytes:
         if type(filename) is MultipartDispositionFilename
         else filename.reveal(access=_BODY_ACCESS)
     )
-    encoded_filename = quote(exact.value, safe="", encoding="utf-8", errors="strict")
-    result = (
-        f'Content-Disposition: form-data; name="{part.name.value}"; '
-        f"filename*=UTF-8''{encoded_filename}\r\n"
-        f"Content-Type: {render_media_type(part.media_type).value}\r\n\r\n"
-    )
-    return result.encode("latin-1")
+    encoded: bytes | None = None
+    try:
+        encoded_filename = quote(exact.value, safe="", encoding="utf-8", errors="strict")
+        result = (
+            f'Content-Disposition: form-data; name="{part.name.value}"; '
+            f"filename*=UTF-8''{encoded_filename}\r\n"
+            f"Content-Type: {render_media_type(part.media_type).value}\r\n\r\n"
+        )
+        encoded = result.encode("latin-1")
+    except UnicodeEncodeError:
+        pass
+    if encoded is None:
+        raise BodyMaterializationError(BodyMaterializationFailureCode.INVALID_TEXT)
+    return encoded
 
 
 def _reject_boundary(content: bytes, boundary: bytes) -> None:
@@ -315,6 +332,7 @@ def _encode_json(value: JsonValue, limits: BodyMaterializationLimits) -> bytes:
     output = bytearray()
     nodes = 0
     stack: list[tuple[JsonValue | bytes, int]] = [(value, 1)]
+    invalid_text = False
     try:
         while stack:
             current, depth = stack.pop()
@@ -330,8 +348,10 @@ def _encode_json(value: JsonValue, limits: BodyMaterializationLimits) -> bytes:
                 output.extend(scalar)
             else:
                 _push_json_container(json_value, depth, output, stack)
-    except UnicodeEncodeError as error:
-        raise BodyMaterializationError(BodyMaterializationFailureCode.INVALID_TEXT) from error
+    except UnicodeEncodeError:
+        invalid_text = True
+    if invalid_text:
+        raise BodyMaterializationError(BodyMaterializationFailureCode.INVALID_TEXT)
     return bytes(output)
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import final
 
 import msgspec
@@ -78,8 +79,9 @@ def compile_selector(
     else:
         raise InvalidSelectorError(SelectorCompileError())
     capabilities = derive_selector_capabilities(source, path, occurrence)
-    try:
-        return CompiledSelector(
+    compiled: CompiledSelector | None = None
+    with suppress(TypeError, ValueError):
+        compiled = CompiledSelector(
             fingerprint=fingerprint,
             source=source,
             path=path,
@@ -88,8 +90,9 @@ def compile_selector(
             body_view=view,
             occurrence=occurrence,
         )
-    except (TypeError, ValueError) as error:
-        raise InvalidSelectorError(SelectorCompileError(alias=_bounded_alias(text))) from error
+    if compiled is None:
+        raise InvalidSelectorError(SelectorCompileError(alias=_bounded_alias(text)))
+    return compiled
 
 
 def _compile_shorthand(
@@ -111,12 +114,13 @@ def _compile_shorthand(
     )
     if static is not None:
         return static[0], static[1], None, TerminalOccurrence()
-    try:
-        source = SelectorSource(normalized)
-    except ValueError as error:
-        raise InvalidSelectorError(SelectorCompileError()) from error
-    view = default_body_view if source in _BODY_SOURCES else None
-    return source, NoPath(), view, TerminalOccurrence()
+    resolved_source: SelectorSource | None = None
+    with suppress(ValueError):
+        resolved_source = SelectorSource(normalized)
+    if resolved_source is None:
+        raise InvalidSelectorError(SelectorCompileError())
+    view = default_body_view if resolved_source in _BODY_SOURCES else None
+    return resolved_source, NoPath(), view, TerminalOccurrence()
 
 
 def _compile_structured(
@@ -129,12 +133,11 @@ def _compile_structured(
     source_text = _literal_text(fields.get("source"))
     if source_text is None:
         raise InvalidSelectorError(SelectorCompileError())
-    try:
+    source: SelectorSource | None = None
+    with suppress(ValueError):
         source = SelectorSource(source_text)
-    except ValueError as error:
-        raise InvalidSelectorError(
-            SelectorCompileError(alias=_bounded_alias(source_text))
-        ) from error
+    if source is None:
+        raise InvalidSelectorError(SelectorCompileError(alias=_bounded_alias(source_text)))
     view = _body_view(source, fields.get("view"), default_body_view)
     occurrence = _occurrence(fields.get("occurrence"))
     if "field" in fields and "path" in fields:
@@ -163,10 +166,12 @@ def _body_view(
         return default
     if text is None:
         raise InvalidSelectorError(SelectorCompileError(alias=source.value))
-    try:
-        return BodyViewKind(text)
-    except ValueError as error:
-        raise InvalidSelectorError(SelectorCompileError(alias=source.value)) from error
+    view: BodyViewKind | None = None
+    with suppress(ValueError):
+        view = BodyViewKind(text)
+    if view is None:
+        raise InvalidSelectorError(SelectorCompileError(alias=source.value))
+    return view
 
 
 def _occurrence(expression: ValueExpression | None) -> ObservationOccurrenceSelector:
@@ -196,19 +201,21 @@ def _http_field(expression: ValueExpression) -> HttpFieldPath:
     projection_text = _literal_text(fields.get("projection"))
     if name is None or ("occurrence" in fields and occurrence is None):
         raise InvalidSelectorError(SelectorCompileError())
-    try:
+    result: HttpFieldPath | None = None
+    with suppress(TypeError, ValueError):
         projection = (
             HttpFieldProjection.RAW_VALUE
             if projection_text is None
             else HttpFieldProjection(projection_text)
         )
-        return HttpFieldPath(
+        result = HttpFieldPath(
             name=name,
             occurrence=None if occurrence is None else Count(value=occurrence),
             projection=projection,
         )
-    except (TypeError, ValueError) as error:
-        raise InvalidSelectorError(SelectorCompileError()) from error
+    if result is None:
+        raise InvalidSelectorError(SelectorCompileError())
+    return result
 
 
 def _path(source: SelectorSource, expression: ValueExpression) -> SelectorPath:

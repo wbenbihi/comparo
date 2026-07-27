@@ -108,13 +108,17 @@ def compile_transforms(
     for item in expression.items:
         operation = _operation(item)
         alias = None if operation is None else operation[0]
+        transform: DiffTransform | None = None
+        invalid = False
         try:
             if operation is None:
                 raise ValueError("transform operation is not static")
             transform = _compile_transform(*operation, input_contract=current)
             current = derive_side_contract(current, (transform,), None)
-        except (KeyError, TypeError, ValueError) as error:
-            raise _invalid(DiffSyntaxFamily.TRANSFORM, alias) from error
+        except (KeyError, TypeError, ValueError):
+            invalid = True
+        if invalid or transform is None:
+            raise _invalid(DiffSyntaxFamily.TRANSFORM, alias)
         result.append(transform)
     return tuple(result)
 
@@ -130,13 +134,17 @@ def compile_reducer(
         return None
     operation = _operation(expression)
     alias = None if operation is None else operation[0]
+    reducer: DiffReducer | None = None
+    invalid = False
     try:
         if operation is None:
             raise ValueError("reducer operation is not static")
         reducer = _compile_reducer_operation(*operation)
         derive_side_contract(input_contract, transforms, reducer)
-    except (KeyError, TypeError, ValueError) as error:
-        raise _invalid(DiffSyntaxFamily.REDUCER, alias) from error
+    except (KeyError, TypeError, ValueError):
+        invalid = True
+    if invalid or reducer is None:
+        raise _invalid(DiffSyntaxFamily.REDUCER, alias)
     return reducer
 
 
@@ -159,6 +167,7 @@ def compile_pairing(
         if operation is None:
             raise _invalid(DiffSyntaxFamily.PAIRING, None)
         name, fields = operation
+    invalid = False
     try:
         identity = _identity(DiffOperationFamily.PAIRING, _kebab(name))
         if name == "singular":
@@ -190,14 +199,18 @@ def compile_pairing(
                 duplicate_keys=DuplicateKeyMode(_text(fields.get("duplicateKeys")) or "error"),
             )
         raise ValueError("unsupported pairing")
-    except (TypeError, ValueError) as error:
-        raise _invalid(DiffSyntaxFamily.PAIRING, name) from error
+    except (TypeError, ValueError):
+        invalid = True
+    if invalid:
+        raise _invalid(DiffSyntaxFamily.PAIRING, name)
+    raise _invalid(DiffSyntaxFamily.PAIRING, name)  # pragma: no cover
 
 
 def compile_comparator(expression: ValueExpression | None) -> DiffComparator:
     """Compile one typed comparator, including directed and tolerance semantics."""
     operation = _operation(expression)
     alias = None if operation is None else operation[0]
+    invalid = False
     try:
         if operation is None:
             raise ValueError("comparator operation is not static")
@@ -241,8 +254,11 @@ def compile_comparator(expression: ValueExpression | None) -> DiffComparator:
                 relation=TextPredicateRelation(_required_text(fields, "relation")),
             )
         raise ValueError("unsupported comparator")
-    except (KeyError, TypeError, ValueError) as error:
-        raise _invalid(DiffSyntaxFamily.COMPARATOR, alias) from error
+    except (KeyError, TypeError, ValueError):
+        invalid = True
+    if invalid:
+        raise _invalid(DiffSyntaxFamily.COMPARATOR, alias)
+    raise _invalid(DiffSyntaxFamily.COMPARATOR, alias)  # pragma: no cover
 
 
 def _compile_transform(  # noqa: C901 -- closed typed transform catalog

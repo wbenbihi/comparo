@@ -112,6 +112,8 @@ def test_registry_validates_material_and_contains_ssl_errors(
         provider.create(custom)
     assert invalid_material.value.code is TlsConfigurationFailureCode.INVALID_MATERIAL
     assert str(invalid) not in str(invalid_material.value)
+    assert invalid_material.value.__cause__ is None
+    assert invalid_material.value.__context__ is None
 
 
 def test_client_identity_files_and_provider_boundaries(tmp_path: Path) -> None:
@@ -175,3 +177,5 @@ def test_registered_client_identity_contains_key_loading_failures(tmp_path: Path
         provider.create(_policy(identity=ClientIdentityRef(value="client")))
     assert failure.value.code is TlsConfigurationFailureCode.INVALID_MATERIAL
     assert str(cert) not in str(failure.value)
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None

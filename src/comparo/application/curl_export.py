@@ -138,6 +138,13 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
     """Render one canonical command using only authenticated sanitized artifact values."""
     if type(request) is not CurlExportRequest:
         raise CurlExportError(CurlExportErrorCode.INVALID_REQUEST)
+    captured: ArtifactRequest | None = None
+    prefix = ""
+    body_argument: str | None = None
+    body_exact = False
+    body_executable = False
+    body_warnings: tuple[CurlExportWarning, ...] = ()
+    failure: CurlExportErrorCode | None = None
     try:
         artifact = verify_artifact(request.root, request.bundle_id, request.artifact_limits)
         captured = _request(artifact, request.reference)
@@ -145,15 +152,16 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
             request,
             captured,
         )
-    except CurlExportError:
-        raise
+    except CurlExportError as error:
+        failure = error.code
     except ArtifactOperationError as error:
-        code = (
+        failure = (
             CurlExportErrorCode.REQUEST_NOT_FOUND
             if error.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
             else CurlExportErrorCode.ARTIFACT_UNAVAILABLE
         )
-        raise CurlExportError(code) from None
+    if failure is not None or captured is None:
+        raise CurlExportError(failure or CurlExportErrorCode.ARTIFACT_UNAVAILABLE)
 
     parts: list[str] = []
     used = len(prefix)

@@ -80,11 +80,17 @@ class LocalArtifactBundleSink:
             root_fd = os.open(root, _DIRECTORY_FLAGS)
         if root_fd < 0:
             raise LocalArtifactStoreError(ArtifactStoreErrorCode.ROOT_UNSAFE)
+        failure: ArtifactStoreErrorCode | None = None
         try:
             _validate_root_fd(root_fd)
-        except Exception:
-            os.close(root_fd)
-            raise
+        except LocalArtifactStoreError as error:
+            failure = error.code
+        except OSError:
+            failure = ArtifactStoreErrorCode.ROOT_UNSAFE
+        if failure is not None:
+            with suppress(OSError):
+                os.close(root_fd)
+            raise LocalArtifactStoreError(failure)
         self._root_fd = root_fd
         self._lock = Lock()
         self._closed = False
@@ -307,19 +313,27 @@ class _BundleTransaction:
         """Create a random restrictive sibling staging directory without following links."""
         for _attempt in range(_STAGING_ATTEMPTS):
             staging_name = f".staging-{bundle_id}-{token_hex(16)}"
+            mkdir_failed = False
             try:
                 os.mkdir(staging_name, mode=0o700, dir_fd=root_fd)
             except FileExistsError:
                 continue
-            except OSError as error:
-                raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from error
+            except OSError:
+                mkdir_failed = True
+            if mkdir_failed:
+                raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED)
+            setup_failed = False
+            staging_fd = -1
+            blob_fd = -1
             try:
                 staging_fd = os.open(staging_name, _DIRECTORY_FLAGS, dir_fd=root_fd)
                 os.mkdir("blobs", mode=0o700, dir_fd=staging_fd)
                 blob_fd = os.open("blobs", _DIRECTORY_FLAGS, dir_fd=staging_fd)
-            except OSError as error:
+            except OSError:
                 _cleanup_partial_creation(root_fd, staging_name, locals())
-                raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from error
+                setup_failed = True
+            if setup_failed:
+                raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED)
             return cls(
                 root_fd=root_fd,
                 bundle_id=bundle_id,
@@ -337,18 +351,21 @@ class _BundleTransaction:
         limits: ArtifactLimits,
     ) -> None:
         """Write all authenticated content and sync it before the completion marker."""
+        results: bytes | None = None
+        failure: ArtifactStoreErrorCode | None = None
         try:
             results = encode_run_artifact(
                 artifact,
                 maximum_bytes=limits.maximum_manifest_bytes.value,
             )
         except ArtifactCodecError as error:
-            code = (
+            failure = (
                 ArtifactStoreErrorCode.BUDGET_EXCEEDED
                 if error.code.value == "budget-exceeded"
                 else ArtifactStoreErrorCode.INVALID_ARTIFACT
             )
-            raise LocalArtifactStoreError(code) from error
+        if failure is not None or results is None:
+            raise LocalArtifactStoreError(failure or ArtifactStoreErrorCode.INVALID_ARTIFACT)
         results_digest = sha256(results).hexdigest()
         await _run_blocking(partial(_write_file, self._staging_fd, "results.json", results))
         self._created_files.append("results.json")
@@ -387,10 +404,11 @@ class _BundleTransaction:
     ) -> None:
         """Stream one blob with exact size and digest verification."""
         name = blob.sha256
-        try:
+        descriptor = -1
+        with suppress(OSError):
             descriptor = os.open(name, _FILE_FLAGS, 0o600, dir_fd=self._blob_fd)
-        except OSError as error:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from error
+        if descriptor < 0:
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED)
         self._created_blob_names.append(name)
         digest = sha256()
         size = 0
@@ -417,21 +435,27 @@ class _BundleTransaction:
 
     def publish(self) -> None:
         """Atomically publish without overwrite, then durably sync the root directory."""
+        failure: ArtifactStoreErrorCode | None = None
         try:
             _atomic_rename_noreplace(
                 self._root_fd,
                 self._staging_name,
                 self._bundle_id,
             )
-        except FileExistsError as error:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.ALREADY_EXISTS) from error
-        except OSError as error:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from error
+        except FileExistsError:
+            failure = ArtifactStoreErrorCode.ALREADY_EXISTS
+        except OSError:
+            failure = ArtifactStoreErrorCode.IO_FAILED
+        if failure is not None:
+            raise LocalArtifactStoreError(failure)
         self._published = True
+        sync_failed = False
         try:
             os.fsync(self._root_fd)
-        except OSError as error:
-            raise LocalArtifactStoreError(ArtifactStoreErrorCode.COMMIT_UNCERTAIN) from error
+        except OSError:
+            sync_failed = True
+        if sync_failed:
+            raise LocalArtifactStoreError(ArtifactStoreErrorCode.COMMIT_UNCERTAIN)
 
     def abort(self) -> None:
         """Remove only this known private staging tree if it was not published."""
@@ -514,6 +538,7 @@ def _move_local_artifact_bundle(root: Path, bundle_id: str, *, restore: bool) ->
     root_fd = -1
     trash_fd = -1
     source_fd = -1
+    failure: ArtifactStoreErrorCode | None = None
     try:
         root_fd = os.open(root, _DIRECTORY_FLAGS)
         _validate_root_fd(root_fd)
@@ -534,18 +559,20 @@ def _move_local_artifact_bundle(root: Path, bundle_id: str, *, restore: bool) ->
         )
         os.fsync(source_parent)
         os.fsync(destination_parent)
-    except LocalArtifactStoreError:
-        raise
+    except LocalArtifactStoreError as error:
+        failure = error.code
     except OSError:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+        failure = ArtifactStoreErrorCode.IO_FAILED
     finally:
         for descriptor in (source_fd, trash_fd, root_fd):
             if descriptor >= 0:
                 with suppress(OSError):
                     os.close(descriptor)
+    if failure is not None:
+        raise LocalArtifactStoreError(failure)
 
 
-def _list_local_artifact_bundle_ids(
+def _list_local_artifact_bundle_ids(  # noqa: C901
     root: Path,
     *,
     maximum_entries: int,
@@ -556,6 +583,7 @@ def _list_local_artifact_bundle_ids(
     if type(maximum_entries) is not int or maximum_entries < 1:
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.BUDGET_EXCEEDED)
     root_fd = -1
+    failure: ArtifactStoreErrorCode | None = None
     try:
         root_fd = os.open(root, _DIRECTORY_FLAGS)
         _validate_root_fd(root_fd)
@@ -572,14 +600,17 @@ def _list_local_artifact_bundle_ids(
                 if type(name) is str and _BUNDLE_ID.fullmatch(name) is not None:
                     candidates.append(name)
         return tuple(sorted(candidates))
-    except LocalArtifactStoreError:
-        raise
+    except LocalArtifactStoreError as error:
+        failure = error.code
     except OSError:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+        failure = ArtifactStoreErrorCode.IO_FAILED
     finally:
         if root_fd >= 0:
             with suppress(OSError):
                 os.close(root_fd)
+    if failure is not None:
+        raise LocalArtifactStoreError(failure)
+    raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED)  # pragma: no cover
 
 
 def _open_local_artifact_bundle(  # noqa: C901
@@ -599,6 +630,7 @@ def _open_local_artifact_bundle(  # noqa: C901
     root_fd = -1
     bundle_fd = -1
     blob_fd = -1
+    failure: ArtifactStoreErrorCode | None = None
     try:
         root_fd = os.open(root, _DIRECTORY_FLAGS)
         _validate_root_fd(root_fd)
@@ -649,17 +681,16 @@ def _open_local_artifact_bundle(  # noqa: C901
         opened = LocalArtifactBundle(artifact, blob_fd)
         blob_fd = -1
         return opened
-    except LocalArtifactStoreError:
-        raise
+    except LocalArtifactStoreError as error:
+        failure = error.code
     except ArtifactCodecError as error:
-        code = (
+        failure = (
             ArtifactStoreErrorCode.UNSUPPORTED_VERSION
             if error.code is ArtifactCodecErrorCode.UNSUPPORTED_VERSION
             else ArtifactStoreErrorCode.INVALID_ARTIFACT
         )
-        raise LocalArtifactStoreError(code) from None
     except (OSError, msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.IO_FAILED) from None
+        failure = ArtifactStoreErrorCode.IO_FAILED
     finally:
         if blob_fd >= 0:
             with suppress(OSError):
@@ -670,6 +701,7 @@ def _open_local_artifact_bundle(  # noqa: C901
         if root_fd >= 0:
             with suppress(OSError):
                 os.close(root_fd)
+    raise LocalArtifactStoreError(failure or ArtifactStoreErrorCode.IO_FAILED)
 
 
 def _decode_bundle_manifest(payload: bytes) -> _BundleManifest:
@@ -683,10 +715,14 @@ def _decode_bundle_manifest(payload: bytes) -> _BundleManifest:
 
 def _decode_bundle_manifest_inner(payload: bytes) -> _BundleManifest:
     """Classify authenticated version incompatibility before strict shape validation."""
+    untyped: object | None = None
+    invalid = False
     try:
         untyped = msgspec.json.decode(payload)
     except msgspec.DecodeError:
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT) from None
+        invalid = True
+    if invalid:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
     if type(untyped) is not dict:
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
     document = cast("dict[object, object]", untyped)
@@ -700,10 +736,12 @@ def _decode_bundle_manifest_inner(payload: bytes) -> _BundleManifest:
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
     if artifact_version != ARTIFACT_API_VERSION:
         raise LocalArtifactStoreError(ArtifactStoreErrorCode.UNSUPPORTED_VERSION)
-    try:
-        return msgspec.convert(untyped, type=_BundleManifest)
-    except (msgspec.ValidationError, TypeError, ValueError):
-        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT) from None
+    converted: _BundleManifest | None = None
+    with suppress(msgspec.ValidationError, TypeError, ValueError):
+        converted = msgspec.convert(untyped, type=_BundleManifest)
+    if converted is None:
+        raise LocalArtifactStoreError(ArtifactStoreErrorCode.INVALID_ARTIFACT)
+    return converted
 
 
 def read_local_artifact_bundle(
@@ -868,12 +906,14 @@ def _cleanup_partial_creation(
 ) -> None:
     blob_fd = local_values.get("blob_fd")
     staging_fd = local_values.get("staging_fd")
-    if type(blob_fd) is int:
-        os.close(blob_fd)
-    if type(staging_fd) is int:
+    if type(blob_fd) is int and blob_fd >= 0:
+        with suppress(OSError):
+            os.close(blob_fd)
+    if type(staging_fd) is int and staging_fd >= 0:
         with suppress(OSError):
             os.rmdir("blobs", dir_fd=staging_fd)
-        os.close(staging_fd)
+        with suppress(OSError):
+            os.close(staging_fd)
     with suppress(OSError):
         os.rmdir(staging_name, dir_fd=root_fd)
 

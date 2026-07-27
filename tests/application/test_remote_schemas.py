@@ -367,6 +367,8 @@ def test_remote_loader_reports_dns_and_network_failures_without_uri_values() -> 
         )
     assert captured.value.code is RemoteSchemaFailureCode.DNS_FAILED
     assert uri not in str(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
 
     empty = _Resolver(())
     with pytest.raises(RemoteSchemaLoadError) as captured:
@@ -387,6 +389,8 @@ def test_remote_loader_reports_dns_and_network_failures_without_uri_values() -> 
             ).load((RemoteSchema(uri=uri),), trusted_local_policy())
         )
     assert captured.value.code is RemoteSchemaFailureCode.NETWORK_FAILED
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
 
     resolver = _Resolver((Ipv4Host(value="93.184.216.34"),))
     with pytest.raises(RemoteSchemaLoadError) as captured:
@@ -397,6 +401,8 @@ def test_remote_loader_reports_dns_and_network_failures_without_uri_values() -> 
             ).load((RemoteSchema(uri=uri),), trusted_local_policy())
         )
     assert captured.value.code is RemoteSchemaFailureCode.EMPTY
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
 
 
 def test_remote_loader_applies_scheme_host_and_port_authority_independently() -> None:

@@ -491,6 +491,8 @@ def test_existing_root_reports_a_resolve_race_as_unavailable(
     with pytest.raises(ArtifactOperationError) as unavailable:
         validate_existing_artifact_root(root)
     assert unavailable.value.code is ArtifactOperationErrorCode.ROOT_UNAVAILABLE
+    assert unavailable.value.__cause__ is None
+    assert unavailable.value.__context__ is None
 
 
 def test_omitted_and_absent_body_captures_are_distinguished(

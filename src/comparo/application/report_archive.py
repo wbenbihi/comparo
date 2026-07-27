@@ -468,6 +468,7 @@ def _encode_cursor(entry: ReportArchiveEntry) -> str:
 def _decode_cursor(value: str | None) -> tuple[int, str] | None:
     if value is None:
         return None
+    decoded: tuple[int, str] | None = None
     try:
         padded = value + "=" * (-len(value) % 4)
         created, bundle_id = msgspec.json.decode(
@@ -477,9 +478,12 @@ def _decode_cursor(value: str | None) -> tuple[int, str] | None:
         require_stable_token(bundle_id, label="report cursor bundle ID", maximum=255)
         if created < 0:
             raise ValueError
-        return (-created, bundle_id)
+        decoded = (-created, bundle_id)
     except (Base64Error, ValueError, TypeError, UnicodeError, msgspec.DecodeError):
-        raise ReportArchiveError(ReportArchiveErrorCode.INVALID_CURSOR) from None
+        pass
+    if decoded is None:
+        raise ReportArchiveError(ReportArchiveErrorCode.INVALID_CURSOR)
+    return decoded
 
 
 def _archive_error_code(code: ArtifactStoreErrorCode) -> ReportArchiveErrorCode:

@@ -187,22 +187,27 @@ def compile_regex(
         raise TypeError("regex compilation requires static typed arguments")
     if len(pattern.encode("utf-8")) > limits.maximum_pattern_bytes:
         raise ValueError("regex pattern exceeds the configured bound")
+    invalid = False
     try:
         program = re2.compile(pattern)
-    except re2.error as error:
-        raise ValueError("regex pattern is invalid for RE2") from error
-    fingerprint = _fingerprint(pattern, mode.value)
-    return PreparedRegex(
-        operator=RegexOperator(
-            pattern=pattern,
-            mode=mode,
-            dialect=RegexDialect.RE2,
-            compiler=_COMPILER,
-            compiled_fingerprint=fingerprint,
-            negate=negate,
-        ),
-        program=program,
-    )
+    except re2.error:
+        invalid = True
+    else:
+        fingerprint = _fingerprint(pattern, mode.value)
+        return PreparedRegex(
+            operator=RegexOperator(
+                pattern=pattern,
+                mode=mode,
+                dialect=RegexDialect.RE2,
+                compiler=_COMPILER,
+                compiled_fingerprint=fingerprint,
+                negate=negate,
+            ),
+            program=program,
+        )
+    if invalid:
+        raise ValueError("regex pattern is invalid for RE2")
+    raise ValueError("regex pattern is invalid for RE2")  # pragma: no cover
 
 
 def prepare_compiled_regex(

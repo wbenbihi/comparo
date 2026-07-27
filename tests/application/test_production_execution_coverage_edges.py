@@ -63,8 +63,10 @@ def test_annotation_models_validate_all_optional_and_bounded_fields() -> None:
     for value in (cast("object", 1), "", "x" * 64):
         with pytest.raises(ValueError, match="bounded and non-empty"):
             production._annotation_text(value, maximum=63)
-    with pytest.raises(ValueError, match="Unicode scalars"):
+    with pytest.raises(ValueError, match="Unicode scalars") as invalid_unicode:
         production._annotation_text("\ud800", maximum=63)
+    assert invalid_unicode.value.__cause__ is None
+    assert invalid_unicode.value.__context__ is None
 
     for tags in (
         cast("tuple[str, ...]", ["release"]),

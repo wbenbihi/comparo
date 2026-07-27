@@ -73,6 +73,7 @@ def compile_assertion_operation(
     if operation is None:
         raise InvalidAssertionOperationError(AssertionOperationError())
     alias, fields = operation
+    rejection: AssertionOperationError | None = None
     try:
         operator = _compile(alias, fields)
         identity = AssertionOperatorIdentity(
@@ -80,11 +81,13 @@ def compile_assertion_operation(
             kind=operator_kind(operator),
             version="1",
         )
-    except (KeyError, TypeError, ValueError) as error:
-        raise InvalidAssertionOperationError(
-            AssertionOperationError(alias=_bounded_alias(alias))
-        ) from error
-    return identity, operator
+    except (KeyError, TypeError, ValueError):
+        rejection = AssertionOperationError(alias=_bounded_alias(alias))
+    else:
+        return identity, operator
+    if rejection is not None:
+        raise InvalidAssertionOperationError(rejection)
+    raise InvalidAssertionOperationError(AssertionOperationError())  # pragma: no cover
 
 
 def _compile(alias: str, fields: dict[str, ValueExpression]) -> AssertionOperator:  # noqa: C901

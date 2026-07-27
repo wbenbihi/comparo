@@ -429,13 +429,18 @@ def test_low_level_source_reads_and_windows_fail_closed_at_limits(
         source_module._read_source(directory_source, max(1, tmp_path.stat().st_size))
     assert changed.value.code is SourceInspectionErrorCode.SOURCE_CHANGED
 
+    canary = "source-path-secret-canary"
+
     def unavailable(*_args: object, **_kwargs: object) -> int:
-        raise OSError
+        raise OSError(2, canary, str(tmp_path / canary))
 
     monkeypatch.setattr(os, "open", unavailable)
     with pytest.raises(SourceInspectionError) as failed:
         source_module._read_source(source, 1_000_000)
     assert failed.value.code is SourceInspectionErrorCode.SOURCE_UNAVAILABLE
+    assert failed.value.__cause__ is None
+    assert failed.value.__context__ is None
+    assert canary not in repr(failed.value)
     monkeypatch.undo()
 
     descriptor = 42

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import suppress
 from enum import StrEnum
 from typing import final
 from uuid import UUID
@@ -153,12 +154,13 @@ class ValueResourceOverride(msgspec.Struct, frozen=True, kw_only=True):
         if self.environment is not None:
             if type(self.environment) is not str:
                 raise TypeError("value resource override Environment must be text or None")
+            invalid_environment = False
             try:
                 ResourceId(value=self.environment)
-            except ValueError as error:
-                raise InvocationBuildError(
-                    InvocationBuildErrorCode.INVALID_VALUE_RESOURCE
-                ) from error
+            except ValueError:
+                invalid_environment = True
+            if invalid_environment:
+                raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_RESOURCE)
         if type(self.resource) is not str:
             raise TypeError("value resource override resource must be text")
         _value_resource_id(self.resource)
@@ -184,12 +186,13 @@ class InlineValueOverride(msgspec.Struct, frozen=True, kw_only=True):
         if self.environment is not None:
             if type(self.environment) is not str:
                 raise TypeError("inline Value Environment must be text or absent")
+            invalid_environment = False
             try:
                 ResourceId(value=self.environment)
-            except ValueError as error:
-                raise InvocationBuildError(
-                    InvocationBuildErrorCode.INVALID_VALUE_RESOURCE
-                ) from error
+            except ValueError:
+                invalid_environment = True
+            if invalid_environment:
+                raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_RESOURCE)
         if self.namespace is ValueNamespace.SECRETS and not _sealed_secret_expression(
             self.expression
         ):
@@ -208,11 +211,14 @@ class EnvironmentValueOverride(msgspec.Struct, frozen=True, kw_only=True):
         """Retain only validated identities and an already sealed text payload."""
         if type(self.environment) is not str or type(self.name) is not str:
             raise TypeError("Environment value override identities must be text")
+        invalid_identifier = False
         try:
             ResourceId(value=self.environment)
             SymbolPath(segments=(self.name,))
-        except ValueError as error:
-            raise InvocationBuildError(InvocationBuildErrorCode.INVALID_IDENTIFIER) from error
+        except ValueError:
+            invalid_identifier = True
+        if invalid_identifier:
+            raise InvocationBuildError(InvocationBuildErrorCode.INVALID_IDENTIFIER)
         if type(self.value) is not SensitiveValue or self.value.payload_type is not JsonString:
             raise TypeError("Environment value overrides must retain a sealed JsonString")
 
@@ -240,10 +246,13 @@ class RequestOverride(msgspec.Struct, frozen=True, kw_only=True):
         """Require a stable subject and at least one typed field expression."""
         if type(self.subject) is not str:
             raise TypeError("Request override subject must be text")
+        invalid_identifier = False
         try:
             ResourceId(value=self.subject)
-        except ValueError as error:
-            raise InvocationBuildError(InvocationBuildErrorCode.INVALID_IDENTIFIER) from error
+        except ValueError:
+            invalid_identifier = True
+        if invalid_identifier:
+            raise InvocationBuildError(InvocationBuildErrorCode.INVALID_IDENTIFIER)
         values = self._expressions()
         if not values:
             raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_RESOURCE)
@@ -417,8 +426,10 @@ def build_invocation(
         raise TypeError("invocation construction project must be CompiledProject or None")
     if options.value_resources and project is None:
         raise InvocationBuildError(InvocationBuildErrorCode.VALUE_RESOURCE_MISSING)
+    invocation: RunInvocation | None = None
+    failure: InvocationBuildErrorCode | None = None
     try:
-        return RunInvocation(
+        invocation = RunInvocation(
             invocation_id=InvocationId(value=invocation_id),
             run_id=RunId(value=run_id),
             execution_profile=_optional_id(options.execution_profile),
@@ -447,10 +458,13 @@ def build_invocation(
             requests=tuple(_request_edit(item) for item in options.requests),
             profiles=_profile_overrides(options.profiles),
         )
-    except InvocationBuildError:
-        raise
-    except (TypeError, ValueError) as error:
-        raise InvocationBuildError(InvocationBuildErrorCode.INVALID_IDENTIFIER) from error
+    except InvocationBuildError as error:
+        failure = error.code
+    except (TypeError, ValueError):
+        failure = InvocationBuildErrorCode.INVALID_IDENTIFIER
+    if failure is not None or invocation is None:
+        raise InvocationBuildError(failure or InvocationBuildErrorCode.INVALID_IDENTIFIER)
+    return invocation
 
 
 def _validate_topology(options: PlanningOptions) -> None:
@@ -528,10 +542,12 @@ def _value_resource_id(reference: str) -> ResourceId:
             raise InvocationBuildError(InvocationBuildErrorCode.VALUE_RESOURCE_KIND_INVALID)
     else:
         raw_id = kind
-    try:
-        return ResourceId(value=raw_id)
-    except ValueError as error:
-        raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_RESOURCE) from error
+    resource_id: ResourceId | None = None
+    with suppress(ValueError):
+        resource_id = ResourceId(value=raw_id)
+    if resource_id is None:
+        raise InvocationBuildError(InvocationBuildErrorCode.INVALID_VALUE_RESOURCE)
+    return resource_id
 
 
 def _value_resource_expression(

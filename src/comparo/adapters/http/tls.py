@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ssl
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Protocol
 from typing import final
@@ -95,12 +96,19 @@ class ExplicitTlsContextProvider:
             raise TypeError("TLS client-identity registry must be a Mapping")
         if any(type(key) is not str for key in (trust_stores or {})):
             raise TypeError("TLS trust-store registry keys must be strings")
+        resolved_trust_stores: dict[str, Path] | None = None
+        failure: TlsConfigurationFailureCode | None = None
         try:
-            self._trust_stores = {
+            resolved_trust_stores = {
                 key: _canonical_file(path) for key, path in (trust_stores or {}).items()
             }
-        except (TypeError, ValueError, OSError) as error:
-            raise TlsConfigurationError(TlsConfigurationFailureCode.INVALID_MATERIAL) from error
+        except TlsConfigurationError as error:
+            failure = error.code
+        except (TypeError, ValueError, OSError):
+            failure = TlsConfigurationFailureCode.INVALID_MATERIAL
+        if failure is not None or resolved_trust_stores is None:
+            raise TlsConfigurationError(failure or TlsConfigurationFailureCode.INVALID_MATERIAL)
+        self._trust_stores = resolved_trust_stores
         identities = dict(client_identities or {})
         if any(
             type(key) is not str or type(value) is not ClientIdentityFiles
@@ -117,6 +125,7 @@ class ExplicitTlsContextProvider:
         if type(policy) is not TlsPolicy:
             raise TypeError("TLS context provider requires TlsPolicy")
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        failure: TlsConfigurationFailureCode | None = None
         try:
             _configure_verification(context, policy, self._trust_stores)
             context.minimum_version = {
@@ -125,10 +134,12 @@ class ExplicitTlsContextProvider:
             }[policy.minimum_version]
             if policy.client_identity is not None:
                 self._load_client_identity(context, policy.client_identity)
-        except TlsConfigurationError:
-            raise
-        except (OSError, ssl.SSLError, ValueError) as error:
-            raise TlsConfigurationError(TlsConfigurationFailureCode.INVALID_MATERIAL) from error
+        except TlsConfigurationError as error:
+            failure = error.code
+        except (OSError, ssl.SSLError, ValueError):
+            failure = TlsConfigurationFailureCode.INVALID_MATERIAL
+        if failure is not None:
+            raise TlsConfigurationError(failure)
         return context
 
     def _load_client_identity(
@@ -153,7 +164,11 @@ class ExplicitTlsContextProvider:
 def _canonical_file(path: Path) -> Path:
     if not isinstance(path, Path) or not path.is_absolute():
         raise TypeError("TLS material path must be an absolute pathlib.Path")
-    exact = path.resolve(strict=True)
+    exact: Path | None = None
+    with suppress(OSError):
+        exact = path.resolve(strict=True)
+    if exact is None:
+        raise TlsConfigurationError(TlsConfigurationFailureCode.INVALID_MATERIAL)
     if not exact.is_file():
         raise ValueError("TLS material must identify a regular file")
     return exact

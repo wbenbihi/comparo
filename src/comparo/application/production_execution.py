@@ -354,10 +354,13 @@ class ProductionRunAnnotations(msgspec.Struct, frozen=True, kw_only=True):
 def _annotation_text(value: object, *, maximum: int) -> None:
     if type(value) is not str or not value or len(value) > maximum:
         raise ValueError("production annotation text must be bounded and non-empty")
+    invalid_unicode = False
     try:
         value.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise ValueError("production annotation text must contain Unicode scalars") from error
+    except UnicodeEncodeError:
+        invalid_unicode = True
+    if invalid_unicode:
+        raise ValueError("production annotation text must contain Unicode scalars")
 
 
 @final

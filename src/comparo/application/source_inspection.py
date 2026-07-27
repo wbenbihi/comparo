@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from contextlib import suppress
 from enum import StrEnum
 from typing import final
 
@@ -225,10 +226,11 @@ def inspect_project_source(request: SourceInspectionRequest) -> SourceWindow:
         raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_CHANGED)
     if request.expected_sha256 is not None and request.expected_sha256 != digest:
         raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_CHANGED)
-    try:
+    text: str | None = None
+    with suppress(UnicodeDecodeError):
         text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_UNAVAILABLE) from None
+    if text is None:
+        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_UNAVAILABLE)
     redactions = 0
     if request.mode is SourceViewMode.MASKED:
         if loaded.compilation.project is None:
@@ -310,6 +312,7 @@ def _read_source(source: SourceCatalogEntry, maximum: int) -> bytes:
     if source.byte_count is None or source.byte_count > maximum:
         raise SourceInspectionError(SourceInspectionErrorCode.BUDGET_EXCEEDED)
     descriptor = -1
+    failure: SourceInspectionErrorCode | None = None
     try:
         descriptor = os.open(
             source.path,
@@ -330,13 +333,15 @@ def _read_source(source: SourceCatalogEntry, maximum: int) -> bytes:
         if len(content) > maximum:
             raise SourceInspectionError(SourceInspectionErrorCode.BUDGET_EXCEEDED)
         return content
-    except SourceInspectionError:
-        raise
+    except SourceInspectionError as error:
+        failure = error.code
     except OSError:
-        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_UNAVAILABLE) from None
+        failure = SourceInspectionErrorCode.SOURCE_UNAVAILABLE
     finally:
         if descriptor >= 0:
-            os.close(descriptor)
+            with suppress(OSError):
+                os.close(descriptor)
+    raise SourceInspectionError(failure or SourceInspectionErrorCode.SOURCE_UNAVAILABLE)
 
 
 def _digest(content: bytes) -> str:

@@ -207,9 +207,13 @@ def test_curl_collapses_artifact_failures_without_retaining_adapter_details(
     export_code: CurlExportErrorCode,
 ) -> None:
     root, artifact = _bundle(tmp_path)
+    canary = "curl-source-secret-canary"
 
     def fail(*_args: object, **_kwargs: object) -> RunArtifact:
-        raise ArtifactOperationError(operation_code)
+        try:
+            raise OSError(2, canary, str(tmp_path / canary))
+        except OSError as source:
+            raise ArtifactOperationError(operation_code) from source
 
     monkeypatch.setattr(curl_module, "verify_artifact", fail)
     with pytest.raises(CurlExportError) as caught:
@@ -217,6 +221,8 @@ def test_curl_collapses_artifact_failures_without_retaining_adapter_details(
 
     assert caught.value.code is export_code
     assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert canary not in repr(caught.value)
 
 
 def test_curl_request_selection_rejects_each_unknown_coordinate(tmp_path: Path) -> None:

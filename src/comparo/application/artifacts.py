@@ -215,19 +215,29 @@ def validate_existing_artifact_root(root: Path) -> Path:
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
-    try:
+    descriptor = -1
+    with suppress(OSError):
         descriptor = os.open(root, flags)
-    except OSError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    if descriptor < 0:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE)
+    validation_failure: ArtifactOperationErrorCode | None = None
     try:
         _validate_private_directory(descriptor)
+    except ArtifactOperationError as error:
+        validation_failure = error.code
+    except OSError:
+        validation_failure = ArtifactOperationErrorCode.ROOT_UNAVAILABLE
     finally:
         with suppress(OSError):
             os.close(descriptor)
-    try:
-        return root.resolve(strict=True)
-    except OSError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    if validation_failure is not None:
+        raise ArtifactOperationError(validation_failure)
+    resolved: Path | None = None
+    with suppress(OSError):
+        resolved = root.resolve(strict=True)
+    if resolved is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE)
+    return resolved
 
 
 def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...]) -> None:
@@ -238,6 +248,7 @@ def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...])
         | getattr(os, "O_NOFOLLOW", 0)
     )
     descriptors: list[int] = []
+    unavailable = False
     try:
         current = os.open(project_root, flags)
         descriptors.append(current)
@@ -253,12 +264,14 @@ def _initialize_relative_directories(project_root: Path, parts: tuple[str, ...])
             _validate_private_directory(current)
     except ArtifactOperationError:
         raise
-    except OSError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    except OSError:
+        unavailable = True
     finally:
         for descriptor in reversed(descriptors):
             with suppress(OSError):
                 os.close(descriptor)
+    if unavailable:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE)
 
 
 def _validate_relative_directories(project_root: Path, parts: tuple[str, ...]) -> None:
@@ -269,6 +282,7 @@ def _validate_relative_directories(project_root: Path, parts: tuple[str, ...]) -
         | getattr(os, "O_NOFOLLOW", 0)
     )
     descriptors: list[int] = []
+    unavailable = False
     try:
         current = os.open(project_root, flags)
         descriptors.append(current)
@@ -279,20 +293,26 @@ def _validate_relative_directories(project_root: Path, parts: tuple[str, ...]) -
             _validate_private_directory(current)
     except ArtifactOperationError:
         raise
-    except OSError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    except OSError:
+        unavailable = True
     finally:
         for descriptor in reversed(descriptors):
             with suppress(OSError):
                 os.close(descriptor)
+    if unavailable:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE)
 
 
 def _resolved_contained_root(project_root: Path, selected: Path) -> Path:
+    resolved_project: Path | None = None
+    resolved: Path | None = None
     try:
         resolved_project = project_root.resolve(strict=True)
         resolved = (project_root / selected).resolve(strict=True)
-    except OSError as error:  # pragma: no cover - pinned directories remain addressable
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE) from error
+    except OSError:  # pragma: no cover - pinned directories remain addressable
+        pass
+    if resolved_project is None or resolved is None:  # pragma: no cover - pinned invariant
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE)
     if not resolved.is_relative_to(resolved_project):  # pragma: no cover - no-follow invariant
         raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNSAFE)
     return resolved
@@ -340,10 +360,12 @@ def verify_artifact(
 ) -> RunArtifact:
     """Authenticate the bundle marker, manifest, artifact, and every declared blob."""
     typed_limits = _limits(limits)
-    try:
-        return read_local_artifact_bundle(root, bundle_id, limits=typed_limits)
-    except LocalArtifactStoreError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE) from error
+    artifact: RunArtifact | None = None
+    with suppress(LocalArtifactStoreError):
+        artifact = read_local_artifact_bundle(root, bundle_id, limits=typed_limits)
+    if artifact is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE)
+    return artifact
 
 
 def render_artifact_report(
@@ -354,14 +376,16 @@ def render_artifact_report(
 ) -> RenderedReport:
     """Validate the complete artifact before deriving one bounded report."""
     artifact = verify_artifact(root, bundle_id, limits)
-    try:
-        return render_report(
+    report: RenderedReport | None = None
+    with suppress(ReportError):
+        report = render_report(
             artifact,
             format,
             maximum_bytes=limits.maximum_report_bytes,
         )
-    except ReportError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.REPORT_FAILED) from error
+    if report is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.REPORT_FAILED)
+    return report
 
 
 async def read_artifact_blob(
@@ -376,6 +400,9 @@ async def read_artifact_blob(
     if type(maximum_output_bytes) is not int or maximum_output_bytes < 0:
         raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
     typed_limits = _limits(limits)
+    unavailable = False
+    blob: ArtifactBlob | None = None
+    chunks: list[bytes] = []
     try:
         with open_local_artifact_bundle(root, bundle_id, limits=typed_limits) as bundle:
             blob = _find_blob(bundle.artifact, sha256)
@@ -384,8 +411,10 @@ async def read_artifact_blob(
             chunks = [chunk async for chunk in bundle.read(blob)]
     except ArtifactOperationError:
         raise
-    except LocalArtifactStoreError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE) from error
+    except LocalArtifactStoreError:
+        unavailable = True
+    if unavailable or blob is None:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE)
     payload = b"".join(chunks)
     if len(payload) != blob.byte_count:  # pragma: no cover - adapter verifies exact size
         raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE)
@@ -449,8 +478,9 @@ async def read_artifact_body_window(
             )
     except ArtifactOperationError:
         raise
-    except LocalArtifactStoreError as error:
-        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE) from error
+    except LocalArtifactStoreError:
+        pass
+    raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE)
 
 
 async def _read_blob_window(

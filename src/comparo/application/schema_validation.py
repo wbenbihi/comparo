@@ -365,14 +365,18 @@ def prepare_remote_schema(
         raise TypeError("remote schema preparation requires a binding and immutable bytes")
     if type(limits) is not SchemaValidationLimits:
         raise TypeError("remote schema preparation requires typed limits")
+    document: object = None
+    invalid_document = False
     try:
         document = json.loads(
             payload.decode("utf-8"),
             parse_float=Decimal,
             parse_int=int,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("remote schema is not valid UTF-8 JSON") from error
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        invalid_document = True
+    if invalid_document:
+        raise ValueError("remote schema is not valid UTF-8 JSON")
     schema = _to_builtin(
         document,
         maximum_depth=limits.maximum_schema_depth,
@@ -405,15 +409,20 @@ def schema_operator(prepared: PreparedSchema, *, assert_formats: bool = False) -
 
 
 def _validator(schema: object) -> object:
+    validator: object | None = None
+    invalid_schema = False
     try:
         validator_type = jsonschema.validators.validator_for(
             schema,
             default=jsonschema.Draft202012Validator,
         )
         validator_type.check_schema(schema)
-        return validator_type(schema, registry=Registry())
-    except jsonschema.exceptions.SchemaError as error:
-        raise ValueError("JSON Schema document is invalid") from error
+        validator = validator_type(schema, registry=Registry())
+    except jsonschema.exceptions.SchemaError:
+        invalid_schema = True
+    if invalid_schema or validator is None:
+        raise ValueError("JSON Schema document is invalid")
+    return validator
 
 
 def _violations(

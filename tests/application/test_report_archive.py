@@ -249,6 +249,8 @@ def test_archive_query_rejects_untrusted_or_oversized_continuations(tmp_path: Pa
             ReportArchiveQuery(page_size=1, cursor="not-a-cursor"),
         )
     assert cursor.value.code is ReportArchiveErrorCode.INVALID_CURSOR
+    assert cursor.value.__cause__ is None
+    assert cursor.value.__context__ is None
 
     with pytest.raises(ReportArchiveError) as page:
         query_report_archive(root, limits, ReportArchiveQuery(page_size=3))
@@ -547,6 +549,8 @@ def test_archive_cursor_resource_and_duration_helpers_cover_safe_optional_shapes
     with pytest.raises(ReportArchiveError) as cursor:
         archive_module._decode_cursor(negative_cursor)
     assert cursor.value.code is ReportArchiveErrorCode.INVALID_CURSOR
+    assert cursor.value.__cause__ is None
+    assert cursor.value.__context__ is None
 
     incomplete = cast(
         "RunArtifact",

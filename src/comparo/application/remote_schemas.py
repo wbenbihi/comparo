@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import ssl
+from contextlib import suppress
 from enum import StrEnum
 from typing import final
+from urllib.parse import SplitResult
 from urllib.parse import urlsplit
 
 import httpcore
@@ -146,10 +148,11 @@ class RemoteSchemaLoader:
                 key=lambda item: item.uri,
             )
         )
+        entries: list[RemoteSchemaDocument] = []
+        failure: RemoteSchemaFailureCode | None = None
         try:
             if len(unique) > self._limits.maximum_documents.value:
                 raise RemoteSchemaLoadError(RemoteSchemaFailureCode.DOCUMENT_LIMIT_EXCEEDED)
-            entries: list[RemoteSchemaDocument] = []
             total_bytes = 0
             try:
                 async with asyncio.timeout(_seconds(self._limits.batch_timeout)):
@@ -161,10 +164,17 @@ class RemoteSchemaLoader:
                                 RemoteSchemaFailureCode.AGGREGATE_SIZE_EXCEEDED
                             )
                         entries.append(RemoteSchemaDocument(uri=schema.uri, payload=payload))
-            except TimeoutError as error:
-                raise RemoteSchemaLoadError(RemoteSchemaFailureCode.NETWORK_FAILED) from error
+            except TimeoutError:
+                failure = RemoteSchemaFailureCode.NETWORK_FAILED
+        except RemoteSchemaLoadError as error:
+            failure = error.code
         finally:
-            await self._resolver.close()
+            try:
+                await self._resolver.close()
+            except Exception:  # noqa: BLE001 - resolver details must not cross this boundary
+                failure = RemoteSchemaFailureCode.NETWORK_FAILED
+        if failure is not None:
+            raise RemoteSchemaLoadError(failure)
         return RemoteSchemaDocuments(entries=tuple(entries))
 
     async def _load_one(
@@ -188,10 +198,11 @@ class RemoteSchemaLoader:
             or (not http.allow_any_port and port not in http.allowed_ports)
         ):
             raise RemoteSchemaLoadError(RemoteSchemaFailureCode.DESTINATION_DENIED)
-        try:
+        addresses: tuple[IpHost, ...] | None = None
+        with suppress(Exception):  # Resolver details stay private.
             addresses = await self._addresses(host, port)
-        except (OSError, RuntimeError, UnicodeError, ValueError) as error:
-            raise RemoteSchemaLoadError(RemoteSchemaFailureCode.DNS_FAILED) from error
+        if addresses is None:
+            raise RemoteSchemaLoadError(RemoteSchemaFailureCode.DNS_FAILED)
         if any(
             network_address_class(item) not in http.allowed_address_classes for item in addresses
         ):
@@ -203,19 +214,26 @@ class RemoteSchemaLoader:
             resolved_addresses=addresses,
             selected_address=addresses[0],
         )
+        payload: bytes | None = None
+        failure: RemoteSchemaFailureCode | None = None
         try:
             async with asyncio.timeout(_seconds(self._limits.total_timeout)):
-                return await self._request(schema.uri, destination)
-        except RemoteSchemaLoadError:
-            raise
+                payload = await self._request(schema.uri, destination)
+        except RemoteSchemaLoadError as error:
+            failure = error.code
         except (
             OSError,
             TimeoutError,
             httpcore.NetworkError,
             httpcore.ProtocolError,
             httpcore.TimeoutException,
-        ) as error:
-            raise RemoteSchemaLoadError(RemoteSchemaFailureCode.NETWORK_FAILED) from error
+        ):
+            failure = RemoteSchemaFailureCode.NETWORK_FAILED
+        except Exception:  # noqa: BLE001 - transport details stay private
+            failure = RemoteSchemaFailureCode.NETWORK_FAILED
+        if failure is not None or payload is None:
+            raise RemoteSchemaLoadError(failure or RemoteSchemaFailureCode.NETWORK_FAILED)
+        return payload
 
     async def _addresses(self, host: HttpHost, port: HttpPort) -> tuple[IpHost, ...]:
         if type(host) is Ipv4Host or type(host) is Ipv6Host:
@@ -285,26 +303,31 @@ def remote_schema_allowed(uri: str, policy: CompiledExecutionPolicy) -> bool:
 
 
 def _destination(uri: str) -> tuple[HttpScheme, HttpHost, HttpPort]:
+    parsed: SplitResult | None = None
     try:
         parsed = urlsplit(uri)
         host_text = parsed.hostname
         port_value = parsed.port
-    except ValueError as error:
-        raise RemoteSchemaLoadError(RemoteSchemaFailureCode.INVALID_URI) from error
+    except ValueError:
+        host_text = None
+        port_value = None
+    if parsed is None:
+        raise RemoteSchemaLoadError(RemoteSchemaFailureCode.INVALID_URI)
     if parsed.scheme not in {"http", "https"} or host_text is None:
         raise RemoteSchemaLoadError(RemoteSchemaFailureCode.INVALID_URI)
+    host: HttpHost | None = None
     try:
         parsed_ip = ipaddress.ip_address(host_text)
-        host: HttpHost = (
+        host = (
             Ipv4Host(value=parsed_ip.compressed)
             if parsed_ip.version == 4
             else Ipv6Host(value=parsed_ip.compressed)
         )
     except ValueError:
-        try:
+        with suppress(UnicodeError, ValueError):
             host = DnsHost(value=host_text.encode("idna").decode("ascii").lower())
-        except (UnicodeError, ValueError) as error:
-            raise RemoteSchemaLoadError(RemoteSchemaFailureCode.INVALID_URI) from error
+    if host is None:
+        raise RemoteSchemaLoadError(RemoteSchemaFailureCode.INVALID_URI)
     scheme = HttpScheme(parsed.scheme)
     port = HttpPort(value=port_value or (443 if scheme is HttpScheme.HTTPS else 80))
     return scheme, host, port

@@ -118,6 +118,7 @@ class StoredBodyStream:
 
     async def _iterate(self) -> AsyncIterator[bytes]:
         await self._store._reader_started()
+        failure: BodyStoreFailureCode | None = None
         try:
             if self._entry.memory is not None:
                 size = self._store.config.io_chunk_size.value
@@ -135,12 +136,14 @@ class StoredBodyStream:
                     yield chunk
             finally:
                 await asyncio.to_thread(stream.close)
-        except BodyStoreError:
-            raise
-        except (OSError, ValueError) as error:
-            raise BodyStoreError(BodyStoreFailureCode.IO_FAILED) from error
+        except BodyStoreError as error:
+            failure = error.code
+        except (OSError, ValueError):
+            failure = BodyStoreFailureCode.IO_FAILED
         finally:
             await self._store._reader_finished()
+        if failure is not None:
+            raise BodyStoreError(failure)
 
 
 class TransientBodyWriter:
@@ -202,7 +205,7 @@ class TransientBodyWriter:
         """Return the exact bytes accepted so far."""
         return ByteCount(value=self._count)
 
-    async def append(self, chunk: bytes) -> None:
+    async def append(self, chunk: bytes) -> None:  # noqa: C901
         """Append one immutable chunk under both per-body and aggregate reservations."""
         if self._done:
             raise BodyStoreError(BodyStoreFailureCode.CLOSED)
@@ -214,6 +217,7 @@ class TransientBodyWriter:
         if attempted > self._maximum_body_bytes.value:
             raise BodyStoreError(BodyStoreFailureCode.BODY_LIMIT_EXCEEDED)
         await self._store._reserve(len(chunk))
+        failure: BodyStoreFailureCode | None = None
         try:
             if self._file is None and attempted > self._store.config.memory_threshold.value:
                 await self._roll_to_disk()
@@ -223,9 +227,17 @@ class TransientBodyWriter:
                 await asyncio.to_thread(self._file.write, chunk)
             self._digest.update(chunk)
             self._count = attempted
+        except BodyStoreError as error:
+            await self._store._release(len(chunk))
+            failure = error.code
+        except (OSError, ValueError):
+            await self._store._release(len(chunk))
+            failure = BodyStoreFailureCode.IO_FAILED
         except BaseException:
             await self._store._release(len(chunk))
             raise
+        if failure is not None:
+            raise BodyStoreError(failure)
 
     async def commit_request(self, provenance: ValueProvenance) -> RepeatableByteSource:
         """Commit bytes and return a repeatable request-source descriptor."""
@@ -286,18 +298,21 @@ class TransientBodyWriter:
     async def _roll_to_disk(self) -> None:
         path = self._store._directory / f"{self._body_id.value.hex}.body"
         stream: BinaryIO | None = None
+        failed = False
         try:
             stream = await asyncio.to_thread(path.open, "xb", buffering=0)
             await asyncio.to_thread(path.chmod, 0o600)
             if self._memory:
                 await asyncio.to_thread(stream.write, self._memory)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError):
             if stream is not None:
                 with suppress(OSError):
                     await asyncio.to_thread(stream.close)
             with suppress(BodyStoreError):
                 await _unlink(path)
-            raise BodyStoreError(BodyStoreFailureCode.IO_FAILED) from error
+            failed = True
+        if failed:
+            raise BodyStoreError(BodyStoreFailureCode.IO_FAILED)
         _wipe(self._memory)
         self._memory = bytearray()
         self._path = path
@@ -366,17 +381,29 @@ class TransientBodyStore:
             raise TypeError("transient body store requires TransientBodyStoreConfig")
         root = None
         if config.root is not None:
+            invalid_root = False
             try:
                 root = config.root.resolve(strict=True)
-            except OSError as error:
-                raise BodyStoreError(BodyStoreFailureCode.IO_FAILED) from error
-            if not root.is_dir():
+            except OSError:
+                invalid_root = True
+            if invalid_root:
                 raise BodyStoreError(BodyStoreFailureCode.IO_FAILED)
+            if root is None or not root.is_dir():
+                raise BodyStoreError(BodyStoreFailureCode.IO_FAILED)
+        directory: Path | None = None
+        setup_failed = False
         try:
             directory = Path(tempfile.mkdtemp(prefix="comparo-body-", dir=root))
             directory.chmod(0o700)
-        except OSError as error:
-            raise BodyStoreError(BodyStoreFailureCode.IO_FAILED) from error
+        except OSError:
+            setup_failed = True
+        if setup_failed:
+            if directory is not None:
+                with suppress(OSError):
+                    directory.rmdir()
+            raise BodyStoreError(BodyStoreFailureCode.IO_FAILED)
+        if directory is None:  # pragma: no cover - successful mkdtemp returns a path
+            raise BodyStoreError(BodyStoreFailureCode.IO_FAILED)
         self.config = config
         self._directory = directory
         self._store_id = uuid4().hex
@@ -562,7 +589,10 @@ def _wipe(value: bytearray) -> None:
 
 
 async def _unlink(path: Path) -> None:
+    failed = False
     try:
         await asyncio.to_thread(path.unlink, missing_ok=True)
-    except OSError as error:
-        raise BodyStoreError(BodyStoreFailureCode.IO_FAILED) from error
+    except OSError:
+        failed = True
+    if failed:
+        raise BodyStoreError(BodyStoreFailureCode.IO_FAILED)
