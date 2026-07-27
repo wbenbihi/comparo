@@ -452,7 +452,10 @@ def iter_execution_work_window(
     remaining = min(maximum_items, total - start_ordinal)
     next_ordinal = start_ordinal
     first_slice, local_start = _locate_execution_slice(prepared, start_ordinal)
-    for slice_index in range(first_slice, len(prepared.plan.slices)):
+    for slice_index in range(  # pragma: no branch - admitted cardinality is exhaustive
+        first_slice,
+        len(prepared.plan.slices),
+    ):
         slice_start = local_start if slice_index == first_slice else 0
         for trial, environment in islice(
             _iter_slice_occurrences(prepared, slice_index, slice_start),

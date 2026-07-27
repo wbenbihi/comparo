@@ -267,6 +267,25 @@ def test_windowed_preview_resolves_only_the_requested_canonical_page(tmp_path: P
     assert second.next_ordinal is None
 
 
+def test_windowed_preview_beyond_the_plan_is_an_empty_terminal_page(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+
+    result = asyncio.run(
+        render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=RenderPreviewRequest(project=project, settings=_settings()),
+                start_ordinal=2,
+                maximum_previews=1,
+            )
+        )
+    )
+
+    assert result.total_executions == 2
+    assert result.previews == ()
+    assert result.diagnostics == ()
+    assert result.next_ordinal is None
+
+
 def test_secret_values_are_absent_from_every_returned_product(tmp_path: Path) -> None:
     secret = "very-secret-render-canary"
     project = _project(
