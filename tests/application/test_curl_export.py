@@ -24,6 +24,7 @@ from comparo.application.curl_export import CurlExportLimits
 from comparo.application.curl_export import CurlExportRequest
 from comparo.application.curl_export import CurlExportWarning
 from comparo.application.curl_export import export_artifact_curl
+from comparo.core.artifacts.codec import fingerprint_run_artifact
 from comparo.core.artifacts.common import ARTIFACT_REDACTION_MARKER
 from comparo.core.artifacts.common import ArtifactCaptureExtent
 from comparo.core.artifacts.common import ArtifactOmissionReason
@@ -50,6 +51,9 @@ def _request(
         root=root,
         bundle_id=artifact.metadata.artifact_id,
         reference=ArtifactBodyReference(
+            artifact_api_version=artifact.api_version,
+            artifact_id=artifact.metadata.artifact_id,
+            artifact_results_sha256=fingerprint_run_artifact(artifact),
             execution_id=execution.execution_id,
             attempt_id=attempt.attempt_id,
             exchange_id=exchange.exchange_id,
@@ -126,6 +130,23 @@ def test_curl_refuses_to_truncate_the_final_command(tmp_path: Path) -> None:
         with pytest.raises(CurlExportError) as incremental:
             append([], "oversized", 0, 1)
         assert incremental.value.code is CurlExportErrorCode.OUTPUT_LIMIT_EXCEEDED
+
+
+def test_curl_rejects_a_request_reference_from_another_artifact(tmp_path: Path) -> None:
+    root, artifact = _bundle(tmp_path)
+    request = _request(root, artifact)
+    stale = msgspec.structs.replace(
+        request,
+        reference=msgspec.structs.replace(
+            request.reference,
+            artifact_id="artifact-other",
+        ),
+    )
+
+    with pytest.raises(CurlExportError) as rejected:
+        asyncio.run(export_artifact_curl(stale))
+
+    assert rejected.value.code is CurlExportErrorCode.REQUEST_NOT_FOUND
 
 
 def test_curl_rejects_an_oversized_quoted_field_before_allocating_its_escaped_copy(
@@ -330,6 +351,7 @@ def test_curl_counts_sanitized_headers_cookies_and_body_redactions(
             *exchange.request.headers,
             ArtifactField(name="x-private", value=ARTIFACT_REDACTION_MARKER, redacted=True),
         ),
+        header_redaction_count=1,
         cookies=(
             ArtifactCookie(
                 name="session",
@@ -337,6 +359,7 @@ def test_curl_counts_sanitized_headers_cookies_and_body_redactions(
                 redacted=True,
             ),
         ),
+        cookie_redaction_count=1,
         body=msgspec.structs.replace(exchange.request.body, redaction_count=2),
     )
 
@@ -358,3 +381,71 @@ def test_curl_counts_sanitized_headers_cookies_and_body_redactions(
     assert exported.warnings.count(CurlExportWarning.VALUES_REDACTED) == 1
     assert "session=<redacted>" in exported.command
     assert curl_module._quote("left'right") == "'left'\"'\"'right'"
+
+
+def test_curl_counts_url_redactions_and_emits_the_shared_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    request = _request(root, artifact)
+    captured = msgspec.structs.replace(
+        _captured(artifact),
+        url="https://example.test/items?api_key=%3Credacted%3E",
+        url_redaction_count=1,
+        body=None,
+    )
+
+    async def sanitized_snapshot(
+        *_args: object,
+        **_kwargs: object,
+    ) -> AuthenticatedArtifactRequest:
+        return _snapshot(request, captured, body_content=None)
+
+    monkeypatch.setattr(
+        curl_module,
+        "read_authenticated_artifact_request",
+        sanitized_snapshot,
+    )
+
+    exported = asyncio.run(export_artifact_curl(request))
+
+    assert "api_key=%3Credacted%3E" in exported.command
+    assert exported.redaction_count == 1
+    assert exported.warnings == (CurlExportWarning.VALUES_REDACTED,)
+
+
+def test_curl_does_not_infer_redaction_from_a_public_marker_literal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    request = _request(root, artifact)
+    captured = msgspec.structs.replace(
+        _captured(artifact),
+        url="https://example.test/items?note=%3Credacted%3E",
+        url_redaction_count=0,
+        header_redaction_count=0,
+        cookie_redaction_count=0,
+        headers=(),
+        cookies=(),
+        body=None,
+    )
+
+    async def sanitized_snapshot(
+        *_args: object,
+        **_kwargs: object,
+    ) -> AuthenticatedArtifactRequest:
+        return _snapshot(request, captured, body_content=None)
+
+    monkeypatch.setattr(
+        curl_module,
+        "read_authenticated_artifact_request",
+        sanitized_snapshot,
+    )
+
+    exported = asyncio.run(export_artifact_curl(request))
+
+    assert "note=%3Credacted%3E" in exported.command
+    assert exported.redaction_count == 0
+    assert exported.warnings == ()

@@ -17,6 +17,7 @@ from comparo.adapters.artifacts import open_local_artifact_bundle
 from comparo.adapters.artifacts import read_local_artifact_bundle
 from comparo.application.artifact_references import ArtifactBodyMessage
 from comparo.application.artifact_references import ArtifactBodyReference
+from comparo.core.artifacts.codec import fingerprint_run_artifact
 from comparo.core.artifacts.common import ArtifactBlob
 from comparo.core.artifacts.common import ArtifactCapture
 from comparo.core.artifacts.common import ArtifactCaptureExtent
@@ -443,8 +444,10 @@ async def read_artifact_body_window(
         raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
     if type(maximum_output_bytes) is not int or maximum_output_bytes < 1:
         raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
+    _require_reference_bundle(reference, bundle_id)
     try:
         with open_local_artifact_bundle(root, bundle_id, limits=_limits(limits)) as bundle:
+            _require_reference_artifact(reference, bundle.artifact)
             capture = _find_body_capture(bundle.artifact, reference)
             blob = capture.blob
             if blob is None:
@@ -505,9 +508,11 @@ async def read_authenticated_artifact_request(
         raise TypeError("authenticated artifact request requires request coordinates")
     if type(maximum_body_bytes) is not int or maximum_body_bytes < 0:
         raise ArtifactOperationError(ArtifactOperationErrorCode.INVALID_LIMIT)
+    _require_reference_bundle(reference, bundle_id)
     unavailable = False
     try:
         with open_local_artifact_bundle(root, bundle_id, limits=_limits(limits)) as bundle:
+            _require_reference_artifact(reference, bundle.artifact)
             request = _find_request(bundle.artifact, reference)
             content: bytes | None = None
             body = request.body
@@ -555,6 +560,25 @@ async def _read_blob_window(
             output.extend(chunk[start_in_chunk : start_in_chunk + remaining])
         position = end
     return bytes(output)
+
+
+def _require_reference_bundle(reference: ArtifactBodyReference, bundle_id: str) -> None:
+    """Reject a reference routed to a different persisted artifact identity."""
+    if reference.artifact_id != bundle_id:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.BODY_NOT_FOUND)
+
+
+def _require_reference_artifact(
+    reference: ArtifactBodyReference,
+    artifact: RunArtifact,
+) -> None:
+    """Authenticate the reference identity and schema revision against the opened manifest."""
+    if (
+        reference.artifact_id != artifact.metadata.artifact_id
+        or reference.artifact_api_version != artifact.api_version
+        or reference.artifact_results_sha256 != fingerprint_run_artifact(artifact)
+    ):
+        raise ArtifactOperationError(ArtifactOperationErrorCode.BODY_NOT_FOUND)
 
 
 def _find_body_capture(

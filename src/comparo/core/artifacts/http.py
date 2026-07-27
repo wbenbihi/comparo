@@ -76,6 +76,9 @@ class ArtifactRequest(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_
 
     method: str
     url: str
+    url_redaction_count: int
+    header_redaction_count: int
+    cookie_redaction_count: int
     headers: tuple[ArtifactField, ...]
     cookies: tuple[ArtifactCookie, ...]
     body: ArtifactCapture | None
@@ -84,12 +87,15 @@ class ArtifactRequest(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_
         """Require ordered field collections and an optional truthful body capture."""
         require_text(self.method, label="artifact request method", maximum=32)
         require_text(self.url, label="artifact request URL", maximum=8192)
+        require_count(self.url_redaction_count, label="artifact request URL redactions")
+        require_count(self.header_redaction_count, label="artifact request header redactions")
+        require_count(self.cookie_redaction_count, label="artifact request cookie redactions")
         _require_fields(self.headers, label="request header")
         _require_cookies(self.cookies)
         if self.body is not None and type(self.body) is not ArtifactCapture:
             raise TypeError("artifact request body must be ArtifactCapture")
         _require_mandatory_field_redaction(self.headers)
-        _require_mandatory_query_redaction(self.url)
+        _require_redaction_count_lower_bounds(self)
 
 
 @final
@@ -143,7 +149,19 @@ def _require_mandatory_field_redaction(
             raise ValueError("mandatory credential artifact fields require fixed redaction")
 
 
-def _require_mandatory_query_redaction(url: str) -> None:
+def _require_redaction_count_lower_bounds(request: ArtifactRequest) -> None:
+    mandatory_query_redactions = _require_mandatory_query_redaction(request.url)
+    if request.url_redaction_count < mandatory_query_redactions:
+        raise ValueError(
+            "artifact request URL redactions cannot under-report mandatory credential masking"
+        )
+    if request.header_redaction_count < sum(field.redacted for field in request.headers):
+        raise ValueError("artifact request header redactions cannot under-report masked fields")
+    if request.cookie_redaction_count < len(request.cookies):
+        raise ValueError("artifact request cookie redactions cannot under-report masked cookies")
+
+
+def _require_mandatory_query_redaction(url: str) -> int:
     try:
         parsed = urlsplit(url)
         parameters = parse_qsl(parsed.query, keep_blank_values=True)
@@ -156,12 +174,15 @@ def _require_mandatory_query_redaction(url: str) -> None:
         or parsed.password is not None
     ):
         raise ValueError("artifact request URL must be absolute HTTP(S)")
-    if any(
-        name.casefold() in MANDATORY_SENSITIVE_QUERY_NAMES
-        and value not in {"", ARTIFACT_REDACTION_MARKER}
-        for name, value in parameters
-    ):
-        raise ValueError("mandatory credential query values require fixed redaction")
+    mandatory_redactions = 0
+    for name, value in parameters:
+        if name.casefold() not in MANDATORY_SENSITIVE_QUERY_NAMES:
+            continue
+        if value not in {"", ARTIFACT_REDACTION_MARKER}:
+            raise ValueError("mandatory credential query values require fixed redaction")
+        if value == ARTIFACT_REDACTION_MARKER:
+            mandatory_redactions += 1
+    return mandatory_redactions
 
 
 @final

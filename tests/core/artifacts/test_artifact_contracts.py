@@ -117,6 +117,9 @@ def _artifact() -> RunArtifact:
         request=ArtifactRequest(
             method="GET",
             url="https://example.test/items",
+            url_redaction_count=0,
+            header_redaction_count=0,
+            cookie_redaction_count=0,
             headers=(ArtifactField(name="accept", value="application/json"),),
             cookies=(),
             body=request_capture,
@@ -267,6 +270,9 @@ def test_http_artifact_dtos_enforce_the_mandatory_credential_floor() -> None:
         ArtifactRequest(
             method="GET",
             url="https://example.test/",
+            url_redaction_count=0,
+            header_redaction_count=0,
+            cookie_redaction_count=0,
             headers=(ArtifactField(name="authorization", value="Bearer LEAK-ME"),),
             cookies=(),
             body=None,
@@ -275,6 +281,9 @@ def test_http_artifact_dtos_enforce_the_mandatory_credential_floor() -> None:
         ArtifactRequest(
             method="GET",
             url="https://example.test/",
+            url_redaction_count=0,
+            header_redaction_count=0,
+            cookie_redaction_count=0,
             headers=(),
             cookies=(ArtifactCookie(name="session", value="LEAK-ME", redacted=False),),
             body=None,
@@ -283,6 +292,9 @@ def test_http_artifact_dtos_enforce_the_mandatory_credential_floor() -> None:
         ArtifactRequest(
             method="GET",
             url="https://example.test/?api_key=LEAK-ME",
+            url_redaction_count=0,
+            header_redaction_count=0,
+            cookie_redaction_count=0,
             headers=(),
             cookies=(),
             body=None,
@@ -291,6 +303,9 @@ def test_http_artifact_dtos_enforce_the_mandatory_credential_floor() -> None:
         ArtifactRequest(
             method="GET",
             url="https://user:LEAK-ME@example.test/",
+            url_redaction_count=0,
+            header_redaction_count=0,
+            cookie_redaction_count=0,
             headers=(),
             cookies=(),
             body=None,
@@ -307,6 +322,9 @@ def test_http_artifact_dtos_enforce_the_mandatory_credential_floor() -> None:
     safe = ArtifactRequest(
         method="GET",
         url="https://example.test/?api_key=%3Credacted%3E&token",
+        url_redaction_count=1,
+        header_redaction_count=1,
+        cookie_redaction_count=1,
         headers=(
             ArtifactField(
                 name="authorization",
@@ -314,10 +332,42 @@ def test_http_artifact_dtos_enforce_the_mandatory_credential_floor() -> None:
                 redacted=True,
             ),
         ),
-        cookies=(),
+        cookies=(
+            ArtifactCookie(
+                name="SessionID",
+                value="<redacted>",
+                redacted=True,
+            ),
+        ),
         body=None,
     )
     assert safe.url.endswith("token")
+    assert safe.url_redaction_count == 1
+    with pytest.raises(ValueError, match="URL redactions cannot under-report"):
+        msgspec.structs.replace(safe, url_redaction_count=0)
+    with pytest.raises(ValueError, match="header redactions cannot under-report"):
+        msgspec.structs.replace(safe, header_redaction_count=0)
+    with pytest.raises(ValueError, match="cookie redactions cannot under-report"):
+        msgspec.structs.replace(safe, cookie_redaction_count=0)
+    for invalid_count in (-1, cast("int", True)):
+        with pytest.raises(ValueError, match="URL redactions"):
+            msgspec.structs.replace(safe, url_redaction_count=invalid_count)
+        with pytest.raises(ValueError, match="header redactions"):
+            msgspec.structs.replace(safe, header_redaction_count=invalid_count)
+        with pytest.raises(ValueError, match="cookie redactions"):
+            msgspec.structs.replace(safe, cookie_redaction_count=invalid_count)
+
+    public_marker = ArtifactRequest(
+        method="GET",
+        url="https://example.test/?note=%3Credacted%3E",
+        url_redaction_count=0,
+        header_redaction_count=0,
+        cookie_redaction_count=0,
+        headers=(),
+        cookies=(),
+        body=None,
+    )
+    assert public_marker.url_redaction_count == 0
     uppercase_cookie = ArtifactCookie(
         name="SessionID",
         value="<redacted>",

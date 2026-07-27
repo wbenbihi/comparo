@@ -28,6 +28,8 @@ from comparo.application.artifacts import render_artifact_report
 from comparo.application.artifacts import validate_existing_artifact_root
 from comparo.application.artifacts import validate_project_artifact_root
 from comparo.application.artifacts import verify_artifact
+from comparo.core.artifacts.codec import fingerprint_run_artifact
+from comparo.core.artifacts.common import ARTIFACT_API_VERSION
 from comparo.core.artifacts.common import ArtifactCapture
 from comparo.core.artifacts.common import ArtifactCaptureExtent
 from comparo.core.artifacts.common import ArtifactOmissionReason
@@ -162,6 +164,9 @@ def test_body_windows_use_result_coordinates_and_truthful_continuations(
     attempt = execution.attempts[0]
     exchange = attempt.exchanges[0]
     reference = ArtifactBodyReference(
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(artifact),
         execution_id=execution.execution_id,
         attempt_id=attempt.attempt_id,
         exchange_id=exchange.exchange_id,
@@ -202,8 +207,11 @@ def test_body_windows_use_result_coordinates_and_truthful_continuations(
 def test_body_window_rejects_unknown_coordinates_without_leaking_values(
     tmp_path: Path,
 ) -> None:
-    root, _artifact = _bundle(tmp_path)
+    root, artifact = _bundle(tmp_path)
     reference = ArtifactBodyReference(
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(artifact),
         execution_id="unknown",
         attempt_id="unknown",
         exchange_id="unknown",
@@ -224,6 +232,107 @@ def test_body_window_rejects_unknown_coordinates_without_leaking_values(
 
     assert caught.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
     assert "unknown" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "reference_changes",
+    [
+        {"artifact_id": "artifact-other"},
+        {"artifact_api_version": "comparo.artifact/v9"},
+        {"artifact_results_sha256": "f" * 64},
+    ],
+)
+def test_body_reference_is_bound_to_one_artifact_identity_and_revision(
+    tmp_path: Path,
+    reference_changes: dict[str, str],
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    reference = ArtifactBodyReference(
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(artifact),
+        execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id,
+        exchange_id=exchange.exchange_id,
+        message=ArtifactBodyMessage.REQUEST,
+    )
+
+    with pytest.raises(ArtifactOperationError) as mismatch:
+        asyncio.run(
+            read_artifact_body_window(
+                root,
+                artifact.metadata.artifact_id,
+                msgspec.structs.replace(reference, **reference_changes),
+                _limits(),
+                offset=0,
+                maximum_output_bytes=1,
+            )
+        )
+
+    assert mismatch.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
+
+
+def test_body_reference_rejects_a_replaced_report_in_the_same_bundle_slot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, artifact = _bundle(tmp_path)
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    reference = ArtifactBodyReference(
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(artifact),
+        execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id,
+        exchange_id=exchange.exchange_id,
+        message=ArtifactBodyMessage.REQUEST,
+    )
+    replacement = msgspec.structs.replace(
+        artifact,
+        metadata=msgspec.structs.replace(
+            artifact.metadata,
+            created_unix_nanoseconds=artifact.metadata.created_unix_nanoseconds + 1,
+        ),
+    )
+    assert replacement.metadata.artifact_id == artifact.metadata.artifact_id
+    assert replacement.executions[0].attempts[0].exchanges[0].exchange_id == exchange.exchange_id
+
+    class ReplacedBundle:
+        artifact = replacement
+
+        def __enter__(self) -> ReplacedBundle:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _blob: object) -> AsyncIterator[bytes]:
+            raise AssertionError("stale coordinates must fail before blob lookup")
+
+    monkeypatch.setattr(
+        artifacts_module,
+        "open_local_artifact_bundle",
+        lambda *_args, **_kwargs: ReplacedBundle(),
+    )
+
+    with pytest.raises(ArtifactOperationError) as stale:
+        asyncio.run(
+            read_artifact_body_window(
+                root,
+                artifact.metadata.artifact_id,
+                reference,
+                _limits(),
+                offset=0,
+                maximum_output_bytes=1,
+            )
+        )
+
+    assert stale.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
 
 
 @pytest.mark.parametrize(
@@ -333,13 +442,23 @@ def test_report_budget_and_untyped_limits_fail_safely(tmp_path: Path) -> None:
 
 def test_body_reference_and_window_contracts_reject_ambiguous_state() -> None:
     reference = ArtifactBodyReference(
+        artifact_api_version=ARTIFACT_API_VERSION,
+        artifact_id="artifact",
+        artifact_results_sha256="0" * 64,
         execution_id="execution",
         attempt_id="attempt",
         exchange_id="exchange",
         message=ArtifactBodyMessage.REQUEST,
     )
     for reference_changes, error in (
+        ({"artifact_api_version": ""}, ValueError),
+        ({"artifact_api_version": "\ud800"}, ValueError),
+        ({"artifact_id": "invalid/id"}, ValueError),
+        ({"artifact_results_sha256": "A" * 64}, ValueError),
+        ({"artifact_results_sha256": "0" * 63}, ValueError),
+        ({"artifact_results_sha256": cast("str", object())}, ValueError),
         ({"execution_id": ""}, ValueError),
+        ({"attempt_id": "\udfff"}, ValueError),
         ({"attempt_id": "x" * 65}, ValueError),
         ({"exchange_id": cast("str", object())}, ValueError),
         ({"message": cast("ArtifactBodyMessage", "request")}, TypeError),
@@ -423,6 +542,9 @@ def test_body_read_rejects_invalid_limits_offsets_and_nested_coordinates(tmp_pat
     attempt = execution.attempts[0]
     exchange = attempt.exchanges[0]
     reference = ArtifactBodyReference(
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(artifact),
         execution_id=execution.execution_id,
         attempt_id=attempt.attempt_id,
         exchange_id=exchange.exchange_id,
@@ -486,6 +608,9 @@ def test_authenticated_request_pins_metadata_and_complete_body_to_one_bundle(
     attempt = execution.attempts[0]
     exchange = attempt.exchanges[0]
     reference = ArtifactBodyReference(
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(artifact),
         execution_id=execution.execution_id,
         attempt_id=attempt.attempt_id,
         exchange_id=exchange.exchange_id,
@@ -524,6 +649,9 @@ def test_authenticated_request_contract_and_rejections_are_closed(tmp_path: Path
     attempt = execution.attempts[0]
     exchange = attempt.exchanges[0]
     reference = ArtifactBodyReference(
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(artifact),
         execution_id=execution.execution_id,
         attempt_id=attempt.attempt_id,
         exchange_id=exchange.exchange_id,
@@ -577,6 +705,17 @@ def test_authenticated_request_contract_and_rejections_are_closed(tmp_path: Path
             )
         )
     assert invalid_limit.value.code is ArtifactOperationErrorCode.INVALID_LIMIT
+    with pytest.raises(ArtifactOperationError) as stale:
+        asyncio.run(
+            read_authenticated_artifact_request(
+                root,
+                artifact.metadata.artifact_id,
+                msgspec.structs.replace(reference, artifact_results_sha256="0" * 64),
+                _limits(),
+                maximum_body_bytes=4,
+            )
+        )
+    assert stale.value.code is ArtifactOperationErrorCode.BODY_NOT_FOUND
     with pytest.raises(ArtifactOperationError) as missing:
         asyncio.run(
             read_authenticated_artifact_request(
@@ -645,6 +784,9 @@ def test_omitted_and_absent_body_captures_are_distinguished(
         executions=(omitted_execution, *artifact.executions[1:]),
     )
     reference = ArtifactBodyReference(
+        artifact_api_version=omitted_artifact.api_version,
+        artifact_id=omitted_artifact.metadata.artifact_id,
+        artifact_results_sha256=fingerprint_run_artifact(omitted_artifact),
         execution_id=execution.execution_id,
         attempt_id=attempt.attempt_id,
         exchange_id=exchange.exchange_id,

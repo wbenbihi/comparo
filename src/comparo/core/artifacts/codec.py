@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from contextlib import suppress
+from hashlib import sha256
 from typing import cast
 
 import msgspec
@@ -42,6 +43,19 @@ class ArtifactCodecError(ValueError):
 def encode_run_artifact(artifact: RunArtifact, *, maximum_bytes: int) -> bytes:
     """Encode one exact artifact canonically within a caller-owned finite limit."""
     _require_limit(maximum_bytes)
+    payload = _encode_run_artifact(artifact)
+    if len(payload) > maximum_bytes:
+        raise ArtifactCodecError(ArtifactCodecErrorCode.BUDGET_EXCEEDED)
+    return payload
+
+
+def fingerprint_run_artifact(artifact: RunArtifact) -> str:
+    """Return the SHA-256 identity of the exact canonical persisted results document."""
+    return sha256(_encode_run_artifact(artifact)).hexdigest()
+
+
+def _encode_run_artifact(artifact: RunArtifact) -> bytes:
+    """Encode one exact artifact without imposing a second application-level limit."""
     if type(artifact) is not RunArtifact:
         raise ArtifactCodecError(ArtifactCodecErrorCode.INVALID_INPUT)
     failed = False
@@ -52,8 +66,6 @@ def encode_run_artifact(artifact: RunArtifact, *, maximum_bytes: int) -> bytes:
         failed = True
     if failed:
         raise ArtifactCodecError(ArtifactCodecErrorCode.MALFORMED)
-    if len(payload) > maximum_bytes:
-        raise ArtifactCodecError(ArtifactCodecErrorCode.BUDGET_EXCEEDED)
     return payload
 
 

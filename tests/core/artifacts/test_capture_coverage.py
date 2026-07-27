@@ -599,23 +599,42 @@ def test_request_registration_url_and_fields_cover_all_typed_values() -> None:
     boundary.seal()
 
     rendered = capture._sanitize_url(url, boundary, RedactionPolicy())
-    headers = capture._request_headers(wire, boundary, RedactionPolicy())
-    cookies = capture._request_cookies(wire, boundary, RedactionPolicy())
+    headers, header_redaction_count = capture._request_headers(
+        wire,
+        boundary,
+        RedactionPolicy(),
+    )
+    cookies, cookie_redaction_count = capture._request_cookies(
+        wire,
+        boundary,
+        RedactionPolicy(),
+    )
 
-    assert rendered.startswith("https://[2001:db8::1]:8443/")
-    assert rendered.endswith("/?flag&page=two%20words&token=%3Credacted%3E")
-    assert "%3Credacted%3E/plain%20path/already%20encoded/" in rendered
+    assert rendered.value.startswith("https://[2001:db8::1]:8443/")
+    assert rendered.value.endswith("/?flag&page=two%20words&token=%3Credacted%3E")
+    assert "%3Credacted%3E/plain%20path/already%20encoded/" in rendered.value
+    assert rendered.redaction_count == 2
     assert headers[0].value == "public"
     assert headers[1].value == "<redacted>"
+    assert header_redaction_count == 1
     assert cookies[0].redacted
     assert cookies[0].name == "SessionID"
-    assert (
-        capture._request_headers(wire, boundary, _redaction(SelectorSource.REQUEST_HEADERS)) == ()
+    assert cookie_redaction_count == 1
+    assert capture._request_headers(wire, boundary, _redaction(SelectorSource.REQUEST_HEADERS)) == (
+        (),
+        2,
     )
-    assert (
-        capture._request_cookies(wire, boundary, _redaction(SelectorSource.REQUEST_COOKIES)) == ()
+    assert capture._request_cookies(wire, boundary, _redaction(SelectorSource.REQUEST_COOKIES)) == (
+        (),
+        1,
     )
-    assert "?" not in capture._sanitize_url(url, boundary, _redaction(SelectorSource.REQUEST_QUERY))
+    omitted_query = capture._sanitize_url(
+        url,
+        boundary,
+        _redaction(SelectorSource.REQUEST_QUERY),
+    )
+    assert "?" not in omitted_query.value
+    assert omitted_query.redaction_count == 4
 
 
 def test_request_capture_resanitizes_the_complete_method_and_url_authority() -> None:
@@ -647,6 +666,9 @@ def test_request_capture_resanitizes_the_complete_method_and_url_authority() -> 
     assert "SECRET" not in captured.method
     assert "secret-host" not in captured.url
     assert "<redacted>" in captured.url
+    assert captured.url_redaction_count == 1
+    assert captured.header_redaction_count == 0
+    assert captured.cookie_redaction_count == 0
 
 
 def test_response_registration_and_field_redaction_cover_all_sections() -> None:
@@ -1386,7 +1408,7 @@ def test_body_capture_aborts_a_writer_when_commit_is_cancelled() -> None:
 
 
 def test_mandatory_artifact_field_is_always_fixed_redacted() -> None:
-    field = capture._artifact_field(
+    field, redaction_count = capture._artifact_field_with_count(
         "authorization",
         HeaderText(value="Bearer LEAK-ME"),
         _boundary(),
@@ -1395,6 +1417,7 @@ def test_mandatory_artifact_field_is_always_fixed_redacted() -> None:
 
     assert field.value == "<redacted>"
     assert field.redacted
+    assert redaction_count == 1
 
 
 def test_sensitive_body_descriptors_are_never_read_or_persisted() -> None:

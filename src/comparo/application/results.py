@@ -14,6 +14,7 @@ import msgspec
 
 from comparo.application.artifact_references import ArtifactBodyMessage
 from comparo.application.artifact_references import ArtifactBodyReference
+from comparo.core.artifacts.codec import fingerprint_run_artifact
 from comparo.core.artifacts.common import ArtifactDefinition
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactMetric
@@ -147,6 +148,10 @@ class ResultTiming(msgspec.Struct, frozen=True, kw_only=True):
     nanoseconds: int | None
     reason: str | None
 
+    def __post_init__(self) -> None:
+        """Preserve the artifact timing's exact duration-or-reason invariant."""
+        ArtifactTiming(name=self.name, nanoseconds=self.nanoseconds, reason=self.reason)
+
 
 @final
 class ResultTimingSummary(msgspec.Struct, frozen=True, kw_only=True):
@@ -194,6 +199,9 @@ class ResultHttpRequestMetadata(
 
     method: str
     url: str
+    url_redaction_count: int
+    header_redaction_count: int
+    cookie_redaction_count: int
     headers: tuple[ResultHttpField, ...]
     cookies: tuple[ResultHttpCookie, ...]
     has_body_capture: bool
@@ -213,6 +221,9 @@ class ResultHttpRequestMetadata(
         ArtifactRequest(
             method=self.method,
             url=self.url,
+            url_redaction_count=self.url_redaction_count,
+            header_redaction_count=self.header_redaction_count,
+            cookie_redaction_count=self.cookie_redaction_count,
             headers=tuple(_artifact_field(item) for item in self.headers),
             cookies=tuple(_artifact_cookie(item) for item in self.cookies),
             body=None,
@@ -331,6 +342,7 @@ class ResultHttpExchange(msgspec.Struct, frozen=True, kw_only=True):
     ordinal: int
     terminal: bool
     failure: ResultFailure | None
+    timings: tuple[ResultTiming, ...]
     request: ResultHttpRequestSlot
     response: ResultHttpResponseSlot
 
@@ -342,6 +354,7 @@ class ResultHttpExchange(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("result HTTP exchange terminal marker must be bool")
         if self.failure is not None and type(self.failure) is not ResultFailure:
             raise TypeError("result HTTP exchange failure must be typed or absent")
+        _require_result_timings(self.timings, label="exchange", canonical_names=True)
         if type(self.request) is not ResultHttpRequestSlot:
             raise TypeError("result HTTP exchange request must be typed")
         if type(self.response) is not ResultHttpResponseSlot:
@@ -361,6 +374,7 @@ class ResultHttpAttempt(msgspec.Struct, frozen=True, kw_only=True):
     terminal: bool
     pre_send_terminal: bool
     failure: ResultFailure | None
+    timings: tuple[ResultTiming, ...]
     exchanges: tuple[ResultHttpExchange, ...]
     terminal_pre_send: ResultHttpRequestSlot | None
 
@@ -372,6 +386,7 @@ class ResultHttpAttempt(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("result HTTP attempt terminal markers must be bool")
         if self.failure is not None and type(self.failure) is not ResultFailure:
             raise TypeError("result HTTP attempt failure must be typed or absent")
+        _require_result_timings(self.timings, label="attempt")
         if (
             self.terminal_pre_send is not None
             and type(self.terminal_pre_send) is not ResultHttpRequestSlot
@@ -491,6 +506,22 @@ class ExecutionResultRow(msgspec.Struct, frozen=True, kw_only=True):
 def _require_http_ordinal(value: object, *, label: str) -> None:
     if type(value) is not int or value < 0:
         raise ValueError(f"{label} must be a non-negative integer")
+
+
+def _require_result_timings(
+    values: object,
+    *,
+    label: str,
+    canonical_names: bool = False,
+) -> None:
+    if type(values) is not tuple or any(type(item) is not ResultTiming for item in values):
+        raise TypeError(f"result HTTP {label} timings must be immutable and typed")
+    if canonical_names:
+        names = tuple(item.name for item in values)
+        if len(set(names)) != len(names) or names != tuple(sorted(names)):
+            raise ValueError(
+                f"result HTTP {label} timing names must be unique and lexically canonical"
+            )
 
 
 def _require_canonical_http_exchanges(exchanges: tuple[ResultHttpExchange, ...]) -> None:
@@ -641,6 +672,7 @@ def project_results(artifact: RunArtifact) -> ResultProjection:
     """Project one sanitized artifact without loading bodies or recomputing outcomes."""
     if type(artifact) is not RunArtifact:
         raise TypeError("result projection requires RunArtifact")
+    artifact_results_sha256 = fingerprint_run_artifact(artifact)
 
     execution_references = {
         item.execution_id: ResultReference(
@@ -687,6 +719,9 @@ def project_results(artifact: RunArtifact) -> ResultProjection:
             item,
             reference=execution_references[item.execution_id],
             comparisons=tuple(comparisons_by_execution[item.execution_id]),
+            artifact_api_version=artifact.api_version,
+            artifact_id=artifact.metadata.artifact_id,
+            artifact_results_sha256=artifact_results_sha256,
         )
         for item in artifact.executions
     )
@@ -754,6 +789,9 @@ def _execution_row(
     *,
     reference: ResultReference,
     comparisons: tuple[ResultReference, ...],
+    artifact_api_version: str,
+    artifact_id: str,
+    artifact_results_sha256: str,
 ) -> ExecutionResultRow:
     return ExecutionResultRow(
         ordinal=execution.ordinal,
@@ -778,7 +816,12 @@ def _execution_row(
         ),
         comparisons=comparisons,
         attempts=_http_attempts(execution),
-        messages=_http_messages(execution),
+        messages=_http_messages(
+            execution,
+            artifact_api_version=artifact_api_version,
+            artifact_id=artifact_id,
+            artifact_results_sha256=artifact_results_sha256,
+        ),
     )
 
 
@@ -810,6 +853,7 @@ def _http_attempt(
             or attempt.terminal_pre_send_omission is not None
         ),
         failure=None if attempt.failure is None else _failure(attempt.failure),
+        timings=tuple(_timing(item) for item in attempt.timings),
         terminal_pre_send=_request_slot(
             attempt.terminal_pre_send_request,
             attempt.terminal_pre_send_omission,
@@ -840,6 +884,7 @@ def _http_exchange(
         ordinal=ordinal,
         terminal=terminal,
         failure=None if exchange.failure is None else _failure(exchange.failure),
+        timings=tuple(_timing(item) for item in exchange.timings),
         request=request,
         response=_response_slot(
             exchange.response,
@@ -907,6 +952,9 @@ def _request_metadata(request: ArtifactRequest) -> ResultHttpRequestMetadata:
     return ResultHttpRequestMetadata(
         method=request.method,
         url=request.url,
+        url_redaction_count=request.url_redaction_count,
+        header_redaction_count=request.header_redaction_count,
+        cookie_redaction_count=request.cookie_redaction_count,
         headers=tuple(_http_field(item) for item in request.headers),
         cookies=tuple(_http_cookie(item) for item in request.cookies),
         has_body_capture=request.body is not None,
@@ -939,7 +987,13 @@ def _artifact_cookie(cookie: ResultHttpCookie) -> ArtifactCookie:
     return ArtifactCookie(name=cookie.name, value=cookie.value, redacted=cookie.redacted)
 
 
-def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...]:
+def _http_messages(
+    execution: ArtifactExecution,
+    *,
+    artifact_api_version: str,
+    artifact_id: str,
+    artifact_results_sha256: str,
+) -> tuple[ResultHttpMessage, ...]:
     messages: list[ResultHttpMessage] = []
     terminal_attempt_ordinal = len(execution.attempts) - 1
     for attempt_ordinal, attempt in enumerate(execution.attempts):
@@ -948,6 +1002,9 @@ def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...
             if exchange.request is not None:
                 messages.append(
                     _http_message(
+                        artifact_api_version,
+                        artifact_id,
+                        artifact_results_sha256,
                         execution.execution_id,
                         attempt.attempt_id,
                         exchange.exchange_id,
@@ -962,6 +1019,9 @@ def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...
             if exchange.response is not None:
                 messages.append(
                     _http_message(
+                        artifact_api_version,
+                        artifact_id,
+                        artifact_results_sha256,
                         execution.execution_id,
                         attempt.attempt_id,
                         exchange.exchange_id,
@@ -977,6 +1037,9 @@ def _http_messages(execution: ArtifactExecution) -> tuple[ResultHttpMessage, ...
 
 
 def _http_message(
+    artifact_api_version: str,
+    artifact_id: str,
+    artifact_results_sha256: str,
     execution_id: str,
     attempt_id: str,
     exchange_id: str,
@@ -990,6 +1053,9 @@ def _http_message(
 ) -> ResultHttpMessage:
     return ResultHttpMessage(
         reference=ArtifactBodyReference(
+            artifact_api_version=artifact_api_version,
+            artifact_id=artifact_id,
+            artifact_results_sha256=artifact_results_sha256,
             execution_id=execution_id,
             attempt_id=attempt_id,
             exchange_id=exchange_id,

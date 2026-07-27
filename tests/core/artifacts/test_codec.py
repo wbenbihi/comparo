@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
@@ -13,6 +14,7 @@ from comparo.core.artifacts.codec import ArtifactCodecError
 from comparo.core.artifacts.codec import ArtifactCodecErrorCode
 from comparo.core.artifacts.codec import decode_run_artifact
 from comparo.core.artifacts.codec import encode_run_artifact
+from comparo.core.artifacts.codec import fingerprint_run_artifact
 from comparo.core.artifacts.codec import generate_artifact_schema
 from comparo.core.artifacts.codec import render_artifact_schema
 from comparo.core.artifacts.values import ArtifactArray
@@ -32,6 +34,30 @@ def test_artifact_json_round_trip_is_canonical_and_deterministic() -> None:
     assert first == second
     assert decode_run_artifact(first, maximum_bytes=100_000) == artifact
     assert msgspec.json.decode(first)["api_version"] == "comparo.artifact/v1alpha1"
+
+
+def test_artifact_fingerprint_is_the_exact_canonical_results_digest() -> None:
+    artifact = _artifact()
+    encoded = encode_run_artifact(artifact, maximum_bytes=100_000)
+
+    assert fingerprint_run_artifact(artifact) == sha256(encoded).hexdigest()
+    with pytest.raises(ArtifactCodecError) as invalid:
+        fingerprint_run_artifact(object())  # type: ignore[arg-type]
+    assert invalid.value.code is ArtifactCodecErrorCode.INVALID_INPUT
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["url_redaction_count", "header_redaction_count", "cookie_redaction_count"],
+)
+def test_v1alpha1_request_requires_redaction_provenance(field: str) -> None:
+    document = msgspec.json.decode(encode_run_artifact(_artifact(), maximum_bytes=100_000))
+    del document["executions"][0]["attempts"][0]["exchanges"][0]["request"][field]
+
+    with pytest.raises(ArtifactCodecError) as missing:
+        decode_run_artifact(msgspec.json.encode(document), maximum_bytes=100_000)
+
+    assert missing.value.code is ArtifactCodecErrorCode.MALFORMED
 
 
 @pytest.mark.parametrize("limit", [-1, True, 1.5])

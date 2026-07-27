@@ -224,7 +224,11 @@ async def export_artifact_curl(request: CurlExportRequest) -> CurlExport:
             request.export_limits.maximum_command_characters,
         )
     command = prefix + " ".join(parts)
-    redactions = sum(field.redacted for field in captured.headers) + len(captured.cookies)
+    redactions = (
+        captured.url_redaction_count
+        + captured.header_redaction_count
+        + captured.cookie_redaction_count
+    )
     if captured.body is not None:
         redactions += captured.body.redaction_count
     warnings = list(body_warnings)

@@ -35,6 +35,7 @@ from comparo.core.artifacts.ports import SanitizedBlobTarget
 from comparo.core.artifacts.ports import SanitizedBlobWriter
 from comparo.core.artifacts.sanitization import SanitizationBoundary
 from comparo.core.artifacts.sanitization import SanitizationBudgetExceededError
+from comparo.core.artifacts.sanitization import SanitizedText
 from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.credentials import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.http.bodies import MaterializedBody
@@ -625,12 +626,18 @@ async def _capture_request(
         )
     elif type(request.body) is not NoMaterializedBody:  # pragma: no cover - domain invariant
         raise TypeError("captured request body has an unsupported type")
+    sanitized_url = _sanitize_url(request.url, boundary, redaction)
+    headers, header_redaction_count = _request_headers(request, boundary, redaction)
+    cookies, cookie_redaction_count = _request_cookies(request, boundary, redaction)
     return ArtifactRequest(
         method=boundary.sanitize_text(request.method.value).value,
-        url=_sanitize_url(request.url, boundary, redaction),
-        headers=_request_headers(request, boundary, redaction),
-        cookies=_request_cookies(request, boundary, redaction),
+        url=sanitized_url.value,
+        headers=headers,
+        cookies=cookies,
         body=body,
+        url_redaction_count=sanitized_url.redaction_count,
+        header_redaction_count=header_redaction_count,
+        cookie_redaction_count=cookie_redaction_count,
     )
 
 
@@ -971,84 +978,115 @@ def _sanitize_url(
     url: AbsoluteHttpUrl,
     boundary: SanitizationBoundary,
     redaction: RedactionPolicy,
-) -> str:
+) -> SanitizedText:
     host = url.authority.host.value
     if type(url.authority.host) is Ipv6Host:
         host = f"[{host}]"
     authority = host if url.authority.port is None else f"{host}:{url.authority.port.value}"
     segments = tuple(_sanitize_path_segment(item, boundary) for item in url.path.segments)
-    path = "/" + "/".join(segments)
+    redaction_count = sum(item.redaction_count for item in segments)
+    path = "/" + "/".join(item.value for item in segments)
     if url.path.trailing_slash:
         path += "/"
     query: list[str] = []
     if not _source_has_custom_redaction(redaction, SelectorSource.REQUEST_QUERY):
         for parameter in url.query.parameters:
-            name = boundary.sanitize_text(parameter.name.value).value
-            encoded_name = quote(name, safe="-._~", encoding="utf-8", errors="strict")
+            name = boundary.sanitize_text(parameter.name.value)
+            redaction_count += name.redaction_count
+            encoded_name = quote(name.value, safe="-._~", encoding="utf-8", errors="strict")
             if type(parameter.value) is BareQueryValue:
                 query.append(encoded_name)
                 continue
             mandatory = parameter.name.value.casefold() in MANDATORY_SENSITIVE_QUERY_NAMES
             if mandatory:
-                value = ARTIFACT_REDACTION_MARKER
+                sanitized_value = SanitizedText(
+                    value=ARTIFACT_REDACTION_MARKER,
+                    redaction_count=1,
+                )
             else:
                 query_value = (
                     parameter.value
                     if is_sensitive_value(parameter.value)
                     else cast(QueryText, parameter.value).value
                 )
-                value = boundary.sanitize_text(query_value).value
-            encoded = quote(value, safe="-._~", encoding="utf-8", errors="strict")
+                sanitized_value = boundary.sanitize_text(query_value)
+            redaction_count += sanitized_value.redaction_count
+            encoded = quote(
+                sanitized_value.value,
+                safe="-._~",
+                encoding="utf-8",
+                errors="strict",
+            )
             query.append(f"{encoded_name}={encoded}")
+    else:
+        redaction_count += len(url.query.parameters)
     suffix = "" if not query else "?" + "&".join(query)
     rendered = f"{url.scheme.value}://{authority}{path}{suffix}"
-    return boundary.sanitize_text(rendered).value
+    final = boundary.sanitize_text(rendered)
+    return SanitizedText(
+        value=final.value,
+        redaction_count=redaction_count + final.redaction_count,
+    )
 
 
-def _sanitize_path_segment(value: object, boundary: SanitizationBoundary) -> str:
+def _sanitize_path_segment(value: object, boundary: SanitizationBoundary) -> SanitizedText:
     if is_sensitive_value(value):
-        sanitized = boundary.sanitize_text(value).value
-        return quote(sanitized, safe="-._~", encoding="utf-8", errors="strict")
+        sanitized = boundary.sanitize_text(value)
+        return SanitizedText(
+            value=quote(sanitized.value, safe="-._~", encoding="utf-8", errors="strict"),
+            redaction_count=sanitized.redaction_count,
+        )
     if type(value) is DecodedPathSegment:
-        sanitized = boundary.sanitize_text(value.value).value
-        return quote(sanitized, safe="-._~", encoding="utf-8", errors="strict")
+        sanitized = boundary.sanitize_text(value.value)
+        return SanitizedText(
+            value=quote(sanitized.value, safe="-._~", encoding="utf-8", errors="strict"),
+            redaction_count=sanitized.redaction_count,
+        )
     encoded = cast(EncodedPathSegment, value)
-    return boundary.sanitize_text(encoded.value).value
+    return boundary.sanitize_text(encoded.value)
 
 
 def _request_headers(
     request: FinalizedWireRequest,
     boundary: SanitizationBoundary,
     redaction: RedactionPolicy,
-) -> tuple[ArtifactField, ...]:
+) -> tuple[tuple[ArtifactField, ...], int]:
     if _source_has_custom_redaction(redaction, SelectorSource.REQUEST_HEADERS):
-        return ()
-    return tuple(
-        _artifact_field(
+        return (), len(request.headers.fields)
+    fields: list[ArtifactField] = []
+    redaction_count = 0
+    for field in request.headers.fields:
+        sanitized, field_redaction_count = _artifact_field_with_count(
             field.name.value,
             field.value,
             boundary,
             mandatory=field.name.value in MANDATORY_SENSITIVE_HEADER_NAMES,
         )
-        for field in request.headers.fields
-    )
+        fields.append(sanitized)
+        redaction_count += field_redaction_count
+    return tuple(fields), redaction_count
 
 
 def _request_cookies(
     request: FinalizedWireRequest,
     boundary: SanitizationBoundary,
     redaction: RedactionPolicy,
-) -> tuple[ArtifactCookie, ...]:
+) -> tuple[tuple[ArtifactCookie, ...], int]:
     if _source_has_custom_redaction(redaction, SelectorSource.REQUEST_COOKIES):
-        return ()
-    return tuple(
-        ArtifactCookie(
-            name=boundary.sanitize_text(cookie.name.value).value,
-            value=ARTIFACT_REDACTION_MARKER,
-            redacted=True,
+        return (), len(request.cookies.cookies)
+    cookies: list[ArtifactCookie] = []
+    redaction_count = 0
+    for cookie in request.cookies.cookies:
+        safe_name = boundary.sanitize_text(cookie.name.value)
+        cookies.append(
+            ArtifactCookie(
+                name=safe_name.value,
+                value=ARTIFACT_REDACTION_MARKER,
+                redacted=True,
+            )
         )
-        for cookie in request.cookies.cookies
-    )
+        redaction_count += safe_name.redaction_count + 1
+    return tuple(cookies), redaction_count
 
 
 def _response_fields(
@@ -1077,19 +1115,41 @@ def _artifact_field(
     *,
     mandatory: bool,
 ) -> ArtifactField:
+    return _artifact_field_with_count(
+        name,
+        value,
+        boundary,
+        mandatory=mandatory,
+    )[0]
+
+
+def _artifact_field_with_count(
+    name: str,
+    value: object,
+    boundary: SanitizationBoundary,
+    *,
+    mandatory: bool,
+) -> tuple[ArtifactField, int]:
     safe_name = boundary.sanitize_text(name)
     if mandatory:
-        return ArtifactField(
-            name=safe_name.value,
-            value=ARTIFACT_REDACTION_MARKER,
-            redacted=True,
+        return (
+            ArtifactField(
+                name=safe_name.value,
+                value=ARTIFACT_REDACTION_MARKER,
+                redacted=True,
+            ),
+            safe_name.redaction_count + 1,
         )
     field_value = value if is_sensitive_value(value) else cast(HeaderText, value).value
     safe_value = boundary.sanitize_text(field_value)
-    return ArtifactField(
-        name=safe_name.value,
-        value=safe_value.value,
-        redacted=(safe_name.redaction_count + safe_value.redaction_count > 0),
+    redaction_count = safe_name.redaction_count + safe_value.redaction_count
+    return (
+        ArtifactField(
+            name=safe_name.value,
+            value=safe_value.value,
+            redacted=redaction_count > 0,
+        ),
+        redaction_count,
     )
 
 

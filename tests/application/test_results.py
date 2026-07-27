@@ -58,6 +58,7 @@ from comparo.application.results import ResultNamedValue
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
 from comparo.application.results import ResultRelation
+from comparo.application.results import ResultTiming
 from comparo.application.results import project_results
 from comparo.core.artifacts import ArtifactAttempt
 from comparo.core.artifacts import ArtifactComparisonOutcome
@@ -73,7 +74,9 @@ from comparo.core.artifacts import ArtifactMetric
 from comparo.core.artifacts import ArtifactOmissionReason
 from comparo.core.artifacts import ArtifactSeverity
 from comparo.core.artifacts import ArtifactSummary
+from comparo.core.artifacts import ArtifactTiming
 from comparo.core.artifacts import RunArtifact
+from comparo.core.artifacts import fingerprint_run_artifact
 from comparo.core.artifacts.values import ArtifactString
 from tests.application.test_artifacts import _bundle
 from tests.application.test_artifacts import _limits
@@ -130,6 +133,9 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     assert first.messages == (
         ResultHttpMessage(
             reference=ArtifactBodyReference(
+                artifact_api_version=artifact.api_version,
+                artifact_id=artifact.metadata.artifact_id,
+                artifact_results_sha256=fingerprint_run_artifact(artifact),
                 execution_id="execution-0",
                 attempt_id="attempt-0",
                 exchange_id="exchange-0",
@@ -143,6 +149,9 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
         ),
         ResultHttpMessage(
             reference=ArtifactBodyReference(
+                artifact_api_version=artifact.api_version,
+                artifact_id=artifact.metadata.artifact_id,
+                artifact_results_sha256=fingerprint_run_artifact(artifact),
                 execution_id="execution-0",
                 attempt_id="attempt-0",
                 exchange_id="exchange-0",
@@ -178,6 +187,9 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     assert exchange.request.metadata is not None
     assert exchange.request.metadata.method == "GET"
     assert exchange.request.metadata.url == "https://example.test/items"
+    assert exchange.request.metadata.url_redaction_count == 0
+    assert exchange.request.metadata.header_redaction_count == 0
+    assert exchange.request.metadata.cookie_redaction_count == 0
     assert exchange.request.metadata.headers == (
         ResultHttpField(name="accept", value="application/json", redacted=False),
     )
@@ -193,6 +205,8 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     )
     assert exchange.response.metadata.trailers == ()
     assert exchange.response.metadata.has_body_capture is True
+    assert attempt.timings == ()
+    assert exchange.timings == (ResultTiming(name="total", nanoseconds=10, reason=None),)
     assert first.failure is None
     assert first.assertions == (projection.assertions[0].reference,)
     assert first.comparisons == (projection.comparisons[0].reference,)
@@ -233,6 +247,63 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     assert b'"body"' not in encoded
     with pytest.raises(AttributeError):
         projection.executions = ()  # type: ignore[misc]
+
+
+def test_projection_preserves_attempt_exchange_timings_and_url_redaction_accounting() -> None:
+    artifact = _artifact()
+    execution = artifact.executions[0]
+    attempt = execution.attempts[0]
+    exchange = attempt.exchanges[0]
+    assert exchange.request is not None
+    updated_exchange = msgspec.structs.replace(
+        exchange,
+        request=msgspec.structs.replace(
+            exchange.request,
+            url="https://example.test/items?api_key=%3Credacted%3E",
+            url_redaction_count=1,
+            header_redaction_count=2,
+            cookie_redaction_count=3,
+        ),
+        timings=(
+            ArtifactTiming(name="connect", nanoseconds=None, reason="connection-reused"),
+            ArtifactTiming(name="total", nanoseconds=20, reason=None),
+        ),
+    )
+    updated_attempt = msgspec.structs.replace(
+        attempt,
+        exchanges=(updated_exchange,),
+        timings=(ArtifactTiming(name="backoff", nanoseconds=7, reason=None),),
+    )
+    updated_execution = msgspec.structs.replace(execution, attempts=(updated_attempt,))
+    updated_artifact = msgspec.structs.replace(
+        artifact,
+        executions=(updated_execution, artifact.executions[1]),
+    )
+
+    original = project_results(artifact)
+    projected = project_results(updated_artifact)
+    projected_attempt = projected.executions[0].attempts[0]
+    projected_exchange = projected_attempt.exchanges[0]
+
+    assert projected != original
+    assert projected_attempt.timings == (ResultTiming(name="backoff", nanoseconds=7, reason=None),)
+    assert projected_exchange.timings == (
+        ResultTiming(name="connect", nanoseconds=None, reason="connection-reused"),
+        ResultTiming(name="total", nanoseconds=20, reason=None),
+    )
+    assert projected_exchange.request.metadata is not None
+    assert projected_exchange.request.metadata.url_redaction_count == 1
+    assert projected_exchange.request.metadata.header_redaction_count == 2
+    assert projected_exchange.request.metadata.cookie_redaction_count == 3
+    assert all(
+        message.reference.artifact_api_version == artifact.api_version
+        and message.reference.artifact_id == artifact.metadata.artifact_id
+        and message.reference.artifact_results_sha256 == fingerprint_run_artifact(updated_artifact)
+        for message in projected.executions[0].messages
+    )
+    assert {
+        message.reference.artifact_results_sha256 for message in projected.executions[0].messages
+    } != {message.reference.artifact_results_sha256 for message in original.executions[0].messages}
 
 
 def test_projection_exposes_every_exchange_message_in_artifact_order() -> None:
@@ -624,6 +695,28 @@ def test_result_http_attempt_and_exchange_contracts_fail_closed() -> None:
         ({"ordinal": cast("int", True)}, ValueError, "non-negative integer"),
         ({"terminal": cast("bool", 1)}, TypeError, "terminal marker must be bool"),
         ({"failure": object()}, TypeError, "failure must be typed or absent"),
+        ({"timings": []}, TypeError, "timings must be immutable and typed"),
+        ({"timings": (object(),)}, TypeError, "timings must be immutable and typed"),
+        (
+            {
+                "timings": (
+                    ResultTiming(name="connect", nanoseconds=1, reason=None),
+                    ResultTiming(name="connect", nanoseconds=2, reason=None),
+                )
+            },
+            ValueError,
+            "unique and lexically canonical",
+        ),
+        (
+            {
+                "timings": (
+                    ResultTiming(name="total", nanoseconds=2, reason=None),
+                    ResultTiming(name="connect", nanoseconds=1, reason=None),
+                )
+            },
+            ValueError,
+            "unique and lexically canonical",
+        ),
     ):
         with pytest.raises(error, match=match):
             msgspec.structs.replace(exchange, **exchange_changes)
@@ -635,6 +728,8 @@ def test_result_http_attempt_and_exchange_contracts_fail_closed() -> None:
         ({"terminal": cast("bool", 1)}, TypeError, "terminal markers must be bool"),
         ({"pre_send_terminal": cast("bool", 1)}, TypeError, "terminal markers must be bool"),
         ({"failure": object()}, TypeError, "failure must be typed or absent"),
+        ({"timings": []}, TypeError, "timings must be immutable and typed"),
+        ({"timings": (object(),)}, TypeError, "timings must be immutable and typed"),
         (
             {"pre_send_terminal": True},
             ValueError,
@@ -650,6 +745,14 @@ def test_result_http_attempt_and_exchange_contracts_fail_closed() -> None:
     ):
         with pytest.raises(error, match=match):
             msgspec.structs.replace(attempt, **attempt_changes)
+
+    for changes, match in (
+        ({"name": ""}, "bounded non-empty"),
+        ({"nanoseconds": None, "reason": None}, "exactly a duration or reason"),
+        ({"nanoseconds": 1, "reason": "also-present"}, "exactly a duration or reason"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            msgspec.structs.replace(exchange.timings[0], **changes)
 
     noncanonical_exchange = msgspec.structs.replace(
         exchange,
@@ -716,6 +819,12 @@ def test_result_http_metadata_and_message_slots_fail_closed() -> None:
         ({"cookies": []}, TypeError, "cookies must be immutable and typed"),
         ({"cookies": (object(),)}, TypeError, "cookies must be immutable and typed"),
         ({"has_body_capture": 1}, TypeError, "capture flag must be bool"),
+        ({"url_redaction_count": -1}, ValueError, "URL redactions"),
+        ({"url_redaction_count": True}, ValueError, "URL redactions"),
+        ({"header_redaction_count": -1}, ValueError, "header redactions"),
+        ({"header_redaction_count": True}, ValueError, "header redactions"),
+        ({"cookie_redaction_count": -1}, ValueError, "cookie redactions"),
+        ({"cookie_redaction_count": True}, ValueError, "cookie redactions"),
         ({"url": "relative"}, ValueError, "absolute HTTP"),
     ):
         with pytest.raises(error, match=match):
@@ -723,6 +832,19 @@ def test_result_http_metadata_and_message_slots_fail_closed() -> None:
     unsafe = ResultHttpField(name="authorization", value="LEAK", redacted=False)
     with pytest.raises(ValueError, match="credential artifact fields"):
         msgspec.structs.replace(request_metadata, headers=(unsafe,))
+    masked_header = ResultHttpField(name="x-secret", value="<redacted>", redacted=True)
+    with pytest.raises(ValueError, match="under-report masked fields"):
+        msgspec.structs.replace(
+            request_metadata,
+            headers=(masked_header,),
+            header_redaction_count=0,
+        )
+    with pytest.raises(ValueError, match="under-report masked cookies"):
+        msgspec.structs.replace(
+            request_metadata,
+            cookies=(cookie,),
+            cookie_redaction_count=0,
+        )
 
     for response_changes, error, match in (
         ({"headers": []}, TypeError, "headers must be immutable and typed"),
@@ -890,6 +1012,7 @@ def test_projection_is_total_for_valid_bounded_http_ids_and_round_trips() -> Non
     retained_request = msgspec.structs.replace(
         retained_request,
         cookies=(CoreArtifactCookie(name="SessionID", value="<redacted>", redacted=True),),
+        cookie_redaction_count=1,
     )
     exchange = msgspec.structs.replace(
         attempt.exchanges[0],

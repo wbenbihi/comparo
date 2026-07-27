@@ -1357,11 +1357,17 @@
             }
           ]
         },
+        "cookie_redaction_count": {
+          "type": "integer"
+        },
         "cookies": {
           "items": {
             "$ref": "#/$defs/ArtifactCookie"
           },
           "type": "array"
+        },
+        "header_redaction_count": {
+          "type": "integer"
         },
         "headers": {
           "items": {
@@ -1374,11 +1380,17 @@
         },
         "url": {
           "type": "string"
+        },
+        "url_redaction_count": {
+          "type": "integer"
         }
       },
       "required": [
         "method",
         "url",
+        "url_redaction_count",
+        "header_redaction_count",
+        "cookie_redaction_count",
         "headers",
         "cookies",
         "body"

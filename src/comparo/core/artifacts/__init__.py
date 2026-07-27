@@ -4,6 +4,7 @@ from comparo.core.artifacts.codec import ArtifactCodecError as ArtifactCodecErro
 from comparo.core.artifacts.codec import ArtifactCodecErrorCode as ArtifactCodecErrorCode
 from comparo.core.artifacts.codec import decode_run_artifact as decode_run_artifact
 from comparo.core.artifacts.codec import encode_run_artifact as encode_run_artifact
+from comparo.core.artifacts.codec import fingerprint_run_artifact as fingerprint_run_artifact
 from comparo.core.artifacts.codec import generate_artifact_schema as generate_artifact_schema
 from comparo.core.artifacts.codec import render_artifact_schema as render_artifact_schema
 from comparo.core.artifacts.common import ARTIFACT_API_VERSION as ARTIFACT_API_VERSION
@@ -116,6 +117,7 @@ __all__ = (
     "RunArtifact",
     "decode_run_artifact",
     "encode_run_artifact",
+    "fingerprint_run_artifact",
     "generate_artifact_schema",
     "render_artifact_schema",
 )
