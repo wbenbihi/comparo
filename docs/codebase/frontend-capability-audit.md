@@ -39,11 +39,15 @@ The remaining product gaps are deliberate scope decisions, not hidden presentati
 | Show effective compiled structure | Supported | `inspect_effective_resource` | Fingerprint-exact, value-safe, paged fields and relationships |
 | Raw/effective side by side | Supported | source + effective inspection services | Use source/resource fingerprints to label the two representations honestly |
 | Show runtime-resolved Request values | Supported | `render_prepared_request_window` | Sanitized outbound request preview, one ordinal window at a time |
-| Show arbitrary generic resolved values | Partial | `LiveValueResolver` / `MaskedValueResolver` in core | Shared engine exists, but the application boundary intentionally exposes request preview rather than a generic value console |
+| Show arbitrary generic resolved values | Supported | `CompareService.inspect_resolved_value` / `ResolvedValueInspectionTarget` | Exact retained plan, execution ordinal, Environment, Matrix cell, and effective Request overrides; sensitive values are irreversibly masked and public values are fingerprinted, paged, and bounded |
 | Explain planning precedence | Supported | plan provenance inspections | Runtime request-field provenance is not yet projected field by field |
 
 “Raw,” “effective,” and “resolved” are distinct. Raw is authored source; effective is linked and
-precedence-applied structure; resolved request preview is run-scoped and sanitized.
+precedence-applied structure. Generic resolved inspection is a masked run-scoped expression view;
+resolved request preview is sanitized wire intent. The generic result's machine-readable
+`freshness` declares that the retained plan and captured ambient-process input are exact, while
+dotenv files, project files, and generated values are inspection samples that execution produces
+again.
 
 ## Compare preparation
 
@@ -63,6 +67,7 @@ precedence-applied structure; resolved request preview is run-scoped and sanitiz
 | Preview exact topology and authority | Supported | `PlanReviewInspection` | Includes counts, profiles, limits, provenance, policy, and mutation approval |
 | Review/start checkpoint | Supported | `CompareService` one-shot handle | Start rejects controls that differ from the reviewed checkpoint |
 | Preview very large runs | Supported | `CompareService.preview_requests` | Resolves only the requested ordinal window from the exact retained plan and reviewed controls; the handle remains usable for later pages or execution |
+| Inspect one effective resolved field | Supported | `CompareService.inspect_resolved_value` | Uses the same retained handle and controls; in-flight inspections block start, and discard/close request cancellation while retaining the plan until cleanup drains |
 
 No frontend may mutate `CompiledProject` or synthesize `PreparedRun` internals. Every ad-hoc edit
 must use the typed invocation surface so normal precedence, provenance, policy, and budgets apply.
@@ -105,7 +110,7 @@ must use the typed invocation surface so normal precedence, provenance, policy, 
 | Summary, gate, executions, comparisons | Supported | `project_results` | Artifact facts are the verdict source of truth |
 | Issues/Requests/Rules/Fields/Timeline | Supported | `application.result_analysis` | Bounded derived lenses; no verdict recomputation |
 | Stable cross-navigation | Supported | `ResultReference` / `ResultCrossLink` | Suitable for screen routes and selection restoration |
-| Request/response metadata | Supported | authenticated artifact exchanges | Sanitized wire values only |
+| Request/response metadata | Supported | `ResultHttpAttempt` / `ResultHttpExchange` / `ResultHttpMessage` plus authenticated artifact exchanges | Sanitized wire values only; canonical retry/redirect ordinals and semantic terminal markers include message-free pre-send attempts |
 | Full sanitized bodies | Supported | `read_artifact_body_window` | Result-coordinate lookup, media/capture metadata, byte windows, and truthful continuation |
 | Baseline/candidate body split view | Supported by composition | two body references/windows | Frontend aligns the two independent captures; chunk counts need not match |
 | Safe cURL | Supported | `export_artifact_curl` | Generated only from authenticated sanitized request captures |
@@ -141,6 +146,10 @@ bodies produce a typed warning and non-executable file placeholder rather than f
 - Exact source mode is the only intentional authored-secret disclosure surface. Masked source,
   masked resolution, request preview, artifacts, archive rows, cURL, and reports are separate safe
   projections.
+- Generic resolved inspection never returns a live resolver, prepared plan, local path, provider
+  exception, or sensitive payload. Its page limit bounds egress; source/resolution budgets bound
+  value construction, while stable continuation fingerprints require traversal of the resolved
+  value.
 - The final `RunArtifact` is authoritative for results. Live progress is operational state, not a
   second verdict engine.
 

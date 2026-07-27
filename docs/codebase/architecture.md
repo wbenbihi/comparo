@@ -84,11 +84,16 @@ Project configuration cannot supply its own ExecutionPolicy authority.
 
 `CompareService.prepare` adds intent validation, runtime-capability admission, evaluation
 capability admission, and a safe `PlanReviewInspection`. It retains the admitted plan and one
-immutable ambient-environment snapshot behind a bounded opaque handle. `preview_requests`
-resolves bounded sanitized pages from that exact retained state without consuming the handle;
-it remains available when execution is blocked by a missing approval or artifact destination.
-`start` consumes the handle only when the controls exactly match the reviewed controls, then
-creates an `ExecutionSession` from the same environment snapshot.
+immutable ambient-process snapshot behind a bounded opaque handle. `preview_requests`
+resolves bounded sanitized pages from that exact retained state without consuming the handle.
+`inspect_resolved_value` binds a frontend-safe resource/field/execution target to that state only
+inside the service, then returns an irreversibly masked, bounded projection. Both remain available
+when execution is blocked by a missing approval or artifact destination. `start` consumes the
+handle only when the controls exactly match the reviewed controls and no inspection is in flight,
+then creates an `ExecutionSession` from the same ambient-process snapshot. Discard and close
+request cancellation of in-flight inspections; their plans and task leases remain counted until
+each coroutine's `finally` finishes cleanup, then the retained state is released.
+Concurrent inspections per retained preparation are caller-bounded; the default is single-flight.
 
 This prevents a UI from reviewing one set of mutation, artifact, or resource-limit settings and
 executing another.
@@ -115,12 +120,16 @@ is showing.
 | Authored source | `ParsedDocument` / revision-pinned source window | Exact structure and authored literals | Masked mode: yes; trusted exact mode: no | Bounded through `inspect_project_source` |
 | Compiled graph | `CompiledProject` | Linked resources and unresolved typed expressions | Not as a whole | Explorer receives a bounded value-safe effective projection |
 | Effective plan | `PreparedRun` / `RunPlan` | Selected resources, topology, matrices, counts, precedence, provenance, budgets | Safe only through inspection DTOs | Yes |
-| Resolved wire intent | `FinalizedWireRequest` | Exact destination, headers, query, cookies, body | No; may contain live secrets | Transient; request preview and cURL are separately sanitized |
+| Resolved run values and wire intent | resolver result / `FinalizedWireRequest` | Run-scoped expression values; exact destination, fields, cookies, and body | No as live values; yes through masked inspection or sanitized preview | Transient; only bounded safe projections cross the application boundary |
 | Observed/persisted result | `RunResult` then `RunArtifact` | Live outcomes, then sanitized manifest and blobs | `RunResult`: no; `RunArtifact`: yes | Artifact and projections are retained |
 
 Explorer exposes authored and effective representations through separate fingerprinted contracts.
-Request preview is resolved wire intent with mandatory sanitization. None should be labelled as
-another representation.
+Generic resolved inspection uses the exact retained planning checkpoint, execution occurrence,
+Environment, Matrix inputs, and effective Request override, but it is still an advisory value
+sample: ambient-process values are frozen at preparation, while dotenv files, project files, and
+generated values are read or produced again by production. Its `freshness` field makes that
+distinction machine-readable. Request preview is resolved wire intent with mandatory sanitization.
+None should be labelled as another representation.
 
 ## Security boundaries
 
@@ -142,7 +151,8 @@ again across redirects; an admitted plan is not itself a network capability.
 ### Frontend boundary
 
 Frontend-safe application DTOs contain coordinates, counts, fingerprints, sanitized artifact
-values, or closed diagnostic codes. They do not contain adapter exception text or live values.
+values, irreversibly masked resolved-value windows, or closed diagnostic codes. They do not
+contain adapter exception text or live values.
 The following must not cross into presentation code:
 
 - `SensitiveValue`, `RunContext`, or resolution registries;

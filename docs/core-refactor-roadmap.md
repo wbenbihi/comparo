@@ -462,7 +462,9 @@ Exit criteria:
 
 ## Step 14: safe request inspection and cURL export
 
-Status: future; not required for the first public rebuilt release.
+Status: backend support complete for authenticated post-run request captures. Planned-request cURL
+and the TUI clipboard adapter remain deferred and are not required for the first public rebuilt
+release.
 
 Add a reusable request-inspection capability for concrete planned or observed request occurrences.
 Its first command renderer emits a POSIX cURL representation through an application-layer safe
@@ -514,8 +516,9 @@ called a sandbox without enforced isolation.
 6. **Public rebuilt release:** restricted CI integration followed by independent release
    qualification and publication.
 
-Safe cURL export and Scenario/extension work are subsequent product milestones; neither is part of
-the first rebuilt release's definition of done.
+Safe cURL export from authenticated sanitized artifacts is implemented. Planned-request export,
+clipboard integration, and Scenario/extension work are subsequent product milestones and are not
+part of the first rebuilt release's definition of done.
 
 ## Parallel work boundaries
 

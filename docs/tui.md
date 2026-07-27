@@ -220,7 +220,8 @@ controls contained before it reaches a widget; Rich markup is disabled for data-
 
 Stateful Scenario execution remains Step 15. Its future placement is already stable: definitions
 appear in Explorer, active execution appears in Compare, and persisted outcomes appear in Report.
-Safe request inspection and cURL export are planned in Step 14. The displayed and copied command
-will use the same sanitized projection and will never place a live credential in the clipboard.
+The backend can export safe cURL from an authenticated sanitized post-run request capture. Planned
+request export and clipboard integration remain deferred; when added, the displayed and copied
+command must be identical and must never place a live credential in the clipboard.
 Browser automation is outside Comparo's scope; WebSocket and gRPC transports and a public plugin
 system remain deferred.

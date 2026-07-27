@@ -20,6 +20,13 @@ for its retained sanitized HTTP messages. A frontend must pass those coordinates
 authenticated, bounded `read_artifact_body_window` service to obtain content; request coordinates
 may also be passed to `export_artifact_curl`.
 
+The coordinate types live in the pure `application.artifact_references` contract rather than the
+effectful artifact service. Each execution also projects every attempt and exchange with canonical
+zero-based ordinals and explicit terminal markers. Message rows repeat their owning ordinals and
+markers and are validated against that topology. A final pre-send attempt remains visible with its
+closed failure and `pre_send_terminal` marker even when it produced no HTTP message; a frontend
+must not infer terminal state from the last visible message.
+
 ## Component ownership
 
 | Component | Single responsibility |

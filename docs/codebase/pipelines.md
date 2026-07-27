@@ -185,6 +185,34 @@ sensitive payloads with a version-owned marker.
 The `steps` namespace and step scope are internal forward seams; Scenario capture production is
 not implemented.
 
+### Generic masked value inspection
+
+`CompareService.inspect_resolved_value` accepts a frontend-safe target containing only a resource
+coordinate, expression field path, execution ordinal, Environment coordinate, continuation
+fingerprint, and projection limits. The service binds it internally to the exact retained plan,
+reviewed controls, and frozen ambient-environment snapshot. A prepared plan, resolver, local path,
+or live value never crosses that handle boundary.
+
+The selection uses the execution's exact Matrix cell, Environment, trial, and attempt-zero scope.
+For Request resources it applies the same typed `RequestOverride` expression replacement used by
+production request preparation. It creates one inspection-owned `RunContext` and resolves through
+`MaskedValueResolver`, which shares the production resolution engine. A sensitive result,
+including a sensitive composite, collapses to `<masked>`, its value kind, and safe taint-origin
+identifiers; no sensitive child value or sensitive digest is returned.
+
+Public results are emitted as pre-order scalar/container nodes with caller-owned page, scalar,
+path-depth, and path-segment limits. Continuation pages require the previous value fingerprint, so
+a changed local source fails closed instead of combining inconsistent pages. Iterator-frame
+traversal keeps fingerprinting and projection auxiliary memory proportional to nesting depth, not
+sibling count. Resolving and producing a stable fingerprint still inspect the complete resolved
+value and are bounded by source/resolution budgets; page limits bound frontend egress rather than
+the cost of value construction.
+
+The returned `freshness` is explicit: the plan checkpoint and captured ambient-process input are
+exact. Dotenv files, project files, and generated values are sampled for inspection; production
+execution reads or produces them again. Frontends must not present this advisory value as a
+guarantee that a mutable or generated input will remain unchanged before execution.
+
 ## 4. Offline request preview
 
 `render_prepared_requests` and `render_prepared_request_window` resolve planned requests using

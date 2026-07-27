@@ -22,8 +22,9 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | Module | Responsibility |
 | --- | --- |
 | `application.__init__` | Curated application public exports |
-| `artifacts` | Artifact-root validation, authenticated inspection/reporting, digest reads, and result-coordinate body windows |
-| `compare` | Bounded one-shot prepare/review/start service for assertions, comparisons, and ExecutionProfile runs |
+| `artifact_references` | Pure immutable request/response body coordinates shared without artifact I/O dependencies |
+| `artifacts` | Artifact-root validation, authenticated inspection/reporting, digest reads, and body windows selected by pure result coordinates |
+| `compare` | Bounded one-shot prepare/review/start service with caller-bounded retained plans and concurrent inspection leases |
 | `count_presentation` | Shared exact/large count presentation contracts used by safe inspections |
 | `curl_export` | Canonical bounded POSIX cURL from authenticated sanitized request captures |
 | `diagnostic_catalog` | Static human guidance selected from closed diagnostics without interpolating live values |
@@ -51,10 +52,11 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `project_workspace` | Explorer project compilation and safe resource/source snapshot facade |
 | `remote_schemas`, `schema_validation`, `regex_validation`, `digest_validation` | Authorized bounded preparation of external/local evaluation capabilities |
 | `render_preview` | Offline run-scoped sanitized request previews, including lazy ordinal windows |
+| `resolved_inspection` | Handle-bindable, execution-exact masked expression inspection with bounded fingerprinted node windows and explicit local-source freshness |
 | `report_archive` | Authenticated searchable cursor-paged report rows and metadata projections |
 | `report_retention` | Reviewable fingerprinted recoverable report pruning and restoration |
 | `result_analysis` | Bounded Issues, Requests, Rules, Fields, and Timeline projections |
-| `results` | Body-free final artifact projection with stable references and cross-links |
+| `results` | Body-free final artifact projection with stable references, cross-links, and explicit retry/redirect ordering and terminal topology |
 | `runtime_capabilities` | Fail-closed admission of the production runtime's currently implemented configuration subset |
 | `source_inspection` | Revision-pinned masked/exact YAML windows and bounded effective resource projections |
 
