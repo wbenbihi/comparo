@@ -11,6 +11,7 @@ from comparo.core.domain.planning_inputs import PlanningBudgetValue as PlanningB
 from comparo.core.domain.planning_inputs import RunInvocation as RunInvocation
 from comparo.core.planning.iteration import iter_plan_cells as iter_plan_cells
 from comparo.core.planning.iteration import iter_plan_trials as iter_plan_trials
+from comparo.core.planning.iteration import plan_cell_at as plan_cell_at
 from comparo.core.planning.models import EffectiveExecution as EffectiveExecution
 from comparo.core.planning.models import PlannedTrial as PlannedTrial
 from comparo.core.planning.models import PlanningResult as PlanningResult

@@ -157,7 +157,7 @@ class ConfigurationRequestProvider:
         expression = object_member(resource_spec(request_resource), "request")
         if type(expression) is not ObjectExpr:  # pragma: no cover - compiler invariant
             return _unavailable(_SHAPE_INVALID)
-        expression = _effective_request_expression(self._prepared, work, expression)
+        expression = effective_request_expression(self._prepared, work, expression)
         target = ResolutionTarget(
             symbol=SymbolPath(segments=("request",)),
             scope=attempt,
@@ -327,7 +327,7 @@ class _NoBodyRequestFinalizer:
         )
 
 
-def _effective_request_expression(
+def effective_request_expression(
     prepared: PreparedRun,
     work: ExecutionWork,
     authored: ObjectExpr,

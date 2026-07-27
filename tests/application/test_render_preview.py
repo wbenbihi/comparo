@@ -93,6 +93,7 @@ def _project(
     request_spec: str = "{request: {method: GET, endpoint: /ping}}",
     project_fields: str = "",
     staging_spec: str = "{baseUrl: 'https://staging.example.test'}",
+    trials: int = 1,
 ) -> PreparedProjectPlan:
     data = root / ".comparo"
     data.mkdir()
@@ -108,7 +109,8 @@ def _project(
         "  defaults:\n"
         "    subjects: [{$use: Request/ping}]\n"
         "    baseline: {$use: staging}\n"
-        "    candidates: [{$use: prod}]\n",
+        "    candidates: [{$use: prod}]\n"
+        f"    trials: {trials}\n",
         encoding="utf-8",
     )
     (data / "resources.yaml").write_text(
@@ -355,6 +357,72 @@ def test_resolution_failure_discards_successful_sibling_requests(tmp_path: Path)
     assert result.previews == ()
     assert tuple(item.path for item in result.diagnostics) == (("1",),)
     assert result.diagnostics[0].code == "runtime.request.unavailable"
+
+
+def test_window_retains_successes_and_failures_from_the_same_bounded_page(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        staging_spec=(
+            "{baseUrl: 'https://staging.example.test', env: {values: {ONLY_STAGING: yes}}}"
+        ),
+        request_spec=(
+            "{request: {method: GET, endpoint: /, headers: {X-Env: {$env: ONLY_STAGING}}}}"
+        ),
+    )
+
+    result = asyncio.run(
+        render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=RenderPreviewRequest(project=project, settings=_settings()),
+                start_ordinal=0,
+                maximum_previews=2,
+            )
+        )
+    )
+
+    assert result.total_executions == 2
+    assert tuple(item.ordinal for item in result.previews) == (0,)
+    assert tuple(item.path for item in result.diagnostics) == (("1",),)
+    assert result.next_ordinal is None
+
+
+def test_window_bounds_fifty_consecutive_failures_to_one_occurrence(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        request_spec=("{request: {method: GET, endpoint: /, headers: {X-Env: {$env: MISSING}}}}"),
+        trials=25,
+    )
+    preview = RenderPreviewRequest(project=project, settings=_settings())
+
+    first = asyncio.run(
+        render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=preview,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+    )
+    last = asyncio.run(
+        render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=preview,
+                start_ordinal=49,
+                maximum_previews=1,
+            )
+        )
+    )
+
+    assert first.total_executions == last.total_executions == 50
+    assert first.previews == last.previews == ()
+    assert tuple(item.path for item in first.diagnostics) == (("0",),)
+    assert tuple(item.path for item in last.diagnostics) == (("49",),)
+    assert first.next_ordinal == 1
+    assert last.next_ordinal is None
 
 
 def test_caller_sanitization_budget_fails_closed_without_values(tmp_path: Path) -> None:

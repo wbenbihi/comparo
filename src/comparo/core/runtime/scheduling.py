@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from itertools import islice
 from typing import cast
 from typing import final
 from uuid import uuid5
@@ -15,8 +16,11 @@ from comparo.core.domain.budgets import BudgetUsage
 from comparo.core.domain.budgets import ResourceBudget
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticStage
+from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EnvironmentExecutionId
+from comparo.core.domain.identity import TrialId
 from comparo.core.domain.lifecycle import CancellationSource
+from comparo.core.domain.planning import PlannedCell
 from comparo.core.domain.primitives import Count
 from comparo.core.domain.scopes import CellScope
 from comparo.core.domain.scopes import EnvironmentScope
@@ -24,6 +28,8 @@ from comparo.core.domain.scopes import ExecutionScope
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.scopes import TrialScope
 from comparo.core.planning.iteration import iter_plan_trials
+from comparo.core.planning.iteration import plan_cell_at
+from comparo.core.planning.models import PlannedTrial
 from comparo.core.planning.models import PreparedRun
 from comparo.core.resolution.control import RunCancellation
 from comparo.core.runtime.models import BlockedExecution
@@ -378,35 +384,186 @@ def iter_execution_work(prepared: PreparedRun) -> Iterator[ExecutionWork]:
         raise TypeError("execution work iteration requires PreparedRun")
     slices = {plan_slice.cells: plan_slice for plan_slice in prepared.plan.slices}
     ordinal = 0
-    run = RunScope(run_id=prepared.plan.run_id)
     for trial in iter_plan_trials(prepared.plan):
         plan_slice = slices[trial.cell.recipe]
-        trial_scope = TrialScope(
-            cell=CellScope(run=run, cell_id=trial.cell.cell_id),
-            trial_id=trial.trial_id,
-        )
         for environment in plan_slice.environments:
-            execution_id = EnvironmentExecutionId(
-                value=uuid5(
-                    prepared.plan.run_id.value,
-                    f"execution:{trial.trial_id.value}:{environment.identity.resource_id.value}",
-                )
-            )
-            yield ExecutionWork(
-                ordinal=Count(value=ordinal),
-                subject=trial.cell.recipe.subject,
-                trial=trial,
-                environment=environment,
-                scope=ExecutionScope(
-                    trial=trial_scope,
-                    environment=EnvironmentScope(
-                        run=run,
-                        environment=environment.identity,
-                    ),
-                    execution_id=execution_id,
-                ),
+            yield _execution_work(
+                prepared,
+                trial,
+                environment,
+                ordinal=ordinal,
             )
             ordinal += 1
+
+
+def execution_work_at(prepared: PreparedRun, ordinal: int) -> ExecutionWork | None:
+    """Resolve one execution ordinal directly from compact slice and Matrix cardinalities."""
+    if type(prepared) is not PreparedRun:
+        raise TypeError("execution work lookup requires PreparedRun")
+    if type(ordinal) is not int or ordinal < 0:
+        raise ValueError("execution work ordinal must be a non-negative integer")
+    if ordinal >= prepared.plan.cardinality.environment_executions.value:
+        return None
+    local_ordinal = ordinal
+    for slice_index, plan_slice in enumerate(prepared.plan.slices):
+        slice_executions = plan_slice.cardinality.environment_executions.value
+        if local_ordinal >= slice_executions:
+            local_ordinal -= slice_executions
+            continue
+        environments = len(plan_slice.environments)
+        executions_per_cell = plan_slice.trial_count.value * environments
+        cell_ordinal, within_cell = divmod(local_ordinal, executions_per_cell)
+        trial_ordinal, environment_ordinal = divmod(within_cell, environments)
+        cell = plan_cell_at(
+            prepared.plan,
+            slice_index=slice_index,
+            cell_ordinal=cell_ordinal,
+        )
+        if cell is None:  # pragma: no cover - admitted cardinality invariant
+            raise RuntimeError("execution work lookup resolved an absent plan cell")
+        trial = _planned_trial(prepared, cell, trial_ordinal)
+        return _execution_work(
+            prepared,
+            trial,
+            plan_slice.environments[environment_ordinal],
+            ordinal=ordinal,
+        )
+    raise RuntimeError(
+        "execution work lookup exceeded admitted slice cardinalities"
+    )  # pragma: no cover
+
+
+def iter_execution_work_window(
+    prepared: PreparedRun,
+    *,
+    start_ordinal: int,
+    maximum_items: int,
+) -> Iterator[ExecutionWork]:
+    """Yield one finite ordinal window without enumerating any preceding execution work."""
+    if type(prepared) is not PreparedRun:
+        raise TypeError("execution work window requires PreparedRun")
+    if type(start_ordinal) is not int or start_ordinal < 0:
+        raise ValueError("execution work window start must be a non-negative integer")
+    if type(maximum_items) is not int or maximum_items < 1:
+        raise ValueError("execution work window size must be a positive integer")
+    total = prepared.plan.cardinality.environment_executions.value
+    if start_ordinal >= total:
+        return
+    remaining = min(maximum_items, total - start_ordinal)
+    next_ordinal = start_ordinal
+    first_slice, local_start = _locate_execution_slice(prepared, start_ordinal)
+    for slice_index in range(first_slice, len(prepared.plan.slices)):
+        slice_start = local_start if slice_index == first_slice else 0
+        for trial, environment in islice(
+            _iter_slice_occurrences(prepared, slice_index, slice_start),
+            remaining,
+        ):
+            yield _execution_work(
+                prepared,
+                trial,
+                environment,
+                ordinal=next_ordinal,
+            )
+            remaining -= 1
+            next_ordinal += 1
+        if not remaining:
+            return
+
+
+def _locate_execution_slice(prepared: PreparedRun, ordinal: int) -> tuple[int, int]:
+    local_ordinal = ordinal
+    for slice_index, plan_slice in enumerate(prepared.plan.slices):
+        slice_executions = plan_slice.cardinality.environment_executions.value
+        if local_ordinal < slice_executions:
+            return slice_index, local_ordinal
+        local_ordinal -= slice_executions
+    raise RuntimeError(
+        "execution work window exceeded admitted slice cardinalities"
+    )  # pragma: no cover
+
+
+def _iter_slice_occurrences(
+    prepared: PreparedRun,
+    slice_index: int,
+    local_start: int,
+) -> Iterator[tuple[PlannedTrial, DefinitionRef]]:
+    plan_slice = prepared.plan.slices[slice_index]
+    environments = len(plan_slice.environments)
+    executions_per_cell = plan_slice.trial_count.value * environments
+    first_cell, within_cell = divmod(local_start, executions_per_cell)
+    first_trial, first_environment = divmod(within_cell, environments)
+    for cell_ordinal in range(first_cell, plan_slice.cells.matrix.cell_count.value):
+        cell = plan_cell_at(
+            prepared.plan,
+            slice_index=slice_index,
+            cell_ordinal=cell_ordinal,
+        )
+        if cell is None:  # pragma: no cover - admitted cardinality invariant
+            raise RuntimeError("execution work window omitted an admitted plan cell")
+        trial_start = first_trial if cell_ordinal == first_cell else 0
+        for trial_ordinal in range(trial_start, plan_slice.trial_count.value):
+            trial = _planned_trial(prepared, cell, trial_ordinal)
+            environment_start = (
+                first_environment
+                if cell_ordinal == first_cell and trial_ordinal == first_trial
+                else 0
+            )
+            for environment_ordinal in range(
+                environment_start,
+                len(plan_slice.environments),
+            ):
+                yield trial, plan_slice.environments[environment_ordinal]
+
+
+def _planned_trial(
+    prepared: PreparedRun,
+    cell: PlannedCell,
+    ordinal: int,
+) -> PlannedTrial:
+    return PlannedTrial(
+        trial_id=TrialId(
+            value=uuid5(
+                prepared.plan.run_id.value,
+                f"trial:{cell.cell_id.value}:{ordinal}",
+            )
+        ),
+        cell=cell,
+        ordinal=Count(value=ordinal),
+    )
+
+
+def _execution_work(
+    prepared: PreparedRun,
+    trial: PlannedTrial,
+    environment: DefinitionRef,
+    *,
+    ordinal: int,
+) -> ExecutionWork:
+    run = RunScope(run_id=prepared.plan.run_id)
+    trial_scope = TrialScope(
+        cell=CellScope(run=run, cell_id=trial.cell.cell_id),
+        trial_id=trial.trial_id,
+    )
+    execution_id = EnvironmentExecutionId(
+        value=uuid5(
+            prepared.plan.run_id.value,
+            f"execution:{trial.trial_id.value}:{environment.identity.resource_id.value}",
+        )
+    )
+    return ExecutionWork(
+        ordinal=Count(value=ordinal),
+        subject=trial.cell.recipe.subject,
+        trial=trial,
+        environment=environment,
+        scope=ExecutionScope(
+            trial=trial_scope,
+            environment=EnvironmentScope(
+                run=run,
+                environment=environment.identity,
+            ),
+            execution_id=execution_id,
+        ),
+    )
 
 
 def _budget(prepared: PreparedRun, resource: BudgetResource) -> ResourceBudget:

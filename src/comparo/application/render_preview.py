@@ -55,7 +55,7 @@ from comparo.core.resolution import DeterministicGenerator
 from comparo.core.resolution import EnvironmentSnapshot
 from comparo.core.resolution import RunContext
 from comparo.core.runtime import ConfigurationRequestProvider
-from comparo.core.runtime import iter_execution_work
+from comparo.core.runtime import iter_execution_work_window
 from comparo.core.runtime.models import BlockedExecution
 from comparo.core.runtime.models import CancelledExecution
 from comparo.core.runtime.models import ExecutionWork
@@ -254,7 +254,7 @@ class RenderPreviewResult(msgspec.Struct, frozen=True, kw_only=True):
 
 @final
 class RenderPreviewWindowResult(msgspec.Struct, frozen=True, kw_only=True):
-    """One bounded preview page or value-free whole-page diagnostics."""
+    """One bounded ordinal page with successful previews and per-occurrence diagnostics."""
 
     previews: tuple[RenderedRequestPreview, ...] = ()
     total_executions: int = 0
@@ -279,12 +279,15 @@ class RenderPreviewWindowResult(msgspec.Struct, frozen=True, kw_only=True):
             type(item) is not ApplicationDiagnostic for item in self.diagnostics
         ):
             raise TypeError("render preview window diagnostics must be immutable and typed")
-        if self.diagnostics and (self.previews or self.next_ordinal is not None):
-            raise ValueError("failed render preview window cannot retain partial products")
         if self.previews:
             ordinals = tuple(item.ordinal for item in self.previews)
-            if ordinals != tuple(range(ordinals[0], ordinals[0] + len(ordinals))):
-                raise ValueError("render preview window must use contiguous canonical order")
+            if ordinals != tuple(sorted(set(ordinals))):
+                raise ValueError("render preview window ordinals must be unique and increasing")
+            if ordinals[-1] >= self.total_executions:
+                raise ValueError("render preview window ordinal exceeds the total")
+            execution_ids = tuple(item.execution_id for item in self.previews)
+            if len(set(execution_ids)) != len(execution_ids):
+                raise ValueError("render preview window execution identities must be unique")
 
 
 async def render_prepared_requests(request: RenderPreviewRequest) -> RenderPreviewResult:
@@ -375,7 +378,7 @@ async def _render_with_resources(
     request: RenderPreviewRequest,
     resources: _RenderResources,
 ) -> RenderPreviewResult:
-    previews, diagnostics = await _render_products(request, resources)
+    previews, diagnostics, _processed = await _render_products(request, resources)
     return (
         RenderPreviewResult(diagnostics=diagnostics)
         if diagnostics
@@ -388,19 +391,18 @@ async def _render_window_with_resources(
     resources: _RenderResources,
 ) -> RenderPreviewWindowResult:
     total = request.preview.project.prepared.plan.cardinality.environment_executions.value
-    previews, diagnostics = await _render_products(
+    previews, diagnostics, processed = await _render_products(
         request.preview,
         resources,
         start_ordinal=request.start_ordinal,
         maximum_previews=request.maximum_previews,
     )
-    if diagnostics:
-        return RenderPreviewWindowResult(total_executions=total, diagnostics=diagnostics)
-    consumed_until = request.start_ordinal + len(previews)
+    consumed_until = request.start_ordinal + processed
     return RenderPreviewWindowResult(
         previews=previews,
         total_executions=total,
-        next_ordinal=consumed_until if consumed_until < total else None,
+        next_ordinal=(consumed_until if processed and consumed_until < total else None),
+        diagnostics=diagnostics,
     )
 
 
@@ -410,14 +412,18 @@ async def _render_products(
     *,
     start_ordinal: int = 0,
     maximum_previews: int | None = None,
-) -> tuple[tuple[RenderedRequestPreview, ...], tuple[ApplicationDiagnostic, ...]]:
+) -> tuple[
+    tuple[RenderedRequestPreview, ...],
+    tuple[ApplicationDiagnostic, ...],
+    int,
+]:
     try:
         resources.files = PinnedProjectFiles(
             request.project.project_root,
             limits=request.settings.files,
         )
     except LocalFilesystemError:
-        return (), _diagnostics("render.preview.project-root-unavailable", stage="resolution")
+        return (), _diagnostics("render.preview.project-root-unavailable", stage="resolution"), 0
     snapshots = await build_environment_snapshots(
         request.project,
         resources.files,
@@ -425,20 +431,20 @@ async def _render_products(
         limits=request.settings.environment,
     )
     if snapshots.diagnostics:
-        return (), tuple(inspect_diagnostic(item) for item in snapshots.diagnostics)
+        return (), tuple(inspect_diagnostic(item) for item in snapshots.diagnostics), 0
     resources.context = _run_context(request, snapshots.snapshots, resources.files)
     resources.provider = ConfigurationRequestProvider(
         request.project.prepared,
         resources.context,
     )
-    requests, diagnostics = await _resolve_all(
+    requests, diagnostics, processed = await _resolve_all(
         request.project.prepared,
         resources.provider,
         start_ordinal=start_ordinal,
         maximum_previews=maximum_previews,
     )
-    if diagnostics:
-        return (), diagnostics
+    if not requests:
+        return (), diagnostics, processed
     snapshot = await resources.context.sanitization_snapshot()
     try:
         resources.boundary = SanitizationBoundary.from_snapshot(
@@ -447,11 +453,19 @@ async def _render_products(
             marker=ARTIFACT_REDACTION_MARKER,
         )
     except SanitizationBudgetExceededError:
-        return (), _diagnostics("render.preview.sanitization-budget-exceeded", stage="render")
+        return (
+            (),
+            (
+                *diagnostics,
+                *_diagnostics("render.preview.sanitization-budget-exceeded", stage="render"),
+            ),
+            processed,
+        )
     resources.boundary.seal()
     return (
         tuple(_render_request(work, finalized, resources.boundary) for work, finalized in requests),
-        (),
+        diagnostics,
+        processed,
     )
 
 
@@ -489,21 +503,28 @@ async def _resolve_all(
 ) -> tuple[
     tuple[tuple[ExecutionWork, FinalizedWireRequest], ...],
     tuple[ApplicationDiagnostic, ...],
+    int,
 ]:
     resolved: list[tuple[ExecutionWork, FinalizedWireRequest]] = []
     diagnostics: list[ApplicationDiagnostic] = []
-    for work in iter_execution_work(prepared):
-        if work.ordinal.value < start_ordinal:
-            continue
-        if maximum_previews is not None and len(resolved) >= maximum_previews:
-            break
+    total = prepared.plan.cardinality.environment_executions.value
+    if start_ordinal >= total:
+        return (), (), 0
+    maximum_items = total - start_ordinal if maximum_previews is None else maximum_previews
+    processed = 0
+    for work in iter_execution_work_window(
+        prepared,
+        start_ordinal=start_ordinal,
+        maximum_items=maximum_items,
+    ):
+        processed += 1
         attempt = _attempt_scope(work)
         outcome = await provider.prepare(work, attempt)
         if type(outcome) is RequestPreparationFailure:
             diagnostics.append(_preparation_diagnostic(work, outcome))
         else:
             resolved.append((work, outcome))
-    return tuple(resolved), tuple(diagnostics)
+    return tuple(resolved), tuple(diagnostics), processed
 
 
 def _attempt_scope(work: ExecutionWork) -> AttemptScope:

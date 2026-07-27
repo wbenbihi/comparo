@@ -43,7 +43,7 @@ def test_window_request_rejects_untyped_or_unbounded_inputs(tmp_path: Path) -> N
             msgspec.structs.replace(request, maximum_previews=maximum)
 
 
-def test_window_result_rejects_partial_or_noncanonical_pages() -> None:
+def test_window_result_accepts_mixed_pages_and_rejects_invalid_products() -> None:
     diagnostic = ApplicationDiagnostic(code="test", severity="error", stage="render")
     first = _preview()
     with pytest.raises(TypeError, match="products"):
@@ -55,23 +55,51 @@ def test_window_result_rejects_partial_or_noncanonical_pages() -> None:
             RenderPreviewWindowResult(total_executions=2, next_ordinal=continuation)
     with pytest.raises(TypeError, match="diagnostics"):
         RenderPreviewWindowResult(diagnostics=cast("Any", [diagnostic]))
-    with pytest.raises(ValueError, match="cannot retain partial"):
-        RenderPreviewWindowResult(
-            previews=(first,),
-            total_executions=2,
-            diagnostics=(diagnostic,),
-        )
-    with pytest.raises(ValueError, match="cannot retain partial"):
+    mixed = RenderPreviewWindowResult(
+        previews=(first,),
+        total_executions=2,
+        next_ordinal=1,
+        diagnostics=(diagnostic,),
+    )
+    assert mixed.previews == (first,)
+    assert mixed.diagnostics == (diagnostic,)
+    assert (
         RenderPreviewWindowResult(
             total_executions=2,
             next_ordinal=1,
             diagnostics=(diagnostic,),
-        )
-    with pytest.raises(ValueError, match="contiguous"):
+        ).next_ordinal
+        == 1
+    )
+    with pytest.raises(ValueError, match="unique and increasing"):
         RenderPreviewWindowResult(
-            previews=(first, _preview(ordinal=2, execution_id="execution-2")),
+            previews=(
+                _preview(ordinal=1, execution_id="execution-1"),
+                _preview(ordinal=0, execution_id="execution-0"),
+            ),
             total_executions=3,
         )
+    with pytest.raises(ValueError, match="unique and increasing"):
+        RenderPreviewWindowResult(
+            previews=(first, _preview(ordinal=0, execution_id="execution-2")),
+            total_executions=3,
+        )
+    with pytest.raises(ValueError, match="exceeds"):
+        RenderPreviewWindowResult(
+            previews=(_preview(ordinal=2, execution_id="execution-2"),),
+            total_executions=2,
+        )
+    with pytest.raises(ValueError, match="identities"):
+        RenderPreviewWindowResult(
+            previews=(first, _preview(ordinal=2)),
+            total_executions=3,
+        )
+
+    gapped = RenderPreviewWindowResult(
+        previews=(first, _preview(ordinal=2, execution_id="execution-2")),
+        total_executions=3,
+    )
+    assert tuple(item.ordinal for item in gapped.previews) == (0, 2)
 
     assert RenderPreviewWindowResult(total_executions=0).previews == ()
 
@@ -151,7 +179,7 @@ def test_windowed_preview_normalizes_internal_cleanup_and_cancellation(
     assert closed
 
 
-def test_window_resource_composition_discards_partial_products_on_diagnostic(
+def test_window_resource_composition_retains_mixed_products_and_continuation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,12 +187,13 @@ def test_window_resource_composition_discards_partial_products_on_diagnostic(
     diagnostic = ApplicationDiagnostic(code="failed", severity="error", stage="resolution")
 
     async def products(*_args: object, **_kwargs: object):  # type: ignore[no-untyped-def]
-        return (_preview(),), (diagnostic,)
+        return (_preview(),), (diagnostic,), 1
 
     monkeypatch.setattr(rendering, "_render_products", products)
     result = asyncio.run(
         rendering._render_window_with_resources(request, rendering._RenderResources())
     )
 
-    assert result.previews == ()
+    assert result.previews == (_preview(),)
     assert result.diagnostics == (diagnostic,)
+    assert result.next_ordinal == 1
