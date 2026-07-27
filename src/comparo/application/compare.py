@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 from typing import cast
 from typing import final
 from uuid import uuid4
 
 import msgspec
 
+from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.environment_binding import capture_process_environment
-from comparo.application.environment_binding import validate_ambient_environment
 from comparo.application.evaluation_binding import preflight_configuration_evaluation
 from comparo.application.execution_session import ExecutionSession
 from comparo.application.execution_session import start_execution_session
@@ -35,11 +38,12 @@ from comparo.application.render_preview import RenderPreviewWindowResult
 from comparo.application.render_preview import render_prepared_request_window
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
-from comparo.application.resolved_inspection import bind_resolved_value_target
+from comparo.application.resolved_inspection import _bind_resolved_value_target
 from comparo.application.resolved_inspection import (
-    inspect_resolved_value as inspect_prepared_resolved_value,
+    _inspect_resolved_value as _inspect_prepared_resolved_value,
 )
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
+from comparo.core.domain.primitives import Duration
 
 _HANDLE_ALLOCATION_ATTEMPTS = 8
 
@@ -60,6 +64,7 @@ class CompareServiceErrorCode(StrEnum):
     PREPARATION_MISMATCH = "preparation-mismatch"
     PREPARATION_BLOCKED = "preparation-blocked"
     PREPARATION_BUSY = "preparation-busy"
+    INSPECTION_CANCELLED = "inspection-cancelled"
 
 
 class CompareServiceError(RuntimeError):
@@ -156,6 +161,25 @@ class ComparePreparationResult(msgspec.Struct, frozen=True, kw_only=True):
         if self.handle is None and self.review is None and self.diagnostics:
             return
         raise ValueError("Compare preparation requires exactly success or diagnostics")
+
+
+@final
+class CompareCloseResult(msgspec.Struct, frozen=True, kw_only=True):
+    """Value-free result of waiting for service-owned inspection cleanup."""
+
+    drained: bool
+    diagnostics: tuple[ApplicationDiagnostic, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Keep successful drain and value-free timeout diagnostics disjoint."""
+        if type(self.drained) is not bool:
+            raise TypeError("Compare close drained state must be bool")
+        if type(self.diagnostics) is not tuple or any(
+            type(item) is not ApplicationDiagnostic for item in self.diagnostics
+        ):
+            raise TypeError("Compare close diagnostics must be immutable and typed")
+        if self.drained == bool(self.diagnostics):
+            raise ValueError("Compare close requires either drained state or diagnostics")
 
 
 @final
@@ -282,25 +306,27 @@ class CompareService:
             raise TypeError("Compare preview handle must be typed")
         if type(controls) is not CompareExecutionControls:
             raise TypeError("Compare preview controls must be typed")
-        prepared, lease = self._begin_inspection(handle, controls)
-        try:
-            settings = prepared.controls.settings
-            return await render_prepared_request_window(
-                RenderPreviewWindowRequest(
-                    preview=RenderPreviewRequest(
-                        project=prepared.project,
-                        settings=RenderPreviewSettings(
-                            files=settings.files,
-                            environment=settings.environment,
-                            yaml=settings.yaml,
-                            sanitization=settings.artifact.limits.sanitization,
-                        ),
-                        ambient_environment=prepared.ambient_environment,
+        prepared = self._validate_inspection(handle, controls)
+        settings = prepared.controls.settings
+        operation = render_prepared_request_window(
+            RenderPreviewWindowRequest(
+                preview=RenderPreviewRequest(
+                    project=prepared.project,
+                    settings=RenderPreviewSettings(
+                        files=settings.files,
+                        environment=settings.environment,
+                        yaml=settings.yaml,
+                        sanitization=settings.artifact.limits.sanitization,
                     ),
-                    start_ordinal=start_ordinal,
-                    maximum_previews=maximum_previews,
-                )
+                    ambient_environment=prepared.ambient_environment,
+                ),
+                start_ordinal=start_ordinal,
+                maximum_previews=maximum_previews,
             )
+        )
+        lease = self._begin_inspection(handle, operation)
+        try:
+            return cast("RenderPreviewWindowResult", await self._await_inspection(lease))
         finally:
             self._end_inspection(handle, lease)
 
@@ -317,19 +343,21 @@ class CompareService:
             raise TypeError("Compare resolved inspection controls must be typed")
         if type(target) is not ResolvedValueInspectionTarget:
             raise TypeError("Compare resolved inspection target must be typed")
-        prepared, lease = self._begin_inspection(handle, controls)
-        try:
-            settings = prepared.controls.settings
-            return await inspect_prepared_resolved_value(
-                bind_resolved_value_target(
-                    prepared.project,
-                    target,
-                    files=settings.files,
-                    environment=settings.environment,
-                    yaml=settings.yaml,
-                    ambient_environment=prepared.ambient_environment,
-                )
+        prepared = self._validate_inspection(handle, controls)
+        settings = prepared.controls.settings
+        operation = _inspect_prepared_resolved_value(
+            _bind_resolved_value_target(
+                prepared.project,
+                target,
+                files=settings.files,
+                environment=settings.environment,
+                yaml=settings.yaml,
+                ambient_environment=prepared.ambient_environment,
             )
+        )
+        lease = self._begin_inspection(handle, operation)
+        try:
+            return cast("ResolvedValueInspectionResult", await self._await_inspection(lease))
         finally:
             self._end_inspection(handle, lease)
 
@@ -368,6 +396,34 @@ class CompareService:
             else:
                 del self._prepared[handle]
 
+    async def aclose(self, *, timeout: Duration) -> CompareCloseResult:
+        """Request closure and wait up to one caller-owned duration for cleanup to drain."""
+        if type(timeout) is not Duration:
+            raise TypeError("Compare asynchronous close timeout must be Duration")
+        self.close()
+        leases = tuple(
+            (handle, lease) for handle, active in self._inspections.items() for lease in active
+        )
+        if not leases:
+            return CompareCloseResult(drained=True)
+        try:
+            seconds: float | None = timeout.nanoseconds / 1_000_000_000
+        except OverflowError:
+            seconds = None
+        _done, pending = await asyncio.wait(
+            tuple(lease.task for _handle, lease in leases),
+            timeout=seconds,
+        )
+        for handle, lease in leases:
+            if lease.task.done():
+                self._end_inspection(handle, lease)
+        if pending:
+            return CompareCloseResult(
+                drained=False,
+                diagnostics=(_diagnostic("compare.service.close-timeout"),),
+            )
+        return CompareCloseResult(drained=True)
+
     def _allocate_handle(self) -> ComparePreparationHandle | None:
         for _attempt in range(_HANDLE_ALLOCATION_ATTEMPTS):
             handle = ComparePreparationHandle(value=str(uuid4()))
@@ -387,23 +443,29 @@ class CompareService:
             raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BLOCKED)
         return prepared
 
-    def _begin_inspection(
+    def _validate_inspection(
         self,
         handle: ComparePreparationHandle,
         controls: CompareExecutionControls,
-    ) -> tuple[_PreparedComparison, _InspectionLease]:
+    ) -> _PreparedComparison:
         prepared = self._validate_retained(handle, controls)
         tasks = self._inspections.get(handle)
         if tasks is not None and len(tasks) >= self._maximum_inspections_per_preparation:
             raise CompareServiceError(CompareServiceErrorCode.PREPARATION_BUSY)
-        task = asyncio.current_task()
-        if task is None:  # pragma: no cover - async public methods always run in one Task
-            raise RuntimeError("Compare inspection requires an asyncio Task")
-        lease = _InspectionLease(cast("asyncio.Task[object]", task))
+        return prepared
+
+    def _begin_inspection(
+        self,
+        handle: ComparePreparationHandle,
+        operation: Coroutine[Any, Any, object],
+    ) -> _InspectionLease:
+        """Retain a service-owned child task, never the arbitrary calling task."""
+        lease = _InspectionLease(asyncio.create_task(operation))
+        tasks = self._inspections.get(handle)
         if tasks is None:
             tasks = self._inspections.setdefault(handle, set())
         tasks.add(lease)
-        return prepared, lease
+        return lease
 
     def _end_inspection(
         self,
@@ -421,9 +483,24 @@ class CompareService:
             self._revoked.remove(handle)
             self._prepared.pop(handle, None)
 
+    async def _await_inspection(self, lease: _InspectionLease) -> object:
+        """Keep service cancellation from cancelling an arbitrary caller orchestration task."""
+        try:
+            outcome = await asyncio.shield(lease.task)
+        except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling():
+                lease.cancel()
+                await _drain_cancelled_task(lease.task)
+                raise
+            raise CompareServiceError(CompareServiceErrorCode.INSPECTION_CANCELLED) from None
+        if lease.cancel_requested:
+            raise CompareServiceError(CompareServiceErrorCode.INSPECTION_CANCELLED)
+        return outcome
+
     def _cancel_inspections(self, handle: ComparePreparationHandle) -> None:
         for lease in self._inspections.get(handle, set()):
-            lease.task.cancel()
+            lease.cancel()
 
     def _validate_retained(
         self,
@@ -449,7 +526,7 @@ class _PreparedComparison(msgspec.Struct, frozen=True, kw_only=True):
     project: PreparedProjectPlan
     controls: CompareExecutionControls
     review: PlanReviewInspection
-    ambient_environment: tuple[tuple[str, str], ...]
+    ambient_environment: CapturedAmbientEnvironment
 
     def __post_init__(self) -> None:
         if type(self.project) is not PreparedProjectPlan:
@@ -458,22 +535,44 @@ class _PreparedComparison(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("prepared comparison controls must be typed")
         if type(self.review) is not PlanReviewInspection:
             raise TypeError("prepared comparison review must be typed")
-        if type(self.ambient_environment) is not tuple:
-            raise TypeError("prepared comparison ambient environment must be immutable text pairs")
-        validate_ambient_environment(
-            self.ambient_environment,
-            self.controls.settings.environment,
-        )
+        if type(self.ambient_environment) is not CapturedAmbientEnvironment:
+            raise TypeError("prepared comparison ambient environment must be sealed")
 
 
 @final
 class _InspectionLease:
-    """One identity-distinct task lease retained until its caller's finalizer runs."""
+    """One identity-distinct service-owned child task with idempotent cancellation."""
 
-    __slots__ = ("task",)
+    __slots__ = ("_cancel_requested", "task")
 
     def __init__(self, task: asyncio.Task[object]) -> None:
         self.task = task
+        self._cancel_requested = False
+
+    def cancel(self) -> bool:
+        if self._cancel_requested or self.task.done():
+            return False
+        self._cancel_requested = True
+        self.task.cancel()
+        return True
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel_requested
+
+
+async def _drain_cancelled_task(task: asyncio.Task[object]) -> None:
+    """Observe one child to completion despite repeated cancellation of its caller."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:  # noqa: BLE001 - child outcome is superseded by caller cancellation
+            break
+    if task.done():
+        with suppress(BaseException):
+            task.result()
 
 
 def _intent_request_diagnostic(request: ComparePrepareRequest) -> ApplicationDiagnostic | None:
@@ -550,6 +649,7 @@ def _diagnostic(code: str) -> ApplicationDiagnostic:
 
 
 __all__ = (
+    "CompareCloseResult",
     "CompareExecutionControls",
     "CompareIntent",
     "ComparePreparationHandle",

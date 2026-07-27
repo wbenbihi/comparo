@@ -12,6 +12,7 @@ from uuid import UUID
 import msgspec
 import pytest
 
+from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.application import compare
 from comparo.application import execution_session
 from comparo.application.compare import CompareExecutionControls
@@ -22,6 +23,7 @@ from comparo.application.compare import ComparePrepareRequest
 from comparo.application.compare import CompareService
 from comparo.application.compare import CompareServiceError
 from comparo.application.compare import CompareServiceErrorCode
+from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.plan_review import PlanReviewInspection
@@ -35,19 +37,23 @@ from comparo.application.production_execution import ProductionExecutionResult
 from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
-from comparo.application.resolved_inspection import ResolvedValueInspectionRequest
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
 from comparo.application.resolved_inspection import ResolvedValueProjectionLimits
+from comparo.application.resolved_inspection import (
+    _ResolvedValueInspectionRequest as ResolvedValueInspectionRequest,
+)
 from comparo.core.artifacts.policy import ArtifactPersistMode
 from comparo.core.configuration.canonical import CompiledResource
 from comparo.core.domain.primitives import ByteCount
+from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
 
 _INVOCATION_ID = UUID("10000000-0000-0000-0000-000000000001")
 _RUN_ID = UUID("20000000-0000-0000-0000-000000000002")
 _HANDLE_ID = UUID("30000000-0000-0000-0000-000000000003")
 _SECRET_CANARY = "compare-secret-canary"
+_AMBIENT_SECRET_CANARY = "compare-ambient-secret-canary"
 
 
 def _write_project(root: Path) -> Path:
@@ -171,6 +177,10 @@ def _resolved_target(
             maximum_scalar_bytes=ByteCount(value=1024),
             maximum_path_segments=PositiveCount(value=16),
             maximum_path_segment_bytes=ByteCount(value=128),
+            maximum_traversal_nodes=PositiveCount(value=1024),
+            maximum_traversal_bytes=ByteCount(value=1024 * 1024),
+            maximum_taint_origins=PositiveCount(value=16),
+            maximum_taint_origin_bytes=ByteCount(value=256),
         ),
         start_node=0,
         maximum_nodes=8,
@@ -315,12 +325,15 @@ def test_compare_preview_uses_retained_plan_controls_and_admission_environment_o
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured_environment = (("TOKEN", _SECRET_CANARY),)
+    captured_environment = CapturedAmbientEnvironment(
+        (("TOKEN", _AMBIENT_SECRET_CANARY),),
+        limits=EnvironmentSourceLimits(),
+    )
     capture_calls: list[tuple[object, object]] = []
     preview_requests: list[RenderPreviewWindowRequest] = []
     execution_requests: list[ProductionExecutionRequest] = []
 
-    def capture(project: object, limits: object) -> tuple[tuple[str, str], ...]:
+    def capture(project: object, limits: object) -> CapturedAmbientEnvironment:
         capture_calls.append((project, limits))
         return captured_environment
 
@@ -364,6 +377,7 @@ def test_compare_preview_uses_retained_plan_controls_and_admission_environment_o
     assert preview.preview.settings.environment == controls.settings.environment
     assert preview.preview.settings.yaml == controls.settings.yaml
     assert preview.preview.settings.sanitization == controls.settings.artifact.limits.sanitization
+    assert _AMBIENT_SECRET_CANARY not in repr(preview)
 
     session = service.start(prepared.handle, controls)
     assert type(session) is object
@@ -374,6 +388,7 @@ def test_compare_preview_uses_retained_plan_controls_and_admission_environment_o
     assert execution.project is retained.project
     assert execution.settings is retained.controls.settings
     assert execution.ambient_environment == captured_environment
+    assert _AMBIENT_SECRET_CANARY not in repr(execution)
 
 
 def test_compare_preview_is_available_when_execution_checkpoint_is_blocked(
@@ -424,7 +439,10 @@ def test_compare_resolved_inspection_uses_retained_plan_controls_and_frozen_ambi
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured_environment = (("TOKEN", _SECRET_CANARY),)
+    captured_environment = CapturedAmbientEnvironment(
+        (("TOKEN", _AMBIENT_SECRET_CANARY),),
+        limits=EnvironmentSourceLimits(),
+    )
     requests: list[ResolvedValueInspectionRequest] = []
     expected = ResolvedValueInspectionResult(
         diagnostics=(
@@ -446,7 +464,7 @@ def test_compare_resolved_inspection_uses_retained_plan_controls_and_frozen_ambi
         requests.append(request)
         return expected
 
-    monkeypatch.setattr(compare, "inspect_prepared_resolved_value", inspect)
+    monkeypatch.setattr(compare, "_inspect_prepared_resolved_value", inspect)
     settings = production_execution_defaults_v1()
     controls = msgspec.structs.replace(
         _controls(),
@@ -484,6 +502,7 @@ def test_compare_resolved_inspection_uses_retained_plan_controls_and_frozen_ambi
     assert request.settings.files == controls.settings.files
     assert request.settings.environment == controls.settings.environment
     assert request.settings.yaml == controls.settings.yaml
+    assert _AMBIENT_SECRET_CANARY not in repr(request)
 
 
 @pytest.mark.parametrize("operation", ["preview", "resolved"])
@@ -519,7 +538,7 @@ def test_compare_revocation_cancels_in_flight_inspections_and_blocks_start(
             )
 
         monkeypatch.setattr(compare, "render_prepared_request_window", render)
-        monkeypatch.setattr(compare, "inspect_prepared_resolved_value", inspect)
+        monkeypatch.setattr(compare, "_inspect_prepared_resolved_value", inspect)
         service = CompareService(maximum_outstanding=1)
         controls = _controls()
         prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
@@ -569,8 +588,9 @@ def test_compare_revocation_cancels_in_flight_inspections_and_blocks_start(
             else CompareServiceErrorCode.CLOSED
         )
         assert revoked.value.code is expected
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(CompareServiceError) as cancelled:
             await task
+        assert cancelled.value.code is CompareServiceErrorCode.INSPECTION_CANCELLED
         assert handle not in service._inspections
         assert handle not in service._revoked
         assert handle not in service._prepared
@@ -637,6 +657,143 @@ def test_compare_tracks_concurrent_inspection_leases_independently(
         await asyncio.gather(*tasks)
 
         assert handle not in service._inspections
+
+    asyncio.run(scenario())
+
+
+def test_compare_service_revocation_does_not_cancel_direct_await_caller(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        child_task: asyncio.Task[object] | None = None
+
+        async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+            nonlocal child_task
+            child_task = cast("asyncio.Task[object]", asyncio.current_task())
+            entered.set()
+            await asyncio.Event().wait()
+            return RenderPreviewWindowResult(total_executions=1)
+
+        monkeypatch.setattr(compare, "render_prepared_request_window", render)
+        service = CompareService(maximum_outstanding=1)
+        controls = _controls()
+        prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+        assert prepared.handle is not None
+        handle = prepared.handle
+        caller = asyncio.current_task()
+
+        async def revoke() -> None:
+            await entered.wait()
+            assert service.discard(handle)
+
+        revoker = asyncio.create_task(revoke())
+        with pytest.raises(CompareServiceError) as cancelled:
+            await service.preview_requests(
+                handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        await revoker
+
+        assert cancelled.value.code is CompareServiceErrorCode.INSPECTION_CANCELLED
+        assert caller is not None
+        assert child_task is not None
+        assert child_task is not caller
+        assert caller.cancelling() == 0
+        assert service.outstanding == 0
+
+    asyncio.run(scenario())
+
+
+def test_compare_aclose_has_caller_owned_timeout_and_eventual_drain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        cancellation_seen = asyncio.Event()
+        release = asyncio.Event()
+
+        async def render(_request: RenderPreviewWindowRequest) -> RenderPreviewWindowResult:
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+                await release.wait()
+            return RenderPreviewWindowResult(total_executions=1)
+
+        monkeypatch.setattr(compare, "render_prepared_request_window", render)
+        service = CompareService(maximum_outstanding=1)
+        controls = _controls()
+        prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+        assert prepared.handle is not None
+        caller = asyncio.create_task(
+            service.preview_requests(
+                prepared.handle,
+                controls,
+                start_ordinal=0,
+                maximum_previews=1,
+            )
+        )
+        await entered.wait()
+        service.close()
+        await cancellation_seen.wait()
+
+        timed_out = await service.aclose(timeout=Duration(nanoseconds=0))
+        assert timed_out.drained is False
+        assert tuple(item.code for item in timed_out.diagnostics) == (
+            "compare.service.close-timeout",
+        )
+        release.set()
+        drained = await service.aclose(timeout=Duration(nanoseconds=10**10_000))
+        assert drained.drained is True
+        assert not drained.diagnostics
+        with pytest.raises(CompareServiceError) as cancelled:
+            await caller
+        assert cancelled.value.code is CompareServiceErrorCode.INSPECTION_CANCELLED
+        assert service.outstanding == 0
+
+    asyncio.run(scenario())
+
+
+def test_compare_ambient_snapshot_repr_and_nested_debug_state_are_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        compare,
+        "capture_process_environment",
+        lambda _project, _limits: CapturedAmbientEnvironment(
+            (("TOKEN", _AMBIENT_SECRET_CANARY),),
+            limits=EnvironmentSourceLimits(),
+        ),
+    )
+    service = CompareService(maximum_outstanding=1)
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+    retained = service._prepared[prepared.handle]
+    snapshot = retained.ambient_environment
+    sealed = snapshot._values
+
+    assert _AMBIENT_SECRET_CANARY not in repr(retained)
+    assert repr(snapshot) == "<captured-ambient-environment>"
+    assert _AMBIENT_SECRET_CANARY not in repr(sealed)
+    assert str(sealed) == "<sensitive>"
+
+
+def test_inspection_lease_cancellation_is_idempotent() -> None:
+    async def scenario() -> None:
+        task = asyncio.create_task(asyncio.sleep(60))
+        lease = compare._InspectionLease(cast("asyncio.Task[object]", task))
+        assert lease.cancel() is True
+        assert lease.cancel() is False
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert lease.cancel() is False
 
     asyncio.run(scenario())
 

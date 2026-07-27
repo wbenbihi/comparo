@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import tracemalloc
 from decimal import Decimal
 from pathlib import Path
@@ -21,6 +20,7 @@ from comparo.adapters.values import LocalFilesystemErrorCode
 from comparo.adapters.values import PinnedProjectFiles
 from comparo.adapters.values import YamlValueLimits
 from comparo.application import resolved_inspection as inspection_module
+from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.planning import PlanningOptions
@@ -29,22 +29,36 @@ from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.preflight import prepare_project_plan
 from comparo.application.resolved_inspection import ResolvedInputTiming
 from comparo.application.resolved_inspection import ResolvedInspectionState
+from comparo.application.resolved_inspection import ResolvedTaintSource
 from comparo.application.resolved_inspection import ResolvedValueFormat
 from comparo.application.resolved_inspection import ResolvedValueFreshness
 from comparo.application.resolved_inspection import ResolvedValueInspection
-from comparo.application.resolved_inspection import ResolvedValueInspectionRequest
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
-from comparo.application.resolved_inspection import ResolvedValueInspectionSettings
 from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
 from comparo.application.resolved_inspection import ResolvedValueNode
 from comparo.application.resolved_inspection import ResolvedValueProjectionLimits
-from comparo.application.resolved_inspection import bind_resolved_value_target
-from comparo.application.resolved_inspection import inspect_resolved_value
+from comparo.application.resolved_inspection import (
+    _bind_resolved_value_target as bind_resolved_value_target,
+)
+from comparo.application.resolved_inspection import (
+    _inspect_resolved_value as inspect_resolved_value,
+)
+from comparo.application.resolved_inspection import (
+    _ResolvedValueInspectionRequest as ResolvedValueInspectionRequest,
+)
+from comparo.application.resolved_inspection import (
+    _ResolvedValueInspectionSettings as ResolvedValueInspectionSettings,
+)
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import CompiledResource
 from comparo.core.configuration.canonical import InlineResource
+from comparo.core.domain.expressions import ArrayExpr
+from comparo.core.domain.expressions import ConversionType
+from comparo.core.domain.expressions import ConvertExpr
 from comparo.core.domain.expressions import LiteralExpr
+from comparo.core.domain.expressions import ObjectExpr
+from comparo.core.domain.expressions import ObjectExpressionMember
 from comparo.core.domain.identity import InlineDefinitionOrigin
 from comparo.core.domain.identity import InlineDefinitionRef
 from comparo.core.domain.identity import InlineFragment
@@ -56,7 +70,9 @@ from comparo.core.domain.primitives import PositiveCount
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
 from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.value_kinds import ValueKind
+from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import JsonArray
 from comparo.core.domain.values import JsonBoolean
@@ -64,6 +80,7 @@ from comparo.core.domain.values import JsonDecimal
 from comparo.core.domain.values import JsonInteger
 from comparo.core.domain.values import JsonNull
 from comparo.core.domain.values import JsonObject
+from comparo.core.domain.values import JsonObjectMember
 from comparo.core.domain.values import JsonString
 from comparo.core.resolution import RunContext
 from comparo.core.runtime import iter_execution_work
@@ -77,6 +94,10 @@ def _settings(
     maximum_scalar_bytes: int = 64,
     maximum_path_segments: int = 16,
     maximum_path_segment_bytes: int = 64,
+    maximum_traversal_nodes: int = 1_000_000,
+    maximum_traversal_bytes: int = 64 * 1024 * 1024,
+    maximum_taint_origins: int = 64,
+    maximum_taint_origin_bytes: int = 1024,
 ) -> ResolvedValueInspectionSettings:
     return ResolvedValueInspectionSettings(
         files=LocalFileLimits(),
@@ -86,6 +107,10 @@ def _settings(
         maximum_scalar_bytes=ByteCount(value=maximum_scalar_bytes),
         maximum_path_segments=PositiveCount(value=maximum_path_segments),
         maximum_path_segment_bytes=ByteCount(value=maximum_path_segment_bytes),
+        maximum_traversal_nodes=PositiveCount(value=maximum_traversal_nodes),
+        maximum_traversal_bytes=ByteCount(value=maximum_traversal_bytes),
+        maximum_taint_origins=PositiveCount(value=maximum_taint_origins),
+        maximum_taint_origin_bytes=ByteCount(value=maximum_taint_origin_bytes),
     )
 
 
@@ -95,12 +120,20 @@ def _projection_limits(
     maximum_scalar_bytes: int = 64,
     maximum_path_segments: int = 16,
     maximum_path_segment_bytes: int = 64,
+    maximum_traversal_nodes: int = 1_000_000,
+    maximum_traversal_bytes: int = 64 * 1024 * 1024,
+    maximum_taint_origins: int = 64,
+    maximum_taint_origin_bytes: int = 1024,
 ) -> ResolvedValueProjectionLimits:
     return ResolvedValueProjectionLimits(
         maximum_page_nodes=PositiveCount(value=maximum_page_nodes),
         maximum_scalar_bytes=ByteCount(value=maximum_scalar_bytes),
         maximum_path_segments=PositiveCount(value=maximum_path_segments),
         maximum_path_segment_bytes=ByteCount(value=maximum_path_segment_bytes),
+        maximum_traversal_nodes=PositiveCount(value=maximum_traversal_nodes),
+        maximum_traversal_bytes=ByteCount(value=maximum_traversal_bytes),
+        maximum_taint_origins=PositiveCount(value=maximum_taint_origins),
+        maximum_taint_origin_bytes=ByteCount(value=maximum_taint_origin_bytes),
     )
 
 
@@ -235,15 +268,20 @@ def _inspection_request(
         ResourceKind.ENVIRONMENT,
         work.environment.identity.resource_id.value,
     )
+    effective_settings = _settings() if settings is None else settings
     return ResolvedValueInspectionRequest(
         project=project,
         resource=_coordinate(selected),
         field_path=field_path,
         execution_ordinal=ordinal,
         environment=_coordinate(environment_resource) if environment is None else environment,
-        settings=_settings() if settings is None else settings,
+        settings=effective_settings,
         start_node=start_node,
         maximum_nodes=maximum_nodes,
+        ambient_environment=CapturedAmbientEnvironment(
+            (),
+            limits=effective_settings.environment,
+        ),
     )
 
 
@@ -296,7 +334,7 @@ def test_secret_and_composed_sensitive_values_are_irreversibly_masked(tmp_path: 
         assert result.inspection.masked is True
         assert result.inspection.kind in {ValueKind.STRING, ValueKind.OBJECT}
         assert result.inspection.nodes[0].masked is True
-        assert result.inspection.taint_origins
+        assert result.inspection.taint_sources
         encoded = msgspec.json.encode(result).decode()
         assert "super-secret-inspection-canary" not in encoded
         assert "staging-secret-label" not in encoded
@@ -413,12 +451,15 @@ def test_request_nested_field_uses_the_production_top_level_resolution_symbol(
         field_path=("variables", "publicTree"),
     )
 
-    assert inspection_module._target_symbol(header).segments == ("request", "headers")
-    assert inspection_module._target_symbol(endpoint).segments == ("request", "endpoint")
-    assert inspection_module._target_symbol(generic).segments == (
-        "variables",
-        "publicTree",
-    )
+    header_selection = inspection_module._select(header)
+    endpoint_selection = inspection_module._select(endpoint)
+    generic_selection = inspection_module._select(generic)
+    assert isinstance(header_selection, inspection_module._Selection)
+    assert isinstance(endpoint_selection, inspection_module._Selection)
+    assert isinstance(generic_selection, inspection_module._Selection)
+    assert header_selection.symbol.segments == ("request", "headers", "X-Region")
+    assert endpoint_selection.symbol.segments == ("request", "endpoint")
+    assert generic_selection.symbol.segments == ("variables", "publicTree")
 
 
 def test_non_present_resolution_outcomes_are_value_free_and_closed(tmp_path: Path) -> None:
@@ -493,7 +534,7 @@ def test_value_fingerprint_guards_multi_page_consistency(tmp_path: Path) -> None
         )
     )
     assert first.inspection is not None
-    fingerprint = first.inspection.value_fingerprint
+    fingerprint = first.inspection.projection_fingerprint
     continued = _inspect(
         msgspec.structs.replace(
             _inspection_request(
@@ -503,11 +544,11 @@ def test_value_fingerprint_guards_multi_page_consistency(tmp_path: Path) -> None
                 start_node=2,
                 maximum_nodes=2,
             ),
-            expected_value_fingerprint=fingerprint,
+            expected_projection_fingerprint=fingerprint,
         )
     )
     assert continued.inspection is not None
-    assert continued.inspection.value_fingerprint == fingerprint
+    assert continued.inspection.projection_fingerprint == fingerprint
     changed = _inspect(
         msgspec.structs.replace(
             _inspection_request(
@@ -515,7 +556,7 @@ def test_value_fingerprint_guards_multi_page_consistency(tmp_path: Path) -> None
                 resource=manifest,
                 field_path=("variables", "publicTree"),
             ),
-            expected_value_fingerprint="0" * 64,
+            expected_projection_fingerprint="0" * 64,
         )
     )
     assert changed.diagnostics[0].code == "resolution.inspect.value-changed"
@@ -558,9 +599,16 @@ def test_private_projection_is_exhaustive_without_unbounded_scalar_copies() -> N
         Duration(nanoseconds=10**200),
         ByteCount(value=0),
     )
-    digest = hashlib.sha256()
     for value in values:
-        inspection_module._hash_value(digest, value)
+        projection = asyncio.run(
+            inspection_module._project_public_value(
+                value,
+                _settings(),
+                start=0,
+                maximum=1,
+            )
+        )
+        assert projection.fingerprint
         node = inspection_module._node(0, (), value, 4)
         assert node.ordinal == 0
     assert inspection_module._maximum_decimal_length(0) == 1
@@ -576,19 +624,162 @@ def test_wide_value_traversal_uses_depth_bounded_auxiliary_memory() -> None:
     value = JsonArray(items=(JsonNull(),) * 200_000)
 
     tracemalloc.start()
-    inspection_module._hash_value(hashlib.sha256(), value)
-    _current, hash_peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-
-    tracemalloc.start()
-    nodes = inspection_module._value_nodes(value, _settings())
-    assert next(nodes).ordinal == 0
-    assert next(nodes).path == ("0",)
+    projection = asyncio.run(
+        inspection_module._project_public_value(
+            value,
+            _settings(),
+            start=0,
+            maximum=2,
+        )
+    )
     _current, projection_peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    assert hash_peak < 1_000_000
+    assert projection.nodes[0].ordinal == 0
+    assert projection.nodes[1].path == ("0",)
     assert projection_peak < 1_000_000
+
+
+def test_wide_flat_siblings_keep_independent_paths() -> None:
+    array = JsonArray(items=(JsonNull(),) * 18)
+    object_value = JsonObject(
+        members=tuple(JsonObjectMember(name=f"k{index}", value=JsonNull()) for index in range(18))
+    )
+
+    settings = _settings(maximum_page_nodes=32)
+    array_nodes = asyncio.run(
+        inspection_module._project_public_value(array, settings, start=0, maximum=32)
+    ).nodes
+    object_nodes = asyncio.run(
+        inspection_module._project_public_value(object_value, settings, start=0, maximum=32)
+    ).nodes
+
+    assert array_nodes[-1].path == ("17",)
+    assert object_nodes[-1].path == ("k17",)
+    assert all(len(node.path) <= 1 for node in (*array_nodes, *object_nodes))
+
+
+def test_projection_fingerprint_uses_collision_safe_variable_width_framing() -> None:
+    first = JsonArray(
+        items=(JsonString(value="astring\0b"), JsonString(value="")),
+    )
+    second = JsonArray(
+        items=(JsonString(value="a"), JsonString(value="bstring\0")),
+    )
+
+    first_projection = asyncio.run(
+        inspection_module._project_public_value(first, _settings(), start=0, maximum=1)
+    )
+    second_projection = asyncio.run(
+        inspection_module._project_public_value(second, _settings(), start=0, maximum=1)
+    )
+
+    assert first_projection.fingerprint != second_projection.fingerprint
+
+
+def test_projection_rejects_caller_owned_traversal_node_and_byte_budgets() -> None:
+    with pytest.raises(inspection_module._ProjectionBudgetExceededError):
+        asyncio.run(
+            inspection_module._project_public_value(
+                JsonArray(items=(JsonNull(),) * 20),
+                _settings(maximum_traversal_nodes=10),
+                start=0,
+                maximum=1,
+            )
+        )
+    with pytest.raises(inspection_module._ProjectionBudgetExceededError):
+        asyncio.run(
+            inspection_module._project_public_value(
+                JsonString(value="x" * 20),
+                _settings(maximum_traversal_bytes=10),
+                start=0,
+                maximum=1,
+            )
+        )
+
+
+def test_projection_traversal_is_cooperatively_cancellable() -> None:
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            inspection_module._project_public_value(
+                JsonArray(items=(JsonNull(),) * 200_000),
+                _settings(),
+                start=199_999,
+                maximum=1,
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_nested_consumer_symbol_matches_object_array_and_wrapper_rules() -> None:
+    provenance = _literal("x").provenance
+    expression = ObjectExpr(
+        members=(
+            ObjectExpressionMember(
+                name="headers",
+                expression=ArrayExpr(
+                    items=(
+                        ConvertExpr(
+                            source=_literal("1"),
+                            target=ConversionType.INTEGER,
+                            provenance=provenance,
+                        ),
+                    ),
+                    provenance=provenance,
+                ),
+            ),
+        ),
+        provenance=provenance,
+    )
+
+    selected = inspection_module._expression_and_symbol_at(
+        expression,
+        ("headers", "0", "source"),
+        SymbolPath(segments=("request",)),
+    )
+
+    assert selected is not None
+    assert selected[1].segments == ("request", "headers", "item-0")
+
+
+def test_taint_lineage_is_bounded_and_discloses_only_opaque_categories() -> None:
+    origins = (
+        TaintOriginId(value="secret/aaaaaaaa"),
+        TaintOriginId(value="env/bbbbbbbb"),
+        TaintOriginId(value="file/cccccccc"),
+        TaintOriginId(value="provider/dddddddd"),
+    )
+    sources, omitted = asyncio.run(
+        inspection_module._bounded_taint_sources(
+            origins,
+            _settings(maximum_taint_origins=2, maximum_taint_origin_bytes=32),
+        )
+    )
+
+    assert sources == (ResolvedTaintSource.SECRET, ResolvedTaintSource.ENVIRONMENT)
+    assert omitted == 2
+    encoded = msgspec.json.encode({"sources": sources, "omitted": omitted}).decode()
+    assert "aaaaaaaa" not in encoded
+    assert "bbbbbbbb" not in encoded
+
+
+def test_masked_projection_fingerprint_does_not_claim_secret_content_identity() -> None:
+    first = inspection_module._masked_projection_fingerprint(
+        ValueKind.STRING,
+        (ResolvedTaintSource.SECRET,),
+        0,
+    )
+    second = inspection_module._masked_projection_fingerprint(
+        ValueKind.STRING,
+        (ResolvedTaintSource.SECRET,),
+        0,
+    )
+    assert first == second
 
 
 def test_private_expression_traversal_handles_inline_and_invalid_indexes(
@@ -636,6 +827,39 @@ def test_resource_cleanup_contains_each_independent_failure() -> None:
     resources.context = cast("RunContext", BrokenContext())
     resources.files = cast("PinnedProjectFiles", BrokenFiles())
     assert asyncio.run(resources.close()) is True
+
+
+def test_resource_cleanup_closes_files_under_repeated_cancellation() -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowContext:
+            async def close(self) -> None:
+                entered.set()
+                await release.wait()
+
+        class Files:
+            closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        resources = inspection_module._InspectionResources()
+        files = Files()
+        resources.context = cast("RunContext", SlowContext())
+        resources.files = cast("PinnedProjectFiles", files)
+        task = asyncio.create_task(resources.close())
+        await entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert files.closed
+
+    asyncio.run(scenario())
 
 
 def test_environment_binding_diagnostics_cross_only_as_safe_application_codes(
@@ -815,10 +1039,19 @@ def test_public_contracts_reject_ambiguous_and_unbounded_shapes(tmp_path: Path) 
         "maximum_scalar_bytes",
         "maximum_path_segments",
         "maximum_path_segment_bytes",
+        "maximum_traversal_nodes",
+        "maximum_traversal_bytes",
+        "maximum_taint_origins",
+        "maximum_taint_origin_bytes",
     ):
         with pytest.raises(TypeError, match="untyped limit"):
             msgspec.structs.replace(settings, **{field: object()})
-    for field in ("maximum_scalar_bytes", "maximum_path_segment_bytes"):
+    for field in (
+        "maximum_scalar_bytes",
+        "maximum_path_segment_bytes",
+        "maximum_traversal_bytes",
+        "maximum_taint_origin_bytes",
+    ):
         with pytest.raises(ValueError, match="positive"):
             msgspec.structs.replace(settings, **{field: ByteCount(value=0)})
     with pytest.raises(TypeError, match="PreparedProjectPlan"):
@@ -851,17 +1084,23 @@ def test_public_contracts_reject_ambiguous_and_unbounded_shapes(tmp_path: Path) 
     for field in ("execution_ordinal", "start_node"):
         with pytest.raises(ValueError, match="non-negative"):
             msgspec.structs.replace(request, **{field: -1})
+    with pytest.raises(ValueError, match="cursor exceeds"):
+        msgspec.structs.replace(
+            request,
+            start_node=10,
+            settings=_settings(maximum_traversal_nodes=10),
+        )
     for maximum in (0, settings.maximum_page_nodes.value + 1):
         with pytest.raises(ValueError, match="page size"):
             msgspec.structs.replace(request, maximum_nodes=maximum)
-    with pytest.raises(TypeError, match="immutable text pairs"):
+    with pytest.raises(TypeError, match="must be sealed"):
         msgspec.structs.replace(
             request,
-            ambient_environment=cast("tuple[tuple[str, str], ...]", object()),
+            ambient_environment=cast("CapturedAmbientEnvironment", object()),
         )
     with pytest.raises(ValueError, match="expected fingerprint"):
-        msgspec.structs.replace(request, expected_value_fingerprint="invalid")
-    with pytest.raises(TypeError, match="ResolvedValueInspectionRequest"):
+        msgspec.structs.replace(request, expected_projection_fingerprint="invalid")
+    with pytest.raises(TypeError, match="internal bound request"):
         asyncio.run(inspect_resolved_value(cast("ResolvedValueInspectionRequest", object())))
     assert environment.kind == "Environment"
 
@@ -888,23 +1127,35 @@ def test_frontend_target_binds_only_inside_the_retained_plan_lifetime(
         files=LocalFileLimits(),
         environment=EnvironmentSourceLimits(),
         yaml=YamlValueLimits(),
-        ambient_environment=(),
+        ambient_environment=CapturedAmbientEnvironment(
+            (),
+            limits=EnvironmentSourceLimits(),
+        ),
     )
 
     assert bound.project is project
     assert bound.resource == target.resource
     assert bound.settings.maximum_page_nodes == limits.maximum_page_nodes
-    assert bound.ambient_environment == ()
+    assert repr(bound.ambient_environment) == "<captured-ambient-environment>"
 
     for field in (
         "maximum_page_nodes",
         "maximum_scalar_bytes",
         "maximum_path_segments",
         "maximum_path_segment_bytes",
+        "maximum_traversal_nodes",
+        "maximum_traversal_bytes",
+        "maximum_taint_origins",
+        "maximum_taint_origin_bytes",
     ):
         with pytest.raises(TypeError, match="untyped limit"):
             msgspec.structs.replace(limits, **{field: object()})
-    for field in ("maximum_scalar_bytes", "maximum_path_segment_bytes"):
+    for field in (
+        "maximum_scalar_bytes",
+        "maximum_path_segment_bytes",
+        "maximum_traversal_bytes",
+        "maximum_taint_origin_bytes",
+    ):
         with pytest.raises(ValueError, match="positive"):
             msgspec.structs.replace(limits, **{field: ByteCount(value=0)})
     with pytest.raises(TypeError, match="target resource"):
@@ -927,7 +1178,10 @@ def test_frontend_target_binds_only_inside_the_retained_plan_lifetime(
             files=LocalFileLimits(),
             environment=EnvironmentSourceLimits(),
             yaml=YamlValueLimits(),
-            ambient_environment=(),
+            ambient_environment=CapturedAmbientEnvironment(
+                (),
+                limits=EnvironmentSourceLimits(),
+            ),
         )
     with pytest.raises(TypeError, match="ResolvedValueInspectionTarget"):
         bind_resolved_value_target(
@@ -936,7 +1190,10 @@ def test_frontend_target_binds_only_inside_the_retained_plan_lifetime(
             files=LocalFileLimits(),
             environment=EnvironmentSourceLimits(),
             yaml=YamlValueLimits(),
-            ambient_environment=(),
+            ambient_environment=CapturedAmbientEnvironment(
+                (),
+                limits=EnvironmentSourceLimits(),
+            ),
         )
 
 
@@ -1016,20 +1273,21 @@ def test_output_contracts_are_closed_and_serializable(tmp_path: Path) -> None:
         {"execution": object()},
         {"state": object()},
         {"provenance": object()},
-        {"value_fingerprint": "invalid"},
+        {"projection_fingerprint": "invalid"},
         {"freshness": object()},
         {"code": ""},
         {"kind": ValueKind.UNKNOWN},
         {"masked": object()},
-        {"taint_origins": object()},
-        {"taint_origins": ("same", "same")},
+        {"taint_sources": object()},
+        {"taint_sources": (object(),)},
+        {"omitted_taint_origin_count": -1},
         {"start_node": -1},
         {"nodes": object()},
         {"nodes": (msgspec.structs.replace(node, ordinal=2),)},
         {"next_node": 2},
         {"code": "bad"},
         {"state": ResolvedInspectionState.ERROR},
-        {"masked": True, "taint_origins": ()},
+        {"masked": True, "taint_sources": (), "omitted_taint_origin_count": 0},
     )
     for kwargs in inspection_changes:
         with pytest.raises((TypeError, ValueError)):
@@ -1041,7 +1299,7 @@ def test_output_contracts_are_closed_and_serializable(tmp_path: Path) -> None:
         execution=execution,
         state=ResolvedInspectionState.MISSING,
         provenance=provenance,
-        value_fingerprint=actual.value_fingerprint,
+        projection_fingerprint=actual.projection_fingerprint,
     )
     with pytest.raises(ValueError, match="failure code"):
         msgspec.structs.replace(missing, code="not-allowed")

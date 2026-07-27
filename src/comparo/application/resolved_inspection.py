@@ -22,8 +22,10 @@ from comparo.adapters.values import SafeYamlValueDecoder
 from comparo.adapters.values import SecureGenerator
 from comparo.adapters.values import SystemRunClock
 from comparo.adapters.values import YamlValueLimits
+from comparo.application._async_cleanup import finish_cleanup
+from comparo.application.environment_binding import CapturedAmbientEnvironment
+from comparo.application.environment_binding import _validate_captured_ambient
 from comparo.application.environment_binding import build_environment_snapshots
-from comparo.application.environment_binding import validate_ambient_environment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.inspection import inspect_diagnostic
@@ -117,6 +119,20 @@ class ResolvedInputTiming(DomainStrEnum):
     RESAMPLED_AT_EXECUTION_START = "resampled-at-execution-start"
 
 
+class ResolvedTaintSource(DomainStrEnum):
+    """Opaque source categories safe to disclose for a masked projection."""
+
+    CONFIGURATION = "configuration"
+    ENVIRONMENT = "environment"
+    FILE = "file"
+    GENERATED = "generated"
+    PROVIDER = "provider"
+    RUNTIME = "runtime"
+    SECRET = "secret"  # noqa: S105 - category label, never a credential
+    YAML = "yaml"
+    OTHER = "other"
+
+
 @final
 class ResolvedValueFreshness(msgspec.Struct, frozen=True, kw_only=True):
     """Machine-readable honesty contract for advisory resolved-value inspection."""
@@ -154,7 +170,7 @@ class ResolvedValueFreshness(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class ResolvedValueInspectionSettings(msgspec.Struct, frozen=True, kw_only=True):
+class _ResolvedValueInspectionSettings(msgspec.Struct, frozen=True, kw_only=True):
     """Caller-owned local-source and frontend projection ceilings."""
 
     files: LocalFileLimits
@@ -164,6 +180,10 @@ class ResolvedValueInspectionSettings(msgspec.Struct, frozen=True, kw_only=True)
     maximum_scalar_bytes: ByteCount
     maximum_path_segments: PositiveCount
     maximum_path_segment_bytes: ByteCount
+    maximum_traversal_nodes: PositiveCount
+    maximum_traversal_bytes: ByteCount
+    maximum_taint_origins: PositiveCount
+    maximum_taint_origin_bytes: ByteCount
 
     def __post_init__(self) -> None:
         """Require explicit typed limits for every effect and returned value."""
@@ -175,10 +195,22 @@ class ResolvedValueInspectionSettings(msgspec.Struct, frozen=True, kw_only=True)
             (self.maximum_scalar_bytes, ByteCount),
             (self.maximum_path_segments, PositiveCount),
             (self.maximum_path_segment_bytes, ByteCount),
+            (self.maximum_traversal_nodes, PositiveCount),
+            (self.maximum_traversal_bytes, ByteCount),
+            (self.maximum_taint_origins, PositiveCount),
+            (self.maximum_taint_origin_bytes, ByteCount),
         )
         if any(type(value) is not kind for value, kind in expected):
             raise TypeError("resolved inspection settings contain an untyped limit")
-        if self.maximum_scalar_bytes.value < 1 or self.maximum_path_segment_bytes.value < 1:
+        if any(
+            limit.value < 1
+            for limit in (
+                self.maximum_scalar_bytes,
+                self.maximum_path_segment_bytes,
+                self.maximum_traversal_bytes,
+                self.maximum_taint_origin_bytes,
+            )
+        ):
             raise ValueError("resolved inspection byte limits must be positive")
 
 
@@ -190,6 +222,10 @@ class ResolvedValueProjectionLimits(msgspec.Struct, frozen=True, kw_only=True):
     maximum_scalar_bytes: ByteCount
     maximum_path_segments: PositiveCount
     maximum_path_segment_bytes: ByteCount
+    maximum_traversal_nodes: PositiveCount
+    maximum_traversal_bytes: ByteCount
+    maximum_taint_origins: PositiveCount
+    maximum_taint_origin_bytes: ByteCount
 
     def __post_init__(self) -> None:
         """Require exact positive limits for every returned structure."""
@@ -198,10 +234,22 @@ class ResolvedValueProjectionLimits(msgspec.Struct, frozen=True, kw_only=True):
             (self.maximum_scalar_bytes, ByteCount),
             (self.maximum_path_segments, PositiveCount),
             (self.maximum_path_segment_bytes, ByteCount),
+            (self.maximum_traversal_nodes, PositiveCount),
+            (self.maximum_traversal_bytes, ByteCount),
+            (self.maximum_taint_origins, PositiveCount),
+            (self.maximum_taint_origin_bytes, ByteCount),
         )
         if any(type(value) is not kind for value, kind in expected):
             raise TypeError("resolved projection limits contain an untyped limit")
-        if self.maximum_scalar_bytes.value < 1 or self.maximum_path_segment_bytes.value < 1:
+        if any(
+            limit.value < 1
+            for limit in (
+                self.maximum_scalar_bytes,
+                self.maximum_path_segment_bytes,
+                self.maximum_traversal_bytes,
+                self.maximum_taint_origin_bytes,
+            )
+        ):
             raise ValueError("resolved projection byte limits must be positive")
 
 
@@ -216,7 +264,7 @@ class ResolvedValueInspectionTarget(msgspec.Struct, frozen=True, kw_only=True):
     limits: ResolvedValueProjectionLimits
     start_node: int
     maximum_nodes: int
-    expected_value_fingerprint: str | None = None
+    expected_projection_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the whole selection without retaining a plan or local values."""
@@ -236,12 +284,13 @@ class ResolvedValueInspectionTarget(msgspec.Struct, frozen=True, kw_only=True):
             maximum_page_nodes=self.limits.maximum_page_nodes.value,
             maximum_path_segments=self.limits.maximum_path_segments.value,
             maximum_path_segment_bytes=self.limits.maximum_path_segment_bytes.value,
-            expected_value_fingerprint=self.expected_value_fingerprint,
+            maximum_traversal_nodes=self.limits.maximum_traversal_nodes.value,
+            expected_projection_fingerprint=self.expected_projection_fingerprint,
         )
 
 
 @final
-class ResolvedValueInspectionRequest(msgspec.Struct, frozen=True, kw_only=True):
+class _ResolvedValueInspectionRequest(msgspec.Struct, frozen=True, kw_only=True):
     """One exact compiled expression and execution occurrence to inspect."""
 
     project: PreparedProjectPlan
@@ -249,11 +298,11 @@ class ResolvedValueInspectionRequest(msgspec.Struct, frozen=True, kw_only=True):
     field_path: tuple[str, ...]
     execution_ordinal: int
     environment: ResourceCoordinate
-    settings: ResolvedValueInspectionSettings
+    settings: _ResolvedValueInspectionSettings
     start_node: int
     maximum_nodes: int
-    ambient_environment: tuple[tuple[str, str], ...] | None = None
-    expected_value_fingerprint: str | None = None
+    ambient_environment: CapturedAmbientEnvironment
+    expected_projection_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         """Validate finite coordinates before any local source can be opened."""
@@ -265,7 +314,7 @@ class ResolvedValueInspectionRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("resolved inspection Environment must be ResourceCoordinate")
         if self.environment.kind != ResourceKind.ENVIRONMENT.value:
             raise ValueError("resolved inspection Environment coordinate must identify Environment")
-        if type(self.settings) is not ResolvedValueInspectionSettings:
+        if type(self.settings) is not _ResolvedValueInspectionSettings:
             raise TypeError("resolved inspection requires typed settings")
         _validate_selection(
             field_path=self.field_path,
@@ -275,9 +324,12 @@ class ResolvedValueInspectionRequest(msgspec.Struct, frozen=True, kw_only=True):
             maximum_page_nodes=self.settings.maximum_page_nodes.value,
             maximum_path_segments=self.settings.maximum_path_segments.value,
             maximum_path_segment_bytes=self.settings.maximum_path_segment_bytes.value,
-            expected_value_fingerprint=self.expected_value_fingerprint,
+            maximum_traversal_nodes=self.settings.maximum_traversal_nodes.value,
+            expected_projection_fingerprint=self.expected_projection_fingerprint,
         )
-        validate_ambient_environment(self.ambient_environment, self.settings.environment)
+        if type(self.ambient_environment) is not CapturedAmbientEnvironment:
+            raise TypeError("resolved inspection ambient environment must be sealed")
+        _validate_captured_ambient(self.ambient_environment, self.settings.environment)
 
 
 @final
@@ -397,12 +449,13 @@ class ResolvedValueInspection(msgspec.Struct, frozen=True, kw_only=True):
     execution: ResolvedExecutionCoordinate
     state: ResolvedInspectionState
     provenance: ResolutionProvenanceInspection
-    value_fingerprint: str
+    projection_fingerprint: str
     freshness: ResolvedValueFreshness = ResolvedValueFreshness()
     code: str | None = None
     kind: ValueKind | None = None
     masked: bool = False
-    taint_origins: tuple[str, ...] = ()
+    taint_sources: tuple[ResolvedTaintSource, ...] = ()
+    omitted_taint_origin_count: int = 0
     start_node: int = 0
     nodes: tuple[ResolvedValueNode, ...] = ()
     next_node: int | None = None
@@ -421,8 +474,8 @@ class ResolvedValueInspection(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("resolved value inspection state must be typed")
         if type(self.provenance) is not ResolutionProvenanceInspection:
             raise TypeError("resolved value inspection provenance must be typed")
-        if not is_sha256(self.value_fingerprint):
-            raise ValueError("resolved value inspection fingerprint must be SHA-256")
+        if not is_sha256(self.projection_fingerprint):
+            raise ValueError("resolved value projection fingerprint must be SHA-256")
         if type(self.freshness) is not ResolvedValueFreshness:
             raise TypeError("resolved value inspection freshness must be typed")
         if self.code is not None and (type(self.code) is not str or not self.code):
@@ -433,12 +486,14 @@ class ResolvedValueInspection(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("resolved value inspection kind must be exact or absent")
         if type(self.masked) is not bool:
             raise TypeError("resolved value inspection masked flag must be bool")
-        if type(self.taint_origins) is not tuple or any(
-            type(item) is not str or not item for item in self.taint_origins
+        if type(self.taint_sources) is not tuple or any(
+            type(item) is not ResolvedTaintSource for item in self.taint_sources
         ):
-            raise TypeError("resolved value taint origins must be immutable non-empty text")
-        if len(self.taint_origins) != len(set(self.taint_origins)):
-            raise ValueError("resolved value taint origins must be unique")
+            raise TypeError("resolved value taint sources must be immutable typed categories")
+        if len(self.taint_sources) != len(set(self.taint_sources)):
+            raise ValueError("resolved value taint sources must be unique")
+        if type(self.omitted_taint_origin_count) is not int or self.omitted_taint_origin_count < 0:
+            raise ValueError("resolved value omitted taint-origin count must be non-negative")
         if type(self.start_node) is not int or self.start_node < 0:
             raise ValueError("resolved value inspection cursor must be non-negative")
         if type(self.nodes) is not tuple or any(
@@ -456,12 +511,13 @@ class ResolvedValueInspection(msgspec.Struct, frozen=True, kw_only=True):
         if present:
             if self.code is not None or self.kind is None:
                 raise ValueError("present resolved inspection requires kind and no failure code")
-            if self.masked != bool(self.taint_origins):
-                raise ValueError("masked resolved inspection requires safe taint origins")
+            if self.masked != bool(self.taint_sources or self.omitted_taint_origin_count):
+                raise ValueError("masked resolved inspection requires safe taint lineage")
         elif (
             self.kind is not None
             or self.masked
-            or self.taint_origins
+            or self.taint_sources
+            or self.omitted_taint_origin_count
             or self.nodes
             or self.next_node is not None
         ):
@@ -492,27 +548,27 @@ class ResolvedValueInspectionResult(msgspec.Struct, frozen=True, kw_only=True):
         raise ValueError("resolved value result requires exactly inspection or diagnostics")
 
 
-def bind_resolved_value_target(
+def _bind_resolved_value_target(
     project: PreparedProjectPlan,
     target: ResolvedValueInspectionTarget,
     *,
     files: LocalFileLimits,
     environment: EnvironmentSourceLimits,
     yaml: YamlValueLimits,
-    ambient_environment: tuple[tuple[str, str], ...],
-) -> ResolvedValueInspectionRequest:
+    ambient_environment: CapturedAmbientEnvironment,
+) -> _ResolvedValueInspectionRequest:
     """Bind a frontend-safe target to one internally retained prepared-plan lifetime."""
     if type(project) is not PreparedProjectPlan:
         raise TypeError("resolved target binding requires PreparedProjectPlan")
     if type(target) is not ResolvedValueInspectionTarget:
         raise TypeError("resolved target binding requires ResolvedValueInspectionTarget")
-    return ResolvedValueInspectionRequest(
+    return _ResolvedValueInspectionRequest(
         project=project,
         resource=target.resource,
         field_path=target.field_path,
         execution_ordinal=target.execution_ordinal,
         environment=target.environment,
-        settings=ResolvedValueInspectionSettings(
+        settings=_ResolvedValueInspectionSettings(
             files=files,
             environment=environment,
             yaml=yaml,
@@ -520,11 +576,15 @@ def bind_resolved_value_target(
             maximum_scalar_bytes=target.limits.maximum_scalar_bytes,
             maximum_path_segments=target.limits.maximum_path_segments,
             maximum_path_segment_bytes=target.limits.maximum_path_segment_bytes,
+            maximum_traversal_nodes=target.limits.maximum_traversal_nodes,
+            maximum_traversal_bytes=target.limits.maximum_traversal_bytes,
+            maximum_taint_origins=target.limits.maximum_taint_origins,
+            maximum_taint_origin_bytes=target.limits.maximum_taint_origin_bytes,
         ),
         start_node=target.start_node,
         maximum_nodes=target.maximum_nodes,
         ambient_environment=ambient_environment,
-        expected_value_fingerprint=target.expected_value_fingerprint,
+        expected_projection_fingerprint=target.expected_projection_fingerprint,
     )
 
 
@@ -537,7 +597,8 @@ def _validate_selection(
     maximum_page_nodes: int,
     maximum_path_segments: int,
     maximum_path_segment_bytes: int,
-    expected_value_fingerprint: str | None,
+    maximum_traversal_nodes: int,
+    expected_projection_fingerprint: str | None,
 ) -> None:
     if type(field_path) is not tuple or any(
         type(segment) is not str or not segment for segment in field_path
@@ -552,9 +613,13 @@ def _validate_selection(
         raise ValueError("resolved inspection execution ordinal must be non-negative")
     if type(start_node) is not int or start_node < 0:
         raise ValueError("resolved inspection node cursor must be non-negative")
+    if start_node >= maximum_traversal_nodes:
+        raise ValueError("resolved inspection node cursor exceeds its traversal limit")
     if type(maximum_nodes) is not int or not 1 <= maximum_nodes <= maximum_page_nodes:
         raise ValueError("resolved inspection page size exceeds its caller-owned limit")
-    if expected_value_fingerprint is not None and not is_sha256(expected_value_fingerprint):
+    if expected_projection_fingerprint is not None and not is_sha256(
+        expected_projection_fingerprint
+    ):
         raise ValueError("resolved inspection expected fingerprint must be SHA-256")
 
 
@@ -568,16 +633,18 @@ class _InspectionResources:
     async def close(self) -> bool:
         """Close every acquired live resource and retain only failure state."""
         failed = False
+        cancellation_received = False
         if self.context is not None:
-            try:
-                await self.context.close()
-            except Exception:  # noqa: BLE001 - cleanup defects never cross the safe boundary
-                failed = True
+            outcome = await finish_cleanup(self.context.close())
+            failed = failed or outcome.failed
+            cancellation_received = cancellation_received or outcome.cancellation_received
         if self.files is not None:
             try:
                 self.files.close()
             except Exception:  # noqa: BLE001 - independent cleanup remains best effort
                 failed = True
+        if cancellation_received:
+            raise asyncio.CancelledError
         return failed
 
 
@@ -594,14 +661,15 @@ class _Digest(Protocol):
 class _Selection(msgspec.Struct, frozen=True, kw_only=True):
     expression: ValueExpression
     work: ExecutionWork
+    symbol: SymbolPath
 
 
-async def inspect_resolved_value(
-    request: ResolvedValueInspectionRequest,
+async def _inspect_resolved_value(
+    request: _ResolvedValueInspectionRequest,
 ) -> ResolvedValueInspectionResult:
     """Resolve one exact compiled expression through the shared masked resolver."""
-    if type(request) is not ResolvedValueInspectionRequest:
-        raise TypeError("resolved value inspection requires ResolvedValueInspectionRequest")
+    if type(request) is not _ResolvedValueInspectionRequest:
+        raise TypeError("resolved value inspection requires an internal bound request")
     capabilities = preflight_runtime_capabilities(request.project)
     if capabilities.diagnostics:
         return ResolvedValueInspectionResult(
@@ -613,7 +681,13 @@ async def inspect_resolved_value(
     expression, work = selected.expression, selected.work
     resources = _InspectionResources()
     try:
-        result = await _inspect_with_resources(request, expression, work, resources)
+        result = await _inspect_with_resources(
+            request,
+            expression,
+            work,
+            selected.symbol,
+            resources,
+        )
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - live defects become one closed application diagnostic
@@ -626,9 +700,10 @@ async def inspect_resolved_value(
 
 
 async def _inspect_with_resources(
-    request: ResolvedValueInspectionRequest,
+    request: _ResolvedValueInspectionRequest,
     expression: ValueExpression,
     work: ExecutionWork,
+    symbol: SymbolPath,
     resources: _InspectionResources,
 ) -> ResolvedValueInspectionResult:
     try:
@@ -651,26 +726,25 @@ async def _inspect_with_resources(
     resources.context = _run_context(request, snapshots.snapshots, resources.files)
     attempt = _attempt_scope(work)
     target = ResolutionTarget(
-        symbol=_target_symbol(request),
+        symbol=symbol,
         scope=attempt,
         cell_inputs=cell_inputs(request.project.prepared, work.trial.cell),
     )
     result = await MaskedValueResolver(resources.context).resolve(expression, target)
-    fingerprint = _result_fingerprint(result)
-    if (
-        request.expected_value_fingerprint is not None
-        and request.expected_value_fingerprint != fingerprint
-    ):
-        return _failure("resolution.inspect.value-changed")
     try:
-        inspection = _project_result(request, work, attempt, result, fingerprint)
+        inspection = await _project_result(request, work, attempt, result)
     except _ProjectionBudgetExceededError:
         return _failure("resolution.inspect.projection-budget-exceeded")
+    if (
+        request.expected_projection_fingerprint is not None
+        and request.expected_projection_fingerprint != inspection.projection_fingerprint
+    ):
+        return _failure("resolution.inspect.value-changed")
     return ResolvedValueInspectionResult(inspection=inspection)
 
 
 def _select(
-    request: ResolvedValueInspectionRequest,
+    request: _ResolvedValueInspectionRequest,
 ) -> _Selection | ApplicationDiagnostic:
     resource = _find_resource(request.project, request.resource)
     if resource is None:
@@ -685,6 +759,11 @@ def _select(
         return _request_diagnostic(request, "resolution.inspect.environment-mismatch")
     node = resource.spec
     path = request.field_path
+    symbol = (
+        SymbolPath(segments=("environment",))
+        if (resource.definition.identity.kind is ResourceKind.ENVIRONMENT)
+        else None
+    )
     if resource.definition.identity.kind is ResourceKind.REQUEST:
         if resource.definition != work.subject:
             return _request_diagnostic(request, "resolution.inspect.subject-mismatch")
@@ -694,10 +773,12 @@ def _select(
                 return _request_diagnostic(request, "resolution.inspect.expression-not-found")
             node = effective_request_expression(request.project.prepared, work, authored)
             path = path[1:]
-    expression = _expression_at(node, path)
-    if expression is None:
+            symbol = SymbolPath(segments=("request",))
+    selected = _expression_and_symbol_at(node, path, symbol)
+    if selected is None:
         return _request_diagnostic(request, "resolution.inspect.expression-not-found")
-    return _Selection(expression=expression, work=work)
+    expression, selected_symbol = selected
+    return _Selection(expression=expression, work=work, symbol=selected_symbol)
 
 
 def _find_resource(
@@ -709,13 +790,40 @@ def _find_resource(
 
 
 def _expression_at(node: object, path: tuple[str, ...]) -> ValueExpression | None:
+    selected = _expression_and_symbol_at(node, path, None)
+    return None if selected is None else selected[0]
+
+
+def _expression_and_symbol_at(
+    node: object,
+    path: tuple[str, ...],
+    base: SymbolPath | None,
+) -> tuple[ValueExpression, SymbolPath] | None:
+    """Select one expression and reproduce the resolver's exact child-symbol rules."""
     current = node
+    segments = () if base is None else base.segments
     for segment in path:
+        child_segment = _consumer_child_segment(current, segment)
         selected = _child(current, segment)
         if selected is None:
             return None
+        if child_segment is not None:
+            segments = (*segments, child_segment)
         current = selected
-    return current if is_value_expression(current) else None
+    if not is_value_expression(current):
+        return None
+    return current, SymbolPath(segments=segments or ("resolved-inspection",))
+
+
+def _consumer_child_segment(node: object, segment: str) -> str | None:
+    if type(node) in {CanonicalObject, ObjectExpr}:
+        return segment
+    if type(node) is ArrayExpr:
+        index = _index(segment)
+        return None if index is None else f"item-{index}"
+    if type(node) is CanonicalArray:
+        return segment
+    return None
 
 
 def _child(node: object, segment: str) -> object | None:  # noqa: C901 - closed graph traversal
@@ -755,7 +863,7 @@ def _index(segment: str) -> int | None:
 
 
 def _run_context(
-    request: ResolvedValueInspectionRequest,
+    request: _ResolvedValueInspectionRequest,
     snapshots: tuple[EnvironmentSnapshot, ...],
     files: PinnedProjectFiles,
 ) -> RunContext:
@@ -786,178 +894,103 @@ def _attempt_scope(work: ExecutionWork) -> AttemptScope:
     )
 
 
-def _target_symbol(request: ResolvedValueInspectionRequest) -> SymbolPath:
-    if (
-        request.resource.kind == ResourceKind.REQUEST.value
-        and request.field_path
-        and request.field_path[0] == "request"
-    ):
-        segments = request.field_path[:2]
-    else:
-        segments = request.field_path or ("resolved-inspection",)
-    try:
-        return SymbolPath(segments=segments)
-    except (TypeError, ValueError):
-        return SymbolPath(segments=("resolved-inspection",))
+@final
+class _TraversalBudget:
+    """Caller-owned ceiling and cooperative checkpoint for one complete value pass."""
+
+    __slots__ = ("_bytes", "_nodes", "_settings", "_work")
+
+    def __init__(self, settings: _ResolvedValueInspectionSettings) -> None:
+        self._settings = settings
+        self._nodes = 0
+        self._bytes = 0
+        self._work = 0
+
+    async def consume_node(self) -> None:
+        self._nodes += 1
+        if self._nodes > self._settings.maximum_traversal_nodes.value:
+            raise _ProjectionBudgetExceededError
+        await self.checkpoint(1)
+
+    async def consume_bytes(self, amount: int) -> None:
+        self._bytes += amount
+        if self._bytes > self._settings.maximum_traversal_bytes.value:
+            raise _ProjectionBudgetExceededError
+        await self.checkpoint(amount)
+
+    async def checkpoint(self, amount: int) -> None:
+        self._work += amount
+        if self._work >= 4096:
+            self._work = 0
+            await asyncio.sleep(0)
 
 
-def _result_fingerprint(
-    result: MaskedPresent | Unavailable | Missing | Error | Blocked,
-) -> str:
-    digest = hashlib.sha256()
-    digest.update(b"comparo.resolved-inspection.value/v1alpha1\0")
-    if type(result) is Unavailable:
-        digest.update(b"unavailable\0")
-        digest.update(result.reason.value.encode("ascii"))
-    elif type(result) is Missing:
-        digest.update(b"missing")
-    elif type(result) is Error:
-        digest.update(b"error\0")
-        digest.update(result.code.value.encode("ascii"))
-    elif type(result) is Blocked:
-        digest.update(b"blocked\0")
-        digest.update(result.code.value.encode("ascii"))
-    elif type(result.value) is MaskedSensitiveValue:
-        digest.update(b"masked\0")
-        digest.update(result.value.kind.value.encode("ascii"))
-        for origin in result.value.origins:
-            digest.update(b"\0")
-            digest.update(origin.value.encode("ascii"))
-    else:
-        digest.update(b"present\0")
-        _hash_value(digest, result.value)
-    return digest.hexdigest()
+@final
+class _PublicProjection(msgspec.Struct, frozen=True, kw_only=True):
+    fingerprint: str
+    nodes: tuple[ResolvedValueNode, ...]
+    next_node: int | None
 
 
-def _hash_value(  # noqa: C901 - exhaustive closed resolved-value hashing
-    updater: _Digest,
-    value: ResolvedValue,
-) -> None:
-    stack: list[Iterator[ResolvedValue | tuple[str, str]]] = [iter((value,))]
-    while stack:
-        try:
-            current = next(stack[-1])
-        except StopIteration:
-            stack.pop()
-            continue
-        if type(current) is tuple:
-            updater.update(b"key\0")
-            _hash_text(updater, current[1])
-        elif type(current) is JsonNull:
-            updater.update(b"null")
-        elif type(current) is JsonBoolean:
-            updater.update(b"true" if current.value else b"false")
-        elif type(current) is JsonInteger:
-            updater.update(b"integer\0")
-            _hash_integer(updater, current.value)
-        elif type(current) is JsonDecimal:
-            updater.update(b"number\0")
-            sign, digits, exponent = current.value.as_tuple()
-            _hash_integer(updater, sign)
-            _hash_integer(updater, cast("int", exponent))
-            for offset in range(0, len(digits), 4096):
-                updater.update(bytes(digits[offset : offset + 4096]))
-        elif type(current) is JsonString:
-            updater.update(b"string\0")
-            _hash_text(updater, current.value)
-        elif type(current) is JsonArray:
-            updater.update(b"array\0")
-            _hash_integer(updater, len(current.items))
-            stack.append(iter(current.items))
-        elif type(current) is JsonObject:
-            updater.update(b"object\0")
-            _hash_integer(updater, len(current.members))
-            stack.append(_object_hash_items(current))
-        elif type(current) is BytesValue:
-            updater.update(b"bytes\0")
-            updater.update(current.value)
-        elif type(current) is Duration:
-            updater.update(b"duration\0")
-            _hash_integer(updater, current.nanoseconds)
-        elif type(current) is ByteCount:
-            updater.update(b"size\0")
-            _hash_integer(updater, current.value)
-        else:  # pragma: no cover - the stack is populated from a closed ResolvedValue union
-            raise TypeError("unsupported resolved fingerprint value")
-
-
-def _object_hash_items(
-    value: JsonObject,
-) -> Iterator[ResolvedValue | tuple[str, str]]:
-    for member in value.members:
-        yield ("key", member.name)
-        yield member.value
-
-
-def _hash_text(updater: _Digest, value: str) -> None:
-    for offset in range(0, len(value), 4096):
-        updater.update(value[offset : offset + 4096].encode("utf-8", errors="replace"))
-
-
-def _hash_integer(updater: _Digest, value: int) -> None:
-    updater.update(b"-" if value < 0 else b"+")
-    remaining = abs(value)
-    updater.update(remaining.bit_length().to_bytes(8, "big"))
-    mask = (1 << 4096) - 1
-    while remaining:
-        updater.update((remaining & mask).to_bytes(512, "big"))
-        remaining >>= 4096
-
-
-def _project_result(
-    request: ResolvedValueInspectionRequest,
+async def _project_result(
+    request: _ResolvedValueInspectionRequest,
     work: ExecutionWork,
     attempt: AttemptScope,
     result: MaskedPresent | Unavailable | Missing | Error | Blocked,
-    fingerprint: str,
 ) -> ResolvedValueInspection:
     execution = _execution_coordinate(work, attempt)
     provenance = _provenance(result.provenance)
     if type(result) is Unavailable:
+        fingerprint = _outcome_fingerprint("unavailable", result.reason.value)
         return ResolvedValueInspection(
             resource=request.resource,
             field_path=request.field_path,
             execution=execution,
             state=ResolvedInspectionState.UNAVAILABLE,
             provenance=provenance,
-            value_fingerprint=fingerprint,
+            projection_fingerprint=fingerprint,
             code=result.reason.value,
             start_node=request.start_node,
         )
     if type(result) is Missing:
+        fingerprint = _outcome_fingerprint("missing")
         return ResolvedValueInspection(
             resource=request.resource,
             field_path=request.field_path,
             execution=execution,
             state=ResolvedInspectionState.MISSING,
             provenance=provenance,
-            value_fingerprint=fingerprint,
+            projection_fingerprint=fingerprint,
             start_node=request.start_node,
         )
     if type(result) is Error:
+        fingerprint = _outcome_fingerprint("error", result.code.value)
         return ResolvedValueInspection(
             resource=request.resource,
             field_path=request.field_path,
             execution=execution,
             state=ResolvedInspectionState.ERROR,
             provenance=provenance,
-            value_fingerprint=fingerprint,
+            projection_fingerprint=fingerprint,
             code=result.code.value,
             start_node=request.start_node,
         )
     if type(result) is Blocked:
+        fingerprint = _outcome_fingerprint("blocked", result.code.value)
         return ResolvedValueInspection(
             resource=request.resource,
             field_path=request.field_path,
             execution=execution,
             state=ResolvedInspectionState.BLOCKED,
             provenance=provenance,
-            value_fingerprint=fingerprint,
+            projection_fingerprint=fingerprint,
             code=result.code.value,
             start_node=request.start_node,
         )
     value = result.value
     if type(value) is MaskedSensitiveValue:
+        sources, omitted = await _bounded_taint_sources(value.origins, request.settings)
+        fingerprint = _masked_projection_fingerprint(value.kind, sources, omitted)
         nodes, next_node = _window(
             _masked_nodes(value),
             start=request.start_node,
@@ -969,16 +1002,18 @@ def _project_result(
             execution=execution,
             state=ResolvedInspectionState.PRESENT,
             provenance=provenance,
-            value_fingerprint=fingerprint,
+            projection_fingerprint=fingerprint,
             kind=value.kind,
             masked=True,
-            taint_origins=tuple(item.value for item in value.origins),
+            taint_sources=sources,
+            omitted_taint_origin_count=omitted,
             start_node=request.start_node,
             nodes=nodes,
             next_node=next_node,
         )
-    nodes, next_node = _window(
-        _value_nodes(value, request.settings),
+    projection = await _project_public_value(
+        value,
+        request.settings,
         start=request.start_node,
         maximum=request.maximum_nodes,
     )
@@ -988,12 +1023,242 @@ def _project_result(
         execution=execution,
         state=ResolvedInspectionState.PRESENT,
         provenance=provenance,
-        value_fingerprint=fingerprint,
+        projection_fingerprint=projection.fingerprint,
         kind=_kind(value),
         start_node=request.start_node,
-        nodes=nodes,
+        nodes=projection.nodes,
+        next_node=projection.next_node,
+    )
+
+
+def _outcome_fingerprint(state: str, code: str | None = None) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"comparo.resolved-inspection.projection/v1alpha2\0")
+    _frame_bytes(digest, state.encode("ascii"))
+    if code is not None:
+        _frame_bytes(digest, code.encode("ascii"))
+    return digest.hexdigest()
+
+
+def _masked_projection_fingerprint(
+    kind: ValueKind,
+    sources: tuple[ResolvedTaintSource, ...],
+    omitted: int,
+) -> str:
+    """Fingerprint only disclosed masked metadata, never undisclosed secret content."""
+    digest = hashlib.sha256()
+    digest.update(b"comparo.resolved-inspection.masked-projection/v1alpha2\0")
+    _frame_bytes(digest, kind.value.encode("ascii"))
+    for source in sources:
+        _frame_bytes(digest, source.value.encode("ascii"))
+    _frame_unsigned(digest, omitted)
+    return digest.hexdigest()
+
+
+async def _bounded_taint_sources(
+    origins: tuple[TaintOriginId, ...],
+    settings: _ResolvedValueInspectionSettings,
+) -> tuple[tuple[ResolvedTaintSource, ...], int]:
+    retained: list[ResolvedTaintSource] = []
+    retained_set: set[ResolvedTaintSource] = set()
+    used_bytes = 0
+    retained_origin_limit = min(len(origins), settings.maximum_taint_origins.value)
+    omitted = len(origins) - retained_origin_limit
+    for index in range(retained_origin_limit):
+        origin = origins[index]
+        if index and index % 256 == 0:
+            await asyncio.sleep(0)
+        source = _taint_source(origin)
+        encoded_bytes = len(source.value.encode("ascii"))
+        bytes_allowed = source in retained_set or (
+            used_bytes + encoded_bytes <= settings.maximum_taint_origin_bytes.value
+        )
+        if not bytes_allowed:
+            omitted += 1
+            continue
+        if source not in retained_set:
+            retained.append(source)
+            retained_set.add(source)
+            used_bytes += encoded_bytes
+    return tuple(retained), omitted
+
+
+def _taint_source(origin: TaintOriginId) -> ResolvedTaintSource:
+    prefix = origin.value.partition("/")[0]
+    sources = {
+        "configuration": ResolvedTaintSource.CONFIGURATION,
+        "env": ResolvedTaintSource.ENVIRONMENT,
+        "environment": ResolvedTaintSource.ENVIRONMENT,
+        "file": ResolvedTaintSource.FILE,
+        "generated": ResolvedTaintSource.GENERATED,
+        "provider": ResolvedTaintSource.PROVIDER,
+        "runtime": ResolvedTaintSource.RUNTIME,
+        "secret": ResolvedTaintSource.SECRET,
+        "yaml": ResolvedTaintSource.YAML,
+    }
+    return sources.get(prefix, ResolvedTaintSource.OTHER)
+
+
+async def _project_public_value(
+    value: ResolvedValue,
+    settings: _ResolvedValueInspectionSettings,
+    *,
+    start: int,
+    maximum: int,
+) -> _PublicProjection:
+    """Hash and project in one caller-bounded, cancellable pre-order traversal."""
+    digest = hashlib.sha256()
+    digest.update(b"comparo.resolved-inspection.public-projection/v1alpha2\0")
+    budget = _TraversalBudget(settings)
+    stack: list[Iterator[tuple[tuple[str, ...], ResolvedValue, str | None]]] = [
+        iter((((), value, None),))
+    ]
+    page: list[ResolvedValueNode] = []
+    ordinal = 0
+    while stack:
+        try:
+            path, current, object_key = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        await budget.consume_node()
+        _validate_output_path(path, settings)
+        if object_key is not None:
+            digest.update(b"K")
+            await _hash_text(digest, object_key, budget)
+        await _hash_value_node(digest, current, budget)
+        if start <= ordinal < start + maximum:
+            page.append(_node(ordinal, path, current, settings.maximum_scalar_bytes.value))
+        ordinal += 1
+        if type(current) is JsonArray:
+            stack.append(_array_value_children(path, current))
+        elif type(current) is JsonObject:
+            stack.append(_object_value_children(path, current))
+    next_node = start + len(page) if ordinal > start + len(page) else None
+    return _PublicProjection(
+        fingerprint=digest.hexdigest(),
+        nodes=tuple(page),
         next_node=next_node,
     )
+
+
+def _array_value_children(
+    parent: tuple[str, ...],
+    value: JsonArray,
+) -> Iterator[tuple[tuple[str, ...], ResolvedValue, str | None]]:
+    """Yield array children while capturing one immutable parent path."""
+    for index, item in enumerate(value.items):
+        yield (*parent, str(index)), item, None
+
+
+def _object_value_children(
+    parent: tuple[str, ...],
+    value: JsonObject,
+) -> Iterator[tuple[tuple[str, ...], ResolvedValue, str | None]]:
+    """Yield object children while capturing one immutable parent path."""
+    for member in value.members:
+        yield (*parent, member.name), member.value, member.name
+
+
+async def _hash_value_node(  # noqa: C901 - exhaustive closed resolved-value framing
+    digest: _Digest,
+    value: ResolvedValue,
+    budget: _TraversalBudget,
+) -> None:
+    if type(value) is JsonNull:
+        digest.update(b"N")
+    elif type(value) is JsonBoolean:
+        digest.update(b"T" if value.value else b"F")
+    elif type(value) is JsonInteger:
+        digest.update(b"I")
+        await _hash_integer(digest, value.value, budget)
+    elif type(value) is JsonDecimal:
+        digest.update(b"D")
+        sign, digits, exponent = value.value.as_tuple()
+        digest.update(b"-" if sign else b"+")
+        await _hash_integer(digest, cast("int", exponent), budget)
+        await budget.consume_bytes(len(digits))
+        _frame_unsigned(digest, len(digits))
+        for offset in range(0, len(digits), 4096):
+            digest.update(bytes(digits[offset : offset + 4096]))
+            await budget.checkpoint(min(4096, len(digits) - offset))
+    elif type(value) is JsonString:
+        digest.update(b"S")
+        await _hash_text(digest, value.value, budget)
+    elif type(value) is JsonArray:
+        digest.update(b"A")
+        _frame_unsigned(digest, len(value.items))
+    elif type(value) is JsonObject:
+        digest.update(b"O")
+        _frame_unsigned(digest, len(value.members))
+    elif type(value) is BytesValue:
+        digest.update(b"B")
+        await _hash_bytes(digest, value.value, budget)
+    elif type(value) is Duration:
+        digest.update(b"R")
+        await _hash_integer(digest, value.nanoseconds, budget)
+    elif type(value) is ByteCount:
+        digest.update(b"Z")
+        await _hash_integer(digest, value.value, budget)
+    else:  # pragma: no cover - the traversal is populated from a closed union
+        raise TypeError("unsupported resolved fingerprint value")
+
+
+async def _hash_text(
+    digest: _Digest,
+    value: str,
+    budget: _TraversalBudget,
+) -> None:
+    byte_count = 0
+    for offset in range(0, len(value), 4096):
+        encoded = value[offset : offset + 4096].encode("utf-8", errors="replace")
+        byte_count += len(encoded)
+        await budget.consume_bytes(len(encoded))
+    _frame_unsigned(digest, byte_count)
+    for offset in range(0, len(value), 4096):
+        encoded = value[offset : offset + 4096].encode("utf-8", errors="replace")
+        digest.update(encoded)
+        await budget.checkpoint(len(encoded))
+
+
+async def _hash_bytes(
+    digest: _Digest,
+    value: bytes,
+    budget: _TraversalBudget,
+) -> None:
+    await budget.consume_bytes(len(value))
+    _frame_unsigned(digest, len(value))
+    for offset in range(0, len(value), 4096):
+        chunk = value[offset : offset + 4096]
+        digest.update(chunk)
+        await budget.checkpoint(len(chunk))
+
+
+async def _hash_integer(
+    digest: _Digest,
+    value: int,
+    budget: _TraversalBudget,
+) -> None:
+    digest.update(b"-" if value < 0 else b"+")
+    remaining = abs(value)
+    byte_count = (remaining.bit_length() + 7) // 8
+    await budget.consume_bytes(byte_count)
+    _frame_unsigned(digest, byte_count)
+    while remaining:
+        chunk_bytes = min(512, (remaining.bit_length() + 7) // 8)
+        mask = (1 << (chunk_bytes * 8)) - 1
+        digest.update((remaining & mask).to_bytes(chunk_bytes, "little"))
+        remaining >>= chunk_bytes * 8
+        await budget.checkpoint(chunk_bytes)
+
+
+def _frame_bytes(digest: _Digest, value: bytes) -> None:
+    _frame_unsigned(digest, len(value))
+    digest.update(value)
+
+
+def _frame_unsigned(digest: _Digest, value: int) -> None:
+    digest.update(value.to_bytes(8, "big", signed=False))
 
 
 def _window(
@@ -1026,27 +1291,6 @@ def _masked_nodes(value: MaskedSensitiveValue) -> Iterator[ResolvedValueNode]:
         truncated=False,
         masked=True,
     )
-
-
-def _value_nodes(
-    value: ResolvedValue,
-    settings: ResolvedValueInspectionSettings,
-) -> Iterator[ResolvedValueNode]:
-    stack: list[Iterator[tuple[tuple[str, ...], ResolvedValue]]] = [iter((((), value),))]
-    ordinal = 0
-    while stack:
-        try:
-            path, current = next(stack[-1])
-        except StopIteration:
-            stack.pop()
-            continue
-        _validate_output_path(path, settings)
-        yield _node(ordinal, path, current, settings.maximum_scalar_bytes.value)
-        ordinal += 1
-        if type(current) is JsonArray:
-            stack.append((((*path, str(index)), item) for index, item in enumerate(current.items)))
-        elif type(current) is JsonObject:
-            stack.append(((*path, item.name), item.value) for item in current.members)
 
 
 def _node(
@@ -1270,7 +1514,7 @@ def _decimal_length(value: Decimal) -> int:
 
 def _validate_output_path(
     path: tuple[str, ...],
-    settings: ResolvedValueInspectionSettings,
+    settings: _ResolvedValueInspectionSettings,
 ) -> None:
     if len(path) > settings.maximum_path_segments.value:
         raise _ProjectionBudgetExceededError
@@ -1342,7 +1586,7 @@ def _coordinate(value: DefinitionRef | CompiledResource) -> ResourceCoordinate:
 
 
 def _request_diagnostic(
-    request: ResolvedValueInspectionRequest,
+    request: _ResolvedValueInspectionRequest,
     code: str,
 ) -> ApplicationDiagnostic:
     coordinate = request.resource
@@ -1372,15 +1616,12 @@ __all__ = (
     "ResolvedExecutionCoordinate",
     "ResolvedInputTiming",
     "ResolvedInspectionState",
+    "ResolvedTaintSource",
     "ResolvedValueFormat",
     "ResolvedValueFreshness",
     "ResolvedValueInspection",
-    "ResolvedValueInspectionRequest",
     "ResolvedValueInspectionResult",
-    "ResolvedValueInspectionSettings",
     "ResolvedValueInspectionTarget",
     "ResolvedValueNode",
     "ResolvedValueProjectionLimits",
-    "bind_resolved_value_target",
-    "inspect_resolved_value",
 )

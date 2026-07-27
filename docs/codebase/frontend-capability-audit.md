@@ -110,8 +110,8 @@ must use the typed invocation surface so normal precedence, provenance, policy, 
 | Summary, gate, executions, comparisons | Supported | `project_results` | Artifact facts are the verdict source of truth |
 | Issues/Requests/Rules/Fields/Timeline | Supported | `application.result_analysis` | Bounded derived lenses; no verdict recomputation |
 | Stable cross-navigation | Supported | `ResultReference` / `ResultCrossLink` | Suitable for screen routes and selection restoration |
-| Request/response metadata | Supported | `ResultHttpAttempt` / `ResultHttpExchange` / `ResultHttpMessage` plus authenticated artifact exchanges | Sanitized wire values only; canonical retry/redirect ordinals and semantic terminal markers include message-free pre-send attempts |
-| Full sanitized bodies | Supported | `read_artifact_body_window` | Result-coordinate lookup, media/capture metadata, byte windows, and truthful continuation |
+| Request/response metadata | Supported | `ResultHttpRequestSlot` / `ResultHttpResponseSlot` inside `ResultHttpAttempt` and `ResultHttpExchange` | Sanitized wire values only; retained/omitted/not-produced states are explicit, and terminal pre-send requests remain visible |
+| Full sanitized persisted bodies | Supported | `read_artifact_body_window` | Authenticated result-coordinate lookup, media/capture metadata, byte windows, and truthful continuation; live transient bodies are outside this contract |
 | Baseline/candidate body split view | Supported by composition | two body references/windows | Frontend aligns the two independent captures; chunk counts need not match |
 | Safe cURL | Supported | `export_artifact_curl` | Generated only from authenticated sanitized request captures |
 
@@ -140,16 +140,18 @@ bodies produce a typed warning and non-executable file placeholder rather than f
   exceptions, and filesystem paths do not enter widget state.
 - Project limits are caller-owned settings and policy ceilings. Versioned defaults are
   replaceable operational defaults, not schema-wide maximums.
-- Parent-process values are copied into one bounded immutable tuple before asynchronous execution,
-  and only when a selected Environment declares `inheritProcess`. A request carrying `None` or an
-  empty tuple does not perform a later ambient read.
+- Parent-process values are copied into one bounded sealed carrier with a value-free debug
+  representation before asynchronous execution, and only when a selected Environment declares
+  `inheritProcess`. A request carrying `None` or an empty carrier does not perform a later ambient
+  read.
 - Exact source mode is the only intentional authored-secret disclosure surface. Masked source,
   masked resolution, request preview, artifacts, archive rows, cURL, and reports are separate safe
   projections.
 - Generic resolved inspection never returns a live resolver, prepared plan, local path, provider
-  exception, or sensitive payload. Its page limit bounds egress; source/resolution budgets bound
-  value construction, while stable continuation fingerprints require traversal of the resolved
-  value.
+  exception, source-derived taint identifier, or sensitive payload. Caller-owned page and complete
+  traversal limits bound egress and inspection work; source/resolution budgets bound value
+  construction. Aggregate-sensitive values collapse, while frontends may inspect known effective
+  child paths independently to display public siblings.
 - The final `RunArtifact` is authoritative for results. Live progress is operational state, not a
   second verdict engine.
 

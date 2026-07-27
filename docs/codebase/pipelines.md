@@ -197,16 +197,20 @@ The selection uses the execution's exact Matrix cell, Environment, trial, and at
 For Request resources it applies the same typed `RequestOverride` expression replacement used by
 production request preparation. It creates one inspection-owned `RunContext` and resolves through
 `MaskedValueResolver`, which shares the production resolution engine. A sensitive result,
-including a sensitive composite, collapses to `<masked>`, its value kind, and safe taint-origin
-identifiers; no sensitive child value or sensitive digest is returned.
+including a sensitive composite, collapses to `<masked>`, its value kind, bounded opaque source
+categories, and an omitted-origin count; no source-derived origin identifier, sensitive child
+value, or sensitive digest is returned. This collapse is deliberately fail-closed. A frontend that
+needs to show public siblings inside a sensitive composite inspects the known effective child
+field paths independently and never attempts to expand the collapsed aggregate.
 
 Public results are emitted as pre-order scalar/container nodes with caller-owned page, scalar,
-path-depth, and path-segment limits. Continuation pages require the previous value fingerprint, so
-a changed local source fails closed instead of combining inconsistent pages. Iterator-frame
-traversal keeps fingerprinting and projection auxiliary memory proportional to nesting depth, not
-sibling count. Resolving and producing a stable fingerprint still inspect the complete resolved
-value and are bounded by source/resolution budgets; page limits bound frontend egress rather than
-the cost of value construction.
+path-depth, path-segment, complete-traversal node/byte, and taint-lineage limits. Continuation pages
+require the previous `projection_fingerprint`, so a changed public projection fails closed instead
+of combining inconsistent pages. For masked results that fingerprint covers only disclosed masked
+metadata; it intentionally makes no claim about undisclosed secret-content identity. A single
+cancellable traversal computes the public fingerprint and page, with iterator-frame auxiliary
+memory proportional to nesting depth rather than sibling count. Traversal ceilings bound the work
+needed even for a deep page; source/resolution budgets separately bound value construction.
 
 The returned `freshness` is explicit: the plan checkpoint and captured ambient-process input are
 exact. Dotenv files, project files, and generated values are sampled for inspection; production
@@ -355,9 +359,12 @@ redaction rules and Environment-specific response classification provider.
 
 `project_results` converts one sanitized `RunArtifact` into a body-free, renderer-independent
 model with summary, execution rows, comparison rows, assertion/diff facts, evidence, stable
-references, and cross-links. Execution rows also expose immutable request/response coordinates
-and whether each retained message has capture metadata; they do not contain body bytes or storage
-locators. The projection never opens blobs or changes verdicts.
+references, and cross-links. Execution rows expose canonical attempt/exchange topology and closed
+HTTP message slots: retained sanitized metadata, a typed omission reason, or a response that was
+not produced because transport failed. Retained exchange messages also expose immutable body
+coordinates and capture-presence flags. Terminal pre-send request metadata remains inspectable
+without fabricating an exchange. The projection contains no body bytes, blob descriptors, storage
+locators, or live runtime objects; it never opens blobs or changes verdicts.
 
 `result_analysis` derives bounded views:
 

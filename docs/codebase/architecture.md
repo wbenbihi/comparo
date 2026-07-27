@@ -91,8 +91,10 @@ inside the service, then returns an irreversibly masked, bounded projection. Bot
 when execution is blocked by a missing approval or artifact destination. `start` consumes the
 handle only when the controls exactly match the reviewed controls and no inspection is in flight,
 then creates an `ExecutionSession` from the same ambient-process snapshot. Discard and close
-request cancellation of in-flight inspections; their plans and task leases remain counted until
-each coroutine's `finally` finishes cleanup, then the retained state is released.
+request cancellation of service-owned child inspection tasks rather than cancelling arbitrary
+frontend orchestration tasks. Their plans and task leases remain counted until cleanup finishes,
+then the retained state is released. Synchronous `close` only requests cancellation; `aclose`
+waits for cleanup using a caller-owned timeout and returns a value-free timeout diagnostic.
 Concurrent inspections per retained preparation are caller-bounded; the default is single-flight.
 
 This prevents a UI from reviewing one set of mutation, artifact, or resource-limit settings and

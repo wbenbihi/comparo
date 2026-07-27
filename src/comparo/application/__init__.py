@@ -20,6 +20,7 @@ from comparo.application.artifacts import (
     validate_project_artifact_root as validate_project_artifact_root,
 )
 from comparo.application.artifacts import verify_artifact as verify_artifact
+from comparo.application.compare import CompareCloseResult as CompareCloseResult
 from comparo.application.compare import CompareExecutionControls as CompareExecutionControls
 from comparo.application.compare import CompareIntent as CompareIntent
 from comparo.application.compare import ComparePreparationHandle as ComparePreparationHandle
@@ -40,6 +41,9 @@ from comparo.application.diagnostic_catalog import DiagnosticPresentation as Dia
 from comparo.application.diagnostic_catalog import present_diagnostic as present_diagnostic
 from comparo.application.diagnostics import SecurityCheck as SecurityCheck
 from comparo.application.diagnostics import run_security_checks as run_security_checks
+from comparo.application.environment_binding import (
+    CapturedAmbientEnvironment as CapturedAmbientEnvironment,
+)
 from comparo.application.environment_binding import (
     EnvironmentBindingResult as EnvironmentBindingResult,
 )
@@ -210,19 +214,14 @@ from comparo.application.resolved_inspection import ResolvedInputTiming as Resol
 from comparo.application.resolved_inspection import (
     ResolvedInspectionState as ResolvedInspectionState,
 )
+from comparo.application.resolved_inspection import ResolvedTaintSource as ResolvedTaintSource
 from comparo.application.resolved_inspection import ResolvedValueFormat as ResolvedValueFormat
 from comparo.application.resolved_inspection import ResolvedValueFreshness as ResolvedValueFreshness
 from comparo.application.resolved_inspection import (
     ResolvedValueInspection as ResolvedValueInspection,
 )
 from comparo.application.resolved_inspection import (
-    ResolvedValueInspectionRequest as ResolvedValueInspectionRequest,
-)
-from comparo.application.resolved_inspection import (
     ResolvedValueInspectionResult as ResolvedValueInspectionResult,
-)
-from comparo.application.resolved_inspection import (
-    ResolvedValueInspectionSettings as ResolvedValueInspectionSettings,
 )
 from comparo.application.resolved_inspection import (
     ResolvedValueInspectionTarget as ResolvedValueInspectionTarget,
@@ -231,10 +230,6 @@ from comparo.application.resolved_inspection import ResolvedValueNode as Resolve
 from comparo.application.resolved_inspection import (
     ResolvedValueProjectionLimits as ResolvedValueProjectionLimits,
 )
-from comparo.application.resolved_inspection import (
-    bind_resolved_value_target as bind_resolved_value_target,
-)
-from comparo.application.resolved_inspection import inspect_resolved_value as inspect_resolved_value
 from comparo.application.result_analysis import AnalysisProjection as AnalysisProjection
 from comparo.application.result_analysis import FieldPathAggregate as FieldPathAggregate
 from comparo.application.result_analysis import IssueAggregate as IssueAggregate
@@ -253,8 +248,16 @@ from comparo.application.results import ResultCrossLink as ResultCrossLink
 from comparo.application.results import ResultEntity as ResultEntity
 from comparo.application.results import ResultFact as ResultFact
 from comparo.application.results import ResultHttpAttempt as ResultHttpAttempt
+from comparo.application.results import ResultHttpCookie as ResultHttpCookie
 from comparo.application.results import ResultHttpExchange as ResultHttpExchange
+from comparo.application.results import ResultHttpField as ResultHttpField
 from comparo.application.results import ResultHttpMessage as ResultHttpMessage
+from comparo.application.results import ResultHttpMessageState as ResultHttpMessageState
+from comparo.application.results import ResultHttpOmissionReason as ResultHttpOmissionReason
+from comparo.application.results import ResultHttpRequestMetadata as ResultHttpRequestMetadata
+from comparo.application.results import ResultHttpRequestSlot as ResultHttpRequestSlot
+from comparo.application.results import ResultHttpResponseMetadata as ResultHttpResponseMetadata
+from comparo.application.results import ResultHttpResponseSlot as ResultHttpResponseSlot
 from comparo.application.results import ResultProjection as ResultProjection
 from comparo.application.results import ResultReference as ResultReference
 from comparo.application.results import ResultRelation as ResultRelation
@@ -301,7 +304,9 @@ __all__ = (
     "ArtifactReadLimits",
     "BoundExecutionProfiles",
     "BudgetOverride",
+    "CapturedAmbientEnvironment",
     "ClearProfileSelection",
+    "CompareCloseResult",
     "CompareExecutionControls",
     "CompareIntent",
     "ComparePreparationHandle",
@@ -400,12 +405,11 @@ __all__ = (
     "ResolvedExecutionCoordinate",
     "ResolvedInputTiming",
     "ResolvedInspectionState",
+    "ResolvedTaintSource",
     "ResolvedValueFormat",
     "ResolvedValueFreshness",
     "ResolvedValueInspection",
-    "ResolvedValueInspectionRequest",
     "ResolvedValueInspectionResult",
-    "ResolvedValueInspectionSettings",
     "ResolvedValueInspectionTarget",
     "ResolvedValueNode",
     "ResolvedValueProjectionLimits",
@@ -413,8 +417,16 @@ __all__ = (
     "ResultEntity",
     "ResultFact",
     "ResultHttpAttempt",
+    "ResultHttpCookie",
     "ResultHttpExchange",
+    "ResultHttpField",
     "ResultHttpMessage",
+    "ResultHttpMessageState",
+    "ResultHttpOmissionReason",
+    "ResultHttpRequestMetadata",
+    "ResultHttpRequestSlot",
+    "ResultHttpResponseMetadata",
+    "ResultHttpResponseSlot",
     "ResultProjection",
     "ResultProjectionWindow",
     "ResultReference",
@@ -435,7 +447,6 @@ __all__ = (
     "ValueResourceOverride",
     "apply_report_retention",
     "bind_execution_profiles",
-    "bind_resolved_value_target",
     "build_environment_snapshots",
     "build_invocation",
     "capture_process_environment",
@@ -455,7 +466,6 @@ __all__ = (
     "inspect_project_plan",
     "inspect_project_source",
     "inspect_project_workspace",
-    "inspect_resolved_value",
     "inspect_runtime_limits",
     "list_report_archive",
     "persisted_production_execution_defaults_v1",
