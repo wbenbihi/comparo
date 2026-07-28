@@ -13,10 +13,11 @@ Status meanings:
 ## Executive assessment
 
 The backend now supports the complete core Comparo journey: inspect a project, build or override a
-bounded execution, review the exact plan and authority, preview requests lazily, run assertions and
-directed environment diffs, follow bounded live progress, inspect final facts and sanitized bodies,
-and browse/export/retain historical reports. The TUI does not need to import the current TUI code
-or invent missing domain behavior.
+bounded execution, review the exact plan and authority, preview supported request occurrences
+lazily, run assertions and directed environment diffs, follow bounded live progress, inspect final
+facts and sanitized bodies, and browse/export/retain historical reports. The TUI does not need to
+import the current TUI code or invent missing domain behavior. The detailed callable contract and
+all design consequences are in [TUI/backend integration](tui-backend-integration.md).
 
 The remaining product gaps are deliberate scope decisions, not hidden presentation work:
 
@@ -38,7 +39,7 @@ The remaining product gaps are deliberate scope decisions, not hidden presentati
 | Detect source changes | Supported | `expected_sha256` | A changed source fails with a closed `source-changed` code |
 | Show effective compiled structure | Supported | `inspect_effective_resource` | Fingerprint-exact, value-safe, paged fields and relationships |
 | Raw/effective side by side | Supported | source + effective inspection services | Use source/resource fingerprints to label the two representations honestly |
-| Show runtime-resolved Request values | Supported | `render_prepared_request_window` | Sanitized outbound request preview, one ordinal window at a time |
+| Show runtime-resolved Request values | Partial | `render_prepared_request_window` | Sanitized outbound request preview, one ordinal window at a time; body/auth-bearing occurrences currently lack the production materializer/finalizer and can return safe diagnostics |
 | Show arbitrary generic resolved values | Supported | `CompareService.inspect_resolved_value` / `ResolvedValueInspectionTarget` | Exact retained plan, execution ordinal, Environment, Matrix cell, and effective Request overrides; sensitive values are irreversibly masked and public values are fingerprinted, paged, and bounded |
 | Explain planning precedence | Supported | plan provenance inspections | Runtime request-field provenance is not yet projected field by field |
 
@@ -66,7 +67,7 @@ again.
 | Ephemeral full ExecutionProfile resource | Partial | Compose the typed controls above | There is no second anonymous profile language; controls compile into the normal invocation model |
 | Preview exact topology and authority | Supported | `PlanReviewInspection` | Includes counts, profiles, limits, provenance, policy, and mutation approval |
 | Review/start checkpoint | Supported | `CompareService` one-shot handle | Start rejects controls that differ from the reviewed checkpoint |
-| Preview very large runs | Supported | `CompareService.preview_requests` | Resolves only the requested ordinal window from the exact retained plan and reviewed controls; the handle remains usable for later pages or execution |
+| Preview very large runs | Partial | `CompareService.preview_requests` | Resolves only the requested ordinal window from the exact retained plan and reviewed controls; body/auth-bearing occurrences can be diagnostic-only, and the handle remains usable for later pages or execution |
 | Inspect one effective resolved field | Supported | `CompareService.inspect_resolved_value` | Uses the same retained handle and controls; in-flight inspections block start, and discard/close request cancellation while retaining the plan until cleanup drains |
 
 No frontend may mutate `CompiledProject` or synthesize `PreparedRun` internals. Every ad-hoc edit
@@ -96,11 +97,12 @@ must use the typed invocation surface so normal precedence, provenance, policy, 
 | --- | --- | --- | --- |
 | Async start and cancellation | Supported | `ExecutionSession` | One explicit run-owned task and cancellation source |
 | Overall progress | Supported | `ExecutionProgressSnapshot` | Phase and exact queued/started/finished totals |
-| Per-occurrence state/outcome | Supported | `LiveOccurrenceProgress` | Queued/running/finished plus observed/unavailable/blocked/cancelled/evaluated/incomplete |
+| Per-occurrence state/outcome | Partial | `LiveOccurrenceProgress` | State, outcomes, and failure codes are available, but subject/Environment/cell/trial coordinates are not projected during the run |
 | Safe failure and timing | Supported | occurrence fields | Closed stage/code plus observer start/finish/elapsed nanoseconds |
 | Recent event timeline | Supported | `recent_events` | Bounded caller-owned window |
 | Slow frontend backpressure | Supported | latest-only mailbox | Occurrence/event windows are bounded; omission is explicit |
 | Final assertion/diff/gate summary | Supported | `ExecutionFinalSummary` | Projected from the final artifact before terminal close |
+| Live assertion/diff/gate state | Deferred | final artifact only | No provisional rule-fact or gate stream exists; do not infer one from execution counters |
 | Live body/chunk viewer | Partial by security design | final artifact body service | Body content crosses the frontend boundary only after sanitization; stream progress is not a live raw-payload console |
 
 ## Final analysis and bodies
@@ -125,7 +127,8 @@ bodies produce a typed warning and non-executable file placeholder rather than f
 | Persist sanitized artifacts | Supported | local artifact sink | Private atomic POSIX bundles with independent artifact schema |
 | List and search history | Supported | `query_report_archive` | Authenticated safe filters, stable cursor, page size, total matches, per-entry failures |
 | Useful archive metadata | Supported | `ReportArchiveEntry` | Duration, profile, subjects/envs, counts, adverse facts, title/tags, VCS and CI context |
-| Notes | Supported in full artifact | `RunArtifact.annotations.notes` | Kept out of compact rows by design |
+| Notes | Partial | `RunArtifact.annotations.notes` | Retained in sanitized artifacts, but absent from `ResultProjection`; a TUI Notes facet needs a safe application projection |
+| Author run annotations | Partial | `ProductionRunAnnotations` | Headless execution accepts them, but `CompareExecutionControls` does not yet carry them |
 | Open and verify | Supported | `verify_artifact` | Hashes every declared blob before full use |
 | Export JSON/JUnit/SARIF/Markdown | Supported | `render_artifact_report` | Caller-bounded output |
 | Retention/archive removal | Supported, recoverable | `plan_report_retention` / `apply_report_retention` | Reviewed fingerprinted plan, full preflight before mutation, re-verification, private trash namespace. Moving to trash does not reclaim filesystem space. |

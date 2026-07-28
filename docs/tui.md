@@ -8,6 +8,10 @@ artifacts itself.
 
 The reusable result surface and its safety boundary are specified in the
 [TUI results implementation contract](tui-results-implementation-contract.md).
+The backend calls, DTO fields, lifetimes, paging rules, and screen-level information map are
+specified in the [TUI/backend integration contract](codebase/tui-backend-integration.md). A
+replacement interface should use that document rather than the rejected current TUI as its source
+of truth.
 
 ## Launching
 
@@ -101,9 +105,12 @@ learns them. The detail panel shows only safe identity and metadata:
 - name, description, and tags;
 - source id, document, line, and column.
 
-Compiled specifications, resolved values, environment-file contents, and live secret containers
-do not cross this inspection boundary. A failed compilation produces structured, value-free
-diagnostics instead of an exception or raw source dump. `r` reloads the project.
+The default catalog contains only value-safe structural outlines. Separate application services
+provide revision-pinned masked or explicitly exact authored source, bounded effective structure,
+dependency edges, and plan-scoped masked resolved-field inspection. Environment-file contents and
+live secret containers never cross the frontend boundary. A failed compilation produces
+structured, value-free diagnostics instead of an exception or raw source dump. `r` reloads the
+project.
 
 ## Compare
 
@@ -162,11 +169,11 @@ Compare is a live journey and Report is read-only. Both surfaces show:
 - outcomes, rule identities, bounded evidence summaries, attempts, exchanges, and decomposed
   timing facts already present in the artifact.
 
-The first migrated result slice is deliberately manifest-only. Full response bodies are still
+The shared result projection is deliberately manifest-only. Full request/response bodies are
 captured and sanitized through the bounded spool/storage abstraction according to execution
-policy, but this surface does not eagerly load detached blobs. A later lazy content-lease widget
-can add body inspection without changing the result model or allowing terminal memory to scale
-with all responses.
+policy. The backend now exposes authenticated byte windows bound to exact result coordinates; the
+interface should load those windows lazily without allowing terminal memory to scale with all
+responses.
 
 ## Report
 
@@ -220,8 +227,8 @@ controls contained before it reaches a widget; Rich markup is disabled for data-
 
 Stateful Scenario execution remains Step 15. Its future placement is already stable: definitions
 appear in Explorer, active execution appears in Compare, and persisted outcomes appear in Report.
-The backend can export safe cURL from an authenticated sanitized post-run request capture. Planned
-request export and clipboard integration remain deferred; when added, the displayed and copied
-command must be identical and must never place a live credential in the clipboard.
+The backend can export safe cURL from an authenticated sanitized post-run request capture. The TUI
+integration remains presentation work: the displayed and copied command must be identical, expose
+its redaction/executability warnings, and never place a live credential in the clipboard.
 Browser automation is outside Comparo's scope; WebSocket and gRPC transports and a public plugin
 system remain deferred.

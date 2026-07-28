@@ -5,7 +5,7 @@ describes the working tree as it exists, not only the intended architecture reco
 roadmap and ADRs. It deliberately excludes `src/comparo/tui`: a replacement interface should
 consume the application contracts documented here rather than copy behavior from the current TUI.
 
-Last code audit: **2026-07-26**, on the `refactor` branch.
+Last code audit: **2026-07-28**, on the `refactor` branch.
 
 ## How to read this guide
 
@@ -14,10 +14,10 @@ main source of false assumptions about what a frontend can do.
 
 | Level | Meaning | Example |
 | --- | --- | --- |
-| Modeled | Immutable domain types can represent the concept | Typed JSON, multipart, retry, SSE, and TLS types exist |
-| Compiled | `comparo/v1alpha1` accepts and links the authored syntax | A remote `responseSchema` can compile |
-| Executable | The production composition lowers the compiled graph and performs the behavior | Body-free Requests execute today |
-| Inspectable | A frontend-neutral application service exposes a safe projection | The plan, archive, and result manifest are inspectable |
+| Modeled | Immutable domain types can represent the concept | Typed HTTP bodies, retries, SSE, and Scenario scopes exist |
+| Compiled | `comparo/v1alpha1` accepts and links the authored syntax | A Scenario or remote `responseSchema` can compile |
+| Executable | The production composition lowers the compiled graph and performs the behavior | Requests execute; Scenarios are rejected before effects |
+| Inspectable | A frontend-neutral application service exposes a safe projection | The plan, archive, resolved fields, and results are inspectable |
 
 A feature is usable by a new TUI only when every required stage is executable **and** an
 appropriate application projection exists. Domain support by itself is not a product feature.
@@ -31,6 +31,9 @@ appropriate application projection exists. Domain support by itself is not a pro
 - [Frontend capability audit](frontend-capability-audit.md) is the handoff contract for a new TUI.
   It marks each expected Explorer, Compare, live-run, and Report capability as supported,
   partial, or missing.
+- [TUI/backend integration contract](tui-backend-integration.md) is the detailed callable API and
+  information-design reference. It maps every TUI surface to application DTOs, lifecycle rules,
+  paging, cancellation, safety guarantees, and current limitations.
 - [Module catalog](module-catalog.md) maps every non-TUI package and source module to its purpose.
 - [Contributor workflow](contributor-workflow.md) shows where to start, how to trace a feature,
   which invariants must remain true, and how the repository is verified.
@@ -71,6 +74,10 @@ The [capability audit](frontend-capability-audit.md) gives the complete frontend
 New interactive code should begin with `comparo.application`, not internal core objects or the
 current TUI backend.
 
+The complete call/lifecycle guidance is in the
+[TUI/backend integration contract](tui-backend-integration.md). The compact table below is only an
+index.
+
 | Need | Application boundary |
 | --- | --- |
 | Load Explorer structure | `inspect_project_workspace` |
@@ -80,7 +87,7 @@ current TUI backend.
 | Build invocation/resource/request/profile overrides | `PlanningOptions` / `plan_project` |
 | Prepare and start Compare | `CompareService` |
 | Inspect a plan before execution | `PlanReviewInspection` and `inspect_plan` |
-| Resolve a safe outbound preview | `render_prepared_request_window` / `render_prepared_requests` |
+| Resolve a safe outbound preview | `CompareService.preview_requests` (direct render functions are for headless composition) |
 | Observe/cancel an interactive run | `ExecutionSession` |
 | Execute without the session facade | `execute_production` |
 | Project final results and sanitized HTTP metadata | `project_results` |

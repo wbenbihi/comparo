@@ -226,7 +226,7 @@ guarantee that a mutable or generated input will remain unchanged before executi
 
 `render_prepared_requests` and `render_prepared_request_window` resolve planned requests using
 pinned project files, isolated env snapshots, deterministic preview generation, and the same
-request provider used by production. They perform no DNS lookup or network I/O. Results are
+request-field lowering used by production. They perform no DNS lookup or network I/O. Results are
 sanitized before crossing the application boundary; the windowed service skips directly to a
 caller-selected canonical ordinal range.
 
@@ -234,6 +234,12 @@ Each preview includes occurrence IDs, subject/environment coordinates, method, s
 ordered headers, redacted cookies, and body omission metadata. Query fields are represented inside
 the URL. Exact per-field runtime provenance is not yet returned. Body-bearing request cURL export
 therefore uses the authenticated post-run sanitized capture instead of a live preview.
+
+The current offline preview composition deliberately has no production body materializer or
+authentication finalizer. A body-bearing or typed-auth occurrence can therefore produce a safe
+per-occurrence preparation diagnostic even though the production path supports that request. A
+frontend must present the page as a sanitized preview with explicit partial failures, not as an
+exact universal wire dump.
 
 ## 5. Production HTTP execution
 

@@ -64,9 +64,10 @@ RunArtifact
   -> presentation widgets
 ```
 
-For request/response bodies, follow the `ArtifactCapture.blob` digest through
-`application.artifacts.read_artifact_blob`. Do not read transient body stores from presentation
-code.
+For request/response bodies, follow the `ArtifactBodyReference` projected on the owning HTTP
+message through `application.artifacts.read_artifact_body_window`. This authenticates the exact
+artifact results revision and message coordinates. Generic blob reads and transient body stores
+must not be used by presentation code.
 
 ### Trace an Explorer row
 
@@ -194,6 +195,9 @@ catalog in the same incremental change. If a change contradicts an accepted ADR,
 ADR rather than silently editing its historical decision.
 
 ## Handoff checklist for a replacement TUI
+
+Read the [TUI/backend integration contract](tui-backend-integration.md) before implementing a
+workspace. It is the exhaustive callable and information-design reference.
 
 Before implementing a screen, identify:
 

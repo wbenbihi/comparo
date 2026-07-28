@@ -51,7 +51,7 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `project_outline` | Secret-free compiled resource structure and dependency/used-by graph |
 | `project_workspace` | Explorer project compilation and safe resource/source snapshot facade |
 | `remote_schemas`, `schema_validation`, `regex_validation`, `digest_validation` | Authorized bounded preparation of external/local evaluation capabilities |
-| `render_preview` | Offline run-scoped sanitized request previews, including lazy ordinal windows |
+| `render_preview` | Offline run-scoped sanitized body-free/no-auth request previews, including lazy ordinal windows; unsupported occurrences return safe diagnostics |
 | `resolved_inspection` | Handle-bindable, execution-exact masked expression inspection with bounded fingerprinted node windows and explicit local-source freshness |
 | `report_archive` | Authenticated searchable cursor-paged report rows and metadata projections |
 | `report_retention` | Reviewable fingerprinted recoverable report pruning and restoration |

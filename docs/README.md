@@ -1,13 +1,16 @@
 # Comparo documentation
 
-The `refactor` branch currently contains Steps 1 through 11 of the rebuild: the immutable
-domain, shared selector engine, pure evaluation kernel, versioned configuration compiler,
-deterministic planner, run-scoped value/secrets boundary, bounded runtime, production HTTP adapter,
-sanitized artifact/reporting boundary, migrated local CLI, and component-based terminal UI. The
-authoritative current documents are:
+The `refactor` branch contains the rebuilt immutable domain, shared selector engine, pure
+evaluation kernel, versioned configuration compiler, deterministic planner, run-scoped
+value/secrets boundary, bounded runtime, production HTTP adapter, sanitized artifact/reporting
+boundary, migrated local CLI, and frontend-neutral TUI application contracts. The current TUI
+presentation is rejected as a product reference; its replacement must consume the documented
+backend contracts below. The authoritative current documents are:
 
 - [Core/backend codebase golden reference](codebase/README.md) — current implementation truth,
   end-to-end pipelines, module catalog, contributor workflow, and replacement-TUI capability audit
+- [TUI/backend integration contract](codebase/tui-backend-integration.md) — callable application
+  APIs, safe display fields, lifecycles, paging, cancellation, and screen-level data mapping
 - [Core domain foundation](core-domain-foundation.md)
 - [Selector language](selector-language.md)
 - [Pure evaluation kernel](core-evaluation-kernel.md)
