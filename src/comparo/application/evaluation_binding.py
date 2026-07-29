@@ -358,14 +358,61 @@ class EvaluationPreflightResult(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
-class _SubjectRules(msgspec.Struct, frozen=True, kw_only=True):
+class CompiledSubjectRules(msgspec.Struct, frozen=True, kw_only=True):
+    """Exact compiled assertion and diff rules attached to one admitted subject."""
+
     subject: DefinitionRef
     assertions: tuple[CompiledAssertionRule, ...]
     diffs: tuple[CompiledDiffRule, ...]
 
+    def __post_init__(self) -> None:
+        """Require immutable typed rule collections and a subject definition."""
+        if type(self.subject) is not DefinitionRef:
+            raise TypeError("compiled evaluation subject must be a DefinitionRef")
+        if type(self.assertions) is not tuple or any(
+            type(item) is not CompiledAssertionRule for item in self.assertions
+        ):
+            raise TypeError("compiled subject assertions must be immutable and typed")
+        if type(self.diffs) is not tuple or any(
+            type(item) is not CompiledDiffRule for item in self.diffs
+        ):
+            raise TypeError("compiled subject diffs must be immutable and typed")
+
+
+@final
+class EvaluationRuleCatalogResult(msgspec.Struct, frozen=True, kw_only=True):
+    """Exactly one compiled rule catalog or its value-free diagnostics."""
+
+    subjects: tuple[CompiledSubjectRules, ...] = ()
+    gate: CompiledGateProfile | None = None
+    diagnostics: tuple[Diagnostic, ...] = ()
+    rejected: tuple[RejectedEvaluationCapability, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Keep usable catalogs and rejected compilation products disjoint."""
+        if type(self.subjects) is not tuple or any(
+            type(item) is not CompiledSubjectRules for item in self.subjects
+        ):
+            raise TypeError("evaluation rule catalog subjects must be immutable and typed")
+        if self.gate is not None and type(self.gate) is not CompiledGateProfile:
+            raise TypeError("evaluation rule catalog gate must be compiled or absent")
+        if type(self.diagnostics) is not tuple or any(
+            type(item) is not Diagnostic for item in self.diagnostics
+        ):
+            raise TypeError("evaluation rule catalog diagnostics must be immutable and typed")
+        if type(self.rejected) is not tuple or any(
+            type(item) is not RejectedEvaluationCapability for item in self.rejected
+        ):
+            raise TypeError("evaluation rule catalog rejections must be immutable and typed")
+        if self.diagnostics:
+            if self.subjects or self.gate is not None:
+                raise ValueError("rejected evaluation catalog cannot retain compiled products")
+        elif not self.subjects:
+            raise ValueError("successful evaluation catalog requires admitted subjects")
+
 
 def _snapshot_requirements(
-    subjects: tuple[_SubjectRules, ...],
+    subjects: tuple[CompiledSubjectRules, ...],
 ) -> SelectionSnapshotRequirements:
     """Derive adapter materialization needs solely from already-compiled selectors."""
     selectors = tuple(
@@ -472,7 +519,7 @@ class ConfigurationEvaluationPreparation:
         prepared: PreparedRun,
         context: RunContext,
         limits: EvaluationRuleLimits,
-        subjects: tuple[_SubjectRules, ...],
+        subjects: tuple[CompiledSubjectRules, ...],
         gate: CompiledGateProfile | None,
         schemas: PreparedSchemaCatalog,
         regexes: PreparedRegexCatalog,
@@ -483,7 +530,9 @@ class ConfigurationEvaluationPreparation:
             raise TypeError("configuration evaluation requires PreparedRun and RunContext")
         if type(limits) is not EvaluationRuleLimits:
             raise TypeError("configuration evaluation requires EvaluationRuleLimits")
-        if type(subjects) is not tuple or any(type(item) is not _SubjectRules for item in subjects):
+        if type(subjects) is not tuple or any(
+            type(item) is not CompiledSubjectRules for item in subjects
+        ):
             raise TypeError("configuration evaluation subjects must be an immutable typed tuple")
         if gate is not None and type(gate) is not CompiledGateProfile:
             raise TypeError("configuration evaluation gate must be compiled")
@@ -668,7 +717,7 @@ class ConfigurationEvaluationPreparation:
         if type(prepared) is not PreparedRun or prepared is not self._prepared:
             raise ValueError("evaluation preparation belongs to another PreparedRun")
 
-    def _rules(self, subject: DefinitionRef) -> _SubjectRules:
+    def _rules(self, subject: DefinitionRef) -> CompiledSubjectRules:
         found = next((item for item in self._subjects if item.subject == subject), None)
         if found is None:
             raise ValueError("evaluation subject was not preflighted")
@@ -769,6 +818,38 @@ def preflight_configuration_evaluation(
     )
 
 
+def compile_configuration_rule_catalog(
+    prepared: PreparedRun,
+    schema_limits: SchemaValidationLimits = DEFAULT_SCHEMA_VALIDATION_LIMITS_V1,
+    regex_limits: RegexValidationLimits = DEFAULT_REGEX_VALIDATION_LIMITS_V1,
+    *,
+    policy: CompiledExecutionPolicy | None = None,
+) -> EvaluationRuleCatalogResult:
+    """Compile the exact pre-run rule catalog without resolving values or causing effects."""
+    if type(prepared) is not PreparedRun:
+        raise TypeError("evaluation rule catalog requires PreparedRun")
+    if type(schema_limits) is not SchemaValidationLimits:
+        raise TypeError("evaluation rule catalog requires SchemaValidationLimits")
+    if type(regex_limits) is not RegexValidationLimits:
+        raise TypeError("evaluation rule catalog requires RegexValidationLimits")
+    if policy is not None and type(policy) is not CompiledExecutionPolicy:
+        raise TypeError("evaluation rule catalog policy must be compiled")
+    subjects, gate, _schemas, _regexes, problems = _compile_configuration(
+        prepared,
+        schema_limits,
+        regex_limits,
+        policy,
+        None,
+        True,
+    )
+    if problems.diagnostics:
+        return EvaluationRuleCatalogResult(
+            diagnostics=tuple(problems.diagnostics),
+            rejected=tuple(problems.rejected),
+        )
+    return EvaluationRuleCatalogResult(subjects=subjects, gate=gate)
+
+
 def _compile_configuration(
     prepared: PreparedRun,
     schema_limits: SchemaValidationLimits,
@@ -777,7 +858,7 @@ def _compile_configuration(
     remote_documents: RemoteSchemaDocuments | None,
     defer_remote: bool,
 ) -> tuple[
-    tuple[_SubjectRules, ...],
+    tuple[CompiledSubjectRules, ...],
     CompiledGateProfile | None,
     PreparedSchemaCatalog,
     PreparedRegexCatalog,
@@ -837,7 +918,7 @@ def _compile_subject(
     remote_documents: RemoteSchemaDocuments | None,
     defer_remote: bool,
     problems: _Problems,
-) -> _SubjectRules:
+) -> CompiledSubjectRules:
     profile_assertions = tuple(
         rule
         for handle in subject.profiles.assertions
@@ -863,7 +944,11 @@ def _compile_subject(
     )
     _require_unique_rules(assertions, problems, project, subject.profiles.assertions)
     _require_unique_rules(diffs, problems, project, subject.profiles.diffs)
-    return _SubjectRules(subject=subject.definition, assertions=assertions, diffs=diffs)
+    return CompiledSubjectRules(
+        subject=subject.definition,
+        assertions=assertions,
+        diffs=diffs,
+    )
 
 
 def _compile_response_schema(
@@ -1222,7 +1307,7 @@ def _compile_diff_side(
 
 def _compile_gate(
     prepared: PreparedRun,
-    subjects: tuple[_SubjectRules, ...],
+    subjects: tuple[CompiledSubjectRules, ...],
     problems: _Problems,
 ) -> CompiledGateProfile | None:
     handles = tuple(
@@ -1984,12 +2069,15 @@ def _budget(
 
 
 __all__ = (
+    "CompiledSubjectRules",
     "ConfigurationEvaluationPreparation",
     "EvaluationBindingResult",
     "EvaluationCapabilityFamily",
     "EvaluationPreflightResult",
+    "EvaluationRuleCatalogResult",
     "EvaluationRuleLimits",
     "RejectedEvaluationCapability",
     "bind_configuration_evaluation",
+    "compile_configuration_rule_catalog",
     "preflight_configuration_evaluation",
 )

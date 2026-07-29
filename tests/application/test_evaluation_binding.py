@@ -14,8 +14,10 @@ import pytest
 from comparo.application import evaluation_binding as binding
 from comparo.application.digest_validation import DEFAULT_DIGEST_VALIDATION_LIMITS_V1
 from comparo.application.digest_validation import prepare_digest_predicate
+from comparo.application.regex_validation import RegexValidationLimits
 from comparo.application.schema_validation import RemoteSchemaDocument
 from comparo.application.schema_validation import RemoteSchemaDocuments
+from comparo.application.schema_validation import SchemaValidationLimits
 from comparo.core.assertions.inputs import PreparedOperandError as AssertionOperandError
 from comparo.core.assertions.inputs import PreparedOperandReady as AssertionOperandReady
 from comparo.core.assertions.inputs import PreparedOperandUnavailable as AssertionOperandUnavailable
@@ -72,6 +74,7 @@ from comparo.core.domain.values import Unavailable
 from comparo.core.domain.values import UnavailableReason
 from comparo.core.planning import plan_run
 from comparo.core.planning.models import PreparedRun
+from comparo.core.policy.models import CompiledExecutionPolicy
 from comparo.core.policy.trusted import trusted_local_policy
 from comparo.core.resolution import DeterministicGenerator
 from comparo.core.resolution import ResolutionTarget
@@ -890,6 +893,80 @@ def test_binding_result_invariants_keep_success_and_failure_disjoint() -> None:
         binding.EvaluationBindingResult(preparation=preparation, rejected=(rejected,))
 
 
+def test_compiled_rule_catalog_preserves_exact_subject_rules_and_rejections() -> None:
+    prepared = _prepared(
+        assertion="[{selector: status, operator: {name: equals, expected: 200}}]",
+        diff="[{selector: status, comparator: exact}]",
+    )
+
+    catalog = binding.compile_configuration_rule_catalog(prepared)
+    rejected = binding.compile_configuration_rule_catalog(_prepared(assertion="[]"))
+
+    assert len(catalog.subjects) == 1
+    assert len(catalog.subjects[0].assertions) == 1
+    assert len(catalog.subjects[0].diffs) == 1
+    assert catalog.gate is None
+    assert catalog.diagnostics == ()
+    assert rejected.subjects == ()
+    assert tuple(item.code.value for item in rejected.diagnostics) == ("evaluation.profile.empty",)
+
+
+def test_compiled_rule_catalog_contracts_reject_invalid_products() -> None:
+    prepared = _prepared(assertion="[{selector: status, operator: {name: equals, expected: 200}}]")
+    catalog = binding.compile_configuration_rule_catalog(prepared)
+    subject = catalog.subjects[0]
+    rejected = binding.compile_configuration_rule_catalog(_prepared(assertion="[]"))
+
+    with pytest.raises(TypeError, match="evaluation subject"):
+        msgspec.structs.replace(subject, subject=cast("DefinitionRef", object()))
+    with pytest.raises(TypeError, match="subject assertions"):
+        msgspec.structs.replace(
+            subject,
+            assertions=cast("tuple[object, ...]", (object(),)),
+        )
+    with pytest.raises(TypeError, match="subject diffs"):
+        msgspec.structs.replace(subject, diffs=cast("tuple[object, ...]", (object(),)))
+    with pytest.raises(TypeError, match="catalog subjects"):
+        msgspec.structs.replace(
+            catalog,
+            subjects=cast("tuple[binding.CompiledSubjectRules, ...]", (object(),)),
+        )
+    with pytest.raises(TypeError, match="catalog gate"):
+        msgspec.structs.replace(catalog, gate=cast("CompiledGateProfile", object()))
+    with pytest.raises(TypeError, match="catalog diagnostics"):
+        msgspec.structs.replace(
+            catalog,
+            diagnostics=cast("tuple[Diagnostic, ...]", (object(),)),
+        )
+    with pytest.raises(TypeError, match="catalog rejections"):
+        msgspec.structs.replace(
+            catalog,
+            rejected=cast("tuple[binding.RejectedEvaluationCapability, ...]", (object(),)),
+        )
+    with pytest.raises(ValueError, match="cannot retain"):
+        msgspec.structs.replace(rejected, subjects=catalog.subjects)
+    with pytest.raises(ValueError, match="requires admitted subjects"):
+        binding.EvaluationRuleCatalogResult()
+
+    with pytest.raises(TypeError, match="requires PreparedRun"):
+        binding.compile_configuration_rule_catalog(cast("PreparedRun", object()))
+    with pytest.raises(TypeError, match="SchemaValidationLimits"):
+        binding.compile_configuration_rule_catalog(
+            prepared,
+            cast("SchemaValidationLimits", object()),
+        )
+    with pytest.raises(TypeError, match="RegexValidationLimits"):
+        binding.compile_configuration_rule_catalog(
+            prepared,
+            regex_limits=cast("RegexValidationLimits", object()),
+        )
+    with pytest.raises(TypeError, match="policy must be compiled"):
+        binding.compile_configuration_rule_catalog(
+            prepared,
+            policy=cast("CompiledExecutionPolicy", object()),
+        )
+
+
 def test_evaluation_preparation_constructor_invariants() -> None:
     prepared = _prepared()
     context = _context(prepared)
@@ -938,7 +1015,7 @@ def test_evaluation_preparation_constructor_invariants() -> None:
             prepared=prepared,
             context=context,
             limits=limits,
-            subjects=cast("tuple[binding._SubjectRules, ...]", (object(),)),
+            subjects=cast("tuple[binding.CompiledSubjectRules, ...]", (object(),)),
             gate=None,
             schemas=schemas,
             regexes=regexes,

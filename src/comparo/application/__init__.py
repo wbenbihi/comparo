@@ -273,6 +273,16 @@ from comparo.application.results import ResultRunAnnotations as ResultRunAnnotat
 from comparo.application.results import ResultSummary as ResultSummary
 from comparo.application.results import ResultVcsProvenance as ResultVcsProvenance
 from comparo.application.results import project_results as project_results
+from comparo.application.rule_inspection import DiffSideInspection as DiffSideInspection
+from comparo.application.rule_inspection import PlanRuleInspection as PlanRuleInspection
+from comparo.application.rule_inspection import PlanRuleWindow as PlanRuleWindow
+from comparo.application.rule_inspection import RuleOperationInspection as RuleOperationInspection
+from comparo.application.rule_inspection import RuleOriginInspection as RuleOriginInspection
+from comparo.application.rule_inspection import RuleSelectorInspection as RuleSelectorInspection
+from comparo.application.rule_inspection import (
+    RuleSelectorPathInspection as RuleSelectorPathInspection,
+)
+from comparo.application.rule_inspection import inspect_plan_rule_window as inspect_plan_rule_window
 from comparo.application.run_service import RunHandle as RunHandle
 from comparo.application.run_service import RunInspection as RunInspection
 from comparo.application.run_service import RunQuery as RunQuery
@@ -351,6 +361,7 @@ __all__ = (
     "CurlExportRequest",
     "CurlExportWarning",
     "DiagnosticPresentation",
+    "DiffSideInspection",
     "EffectiveResourceInspectionRequest",
     "EffectiveResourceWindow",
     "EnvironmentBindingResult",
@@ -378,6 +389,8 @@ __all__ = (
     "PlanOccurrenceInspection",
     "PlanOccurrenceWindow",
     "PlanReviewInspection",
+    "PlanRuleInspection",
+    "PlanRuleWindow",
     "PlanningOptions",
     "PolicyLoadLimits",
     "PreparedProjectPlan",
@@ -466,6 +479,10 @@ __all__ = (
     "ResultSummary",
     "ResultVcsProvenance",
     "RuleAggregate",
+    "RuleOperationInspection",
+    "RuleOriginInspection",
+    "RuleSelectorInspection",
+    "RuleSelectorPathInspection",
     "RunHandle",
     "RunInspection",
     "RunQuery",
@@ -504,6 +521,7 @@ __all__ = (
     "inspect_effective_resource",
     "inspect_execution_settings",
     "inspect_plan",
+    "inspect_plan_rule_window",
     "inspect_policy_diagnostic",
     "inspect_project_plan",
     "inspect_project_source",

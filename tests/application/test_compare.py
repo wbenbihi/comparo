@@ -47,6 +47,7 @@ from comparo.application.resolved_inspection import ResolvedValueProjectionLimit
 from comparo.application.resolved_inspection import (
     _ResolvedValueInspectionRequest as ResolvedValueInspectionRequest,
 )
+from comparo.application.rule_inspection import PlanRuleWindow
 from comparo.core.artifacts.policy import ArtifactPersistMode
 from comparo.core.configuration.canonical import CompiledResource
 from comparo.core.domain.primitives import ByteCount
@@ -1343,6 +1344,20 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
             start_ordinal=0,
             maximum_occurrences=1,
         )
+    with pytest.raises(TypeError, match="rule handle"):
+        service.list_rules(
+            cast("ComparePreparationHandle", object()),
+            _controls(),
+            start_ordinal=0,
+            maximum_rules=1,
+        )
+    with pytest.raises(TypeError, match="rule controls"):
+        service.list_rules(
+            ComparePreparationHandle(value=str(_HANDLE_ID)),
+            cast("CompareExecutionControls", object()),
+            start_ordinal=0,
+            maximum_rules=1,
+        )
     with pytest.raises(TypeError, match="start handle"):
         service.validate_start(cast("ComparePreparationHandle", object()), _controls())
     with pytest.raises(TypeError, match="start controls"):
@@ -1405,6 +1420,25 @@ def test_compare_lists_canonical_occurrences_without_resolving_requests(tmp_path
     )
     assert tuple(item.ordinal for item in final.occurrences) == (3,)
     assert final.next_ordinal is None
+    assert service.outstanding == 1
+
+
+def test_compare_lists_exact_pre_run_rules_without_consuming_handle(tmp_path: Path) -> None:
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+
+    rules = service.list_rules(
+        prepared.handle,
+        controls,
+        start_ordinal=0,
+        maximum_rules=10,
+    )
+
+    assert type(rules) is PlanRuleWindow
+    assert rules.total_rules == 0
+    assert rules.rules == ()
     assert service.outstanding == 1
 
 

@@ -46,6 +46,8 @@ from comparo.application.resolved_inspection import _bind_resolved_value_target
 from comparo.application.resolved_inspection import (
     _inspect_resolved_value as _inspect_prepared_resolved_value,
 )
+from comparo.application.rule_inspection import PlanRuleWindow
+from comparo.application.rule_inspection import inspect_plan_rule_window
 from comparo.application.runtime_capabilities import preflight_runtime_capabilities
 from comparo.core.domain.primitives import Duration
 
@@ -389,6 +391,26 @@ class CompareService:
             prepared.project,
             start_ordinal=start_ordinal,
             maximum_occurrences=maximum_occurrences,
+        )
+
+    def list_rules(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        *,
+        start_ordinal: int,
+        maximum_rules: int,
+    ) -> PlanRuleWindow:
+        """List exact compiled pre-run rules without consuming the preparation."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare rule handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare rule controls must be typed")
+        prepared = self._validate_inspection(handle, controls)
+        return inspect_plan_rule_window(
+            prepared.project,
+            start_ordinal=start_ordinal,
+            maximum_rules=maximum_rules,
         )
 
     def validate_start(
