@@ -15,10 +15,13 @@ import msgspec
 from comparo.application.artifact_references import ArtifactBodyMessage
 from comparo.application.artifact_references import ArtifactBodyReference
 from comparo.core.artifacts.codec import fingerprint_run_artifact
+from comparo.core.artifacts.common import ArtifactCiProvenance
 from comparo.core.artifacts.common import ArtifactDefinition
 from comparo.core.artifacts.common import ArtifactFailure
 from comparo.core.artifacts.common import ArtifactMetric
 from comparo.core.artifacts.common import ArtifactOmissionReason
+from comparo.core.artifacts.common import ArtifactRunAnnotations
+from comparo.core.artifacts.common import ArtifactVcsProvenance
 from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.common import require_text
 from comparo.core.artifacts.facts import ArtifactEvidence
@@ -657,6 +660,71 @@ class ResultSummary(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class ResultVcsProvenance(msgspec.Struct, frozen=True, kw_only=True):
+    """Sanitized source-control context supplied for one run."""
+
+    provider: str
+    repository: str
+    revision: str
+    branch: str | None = None
+
+    def __post_init__(self) -> None:
+        """Preserve the authenticated artifact annotation contract."""
+        ArtifactVcsProvenance(
+            provider=self.provider,
+            repository=self.repository,
+            revision=self.revision,
+            branch=self.branch,
+        )
+
+
+@final
+class ResultCiProvenance(msgspec.Struct, frozen=True, kw_only=True):
+    """Sanitized CI context supplied for one run."""
+
+    provider: str
+    run_id: str
+    job: str | None = None
+    url: str | None = None
+
+    def __post_init__(self) -> None:
+        """Preserve the authenticated artifact annotation contract."""
+        ArtifactCiProvenance(
+            provider=self.provider,
+            run_id=self.run_id,
+            job=self.job,
+            url=self.url,
+        )
+
+
+@final
+class ResultRunAnnotations(msgspec.Struct, frozen=True, kw_only=True):
+    """Frontend-safe title, notes, tags, and external run provenance."""
+
+    title: str | None = None
+    notes: str | None = None
+    tags: tuple[str, ...] = ()
+    vcs: ResultVcsProvenance | None = None
+    ci: ResultCiProvenance | None = None
+    redaction_count: int = 0
+
+    def __post_init__(self) -> None:
+        """Keep this projection isomorphic with sanitized artifact annotations."""
+        if self.vcs is not None and type(self.vcs) is not ResultVcsProvenance:
+            raise TypeError("result VCS provenance must be typed or absent")
+        if self.ci is not None and type(self.ci) is not ResultCiProvenance:
+            raise TypeError("result CI provenance must be typed or absent")
+        ArtifactRunAnnotations(
+            title=self.title,
+            notes=self.notes,
+            tags=self.tags,
+            vcs=None if self.vcs is None else _artifact_vcs(self.vcs),
+            ci=None if self.ci is None else _artifact_ci(self.ci),
+            redaction_count=self.redaction_count,
+        )
+
+
+@final
 class ResultProjection(msgspec.Struct, frozen=True, kw_only=True):
     """Complete manifest-only result model shared by Compare and Report."""
 
@@ -666,6 +734,12 @@ class ResultProjection(msgspec.Struct, frozen=True, kw_only=True):
     comparisons: tuple[ComparisonResultRow, ...]
     diffs: tuple[ResultFact, ...]
     links: tuple[ResultCrossLink, ...]
+    annotations: ResultRunAnnotations | None = None
+
+    def __post_init__(self) -> None:
+        """Require optional annotations to remain a typed sanitized projection."""
+        if self.annotations is not None and type(self.annotations) is not ResultRunAnnotations:
+            raise TypeError("result annotations must be typed or absent")
 
 
 def project_results(artifact: RunArtifact) -> ResultProjection:
@@ -753,6 +827,56 @@ def project_results(artifact: RunArtifact) -> ResultProjection:
         comparisons=comparisons,
         diffs=diffs,
         links=_links(artifact, execution_references, comparison_references),
+        annotations=(
+            None if artifact.annotations is None else _run_annotations(artifact.annotations)
+        ),
+    )
+
+
+def _run_annotations(value: ArtifactRunAnnotations) -> ResultRunAnnotations:
+    return ResultRunAnnotations(
+        title=value.title,
+        notes=value.notes,
+        tags=value.tags,
+        vcs=(
+            None
+            if value.vcs is None
+            else ResultVcsProvenance(
+                provider=value.vcs.provider,
+                repository=value.vcs.repository,
+                revision=value.vcs.revision,
+                branch=value.vcs.branch,
+            )
+        ),
+        ci=(
+            None
+            if value.ci is None
+            else ResultCiProvenance(
+                provider=value.ci.provider,
+                run_id=value.ci.run_id,
+                job=value.ci.job,
+                url=value.ci.url,
+            )
+        ),
+        redaction_count=value.redaction_count,
+    )
+
+
+def _artifact_vcs(value: ResultVcsProvenance) -> ArtifactVcsProvenance:
+    return ArtifactVcsProvenance(
+        provider=value.provider,
+        repository=value.repository,
+        revision=value.revision,
+        branch=value.branch,
+    )
+
+
+def _artifact_ci(value: ResultCiProvenance) -> ArtifactCiProvenance:
+    return ArtifactCiProvenance(
+        provider=value.provider,
+        run_id=value.run_id,
+        job=value.job,
+        url=value.url,
     )
 
 
@@ -1211,6 +1335,7 @@ def result_value_preview(value: ArtifactValue, *, maximum_characters: int) -> st
 __all__ = (
     "ComparisonResultRow",
     "ExecutionResultRow",
+    "ResultCiProvenance",
     "ResultCoordinate",
     "ResultCrossLink",
     "ResultEntity",
@@ -1235,9 +1360,11 @@ __all__ = (
     "ResultReference",
     "ResultRelation",
     "ResultResource",
+    "ResultRunAnnotations",
     "ResultSummary",
     "ResultTiming",
     "ResultTimingSummary",
+    "ResultVcsProvenance",
     "project_results",
     "result_value_preview",
 )

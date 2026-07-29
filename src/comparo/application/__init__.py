@@ -251,6 +251,7 @@ from comparo.application.result_analysis import project_rules as project_rules
 from comparo.application.result_analysis import project_timeline as project_timeline
 from comparo.application.results import ComparisonResultRow as ComparisonResultRow
 from comparo.application.results import ExecutionResultRow as ExecutionResultRow
+from comparo.application.results import ResultCiProvenance as ResultCiProvenance
 from comparo.application.results import ResultCrossLink as ResultCrossLink
 from comparo.application.results import ResultEntity as ResultEntity
 from comparo.application.results import ResultFact as ResultFact
@@ -268,7 +269,9 @@ from comparo.application.results import ResultHttpResponseSlot as ResultHttpResp
 from comparo.application.results import ResultProjection as ResultProjection
 from comparo.application.results import ResultReference as ResultReference
 from comparo.application.results import ResultRelation as ResultRelation
+from comparo.application.results import ResultRunAnnotations as ResultRunAnnotations
 from comparo.application.results import ResultSummary as ResultSummary
+from comparo.application.results import ResultVcsProvenance as ResultVcsProvenance
 from comparo.application.results import project_results as project_results
 from comparo.application.run_service import RunHandle as RunHandle
 from comparo.application.run_service import RunInspection as RunInspection
@@ -440,6 +443,7 @@ __all__ = (
     "ResolvedValueInspectionTarget",
     "ResolvedValueNode",
     "ResolvedValueProjectionLimits",
+    "ResultCiProvenance",
     "ResultCrossLink",
     "ResultEntity",
     "ResultFact",
@@ -458,7 +462,9 @@ __all__ = (
     "ResultProjectionWindow",
     "ResultReference",
     "ResultRelation",
+    "ResultRunAnnotations",
     "ResultSummary",
+    "ResultVcsProvenance",
     "RuleAggregate",
     "RunHandle",
     "RunInspection",

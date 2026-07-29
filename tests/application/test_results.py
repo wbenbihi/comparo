@@ -40,6 +40,7 @@ from comparo.application.result_analysis import project_requests
 from comparo.application.result_analysis import project_rules
 from comparo.application.result_analysis import project_timeline
 from comparo.application.results import ExecutionResultRow
+from comparo.application.results import ResultCiProvenance
 from comparo.application.results import ResultEntity
 from comparo.application.results import ResultEvidence
 from comparo.application.results import ResultFailure
@@ -58,9 +59,12 @@ from comparo.application.results import ResultNamedValue
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
 from comparo.application.results import ResultRelation
+from comparo.application.results import ResultRunAnnotations
 from comparo.application.results import ResultTiming
+from comparo.application.results import ResultVcsProvenance
 from comparo.application.results import project_results
 from comparo.core.artifacts import ArtifactAttempt
+from comparo.core.artifacts import ArtifactCiProvenance
 from comparo.core.artifacts import ArtifactComparisonOutcome
 from comparo.core.artifacts import ArtifactCookie as CoreArtifactCookie
 from comparo.core.artifacts import ArtifactDefinition
@@ -72,9 +76,11 @@ from comparo.core.artifacts import ArtifactGateCounts
 from comparo.core.artifacts import ArtifactGateVerdict
 from comparo.core.artifacts import ArtifactMetric
 from comparo.core.artifacts import ArtifactOmissionReason
+from comparo.core.artifacts import ArtifactRunAnnotations
 from comparo.core.artifacts import ArtifactSeverity
 from comparo.core.artifacts import ArtifactSummary
 from comparo.core.artifacts import ArtifactTiming
+from comparo.core.artifacts import ArtifactVcsProvenance
 from comparo.core.artifacts import RunArtifact
 from comparo.core.artifacts import fingerprint_run_artifact
 from comparo.core.artifacts.values import ArtifactString
@@ -120,6 +126,7 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     assert projection.summary.gate_profile is None
     assert projection.summary.executions[0].name == "observed"
     assert projection.summary.coverage_issues == 0
+    assert projection.annotations is None
 
     first = projection.executions[0]
     assert first.reference.entity is ResultEntity.EXECUTION
@@ -1043,6 +1050,66 @@ def test_projection_is_total_for_valid_bounded_http_ids_and_round_trips() -> Non
         ResultHttpCookie(name="SessionID", value="<redacted>", redacted=True),
     )
     assert msgspec.json.decode(msgspec.json.encode(projection), type=ResultProjection) == projection
+
+
+def test_projection_exposes_sanitized_run_annotations() -> None:
+    artifact = msgspec.structs.replace(
+        _artifact(),
+        annotations=ArtifactRunAnnotations(
+            title="Release candidate",
+            notes="Review the warning facts.",
+            tags=("ci", "release"),
+            vcs=ArtifactVcsProvenance(
+                provider="git",
+                repository="example/comparo",
+                revision="abc123",
+                branch="main",
+            ),
+            ci=ArtifactCiProvenance(
+                provider="github-actions",
+                run_id="42",
+                job="compare",
+                url="https://example.test/actions/runs/42",
+            ),
+            redaction_count=1,
+        ),
+    )
+
+    annotations = project_results(artifact).annotations
+
+    assert annotations == ResultRunAnnotations(
+        title="Release candidate",
+        notes="Review the warning facts.",
+        tags=("ci", "release"),
+        vcs=ResultVcsProvenance(
+            provider="git",
+            repository="example/comparo",
+            revision="abc123",
+            branch="main",
+        ),
+        ci=ResultCiProvenance(
+            provider="github-actions",
+            run_id="42",
+            job="compare",
+            url="https://example.test/actions/runs/42",
+        ),
+        redaction_count=1,
+    )
+
+
+def test_result_annotation_projection_rejects_untyped_nested_values() -> None:
+    valid = ResultRunAnnotations()
+    with pytest.raises(TypeError, match="VCS provenance"):
+        msgspec.structs.replace(valid, vcs=cast("ResultVcsProvenance", object()))
+    with pytest.raises(TypeError, match="CI provenance"):
+        msgspec.structs.replace(valid, ci=cast("ResultCiProvenance", object()))
+
+    projection = project_results(_artifact())
+    with pytest.raises(TypeError, match="result annotations"):
+        msgspec.structs.replace(
+            projection,
+            annotations=cast("ResultRunAnnotations", object()),
+        )
 
 
 def test_projection_preserves_requested_gate_verdict_and_assessments_exactly() -> None:
