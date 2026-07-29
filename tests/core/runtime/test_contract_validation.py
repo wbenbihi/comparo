@@ -12,7 +12,10 @@ import pytest
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticStage
 from comparo.core.domain.identity import ComparisonId
+from comparo.core.domain.identity import EffectiveRuleId
+from comparo.core.domain.identity import FactId
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.identity import RuleId
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.primitives import Count
 from comparo.core.planning.models import PreparedRun
@@ -32,6 +35,10 @@ from comparo.core.runtime import RequestPreparationFailure
 from comparo.core.runtime import RunResult
 from comparo.core.runtime import RuntimeEvent
 from comparo.core.runtime import RuntimeEventKind
+from comparo.core.runtime import RuntimeFactEngine
+from comparo.core.runtime import RuntimeFactMetric
+from comparo.core.runtime import RuntimeFactOutcome
+from comparo.core.runtime import RuntimeFactSummary
 from comparo.core.runtime import RuntimeOccurrenceOutcome
 from comparo.core.runtime import UnavailableExecution
 from comparo.core.runtime import run_prepared
@@ -45,6 +52,26 @@ from tests.core.domain.http.observation_factories import response
 from tests.core.runtime.conftest import FixedClock
 from tests.core.runtime.test_kernel_integration import KernelPreparation
 from tests.core.runtime.test_vertical_runtime import _driver
+
+
+def _runtime_fact(
+    engine: RuntimeFactEngine = RuntimeFactEngine.ASSERTION,
+    *,
+    ordinal: int = 1,
+) -> RuntimeFactSummary:
+    return RuntimeFactSummary(
+        engine=engine,
+        fact_id=FactId(value=UUID(int=ordinal)),
+        rule_id=RuleId(value=f"rule-{ordinal}"),
+        effective_rule_id=EffectiveRuleId(value=f"effective-{ordinal}"),
+        severity="error",
+        outcome=(
+            RuntimeFactOutcome.SATISFIED
+            if engine is RuntimeFactEngine.ASSERTION
+            else RuntimeFactOutcome.EQUIVALENT
+        ),
+        counts=(RuntimeFactMetric(name="evaluated", value=Count(value=1)),),
+    )
 
 
 @pytest.fixture
@@ -62,6 +89,45 @@ def runtime_result(prepared_comparison_run: PreparedRun) -> RunResult:
             events=RecordingEventSink(),
         )
     )
+
+
+def test_runtime_emits_value_free_fact_summaries_in_sequence(
+    prepared_comparison_run: PreparedRun,
+) -> None:
+    cancellation = RunCancellation()
+    driver, _transport = _driver(prepared_comparison_run, cancellation)
+    events = RecordingEventSink()
+
+    result = asyncio.run(
+        run_prepared(
+            prepared_comparison_run,
+            driver=driver,
+            evaluation=KernelPreparation(),
+            cancellation=cancellation,
+            clock=FixedClock(),
+            events=events,
+        )
+    )
+
+    assertion_events = tuple(
+        item for item in events.events if item.kind is RuntimeEventKind.ASSERTIONS_FINISHED
+    )
+    comparison_events = tuple(
+        item for item in events.events if item.kind is RuntimeEventKind.COMPARISON_FINISHED
+    )
+    assert len(assertion_events) == len(result.executions)
+    assert len(comparison_events) == len(result.comparisons)
+    assert all(item.fact_evaluation_complete is True for item in assertion_events)
+    assert all(item.fact_evaluation_complete is True for item in comparison_events)
+    assert all(
+        fact.engine is RuntimeFactEngine.ASSERTION
+        for item in assertion_events
+        for fact in item.facts
+    )
+    assert all(
+        fact.engine is RuntimeFactEngine.DIFF for item in comparison_events for fact in item.facts
+    )
+    assert tuple(item.sequence.value for item in events.events) == tuple(range(len(events.events)))
 
 
 def test_execution_work_and_outcome_contracts_reject_contradictions(
@@ -215,6 +281,35 @@ def test_events_and_run_result_reject_ambiguous_coordinates(runtime_result: RunR
     execution_id = runtime_result.executions[0].work.scope.execution_id
     comparison_id = runtime_result.comparisons[0].work.comparison_id
 
+    metric = RuntimeFactMetric(name="evaluated", value=Count(value=1))
+    with pytest.raises(ValueError, match="metric name"):
+        msgspec.structs.replace(metric, name="")
+    with pytest.raises(ValueError, match="metric name"):
+        msgspec.structs.replace(metric, name="x" * 65)
+    with pytest.raises(TypeError, match="metric value"):
+        msgspec.structs.replace(metric, value=object())
+
+    fact = _runtime_fact()
+    for changes, error, message in (
+        ({"engine": object()}, TypeError, "engine"),
+        ({"fact_id": object()}, TypeError, "identities"),
+        ({"rule_id": object()}, TypeError, "identities"),
+        ({"effective_rule_id": object()}, TypeError, "identities"),
+        ({"severity": ""}, ValueError, "severity"),
+        ({"severity": "x" * 65}, ValueError, "severity"),
+        ({"outcome": object()}, TypeError, "outcome"),
+        ({"counts": []}, TypeError, "metrics"),
+        ({"counts": (object(),)}, TypeError, "metrics"),
+        (
+            {"counts": (metric, msgspec.structs.replace(metric, name="before"))},
+            ValueError,
+            "canonical",
+        ),
+        ({"counts": (metric, metric)}, ValueError, "canonical"),
+    ):
+        with pytest.raises(error, match=message):
+            msgspec.structs.replace(fact, **changes)
+
     with pytest.raises(TypeError, match="Count sequence"):
         RuntimeEvent(sequence=0, run_id=run_id, kind=RuntimeEventKind.RUN_STARTED)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="Count sequence"):
@@ -319,6 +414,67 @@ def test_events_and_run_result_reject_ambiguous_coordinates(runtime_result: RunR
             comparison_id=comparison_id,
             failure_stage=DiagnosticStage.TRANSPORT,
             failure_code=DiagnosticCode(value="runtime.test"),
+        )
+    with pytest.raises(TypeError, match="facts must be immutable"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.RUN_STARTED,
+            facts=[],  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="facts must be immutable"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.RUN_STARTED,
+            facts=(object(),),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="completion marker"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.ASSERTIONS_FINISHED,
+            execution_id=execution_id,
+        )
+    with pytest.raises(ValueError, match="completion marker"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.RUN_STARTED,
+            fact_evaluation_complete=True,
+        )
+    with pytest.raises(TypeError, match="completion marker"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.ASSERTIONS_FINISHED,
+            execution_id=execution_id,
+            fact_evaluation_complete=cast("bool", 1),
+        )
+    with pytest.raises(ValueError, match="fact-bearing"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.RUN_STARTED,
+            facts=(fact,),
+        )
+    with pytest.raises(ValueError, match="engine contradicts"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.ASSERTIONS_FINISHED,
+            execution_id=execution_id,
+            facts=(_runtime_fact(RuntimeFactEngine.DIFF),),
+            fact_evaluation_complete=True,
+        )
+    with pytest.raises(ValueError, match="identities must be unique"):
+        RuntimeEvent(
+            sequence=Count(value=0),
+            run_id=run_id,
+            kind=RuntimeEventKind.ASSERTIONS_FINISHED,
+            execution_id=execution_id,
+            facts=(fact, fact),
+            fact_evaluation_complete=True,
         )
 
     with pytest.raises(TypeError, match="RunId"):

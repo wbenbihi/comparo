@@ -63,10 +63,12 @@ from comparo.application.execution_session import (
 from comparo.application.execution_session import ExecutionSession as ExecutionSession
 from comparo.application.execution_session import ExecutionSessionLimits as ExecutionSessionLimits
 from comparo.application.execution_session import ExecutionSessionPhase as ExecutionSessionPhase
+from comparo.application.execution_session import LiveFactMetric as LiveFactMetric
 from comparo.application.execution_session import LiveOccurrenceKind as LiveOccurrenceKind
 from comparo.application.execution_session import LiveOccurrenceProgress as LiveOccurrenceProgress
 from comparo.application.execution_session import LiveOccurrenceState as LiveOccurrenceState
 from comparo.application.execution_session import LiveProgressEvent as LiveProgressEvent
+from comparo.application.execution_session import LiveRuleFactProgress as LiveRuleFactProgress
 from comparo.application.execution_session import start_execution_session as start_execution_session
 from comparo.application.inspection import ApplicationDiagnostic as ApplicationDiagnostic
 from comparo.application.inspection import PlanInspection as PlanInspection
@@ -412,10 +414,12 @@ __all__ = (
     "InlineValueOverride",
     "InvocationBuildError",
     "IssueAggregate",
+    "LiveFactMetric",
     "LiveOccurrenceKind",
     "LiveOccurrenceProgress",
     "LiveOccurrenceState",
     "LiveProgressEvent",
+    "LiveRuleFactProgress",
     "MatrixOverride",
     "PlanClipboardSummary",
     "PlanComparisonInspection",

@@ -21,6 +21,10 @@ from comparo.core.runtime.models import ObservedExecution as ObservedExecution
 from comparo.core.runtime.models import RunResult as RunResult
 from comparo.core.runtime.models import RuntimeEvent as RuntimeEvent
 from comparo.core.runtime.models import RuntimeEventKind as RuntimeEventKind
+from comparo.core.runtime.models import RuntimeFactEngine as RuntimeFactEngine
+from comparo.core.runtime.models import RuntimeFactMetric as RuntimeFactMetric
+from comparo.core.runtime.models import RuntimeFactOutcome as RuntimeFactOutcome
+from comparo.core.runtime.models import RuntimeFactSummary as RuntimeFactSummary
 from comparo.core.runtime.models import RuntimeOccurrenceOutcome as RuntimeOccurrenceOutcome
 from comparo.core.runtime.models import UnavailableExecution as UnavailableExecution
 from comparo.core.runtime.ports import AssertionCall as AssertionCall

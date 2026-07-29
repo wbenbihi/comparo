@@ -9,10 +9,22 @@ import msgspec
 
 from comparo.core.assertions.engine import evaluate_assertion
 from comparo.core.diffs.engine import evaluate_diff
+from comparo.core.domain.assertions.results import AssertionError
+from comparo.core.domain.assertions.results import AssertionFact
+from comparo.core.domain.assertions.results import AssertionUnavailable
+from comparo.core.domain.assertions.results import Satisfied
+from comparo.core.domain.assertions.results import Skipped
+from comparo.core.domain.assertions.results import Violated
 from comparo.core.domain.diagnostics import Diagnostic
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.diagnostics import DiagnosticStage
+from comparo.core.domain.diffs.results import DiffEvaluationError
+from comparo.core.domain.diffs.results import DiffRuleFact
+from comparo.core.domain.diffs.results import Drifted
+from comparo.core.domain.diffs.results import Equivalent
+from comparo.core.domain.diffs.results import Incomplete
+from comparo.core.domain.diffs.results import NotEvaluated
 from comparo.core.domain.gates.model import GateEvaluation
 from comparo.core.domain.gates.normalization import normalize_assertion_fact
 from comparo.core.domain.gates.normalization import normalize_diff_fact
@@ -43,6 +55,10 @@ from comparo.core.runtime.models import ObservedExecution
 from comparo.core.runtime.models import RunResult
 from comparo.core.runtime.models import RuntimeEvent
 from comparo.core.runtime.models import RuntimeEventKind
+from comparo.core.runtime.models import RuntimeFactEngine
+from comparo.core.runtime.models import RuntimeFactMetric
+from comparo.core.runtime.models import RuntimeFactOutcome
+from comparo.core.runtime.models import RuntimeFactSummary
 from comparo.core.runtime.models import RuntimeOccurrenceOutcome
 from comparo.core.runtime.ports import EvaluationPreparation
 from comparo.core.runtime.ports import ExecutionDriver
@@ -69,17 +85,19 @@ async def run_prepared(
     cleanup_failed = False
     try:
         scheduled = await schedule_executions(prepared, driver, cancellation, events)
-        records, assertion_incomplete = await _evaluate_assertions(
+        records, assertion_incomplete, next_sequence = await _evaluate_assertions(
             prepared,
             scheduled.records,
             evaluation,
+            events,
+            scheduled.next_event_sequence.value,
         )
         comparisons, diff_incomplete, next_sequence = await _evaluate_comparisons(
             prepared,
             records,
             evaluation,
             events,
-            scheduled.next_event_sequence.value,
+            next_sequence,
         )
     finally:
         try:
@@ -115,7 +133,9 @@ async def _evaluate_assertions(
     prepared: PreparedRun,
     records: tuple[ExecutionRecord, ...],
     evaluation: EvaluationPreparation,
-) -> tuple[tuple[ExecutionRecord, ...], bool]:
+    events: RuntimeEventSink,
+    sequence: int,
+) -> tuple[tuple[ExecutionRecord, ...], bool, int]:
     evaluated: list[ExecutionRecord] = []
     incomplete = False
     for record in records:
@@ -136,11 +156,24 @@ async def _evaluate_assertions(
                 )
                 for call in calls
             )
+            complete = True
         except Exception:  # noqa: BLE001 - preparation/evaluation defects are contained per run
             assertions = ()
             incomplete = True
+            complete = False
         evaluated.append(msgspec.structs.replace(record, assertions=assertions))
-    return tuple(evaluated), incomplete
+        await events.emit(
+            RuntimeEvent(
+                sequence=Count(value=sequence),
+                run_id=prepared.plan.run_id,
+                kind=RuntimeEventKind.ASSERTIONS_FINISHED,
+                execution_id=record.work.scope.execution_id,
+                facts=tuple(_assertion_summary(item.fact) for item in assertions),
+                fact_evaluation_complete=complete,
+            )
+        )
+        sequence += 1
+    return tuple(evaluated), incomplete, sequence
 
 
 async def _evaluate_comparisons(
@@ -165,6 +198,7 @@ async def _evaluate_comparisons(
             outcome: IncompleteComparison | EvaluatedComparison = IncompleteComparison(
                 unavailable_executions=missing
             )
+            facts_complete = False
         else:
             try:
                 calls = await evaluation.diffs(
@@ -189,9 +223,11 @@ async def _evaluate_comparisons(
                     for call in calls
                 )
                 outcome = EvaluatedComparison(diffs=diffs)
+                facts_complete = True
             except Exception:  # noqa: BLE001 - one comparison cannot abort unrelated work
                 outcome = EvaluatedComparison(diffs=())
                 incomplete = True
+                facts_complete = False
         comparisons.append(ComparisonRecord(work=work, outcome=outcome))
         await events.emit(
             RuntimeEvent(
@@ -204,10 +240,71 @@ async def _evaluate_comparisons(
                     if type(outcome) is IncompleteComparison
                     else RuntimeOccurrenceOutcome.EVALUATED
                 ),
+                facts=(
+                    ()
+                    if type(outcome) is IncompleteComparison
+                    else tuple(_diff_summary(item.fact) for item in outcome.diffs)
+                ),
+                fact_evaluation_complete=facts_complete,
             )
         )
         sequence += 1
     return tuple(comparisons), incomplete, sequence
+
+
+def _assertion_summary(fact: AssertionFact) -> RuntimeFactSummary:
+    counts = fact.counts
+    return RuntimeFactSummary(
+        engine=RuntimeFactEngine.ASSERTION,
+        fact_id=fact.fact_id,
+        rule_id=fact.rule.definition.rule_id,
+        effective_rule_id=fact.rule.effective_id,
+        severity=fact.severity.value,
+        outcome={
+            Satisfied: RuntimeFactOutcome.SATISFIED,
+            Violated: RuntimeFactOutcome.VIOLATED,
+            Skipped: RuntimeFactOutcome.SKIPPED,
+            AssertionUnavailable: RuntimeFactOutcome.UNAVAILABLE,
+            AssertionError: RuntimeFactOutcome.ERROR,
+        }[type(fact.outcome)],
+        counts=_metrics(
+            ("errors", counts.errors.value),
+            ("evaluated", counts.evaluated.value),
+            ("satisfied", counts.satisfied.value),
+            ("selected", counts.selected.value),
+            ("violated", counts.violated.value),
+        ),
+    )
+
+
+def _diff_summary(fact: DiffRuleFact) -> RuntimeFactSummary:
+    counts = fact.counts
+    return RuntimeFactSummary(
+        engine=RuntimeFactEngine.DIFF,
+        fact_id=fact.fact_id,
+        rule_id=fact.rule.definition.rule_id,
+        effective_rule_id=fact.rule.effective_id,
+        severity=fact.rule.severity.value,
+        outcome={
+            Equivalent: RuntimeFactOutcome.EQUIVALENT,
+            Drifted: RuntimeFactOutcome.DRIFTED,
+            Incomplete: RuntimeFactOutcome.INCOMPLETE,
+            DiffEvaluationError: RuntimeFactOutcome.ERROR,
+            NotEvaluated: RuntimeFactOutcome.NOT_EVALUATED,
+        }[type(fact.outcome)],
+        counts=_metrics(
+            ("added", counts.added.value),
+            ("changed", counts.changed.value),
+            ("ignored", counts.ignored.value),
+            ("incomparable", counts.incomparable.value),
+            ("removed", counts.removed.value),
+            ("same", counts.same.value),
+        ),
+    )
+
+
+def _metrics(*values: tuple[str, int]) -> tuple[RuntimeFactMetric, ...]:
+    return tuple(RuntimeFactMetric(name=name, value=Count(value=value)) for name, value in values)
 
 
 def _comparison_work(

@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 from typing import cast
+from uuid import UUID
 
 import msgspec
 import pytest
@@ -16,7 +17,15 @@ from comparo.application.plan_occurrences import PlanComparisonInspection
 from comparo.application.plan_occurrences import PlanOccurrenceInspection
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
+from comparo.core.domain.identity import EffectiveRuleId
+from comparo.core.domain.identity import FactId
+from comparo.core.domain.identity import RuleId
+from comparo.core.domain.primitives import Count
 from comparo.core.runtime.models import RuntimeEventKind
+from comparo.core.runtime.models import RuntimeFactEngine
+from comparo.core.runtime.models import RuntimeFactMetric
+from comparo.core.runtime.models import RuntimeFactOutcome
+from comparo.core.runtime.models import RuntimeFactSummary
 from comparo.core.runtime.models import RuntimeOccurrenceOutcome
 from tests.application.test_execution_session import _event
 from tests.application.test_production_execution import _request
@@ -69,10 +78,45 @@ def _comparison_coordinate(comparison_id: str = "comparison-1") -> PlanCompariso
     )
 
 
+def _fact(
+    engine: RuntimeFactEngine = RuntimeFactEngine.ASSERTION,
+    *,
+    ordinal: int = 1,
+) -> RuntimeFactSummary:
+    return RuntimeFactSummary(
+        engine=engine,
+        fact_id=FactId(value=UUID(int=ordinal)),
+        rule_id=RuleId(value=f"rule-{ordinal}"),
+        effective_rule_id=EffectiveRuleId(value=f"effective-{ordinal}"),
+        severity="error",
+        outcome=(
+            RuntimeFactOutcome.SATISFIED
+            if engine is RuntimeFactEngine.ASSERTION
+            else RuntimeFactOutcome.EQUIVALENT
+        ),
+        counts=(RuntimeFactMetric(name="evaluated", value=Count(value=1)),),
+    )
+
+
+def _live_fact() -> sessions.LiveRuleFactProgress:
+    return sessions.LiveRuleFactProgress(
+        owner_kind=sessions.LiveOccurrenceKind.EXECUTION,
+        owner_id="execution-1",
+        engine=RuntimeFactEngine.ASSERTION,
+        fact_id="fact-1",
+        rule_id="rule-1",
+        effective_rule_id="effective-1",
+        severity="error",
+        outcome=RuntimeFactOutcome.SATISFIED,
+        counts=(sessions.LiveFactMetric(name="evaluated", value=1),),
+    )
+
+
 def test_session_limits_require_exact_positive_integers() -> None:
     for changes in (
         {"maximum_occurrences": 0, "maximum_recent_events": 1},
         {"maximum_occurrences": 1, "maximum_recent_events": -1},
+        {"maximum_occurrences": 1, "maximum_recent_events": 1, "maximum_facts": 0},
         {"maximum_occurrences": cast("int", True), "maximum_recent_events": 1},
     ):
         with pytest.raises(ValueError, match="positive integers"):
@@ -109,6 +153,42 @@ def test_live_occurrence_contract_rejects_each_incoherent_shape() -> None:
     for changes, error, message in cases:
         with pytest.raises(error, match=message):
             msgspec.structs.replace(valid, **changes)
+
+    metric = sessions.LiveFactMetric(name="evaluated", value=1)
+    for changes in ({"name": ""}, {"name": "x" * 65}, {"value": -1}):
+        with pytest.raises(ValueError, match="live fact metric"):
+            msgspec.structs.replace(metric, **changes)
+
+    fact = _live_fact()
+    fact_cases: tuple[tuple[dict[str, Any], type[Exception], str], ...] = (
+        ({"owner_kind": "execution"}, TypeError, "owner kind"),
+        ({"engine": "assertion"}, TypeError, "engine"),
+        ({"owner_kind": sessions.LiveOccurrenceKind.COMPARISON}, ValueError, "contradicts"),
+        ({"owner_id": ""}, ValueError, "non-empty"),
+        ({"fact_id": ""}, ValueError, "non-empty"),
+        ({"rule_id": ""}, ValueError, "non-empty"),
+        ({"effective_rule_id": ""}, ValueError, "non-empty"),
+        ({"severity": ""}, ValueError, "non-empty"),
+        ({"outcome": "satisfied"}, TypeError, "outcome"),
+        ({"counts": []}, TypeError, "metrics"),
+        ({"counts": (object(),)}, TypeError, "metrics"),
+        ({"counts": (metric, metric)}, ValueError, "canonical"),
+        (
+            {"counts": (metric, msgspec.structs.replace(metric, name="before"))},
+            ValueError,
+            "canonical",
+        ),
+    )
+    for changes, error, message in fact_cases:
+        with pytest.raises(error, match=message):
+            msgspec.structs.replace(fact, **changes)
+    diff = msgspec.structs.replace(
+        fact,
+        owner_kind=sessions.LiveOccurrenceKind.COMPARISON,
+        engine=RuntimeFactEngine.DIFF,
+        outcome=RuntimeFactOutcome.EQUIVALENT,
+    )
+    assert diff.owner_kind is sessions.LiveOccurrenceKind.COMPARISON
 
     coordinate_cases: tuple[tuple[dict[str, Any], type[Exception], str], ...] = (
         ({"execution": object()}, TypeError, "execution occurrence coordinate"),
@@ -153,6 +233,17 @@ def test_live_event_and_final_summary_contracts_reject_bad_values() -> None:
         ({"observed_at_nanoseconds": -1}, ValueError, "timestamp"),
         ({"occurrence_id": ""}, ValueError, "occurrence ID"),
         ({"outcome": "observed"}, TypeError, "outcome must be typed"),
+        ({"fact_count": -1}, ValueError, "fact count"),
+        ({"fact_evaluation_complete": True}, ValueError, "completion marker"),
+        (
+            {
+                "kind": RuntimeEventKind.ASSERTIONS_FINISHED,
+                "fact_evaluation_complete": cast("bool", 1),
+            },
+            TypeError,
+            "completion marker",
+        ),
+        ({"fact_count": 1}, ValueError, "fact count requires"),
     )
     for changes, error, message in cases:
         with pytest.raises(error, match=message):
@@ -190,8 +281,17 @@ def test_progress_snapshot_rejects_invalid_collections_and_terminal_summary() ->
         msgspec.structs.replace(valid, occurrences=(occurrence, occurrence))
     with pytest.raises(TypeError, match="recent progress events"):
         msgspec.structs.replace(valid, recent_events=cast("tuple[Any, ...]", [event]))
+    fact = _live_fact()
+    with pytest.raises(TypeError, match="progress facts"):
+        msgspec.structs.replace(valid, facts=cast("tuple[Any, ...]", [fact]))
+    with pytest.raises(ValueError, match="fact identities"):
+        msgspec.structs.replace(valid, facts=(fact, fact))
     with pytest.raises(ValueError, match="omitted"):
         msgspec.structs.replace(valid, omitted_occurrences=-1)
+    with pytest.raises(ValueError, match="fact omission"):
+        msgspec.structs.replace(valid, omitted_facts=-1)
+    with pytest.raises(ValueError, match="fact omission"):
+        msgspec.structs.replace(valid, incomplete_fact_scopes=-1)
     with pytest.raises(TypeError, match="final execution summary"):
         msgspec.structs.replace(
             valid,
@@ -263,6 +363,54 @@ def test_mailbox_counts_orphan_and_overflow_events_without_unbounded_growth(
     asyncio.run(scenario())
 
 
+def test_mailbox_projects_and_bounds_live_fact_summaries(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        request = _request(tmp_path)
+        mailbox = sessions._ProgressMailbox(
+            _snapshot(),
+            limits=sessions.ExecutionSessionLimits(
+                maximum_occurrences=2,
+                maximum_recent_events=4,
+                maximum_facts=1,
+            ),
+        )
+        event = msgspec.structs.replace(
+            _event(request, 1, RuntimeEventKind.ASSERTIONS_FINISHED),
+            facts=(_fact(), _fact(ordinal=2)),
+            fact_evaluation_complete=False,
+        )
+
+        await mailbox.emit(event)
+        await mailbox.emit(
+            msgspec.structs.replace(
+                event,
+                sequence=Count(value=2),
+                facts=(_fact(),),
+                fact_evaluation_complete=True,
+            )
+        )
+
+        snapshot = mailbox.snapshot
+        assert len(snapshot.facts) == 1
+        assert event.execution_id is not None
+        assert snapshot.facts[0].owner_kind is sessions.LiveOccurrenceKind.EXECUTION
+        assert snapshot.facts[0].owner_id == str(event.execution_id.value)
+        assert snapshot.facts[0].counts == (sessions.LiveFactMetric(name="evaluated", value=1),)
+        assert snapshot.omitted_facts == 1
+        assert snapshot.incomplete_fact_scopes == 1
+        assert snapshot.recent_events[-1].fact_count == 1
+        assert snapshot.recent_events[-1].fact_evaluation_complete is True
+
+        comparison = msgspec.structs.replace(
+            _event(request, 3, RuntimeEventKind.COMPARISON_FINISHED),
+            facts=(_fact(RuntimeFactEngine.DIFF, ordinal=3),),
+        )
+        await mailbox.emit(comparison)
+        assert mailbox.snapshot.omitted_facts == 2
+
+    asyncio.run(scenario())
+
+
 def test_session_requires_typed_limits(tmp_path: Path) -> None:
     async def scenario() -> None:
         with pytest.raises(TypeError, match="ExecutionSessionLimits"):
@@ -288,11 +436,13 @@ def test_session_projects_terminal_artifact_summary(
         snapshots = tuple([snapshot async for snapshot in session.updates()])
 
         assert result.artifact is not None
+        assert session.task_cancelled is False
         summary = snapshots[-1].final_summary
         assert summary is not None
         assert summary.completion == result.artifact.completion.kind.value
         assert summary.assertions == 1
         assert summary.diffs == 1
         assert summary.adverse_facts == 0
+        assert await session.after(snapshots[-1].revision) is None
 
     asyncio.run(scenario())

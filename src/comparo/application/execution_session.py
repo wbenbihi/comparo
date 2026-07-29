@@ -23,6 +23,9 @@ from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.resolution import RunCancellation
 from comparo.core.runtime.models import RuntimeEvent
 from comparo.core.runtime.models import RuntimeEventKind
+from comparo.core.runtime.models import RuntimeFactEngine
+from comparo.core.runtime.models import RuntimeFactOutcome
+from comparo.core.runtime.models import RuntimeFactSummary
 from comparo.core.runtime.models import RuntimeOccurrenceOutcome
 
 
@@ -47,12 +50,17 @@ class ExecutionSessionLimits(msgspec.Struct, frozen=True, kw_only=True):
 
     maximum_occurrences: int
     maximum_recent_events: int
+    maximum_facts: int = 10_000
 
     def __post_init__(self) -> None:
         """Require explicit finite positive window sizes."""
         if any(
             type(value) is not int or value < 1
-            for value in (self.maximum_occurrences, self.maximum_recent_events)
+            for value in (
+                self.maximum_occurrences,
+                self.maximum_recent_events,
+                self.maximum_facts,
+            )
         ):
             raise ValueError("execution session window limits must be positive integers")
 
@@ -60,6 +68,7 @@ class ExecutionSessionLimits(msgspec.Struct, frozen=True, kw_only=True):
 DEFAULT_EXECUTION_SESSION_LIMITS_V1 = ExecutionSessionLimits(
     maximum_occurrences=10_000,
     maximum_recent_events=128,
+    maximum_facts=10_000,
 )
 
 
@@ -141,6 +150,8 @@ class LiveProgressEvent(msgspec.Struct, frozen=True, kw_only=True):
     observed_at_nanoseconds: int
     occurrence_id: str | None = None
     outcome: RuntimeOccurrenceOutcome | None = None
+    fact_count: int = 0
+    fact_evaluation_complete: bool | None = None
 
     def __post_init__(self) -> None:
         """Require typed value-free event data and a monotonic observer timestamp."""
@@ -156,6 +167,82 @@ class LiveProgressEvent(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("live event occurrence ID must be non-empty text or absent")
         if self.outcome is not None and type(self.outcome) is not RuntimeOccurrenceOutcome:
             raise TypeError("live event outcome must be typed or absent")
+        if type(self.fact_count) is not int or self.fact_count < 0:
+            raise ValueError("live event fact count must be non-negative")
+        fact_kind = self.kind in {
+            RuntimeEventKind.ASSERTIONS_FINISHED,
+            RuntimeEventKind.COMPARISON_FINISHED,
+        }
+        if fact_kind != (self.fact_evaluation_complete is not None):
+            raise ValueError("live fact completion marker contradicts its event kind")
+        if self.fact_evaluation_complete is not None and (
+            type(self.fact_evaluation_complete) is not bool
+        ):
+            raise TypeError("live fact completion marker must be bool or absent")
+        if self.fact_count and not fact_kind:
+            raise ValueError("live event fact count requires a fact-bearing event")
+
+
+@final
+class LiveFactMetric(msgspec.Struct, frozen=True, kw_only=True):
+    """One exact value-free count from a live aggregate rule fact."""
+
+    name: str
+    value: int
+
+    def __post_init__(self) -> None:
+        """Require one bounded name and non-negative integer value."""
+        if type(self.name) is not str or not self.name or len(self.name) > 64:
+            raise ValueError("live fact metric name must be bounded non-empty text")
+        if type(self.value) is not int or self.value < 0:
+            raise ValueError("live fact metric value must be non-negative")
+
+
+@final
+class LiveRuleFactProgress(msgspec.Struct, frozen=True, kw_only=True):
+    """One bounded sanitized fact bound to its execution or comparison owner."""
+
+    owner_kind: LiveOccurrenceKind
+    owner_id: str
+    engine: RuntimeFactEngine
+    fact_id: str
+    rule_id: str
+    effective_rule_id: str
+    severity: str
+    outcome: RuntimeFactOutcome
+    counts: tuple[LiveFactMetric, ...]
+
+    def __post_init__(self) -> None:
+        """Require stable value-free identities and canonical metric counts."""
+        if type(self.owner_kind) is not LiveOccurrenceKind:
+            raise TypeError("live fact owner kind must be typed")
+        if type(self.engine) is not RuntimeFactEngine:
+            raise TypeError("live fact engine must be typed")
+        expected_owner = (
+            LiveOccurrenceKind.EXECUTION
+            if self.engine is RuntimeFactEngine.ASSERTION
+            else LiveOccurrenceKind.COMPARISON
+        )
+        if self.owner_kind is not expected_owner:
+            raise ValueError("live fact owner kind contradicts its engine")
+        for value in (
+            self.owner_id,
+            self.fact_id,
+            self.rule_id,
+            self.effective_rule_id,
+            self.severity,
+        ):
+            if type(value) is not str or not value:
+                raise ValueError("live fact identities and severity must be non-empty text")
+        if type(self.outcome) is not RuntimeFactOutcome:
+            raise TypeError("live fact outcome must be typed")
+        if type(self.counts) is not tuple or any(
+            type(item) is not LiveFactMetric for item in self.counts
+        ):
+            raise TypeError("live fact metrics must be immutable and typed")
+        names = tuple(item.name for item in self.counts)
+        if names != tuple(sorted(names)) or len(names) != len(set(names)):
+            raise ValueError("live fact metric names must be unique and canonical")
 
 
 @final
@@ -209,7 +296,10 @@ class ExecutionProgressSnapshot(msgspec.Struct, frozen=True, kw_only=True):
     last_event_kind: RuntimeEventKind | None = None
     occurrences: tuple[LiveOccurrenceProgress, ...] = ()
     recent_events: tuple[LiveProgressEvent, ...] = ()
+    facts: tuple[LiveRuleFactProgress, ...] = ()
     omitted_occurrences: int = 0
+    omitted_facts: int = 0
+    incomplete_fact_scopes: int = 0
     final_summary: ExecutionFinalSummary | None = None
 
     def __post_init__(self) -> None:
@@ -228,8 +318,19 @@ class ExecutionProgressSnapshot(msgspec.Struct, frozen=True, kw_only=True):
             type(item) is not LiveProgressEvent for item in self.recent_events
         ):
             raise TypeError("recent progress events must be immutable and typed")
+        if type(self.facts) is not tuple or any(
+            type(item) is not LiveRuleFactProgress for item in self.facts
+        ):
+            raise TypeError("live progress facts must be immutable and typed")
+        if len({(item.engine, item.fact_id) for item in self.facts}) != len(self.facts):
+            raise ValueError("live progress fact identities must be unique")
         if type(self.omitted_occurrences) is not int or self.omitted_occurrences < 0:
             raise ValueError("omitted live occurrence count must be non-negative")
+        if any(
+            type(value) is not int or value < 0
+            for value in (self.omitted_facts, self.incomplete_fact_scopes)
+        ):
+            raise ValueError("live fact omission and incompleteness counts must be non-negative")
         if self.final_summary is not None and type(self.final_summary) is not ExecutionFinalSummary:
             raise TypeError("final execution summary must be typed or absent")
 
@@ -287,6 +388,7 @@ class _ProgressMailbox:
         "_changed",
         "_clock",
         "_closed",
+        "_facts",
         "_limits",
         "_occurrences",
         "_project",
@@ -311,6 +413,7 @@ class _ProgressMailbox:
         self._project = project
         self._clock = clock
         self._occurrences: dict[tuple[LiveOccurrenceKind, str], LiveOccurrenceProgress] = {}
+        self._facts: dict[tuple[RuntimeFactEngine, str], LiveRuleFactProgress] = {}
         self._recent_events: list[LiveProgressEvent] = []
         self._changed = asyncio.Event()
         self._closed = False
@@ -329,6 +432,7 @@ class _ProgressMailbox:
         started = current.started_executions
         finished = current.finished_executions
         comparisons = current.finished_comparisons
+        incomplete_fact_scopes = current.incomplete_fact_scopes
         last_execution = current.last_execution_id
         last_comparison = current.last_comparison_id
         observed_at = self._clock()
@@ -357,6 +461,10 @@ class _ProgressMailbox:
             finished += 1
             last_execution = str(event.execution_id.value) if event.execution_id else None
             self._occurrence_event(event, observed_at, last_execution)
+        elif event.kind is RuntimeEventKind.ASSERTIONS_FINISHED:
+            last_execution = str(event.execution_id.value) if event.execution_id else None
+            self._fact_event(event, last_execution)
+            incomplete_fact_scopes += int(event.fact_evaluation_complete is False)
         elif event.kind is RuntimeEventKind.COMPARISON_FINISHED:
             comparison_coordinate = self._comparison_coordinate(comparisons, event)
             comparisons += 1
@@ -367,6 +475,8 @@ class _ProgressMailbox:
                 last_comparison,
                 comparison=comparison_coordinate,
             )
+            self._fact_event(event, last_comparison)
+            incomplete_fact_scopes += int(event.fact_evaluation_complete is False)
         elif event.kind is RuntimeEventKind.RUN_FINISHED:
             phase = ExecutionSessionPhase.FINALIZING
         else:  # pragma: no cover - RuntimeEventKind is exhaustively handled above
@@ -380,6 +490,8 @@ class _ProgressMailbox:
                 observed_at_nanoseconds=observed_at,
                 occurrence_id=occurrence_id,
                 outcome=event.outcome,
+                fact_count=len(event.facts),
+                fact_evaluation_complete=event.fact_evaluation_complete,
             )
         )
         del self._recent_events[: -self._limits.maximum_recent_events]
@@ -398,9 +510,35 @@ class _ProgressMailbox:
                 last_event_kind=event.kind,
                 occurrences=tuple(self._occurrences.values()),
                 recent_events=tuple(self._recent_events),
+                facts=tuple(self._facts.values()),
                 omitted_occurrences=self._snapshot.omitted_occurrences,
+                omitted_facts=self._snapshot.omitted_facts,
+                incomplete_fact_scopes=incomplete_fact_scopes,
             )
         )
+
+    def _fact_event(self, event: RuntimeEvent, owner_id: str | None) -> None:
+        if owner_id is None:  # pragma: no cover - RuntimeEvent invariant
+            return
+        owner_kind = (
+            LiveOccurrenceKind.EXECUTION
+            if event.kind is RuntimeEventKind.ASSERTIONS_FINISHED
+            else LiveOccurrenceKind.COMPARISON
+        )
+        omitted = 0
+        for fact in event.facts:
+            key = (fact.engine, str(fact.fact_id.value))
+            if key in self._facts:
+                continue
+            if len(self._facts) >= self._limits.maximum_facts:
+                omitted += 1
+                continue
+            self._facts[key] = _live_fact(owner_kind, owner_id, fact)
+        if omitted:
+            self._snapshot = msgspec.structs.replace(
+                self._snapshot,
+                omitted_facts=self._snapshot.omitted_facts + omitted,
+            )
 
     def _occurrence_event(
         self,
@@ -571,6 +709,26 @@ class _ProgressMailbox:
         self._changed.set()
 
 
+def _live_fact(
+    owner_kind: LiveOccurrenceKind,
+    owner_id: str,
+    fact: RuntimeFactSummary,
+) -> LiveRuleFactProgress:
+    return LiveRuleFactProgress(
+        owner_kind=owner_kind,
+        owner_id=owner_id,
+        engine=fact.engine,
+        fact_id=str(fact.fact_id.value),
+        rule_id=fact.rule_id.value,
+        effective_rule_id=fact.effective_rule_id.value,
+        severity=fact.severity,
+        outcome=fact.outcome,
+        counts=tuple(
+            LiveFactMetric(name=item.name, value=item.value.value) for item in fact.counts
+        ),
+    )
+
+
 @final
 class ExecutionSession:
     """One running production execution with coalesced progress and explicit cancellation."""
@@ -717,9 +875,11 @@ __all__ = (
     "ExecutionSession",
     "ExecutionSessionLimits",
     "ExecutionSessionPhase",
+    "LiveFactMetric",
     "LiveOccurrenceKind",
     "LiveOccurrenceProgress",
     "LiveOccurrenceState",
     "LiveProgressEvent",
+    "LiveRuleFactProgress",
     "start_execution_session",
 )

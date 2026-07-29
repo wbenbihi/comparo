@@ -18,8 +18,11 @@ from comparo.core.domain.gates.summary_validation import require_lifecycle_compl
 from comparo.core.domain.http.observations import EnvironmentExecutionObservation
 from comparo.core.domain.identity import ComparisonId
 from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import EffectiveRuleId
 from comparo.core.domain.identity import EnvironmentExecutionId
+from comparo.core.domain.identity import FactId
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.identity import RuleId
 from comparo.core.domain.identity import RunId
 from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.domain.lifecycle import RunCompletion
@@ -263,6 +266,7 @@ class RuntimeEventKind(DomainStrEnum):
     EXECUTION_QUEUED = "execution-queued"
     EXECUTION_STARTED = "execution-started"
     EXECUTION_FINISHED = "execution-finished"
+    ASSERTIONS_FINISHED = "assertions-finished"
     COMPARISON_FINISHED = "comparison-finished"
     RUN_FINISHED = "run-finished"
 
@@ -278,6 +282,77 @@ class RuntimeOccurrenceOutcome(DomainStrEnum):
     INCOMPLETE = "incomplete"
 
 
+class RuntimeFactEngine(DomainStrEnum):
+    """The built-in evaluation engine that produced one live fact summary."""
+
+    ASSERTION = "assertion"
+    DIFF = "diff"
+
+
+class RuntimeFactOutcome(DomainStrEnum):
+    """Closed aggregate outcomes shared by live assertion and diff summaries."""
+
+    SATISFIED = "satisfied"
+    VIOLATED = "violated"
+    SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
+    EQUIVALENT = "equivalent"
+    DRIFTED = "drifted"
+    INCOMPLETE = "incomplete"
+    ERROR = "error"
+    NOT_EVALUATED = "not-evaluated"
+
+
+@final
+class RuntimeFactMetric(msgspec.Struct, frozen=True, kw_only=True):
+    """One exact named count retained by a live fact summary."""
+
+    name: str
+    value: Count
+
+    def __post_init__(self) -> None:
+        """Require one bounded metric name and typed non-negative count."""
+        if type(self.name) is not str or not self.name or len(self.name) > 64:
+            raise ValueError("runtime fact metric name must be bounded non-empty text")
+        if type(self.value) is not Count:
+            raise TypeError("runtime fact metric value must be Count")
+
+
+@final
+class RuntimeFactSummary(msgspec.Struct, frozen=True, kw_only=True):
+    """Value-free aggregate fact safe for incremental progress observers."""
+
+    engine: RuntimeFactEngine
+    fact_id: FactId
+    rule_id: RuleId
+    effective_rule_id: EffectiveRuleId
+    severity: str
+    outcome: RuntimeFactOutcome
+    counts: tuple[RuntimeFactMetric, ...]
+
+    def __post_init__(self) -> None:
+        """Require stable identities, outcome, and canonical exact metrics."""
+        if type(self.engine) is not RuntimeFactEngine:
+            raise TypeError("runtime fact engine must be typed")
+        if (
+            type(self.fact_id) is not FactId
+            or type(self.rule_id) is not RuleId
+            or type(self.effective_rule_id) is not EffectiveRuleId
+        ):
+            raise TypeError("runtime fact identities must be typed")
+        if type(self.severity) is not str or not self.severity or len(self.severity) > 64:
+            raise ValueError("runtime fact severity must be bounded non-empty text")
+        if type(self.outcome) is not RuntimeFactOutcome:
+            raise TypeError("runtime fact outcome must be typed")
+        if type(self.counts) is not tuple or any(
+            type(item) is not RuntimeFactMetric for item in self.counts
+        ):
+            raise TypeError("runtime fact metrics must be immutable and typed")
+        names = tuple(item.name for item in self.counts)
+        if names != tuple(sorted(names)) or len(names) != len(set(names)):
+            raise ValueError("runtime fact metric names must be unique and canonical")
+
+
 @final
 class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
     """A sequenced progress notification carrying only safe runtime identities."""
@@ -290,6 +365,8 @@ class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
     outcome: RuntimeOccurrenceOutcome | None = None
     failure_stage: DiagnosticStage | None = None
     failure_code: DiagnosticCode | None = None
+    facts: tuple[RuntimeFactSummary, ...] = ()
+    fact_evaluation_complete: bool | None = None
 
     def __post_init__(self) -> None:  # noqa: C901 - closed event-shape validation
         """Require the coordinate dictated by the exact event kind."""
@@ -301,6 +378,7 @@ class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
             RuntimeEventKind.EXECUTION_QUEUED,
             RuntimeEventKind.EXECUTION_STARTED,
             RuntimeEventKind.EXECUTION_FINISHED,
+            RuntimeEventKind.ASSERTIONS_FINISHED,
         }
         if (self.execution_id is not None) is (self.kind not in execution_kinds):
             raise ValueError("runtime event execution coordinate contradicts its kind")
@@ -327,6 +405,32 @@ class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("runtime event failure code must be typed")
         if self.failure_code is not None and self.kind is not RuntimeEventKind.EXECUTION_FINISHED:
             raise ValueError("runtime event failure is valid only for a finished execution")
+        if type(self.facts) is not tuple or any(
+            type(item) is not RuntimeFactSummary for item in self.facts
+        ):
+            raise TypeError("runtime event facts must be immutable and typed")
+        fact_kind = self.kind in {
+            RuntimeEventKind.ASSERTIONS_FINISHED,
+            RuntimeEventKind.COMPARISON_FINISHED,
+        }
+        if fact_kind != (self.fact_evaluation_complete is not None):
+            raise ValueError("runtime fact completion marker contradicts its event kind")
+        if self.fact_evaluation_complete is not None and (
+            type(self.fact_evaluation_complete) is not bool
+        ):
+            raise TypeError("runtime fact completion marker must be bool or absent")
+        if self.facts and not fact_kind:
+            raise ValueError("runtime facts require a fact-bearing event")
+        expected_engine = (
+            RuntimeFactEngine.ASSERTION
+            if self.kind is RuntimeEventKind.ASSERTIONS_FINISHED
+            else RuntimeFactEngine.DIFF
+        )
+        if self.facts and any(item.engine is not expected_engine for item in self.facts):
+            raise ValueError("runtime fact engine contradicts its event kind")
+        fact_ids = tuple(item.fact_id for item in self.facts)
+        if len(fact_ids) != len(set(fact_ids)):
+            raise ValueError("runtime event fact identities must be unique")
 
 
 @final

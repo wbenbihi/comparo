@@ -60,6 +60,7 @@ def _event(
             RuntimeEventKind.EXECUTION_QUEUED,
             RuntimeEventKind.EXECUTION_STARTED,
             RuntimeEventKind.EXECUTION_FINISHED,
+            RuntimeEventKind.ASSERTIONS_FINISHED,
         }
         else None
     )
@@ -79,6 +80,15 @@ def _event(
             if kind is RuntimeEventKind.EXECUTION_FINISHED
             else RuntimeOccurrenceOutcome.EVALUATED
             if kind is RuntimeEventKind.COMPARISON_FINISHED
+            else None
+        ),
+        fact_evaluation_complete=(
+            True
+            if kind
+            in {
+                RuntimeEventKind.ASSERTIONS_FINISHED,
+                RuntimeEventKind.COMPARISON_FINISHED,
+            }
             else None
         ),
     )
@@ -203,6 +213,7 @@ def test_session_live_rows_expose_exact_plan_coordinates(
                         kind=RuntimeEventKind.COMPARISON_FINISHED,
                         comparison_id=ComparisonId(value=UUID(comparison_coordinate.comparison_id)),
                         outcome=RuntimeOccurrenceOutcome.EVALUATED,
+                        fact_evaluation_complete=True,
                     )
                 )
                 sequence += 1
