@@ -23,7 +23,7 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | --- | --- |
 | `application.__init__` | Curated application public exports |
 | `artifact_references` | Pure immutable request/response body coordinates shared without artifact I/O dependencies |
-| `artifacts` | Artifact-root validation, authenticated inspection/reporting, digest reads, and body windows selected by pure result coordinates |
+| `artifacts` | Artifact-root validation, authenticated manifest inspection/reporting, digest reads, and body windows selected by pure result coordinates |
 | `compare` | Bounded one-shot prepare/review/start service with caller-bounded retained plans and concurrent inspection leases |
 | `count_presentation` | Shared exact/large count presentation contracts used by safe inspections |
 | `curl_export` | Canonical bounded POSIX cURL from authenticated sanitized request captures |
@@ -39,6 +39,7 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `plan_inspection_identity` | Safe definition/fingerprint/source identity helpers |
 | `plan_inspection_profiles` | Assertion/diff/gate/safety/redaction/artifact attachment projections |
 | `plan_inspection_topology` | Subject, Environment pair, Matrix, trial, slice, and cardinality projections |
+| `plan_occurrences` | Caller-windowed execution and comparison coordinates reusable by plan review and live-run projections |
 | `plan_review` | Combines plan inspection, runtime limits, execution settings, mutation approval, and tool version |
 | `plan_review_checkpoint` | Immutable plan-review checkpoint contracts |
 | `plan_review_clipboard` | Safe plan-review copy/export projections; no live value access |
@@ -50,15 +51,20 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `profile_binding` | Restrictive Safety/Redaction/Artifact profile composition over caller settings |
 | `project_outline` | Secret-free compiled resource structure and dependency/used-by graph |
 | `project_workspace` | Explorer project compilation and safe resource/source snapshot facade |
+| `request_composition` | Field-by-field Request composition, precedence strategy, winning source, and contribution origins for one planned occurrence |
 | `remote_schemas`, `schema_validation`, `regex_validation`, `digest_validation` | Authorized bounded preparation of external/local evaluation capabilities |
 | `render_preview` | Offline run-scoped sanitized body-free/no-auth request previews, including lazy ordinal windows; unsupported occurrences return safe diagnostics |
 | `resolved_inspection` | Handle-bindable, execution-exact masked expression inspection with bounded fingerprinted node windows and explicit local-source freshness |
 | `report_archive` | Authenticated searchable cursor-paged report rows and metadata projections |
 | `report_retention` | Reviewable fingerprinted recoverable report pruning and restoration |
+| `result_catalog` | Authenticated manifest-only paging for archived executions, assertions, comparisons, and diffs |
 | `result_analysis` | Bounded Issues, Requests, Rules, Fields, and Timeline projections |
-| `results` | Body-free final artifact projection with artifact-bound references, cross-links, sanitized HTTP metadata and typed URL/header/cookie redaction counts, exact timings, explicit omission states, and canonical retry/redirect/pre-send topology |
+| `results` | Body-free eager and tagged page result projections with artifact-bound references, cross-links, sanitized HTTP metadata, exact timings, annotations, explicit omission states, and canonical retry/redirect/pre-send topology |
+| `rule_inspection` | Bounded compiled assertion/diff rule selectors, operations, profiles, and source origins |
+| `run_service` | Bounded registry for current and retained terminal sessions, cancellation, snapshot waits, safe terminal access, and result paging |
 | `runtime_capabilities` | Fail-closed admission of the production runtime's currently implemented configuration subset |
 | `source_inspection` | Revision-pinned masked/exact YAML windows and bounded effective resource projections |
+| `structured_bodies` | Authenticated caller-bounded JSON tree, SSE event, and nested SSE-data JSON pages over sanitized body references |
 
 ## `comparo.configuration` and `comparo.policy`
 

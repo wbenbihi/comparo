@@ -39,9 +39,9 @@ The remaining product gaps are deliberate scope decisions, not hidden presentati
 | Detect source changes | Supported | `expected_sha256` | A changed source fails with a closed `source-changed` code |
 | Show effective compiled structure | Supported | `inspect_effective_resource` | Fingerprint-exact, value-safe, paged fields and relationships |
 | Raw/effective side by side | Supported | source + effective inspection services | Use source/resource fingerprints to label the two representations honestly |
-| Show runtime-resolved Request values | Partial | `render_prepared_request_window` | Sanitized outbound request preview, one ordinal window at a time; body/auth-bearing occurrences currently lack the production materializer/finalizer and can return safe diagnostics |
+| Show runtime-resolved Request values | Supported | `render_prepared_request_window` | Sanitized finalized request previews, including body/auth-bearing occurrences, one caller-bounded ordinal window at a time |
 | Show arbitrary generic resolved values | Supported | `CompareService.inspect_resolved_value` / `ResolvedValueInspectionTarget` | Exact retained plan, execution ordinal, Environment, Matrix cell, and effective Request overrides; sensitive values are irreversibly masked and public values are fingerprinted, paged, and bounded |
-| Explain planning precedence | Supported | plan provenance inspections | Runtime request-field provenance is not yet projected field by field |
+| Explain planning precedence | Supported | plan provenance inspections + `CompareService.inspect_request_composition` | Field-by-field method, URL, headers, query, cookies, auth, body, stream, transport, and policy contributions retain origin and winning strategy |
 
 “Raw,” “effective,” and “resolved” are distinct. Raw is authored source; effective is linked and
 precedence-applied structure. Generic resolved inspection is a masked run-scoped expression view;
@@ -67,7 +67,7 @@ again.
 | Ephemeral full ExecutionProfile resource | Partial | Compose the typed controls above | There is no second anonymous profile language; controls compile into the normal invocation model |
 | Preview exact topology and authority | Supported | `PlanReviewInspection` | Includes counts, profiles, limits, provenance, policy, and mutation approval |
 | Review/start checkpoint | Supported | `CompareService` one-shot handle | Start rejects controls that differ from the reviewed checkpoint |
-| Preview very large runs | Partial | `CompareService.preview_requests` | Resolves only the requested ordinal window from the exact retained plan and reviewed controls; body/auth-bearing occurrences can be diagnostic-only, and the handle remains usable for later pages or execution |
+| Preview very large runs | Supported | `CompareService.preview_requests` | Resolves only the requested ordinal window from the exact retained plan and reviewed controls; the handle remains usable for later pages or execution |
 | Inspect one effective resolved field | Supported | `CompareService.inspect_resolved_value` | Uses the same retained handle and controls; in-flight inspections block start, and discard/close request cancellation while retaining the plan until cleanup drains |
 
 No frontend may mutate `CompiledProject` or synthesize `PreparedRun` internals. Every ad-hoc edit
@@ -97,12 +97,13 @@ must use the typed invocation surface so normal precedence, provenance, policy, 
 | --- | --- | --- | --- |
 | Async start and cancellation | Supported | `ExecutionSession` | One explicit run-owned task and cancellation source |
 | Overall progress | Supported | `ExecutionProgressSnapshot` | Phase and exact queued/started/finished totals |
-| Per-occurrence state/outcome | Partial | `LiveOccurrenceProgress` | State, outcomes, and failure codes are available, but subject/Environment/cell/trial coordinates are not projected during the run |
+| Per-occurrence state/outcome | Supported | `LiveOccurrenceProgress` | State, outcome, safe failure, timings, and typed subject/Environment/Matrix-cell/trial or comparison coordinates are available during the run |
 | Safe failure and timing | Supported | occurrence fields | Closed stage/code plus observer start/finish/elapsed nanoseconds |
 | Recent event timeline | Supported | `recent_events` | Bounded caller-owned window |
 | Slow frontend backpressure | Supported | latest-only mailbox | Occurrence/event windows are bounded; omission is explicit |
 | Final assertion/diff/gate summary | Supported | `ExecutionFinalSummary` | Projected from the final artifact before terminal close |
-| Live assertion/diff/gate state | Deferred | final artifact only | No provisional rule-fact or gate stream exists; do not infer one from execution counters |
+| Live assertion/diff facts | Supported | `LiveRuleFactProgress` / `facts` | Bounded value-free rule identities, severity, outcome, aggregate metrics, omission count, and incomplete-scope count; facts never expose evidence payloads |
+| Live gate state | Deferred | `ExecutionFinalSummary` | Gate reduction is authoritative only after final artifact compilation; do not infer a provisional verdict from counters or partial facts |
 | Live body/chunk viewer | Partial by security design | final artifact body service | Body content crosses the frontend boundary only after sanitization; stream progress is not a live raw-payload console |
 
 ## Final analysis and bodies
@@ -110,10 +111,12 @@ must use the typed invocation surface so normal precedence, provenance, policy, 
 | Capability | Status | Backend contract | Notes |
 | --- | --- | --- | --- |
 | Summary, gate, executions, comparisons | Supported | `project_results` | Artifact facts are the verdict source of truth |
+| Page completed result collections | Supported | `project_result_page` / `RunService.result_page` / `read_archived_result_page` | Executions, assertions, comparisons, and diffs are independently bounded; tagged page variants round-trip safely |
 | Issues/Requests/Rules/Fields/Timeline | Supported | `application.result_analysis` | Bounded derived lenses; no verdict recomputation |
 | Stable cross-navigation | Supported | `ResultReference` / `ResultCrossLink` | Suitable for screen routes and selection restoration |
 | Request/response metadata | Supported | `ResultHttpRequestSlot` / `ResultHttpResponseSlot` inside `ResultHttpAttempt` and `ResultHttpExchange` | Sanitized wire values only; URL/header/cookie redaction counts and attempt/exchange timings are exact, retained/omitted/not-produced states are explicit, and terminal pre-send requests remain visible |
 | Full sanitized persisted bodies | Supported | `read_artifact_body_window` | Authenticated result-coordinate lookup is bound to the exact canonical-results SHA-256, then exposes media/capture metadata, byte windows, and truthful continuation; stale replacement-report references fail closed and live transient bodies are outside this contract |
+| Structured JSON/SSE body exploration | Supported | `read_artifact_structured_body_page` | Caller-owned byte/node/depth/event/line/preview limits; JSON Pointer subtrees, SSE event pages, and JSON nested in one SSE `data` buffer remain authenticated and value-safe |
 | Baseline/candidate body split view | Supported by composition | two body references/windows | Frontend aligns the two independent captures; chunk counts need not match |
 | Safe cURL | Supported | `export_artifact_curl` | Generated only from authenticated sanitized request captures; warnings/counts include URL, header, cookie, and body redactions |
 
@@ -127,8 +130,8 @@ bodies produce a typed warning and non-executable file placeholder rather than f
 | Persist sanitized artifacts | Supported | local artifact sink | Private atomic POSIX bundles with independent artifact schema |
 | List and search history | Supported | `query_report_archive` | Authenticated safe filters, stable cursor, page size, total matches, per-entry failures |
 | Useful archive metadata | Supported | `ReportArchiveEntry` | Duration, profile, subjects/envs, counts, adverse facts, title/tags, VCS and CI context |
-| Notes | Partial | `RunArtifact.annotations.notes` | Retained in sanitized artifacts, but absent from `ResultProjection`; a TUI Notes facet needs a safe application projection |
-| Author run annotations | Partial | `ProductionRunAnnotations` | Headless execution accepts them, but `CompareExecutionControls` does not yet carry them |
+| Notes | Supported | `ResultRunAnnotations.notes` | Sanitized title, notes, tags, VCS, CI, and redaction count are projected on eager and paged results |
+| Author run annotations | Supported | `CompareExecutionControls.annotations` / `ProductionRunAnnotations` | Interactive and headless execution bind the same reviewed annotation input to artifact compilation |
 | Open and verify | Supported | `verify_artifact` | Hashes every declared blob before full use |
 | Export JSON/JUnit/SARIF/Markdown | Supported | `render_artifact_report` | Caller-bounded output |
 | Retention/archive removal | Supported, recoverable | `plan_report_retention` / `apply_report_retention` | Reviewed fingerprinted plan, full preflight before mutation, re-verification, private trash namespace. Moving to trash does not reclaim filesystem space. |

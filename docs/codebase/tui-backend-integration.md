@@ -4,8 +4,12 @@ This document is the implementation reference for a replacement Comparo TUI. It 
 backend information a TUI can display, the application functions it should call, and the lifecycle,
 safety, paging, cancellation, and identity contracts it must preserve.
 
-It documents the backend on the `refactor` branch as of **2026-07-28**. It does not describe the
+It documents the backend on the `refactor` branch as of **2026-07-29**. It does not describe the
 rejected current TUI implementation and does not require its component or state model to be reused.
+
+The companion [application API reference](application-api-reference.md) is the canonical
+frontend-neutral callable and lifetime contract. This document adds TUI orchestration and
+information-design guidance on top of it.
 
 ## 1. Boundary in one sentence
 
@@ -17,7 +21,7 @@ The preferred import boundary is `comparo.application`. Detailed result and stru
 are not re-exported at the package root remain public from their owning application modules:
 
 ```python
-from comparo.application import CompareService, inspect_project_workspace, project_results
+from comparo.application import CompareService, RunService, inspect_project_workspace
 from comparo.application.project_outline import ProjectOutlineField, ProjectRelationship
 from comparo.application.results import ResultMetric, ResultResource, result_value_preview
 from comparo.reporters import ReportFormat
@@ -41,10 +45,11 @@ The TUI must label the representation it displays. “Config” and “resolved�
 | Effective | `EffectiveResourceWindow` | Linked/compiled structural fields and relationships before runtime resolution | Value-safe |
 | Plan | `PlanReviewInspection` | Effective selection, precedence, topology, limits, authority, and start decision | Secret-free |
 | Resolved sample · masked | `ResolvedValueInspection` | One field resolved for one admitted execution occurrence through the masked resolver | Irreversibly masked |
-| Request preview · sanitized | `RenderedRequestPreview` | Pre-network sanitized method/URL/headers/cookies for one plan occurrence | Safe projection, with limitations |
+| Request preview · sanitized | `RenderedRequestPreview` | Pre-network finalized and sanitized request for one plan occurrence | Safe projection |
 | Live progress | `ExecutionProgressSnapshot` | Coalesced operational state for an active run | Value-free; not a verdict source |
 | Result manifest | `ResultProjection` | Artifact-owned verdicts, facts, HTTP metadata, topology, and references | Sanitized; body-free |
 | Artifact body · sanitized | `ArtifactBodyWindow` | Authenticated bounded bytes from a persisted sanitized request/response capture | Safe per capture policy, still untrusted terminal data |
+| Artifact body · structured | `StructuredBodyPage` | Authenticated bounded JSON nodes or SSE events, including nested SSE data JSON | Safe per capture policy, still untrusted terminal data |
 
 The TUI must not present a masked resolution sample as the value that is guaranteed to execute.
 The plan and captured ambient process environment are exact, but dotenv files, project files, and
@@ -59,12 +64,13 @@ One process-scoped backend owner should contain operational services and immutab
 TuiBackend
 ├── ProjectWorkspaceRequest
 ├── CompareService
+├── RunService
 ├── ProductionExecutionSettings
 ├── ProjectLoadLimits / PolicyLoadLimits
 ├── ArtifactReadLimits / ReportArchiveLimits
 ├── absolute validated artifact root
 ├── zero or one current ComparePreparationHandle
-└── zero or one current ExecutionSession
+└── bounded current/recent terminal sessions owned by RunService
 ```
 
 This is a frontend orchestration object, not a domain service. Its responsibilities are limited to:
@@ -94,16 +100,23 @@ observations, blob paths, or adapter exceptions in widget state.
 | Prepare Compare | `CompareService.prepare(request)` | Synchronous, filesystem/compile | Replace/discard the previous draft handle |
 | Preview planned requests | `CompareService.preview_requests(...)` | Async, cancellable | Page by canonical execution ordinal |
 | Inspect one resolved field | `CompareService.inspect_resolved_value(...)` | Async, cancellable | Use the same handle and controls as review/start |
+| Inspect resolved fields | `CompareService.inspect_resolved_values(...)` | Async, cancellable batch | Keep target diagnostics independent |
+| Explain Request composition | `CompareService.inspect_request_composition(...)` | Pure retained-plan projection | Show origin, strategy, and winner; do not infer precedence |
+| List plan occurrences/comparisons/rules | `CompareService.list_occurrences/list_comparisons/list_rules` | Pure caller-windowed projection | Use canonical coordinates before and during execution |
 | Validate start | `CompareService.validate_start(handle, controls)` | Synchronous, no effects | Optional immediate UI guard; `start` revalidates |
 | Start Compare | `CompareService.start(handle, controls)` | Synchronous task creation | Consumes the one-shot handle |
-| Follow execution | `ExecutionSession.updates()` | Async iterator, coalesced | Render latest state; do not queue every snapshot |
-| Cancel execution | `ExecutionSession.cancel()` | Synchronous, first-wins | Change UI to cancelling only when it returns `True` |
-| Obtain terminal run | `await ExecutionSession.result()` | Async, shielded | Always await after updates finish |
+| Register execution | `RunService.register(session)` | Synchronous bounded admission | Registry owns current/recent terminal discovery |
+| List/inspect/follow execution | `RunService.list/inspect/after` | Sync snapshots + async revision wait | Render latest state; do not queue every snapshot |
+| Cancel execution | `RunService.cancel(handle)` | Synchronous, first-wins | Change UI to cancelling only when it returns `True` |
+| Obtain terminal run | `await RunService.result(handle)` | Async, shielded and value-safe | Always inspect terminal success or diagnostics |
 | Build result model | `project_results(artifact)` | Pure synchronous | Use for both live Compare and stored Report |
+| Page terminal results | `await RunService.result_page(handle, query)` | Async terminal wait + bounded projection | Page executions/assertions/comparisons/diffs independently |
 | Build result pivots | `project_issues/requests/rules/fields/timeline(...)` | Pure synchronous | Window output; preserve selected reference |
 | Query Report | `query_report_archive(root, limits, query)` | Synchronous, filesystem/authentication | Run outside event loop and reset cursor when filters change |
 | Open Report | `verify_artifact(root, bundle_id, limits)` | Synchronous, full authentication | Then call `project_results`; never open files directly |
+| Page archived results | `read_archived_result_page(...)` | Synchronous, manifest authentication | Does not read detached body blobs |
 | Read a body | `read_artifact_body_window(...)` | Async, authenticated, bounded | Page by `next_offset`; use only a projected body reference |
+| Read structured body | `read_artifact_structured_body_page(...)` | Async, authenticated, caller-bounded | JSON Pointer nodes, SSE events, or one event's JSON data |
 | Export cURL | `export_artifact_curl(request)` | Async, authenticated, bounded | Display exact warnings/flags before copying |
 | Export report | `render_artifact_report(...)` | Synchronous, authenticated, bounded | Run outside event loop; write only after an explicit user action |
 | Review retention | `plan_report_retention(...)` | Synchronous, authenticated | Show candidates and fingerprint before applying |
@@ -579,8 +592,9 @@ same freshness caveat as resolved inspection.
 
 ## 11. Live execution contract
 
-`CompareService.start` returns `ExecutionSession` and consumes the preparation. The session owns
-one production task, one cancellation source, and one latest-value mailbox.
+`CompareService.start` returns `ExecutionSession` and consumes the preparation. Register that
+session with `RunService`; the session owns one production task, one cancellation source, and one
+latest-value mailbox, while the registry owns bounded discovery of current/recent terminal runs.
 
 ### 11.1 Snapshot fields
 
@@ -592,19 +606,20 @@ one production task, one cancellation source, and one latest-value mailbox.
 - queued, started, and finished execution counts;
 - finished comparison count and `active_executions`;
 - last runtime sequence/kind/occurrence IDs;
-- bounded occurrence rows and recent events;
-- count of omitted occurrence rows; and
+- bounded occurrence rows, recent events, and assertion/diff facts;
+- counts of omitted occurrences/facts and incomplete fact scopes; and
 - terminal `ExecutionFinalSummary` when an artifact exists.
 
 `LiveOccurrenceProgress` provides occurrence kind/ID, queued/running/finished state, terminal
-outcome, closed failure stage/code, observer timestamps, and computed elapsed nanoseconds.
+outcome, closed failure stage/code, observer timestamps, computed elapsed nanoseconds, and the
+typed `PlanOccurrenceInspection` or `PlanComparisonInspection` coordinate. A running table can
+therefore label Request, Environment, Matrix case/cell, trial, and baseline/candidate sides without
+joining against presentation fixtures.
 
-It does **not** currently project subject, Environment, cell, trial, Matrix coordinates, or a
-navigable `ResultReference`. The compact plan also does not enumerate occurrence IDs. A running
-table can therefore show aggregate progress and opaque occurrence IDs, but it cannot safely label
-each row as “Request X · Environment Y · cell Z” until the application progress DTO is enriched.
-Likewise, assertion/diff totals and gate verdict are available only in `final_summary`; there is no
-live rule-fact or provisional-gate feed.
+`LiveRuleFactProgress` provides bounded value-free assertion/diff facts: owner, engine, authored
+and effective rule IDs, severity, outcome, and aggregate metric counts. It intentionally excludes
+evidence values. Gate verdict remains terminal-only in `final_summary`; a TUI must not reduce a
+partial fact window into a provisional gate.
 
 `recent_events` is a bounded recent window, not an audit log. Snapshots are coalesced: a slow UI
 can skip intermediate revisions by design. The TUI should update rows by `(kind, occurrence_id)`
@@ -613,20 +628,23 @@ and use aggregate counters as authoritative.
 ### 11.2 Consumption pattern
 
 ```python
-session = service.start(handle, controls)
+session = compare.start(handle, controls)
+run = runs.register(session)
+snapshot = runs.inspect(run).snapshot
 
-async for snapshot in session.updates():
+while (newer := await runs.after(run, snapshot.revision)) is not None:
+    snapshot = newer
     render_latest(snapshot)
 
-outcome = await session.result()
-if outcome.artifact is not None:
-    results = project_results(outcome.artifact)
+access = await runs.result(run)
+if access.result is not None and access.result.artifact is not None:
+    results = project_results(access.result.artifact)
 else:
-    render_diagnostics(outcome.diagnostics)
+    render_diagnostics(access.diagnostics)
 ```
 
-`updates()` closing means no more progress, not necessarily success. Always inspect the terminal
-`ProductionExecutionResult`. Live progress never replaces artifact-owned assertion, diff, or gate
+`after()` returning `None` means no more progress, not necessarily success. Always inspect the
+terminal `RunResultAccess`. Live progress never replaces artifact-owned assertion, diff, or gate
 facts.
 
 On successful artifact compilation, `ProductionExecutionResult.artifact` is available even when
@@ -635,20 +653,20 @@ persistence failed. Its optional persistence outcome separately reports `persist
 the artifact regardless, refresh Report only after confirmed persistence, and treat
 `commit-uncertain` as an explicit storage warning rather than assuming either success or failure.
 
-`cancel()` is first-wins and returns whether cancellation was newly accepted. `result()` is
-shielded from accidental caller cancellation. `close()` requests cancellation and waits for
-cleanup; call it during backend shutdown if a session is unfinished.
+`RunService.cancel()` is first-wins and returns whether cancellation was newly accepted.
+`result()` is shielded from accidental caller cancellation. `RunService.close()` cancels active
+runs, waits for cleanup, and releases the registry during backend shutdown.
 
 ## 12. Final result contract
 
 Call `project_results` for both a live run's sanitized artifact and a verified stored artifact.
 `ResultProjection` is the sole shared model for Compare results and Report details.
 
-The projection eagerly contains every manifest-resident execution, comparison, and fact. The
-derived analysis lenses are windowed, and widgets should be virtualized, but the initial artifact
-verification and result projection are not paged. For very large admitted runs, execute projection
-off the UI loop and respect artifact limits; true archive-scale lazy result indexes would require a
-new authenticated paged application service.
+`project_results` eagerly contains every manifest-resident execution, comparison, and fact for
+callers that have admitted that manifest size. For large runs, use `ResultPageQuery` through
+`RunService.result_page` for retained terminal sessions or `read_archived_result_page` for stored
+manifests. Executions, assertions, comparisons, and diffs have independent offsets and tagged page
+types. Derived analysis lenses remain separately windowed over an eager `ResultProjection`.
 
 ### 12.1 Summary
 
@@ -756,9 +774,13 @@ and positive output-byte cap. `ArtifactBodyWindow` provides:
 Render capture state even when content is empty. Empty content may mean an empty complete body, an
 omitted capture, or a zero-length page at the end; the metadata distinguishes them.
 
-The API is byte-oriented. A TUI can provide hex/text views and bounded syntax highlighting, but it
-must not parse a partial window as a complete JSON document. A complete structured JSON tree or
-stream-event browser would require an additional bounded application projection.
+The byte API can drive hex/text views and bounded syntax highlighting, but a TUI must not parse a
+partial window as a complete JSON document. Use `read_artifact_structured_body_page` for complete
+structured access. It authenticates the same reference, caps the full document, then applies
+caller-owned JSON-node/depth/pointer/preview and SSE-event/line limits. `StructuredJsonPage`
+provides pre-order RFC 6901 nodes and subtrees. `StructuredSsePage` provides dispatched events;
+supplying `sse_event_index` opens that event's JSON `data` as its own JSON page. Event alignment is
+semantic and never assumes equal transport chunk counts.
 
 Only call the body service when the projected message says `has_body_capture=True`. A retained
 message reference can exist solely for metadata; without capture metadata the body service
@@ -812,15 +834,15 @@ scan.
 An archive row can show bundle/run/invocation IDs, creation time, completion/gate, subjects,
 Environments, counts, total detached blob bytes, coverage issues, duration, ExecutionProfile,
 adverse assertion/diff counts, title/tags, and sanitized VCS/CI coordinates. Notes intentionally
-require opening the full artifact.
+require opening an authenticated result rather than appearing in compact archive rows.
 
 Per-entry failures must remain visible as “N reports could not be authenticated” with optional
 closed-code detail; a corrupt entry must not hide valid siblings.
 
 Archive rows expose title, tags, VCS, and CI coordinates when another frontend supplied them.
-Notes are retained inside the sanitized artifact but are not projected by `ResultProjection` or
-the compact archive DTO. A Notes detail facet requires a new application projection; it must not
-render the artifact object directly as a shortcut.
+After open, `ResultProjection.annotations` and every `ResultPage` expose sanitized title, notes,
+tags, VCS, CI, and annotation redaction count. The compact archive DTO still omits notes so report
+search pages do not duplicate free-form content.
 
 ### 14.2 Open and share results
 
@@ -869,6 +891,8 @@ restored bundle and rolls it back to trash if verification fails. Permanent purg
 | Readiness summary | `PlanReviewInspection` | Exact calls/cells/trials/pairs, methods, profiles, limits, authority, blockers/advisories |
 | Request preview | `RenderPreviewWindowResult` | Sanitized per-occurrence method/URL/fields and diagnostics |
 | Resolved inspector | `ResolvedValueInspectionResult` | Masked field values, provenance, source timing |
+| Composition inspector | `RequestCompositionInspection` | Per-field layers, origin, merge/replace strategy, and winner |
+| Rules | `PlanRuleWindow` | Compiled pre-run assertion/diff rules, selectors, operations, and origin |
 | Copy summary | `PlanClipboardSummary` | Constant-size checkpoint identity and counts |
 
 ### 15.3 Compare · running
@@ -876,13 +900,14 @@ restored bundle and rolls it back to trash if verification fails. Permanent purg
 | Surface | Primary contract | Information available |
 | --- | --- | --- |
 | Summary strip | `ExecutionProgressSnapshot` | Phase and exact aggregate counters |
-| Occurrence table | `LiveOccurrenceProgress` | State, opaque occurrence ID, outcome, safe failure, and elapsed observer time; semantic subject/Environment/cell labels are not projected yet |
+| Occurrence table | `LiveOccurrenceProgress` | State, subject/Environment/Matrix/trial or comparison coordinates, outcome, safe failure, and elapsed observer time |
 | Recent activity | `LiveProgressEvent` | Bounded latest runtime events |
+| Live facts | `LiveRuleFactProgress` | Bounded assertion/diff owner, rule, severity, outcome, and aggregate metrics with omission/incompleteness counts |
 | Cancellation | `ExecutionSession.cancel` | First-wins request and cancelling phase |
 
 There is no safe live raw request/response body or stream-chunk console. Keep those facets disabled
-until a final sanitized artifact exists. Live assertion/diff counts and a provisional gate verdict
-are also unavailable; show them only from the terminal artifact summary.
+until a final sanitized artifact exists. Live rule facts are operational previews without evidence;
+the gate and authoritative facts still come only from the terminal artifact.
 
 ### 15.4 Compare · results and Report · detail
 
@@ -896,7 +921,8 @@ are also unavailable; show them only from the terminal artifact summary.
 | Timeline | `project_timeline` |
 | Request/response | attempt/exchange slots and metadata |
 | Headers/cookies/trailers | ordered `ResultHttpField` / `ResultHttpCookie` tuples |
-| Body | message reference + `read_artifact_body_window` |
+| Body bytes/text | message reference + `read_artifact_body_window` |
+| JSON/SSE structure | message reference + `read_artifact_structured_body_page` |
 | Evidence | `ResultFact.evidence` + `result_value_preview` |
 | Related entities | `ResultCrossLink` / owner references |
 | cURL | request body reference + `export_artifact_curl` |
@@ -940,7 +966,8 @@ Use one latest-wins worker slot for each semantic operation:
 - resolved-value page;
 - report query;
 - report open;
-- selected body window; and
+- terminal/archive result page;
+- selected body byte/structure page; and
 - selected cURL export.
 
 Execution is different: it is one durable session that survives workspace navigation. Do not make
@@ -1009,19 +1036,13 @@ These are intentional or explicit current boundaries, not work for a widget to r
 - no stateful Scenario/step execution or capture production;
 - no WebSocket, gRPC, browser automation, plugin host, or external LLM judge;
 - no live response-body or stream-chunk viewer;
-- live occurrence rows lack subject/Environment/cell/trial coordinates, and live rule/gate facts
-  are terminal-only;
+- live rule facts intentionally omit evidence and the gate is terminal-only;
 - no generic project resource editor;
 - no context-free whole-resource resolved view;
-- no field-by-field runtime precedence projection for a finalized request;
-- no pre-run rule-detail projection beyond counts, attachments, and gate configuration;
-- no interactive Compare run-annotation input, and no frontend-safe Notes detail projection;
-- offline request preview can reject body/auth-bearing occurrences because it has no production
-  materializer/auth finalizer;
-- body access is authenticated byte-window access, not a structured JSON/event tree;
 - no authoritative full-body visual text-diff projection;
 - Fields analysis depends on retained evidence and is not a full response diff tree;
-- result verification/projection is eager even though derived analysis views are windowed;
+- eager `project_results` and its derived pivots still require a fully admitted manifest, while
+  primary execution/assertion/comparison/diff collections also have authenticated page APIs;
 - archive query paging still authenticates the bounded physical archive on each query;
 - report history cannot reconstruct every live input for “run again”;
 - remote schemas have no cache, integrity pin, or transitive external reference loader;
@@ -1036,7 +1057,7 @@ first. Do not open core objects or artifact files from a widget as a shortcut.
 ```text
 launch
   validate/initialize artifact root
-  create ProjectWorkspaceRequest + CompareService
+  create ProjectWorkspaceRequest + CompareService + RunService
   inspect_project_workspace
 
 Explorer highlight
@@ -1051,29 +1072,29 @@ Compare draft change
   render diagnostics OR retain handle + review
 
 Compare inspect
-  preview_requests and/or inspect_resolved_value through retained handle
+  preview/list rules/occurrences/composition and/or inspect resolved values through retained handle
   maintain fingerprinted page state
 
 Compare start
-  start consumes handle
-  consume latest progress snapshots
+  start consumes handle and register session in RunService
+  consume latest registry progress snapshots with typed occurrence coordinates and live facts
   allow first-wins cancellation
   await terminal ProductionExecutionResult
-  project_results from artifact
+  page terminal results or project_results from artifact
 
 Report refresh/open
   query_report_archive in bounded pages
-  verify selected artifact
-  project_results
+  page selected authenticated manifest or verify full artifact
+  project_results when derived analysis lenses are required
 
 Shared result detail
   navigate with ResultReference and ResultCrossLink
   derive bounded pivots
-  lazily read authenticated body windows
+  lazily read authenticated body byte or structured JSON/SSE pages
   lazily generate sanitized cURL
 
 shutdown
-  close active session
+  close RunService (cancels and drains active sessions)
   discard prepared handle
   drain CompareService
 ```

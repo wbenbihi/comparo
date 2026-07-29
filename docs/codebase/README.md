@@ -5,7 +5,7 @@ describes the working tree as it exists, not only the intended architecture reco
 roadmap and ADRs. It deliberately excludes `src/comparo/tui`: a replacement interface should
 consume the application contracts documented here rather than copy behavior from the current TUI.
 
-Last code audit: **2026-07-28**, on the `refactor` branch.
+Last code audit: **2026-07-29**, on the `refactor` branch.
 
 ## How to read this guide
 
@@ -34,6 +34,9 @@ appropriate application projection exists. Domain support by itself is not a pro
 - [TUI/backend integration contract](tui-backend-integration.md) is the detailed callable API and
   information-design reference. It maps every TUI surface to application DTOs, lifecycle rules,
   paging, cancellation, safety guarantees, and current limitations.
+- [Application API reference](application-api-reference.md) is the frontend-neutral golden contract
+  for project, preparation, current run, terminal result, archive, and body access. Use it before
+  adding any presentation adapter.
 - [Module catalog](module-catalog.md) maps every non-TUI package and source module to its purpose.
 - [Contributor workflow](contributor-workflow.md) shows where to start, how to trace a feature,
   which invariants must remain true, and how the repository is verified.
@@ -88,13 +91,15 @@ index.
 | Prepare and start Compare | `CompareService` |
 | Inspect a plan before execution | `PlanReviewInspection` and `inspect_plan` |
 | Resolve a safe outbound preview | `CompareService.preview_requests` (direct render functions are for headless composition) |
-| Observe/cancel an interactive run | `ExecutionSession` |
+| Discover/observe/cancel current and recent terminal runs | `RunService` over `ExecutionSession` |
 | Execute without the session facade | `execute_production` |
 | Project final results and sanitized HTTP metadata | `project_results` |
+| Page retained or archived result facts | `RunService.result_page` / `read_archived_result_page` |
 | Build Issues/Requests/Rules/Fields/Timeline lenses | `project_issues` / `project_requests` / `project_rules` / `project_fields` / `project_timeline` |
 | List persisted runs | `list_report_archive` |
 | Authenticate and inspect an artifact | `verify_artifact` / `inspect_artifact` |
 | Read a sanitized body by result coordinates | `read_artifact_body_window` |
+| Explore authenticated JSON/SSE structure | `read_artifact_structured_body_page` |
 | Export a secret-safe cURL | `export_artifact_curl` |
 | Query paginated report history | `query_report_archive` |
 | Plan/apply/restore report retention | `plan_report_retention` / `apply_report_retention` / `restore_report` |

@@ -56,6 +56,7 @@ run- or service-owned objects.
 | --- | --- | --- |
 | `CompareService` | Interactive Compare workspace | Bounded map of one-shot admitted-plan handles |
 | `ExecutionSession` | One interactive run | Task, cancellation, bounded occurrence rows/events, and latest coalesced snapshot |
+| `RunService` | One local frontend process | Bounded registry of current/recent terminal sessions and stable run handles |
 | `RunContext` | One run | Provider caches, environment snapshots, cancellation, and sensitive-value registry |
 | `TransientBodyStore` | One production run | Bounded memory/spooled response bodies |
 | `ArtifactCapturingDriver` | One production run | Sanitized capture batches and coverage issues |
@@ -96,6 +97,15 @@ frontend orchestration tasks. Their plans and task leases remain counted until c
 then the retained state is released. Synchronous `close` only requests cancellation; `aclose`
 waits for cleanup using a caller-owned timeout and returns a value-free timeout diagnostic.
 Concurrent inspections per retained preparation are caller-bounded; the default is single-flight.
+
+The same handle also exposes caller-windowed plan occurrences, directed comparisons, compiled
+rules, and field-by-field Request composition. These are structural projections of the reviewed
+plan and do not perform value resolution or effects.
+
+After `start`, a frontend registers the returned session in `RunService`. The registry exposes
+bounded current/recent discovery, coalesced revision waits, typed live occurrence coordinates,
+bounded live assertion/diff facts, cancellation, terminal access, and independently paged final
+fact collections. It owns no second resolver, verdict engine, or durable body store.
 
 This prevents a UI from reviewing one set of mutation, artifact, or resource-limit settings and
 executing another.

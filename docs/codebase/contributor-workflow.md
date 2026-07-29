@@ -58,14 +58,16 @@ application.preflight.prepare_project_plan
 
 ```text
 RunArtifact
-  -> application.results.project_results
+  -> application.results.project_results OR project_result_page
+  -> application.run_service.result_page / result_catalog.read_archived_result_page
   -> application.result_analysis.project_*
   -> stable ResultReference navigation
   -> presentation widgets
 ```
 
 For request/response bodies, follow the `ArtifactBodyReference` projected on the owning HTTP
-message through `application.artifacts.read_artifact_body_window`. This authenticates the exact
+message through `application.artifacts.read_artifact_body_window` or
+`application.structured_bodies.read_artifact_structured_body_page`. Both authenticate the exact
 artifact results revision and message coordinates. Generic blob reads and transient body stores
 must not be used by presentation code.
 

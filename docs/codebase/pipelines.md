@@ -231,15 +231,11 @@ sanitized before crossing the application boundary; the windowed service skips d
 caller-selected canonical ordinal range.
 
 Each preview includes occurrence IDs, subject/environment coordinates, method, sanitized URL,
-ordered headers, redacted cookies, and body omission metadata. Query fields are represented inside
-the URL. Exact per-field runtime provenance is not yet returned. Body-bearing request cURL export
-therefore uses the authenticated post-run sanitized capture instead of a live preview.
-
-The current offline preview composition deliberately has no production body materializer or
-authentication finalizer. A body-bearing or typed-auth occurrence can therefore produce a safe
-per-occurrence preparation diagnostic even though the production path supports that request. A
-frontend must present the page as a sanitized preview with explicit partial failures, not as an
-exact universal wire dump.
+ordered headers, redacted cookies, finalized body/auth metadata, and omission accounting. Query
+fields are represented inside the URL. `inspect_request_composition` separately projects the
+field-by-field canonical sources, precedence strategy, and winner for the same retained occurrence.
+Body-bearing request cURL export still uses the authenticated post-run sanitized capture because a
+cURL command represents captured executable bytes, not a pre-network preview.
 
 ## 5. Production HTTP execution
 
@@ -369,7 +365,8 @@ redaction rules and Environment-specific response classification provider.
 
 ## 9. Result, archive, and report projections
 
-`project_results` converts one sanitized `RunArtifact` into a body-free, renderer-independent
+`project_results` converts one sanitized `RunArtifact` into an eager body-free,
+renderer-independent
 model with summary, execution rows, comparison rows, assertion/diff facts, evidence, stable
 references, and cross-links. Execution rows expose canonical attempt/exchange topology and closed
 HTTP message slots: retained sanitized metadata, a typed omission reason, or a response that was
@@ -379,7 +376,13 @@ version, artifact ID, and exact canonical-results SHA-256; replacement reports c
 coordinates. Request metadata carries exact URL, header, and cookie redaction counts. Terminal
 pre-send request metadata remains inspectable
 without fabricating an exchange. The projection contains no body bytes, blob descriptors, storage
-locators, or live runtime objects; it never opens blobs or changes verdicts.
+locators, or live runtime objects; it never opens blobs or changes verdicts. It also projects
+sanitized title, notes, tags, VCS/CI coordinates, and annotation redaction count.
+
+`project_result_page` projects executions, assertions, comparisons, or diffs independently into
+tagged page variants. `RunService.result_page` applies that contract to retained terminal runs;
+`read_archived_result_page` authenticates a stored manifest and applies it without reading detached
+blobs. These pages are the primary path for large result collections.
 
 `result_analysis` derives bounded views:
 
@@ -395,9 +398,11 @@ not incorporate comparison verdicts and must not be presented as “validation p
 
 `query_report_archive` authenticates bounded candidates and returns stable cursor pages with safe
 filters, duration, ExecutionProfile, adverse counts, title/tags, and optional sanitized VCS/CI
-context. Per-entry metadata failures remain isolated. Notes stay in the full artifact rather than
-compact rows. `verify_artifact` authenticates every blob before full use;
-`read_artifact_body_window` resolves result coordinates to a truthful bounded body window.
+context. Per-entry metadata failures remain isolated. Notes stay out of compact rows but are
+available after open through result annotations. `verify_artifact` authenticates every blob before
+full use; `read_artifact_body_window` resolves result coordinates to a truthful bounded body
+window. `read_artifact_structured_body_page` authenticates the same coordinate and provides
+caller-bounded JSON Pointer nodes, SSE event pages, or JSON nested in one SSE event's `data`.
 
 `export_artifact_curl` serializes only authenticated sanitized request captures and sums their typed
 URL, header, cookie, and body provenance for its redaction count and warning; marker text is never
