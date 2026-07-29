@@ -369,6 +369,20 @@ from comparo.application.source_inspection import (
     inspect_effective_resource as inspect_effective_resource,
 )
 from comparo.application.source_inspection import inspect_project_source as inspect_project_source
+from comparo.application.structured_bodies import StructuredBodyFormat as StructuredBodyFormat
+from comparo.application.structured_bodies import StructuredBodyLimits as StructuredBodyLimits
+from comparo.application.structured_bodies import StructuredBodyPage as StructuredBodyPage
+from comparo.application.structured_bodies import StructuredBodyQuery as StructuredBodyQuery
+from comparo.application.structured_bodies import StructuredBodySource as StructuredBodySource
+from comparo.application.structured_bodies import StructuredJsonKind as StructuredJsonKind
+from comparo.application.structured_bodies import StructuredJsonNode as StructuredJsonNode
+from comparo.application.structured_bodies import StructuredJsonPage as StructuredJsonPage
+from comparo.application.structured_bodies import StructuredSseDataFormat as StructuredSseDataFormat
+from comparo.application.structured_bodies import StructuredSseEvent as StructuredSseEvent
+from comparo.application.structured_bodies import StructuredSsePage as StructuredSsePage
+from comparo.application.structured_bodies import (
+    read_artifact_structured_body_page as read_artifact_structured_body_page,
+)
 from comparo.configuration.loader import DEFAULT_PROJECT_LOAD_LIMITS as DEFAULT_PROJECT_LOAD_LIMITS
 from comparo.configuration.loader import ProjectLoadLimits as ProjectLoadLimits
 from comparo.policy import DEFAULT_POLICY_LOAD_LIMITS as DEFAULT_POLICY_LOAD_LIMITS
@@ -569,6 +583,17 @@ __all__ = (
     "SourceInspectionRequest",
     "SourceViewMode",
     "SourceWindow",
+    "StructuredBodyFormat",
+    "StructuredBodyLimits",
+    "StructuredBodyPage",
+    "StructuredBodyQuery",
+    "StructuredBodySource",
+    "StructuredJsonKind",
+    "StructuredJsonNode",
+    "StructuredJsonPage",
+    "StructuredSseDataFormat",
+    "StructuredSseEvent",
+    "StructuredSsePage",
     "TimelineEvent",
     "ValueResourceOverride",
     "apply_report_retention",
@@ -618,6 +643,7 @@ __all__ = (
     "read_artifact_blob",
     "read_artifact_body_window",
     "read_artifact_manifest",
+    "read_artifact_structured_body_page",
     "render_artifact_report",
     "render_prepared_request_window",
     "render_prepared_requests",
