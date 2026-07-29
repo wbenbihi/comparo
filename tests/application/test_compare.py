@@ -42,6 +42,7 @@ from comparo.application.production_execution import ProductionRunAnnotations
 from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
+from comparo.application.request_composition import RequestCompositionInspection
 from comparo.application.resolved_inspection import ResolvedValueInspectionBatch
 from comparo.application.resolved_inspection import ResolvedValueInspectionBatchResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
@@ -1443,6 +1444,18 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
             start_ordinal=0,
             maximum_rules=1,
         )
+    with pytest.raises(TypeError, match="request composition handle"):
+        service.inspect_request_composition(
+            cast("ComparePreparationHandle", object()),
+            _controls(),
+            execution_ordinal=0,
+        )
+    with pytest.raises(TypeError, match="request composition controls"):
+        service.inspect_request_composition(
+            ComparePreparationHandle(value=str(_HANDLE_ID)),
+            cast("CompareExecutionControls", object()),
+            execution_ordinal=0,
+        )
     with pytest.raises(TypeError, match="start handle"):
         service.validate_start(cast("ComparePreparationHandle", object()), _controls())
     with pytest.raises(TypeError, match="start controls"):
@@ -1538,6 +1551,39 @@ def test_compare_lists_exact_pre_run_rules_without_consuming_handle(tmp_path: Pa
     assert type(rules) is PlanRuleWindow
     assert rules.total_rules == 0
     assert rules.rules == ()
+    assert service.outstanding == 1
+
+
+def test_compare_inspects_request_composition_without_consuming_handle(tmp_path: Path) -> None:
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+
+    inspection = service.inspect_request_composition(
+        prepared.handle,
+        controls,
+        execution_ordinal=0,
+    )
+
+    assert type(inspection) is RequestCompositionInspection
+    assert inspection.occurrence.subject.resource_id == "ping"
+    assert tuple(item.field for item in inspection.fields) == (
+        "method",
+        "url",
+        "timeout",
+        "retries",
+        "redirects",
+        "tls",
+    )
+    assert (
+        service.inspect_request_composition(
+            prepared.handle,
+            controls,
+            execution_ordinal=1,
+        )
+        is None
+    )
     assert service.outstanding == 1
 
 

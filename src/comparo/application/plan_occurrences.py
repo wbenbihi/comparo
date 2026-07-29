@@ -214,7 +214,7 @@ def inspect_plan_occurrence_window(
     prepared = project.prepared
     total = prepared.plan.cardinality.environment_executions.value
     occurrences = tuple(
-        _inspect_occurrence(work)
+        inspect_plan_occurrence(work)
         for work in iter_execution_work_window(
             prepared,
             start_ordinal=start_ordinal,
@@ -261,7 +261,10 @@ def inspect_plan_comparison_window(
     )
 
 
-def _inspect_occurrence(work: ExecutionWork) -> PlanOccurrenceInspection:
+def inspect_plan_occurrence(work: ExecutionWork) -> PlanOccurrenceInspection:
+    """Project one exact core execution work item without resolving values."""
+    if type(work) is not ExecutionWork:
+        raise TypeError("plan occurrence projection requires ExecutionWork")
     cell = work.trial.cell
     return PlanOccurrenceInspection(
         ordinal=work.ordinal.value,
@@ -323,5 +326,6 @@ __all__ = (
     "PlanOccurrenceInspection",
     "PlanOccurrenceWindow",
     "inspect_plan_comparison_window",
+    "inspect_plan_occurrence",
     "inspect_plan_occurrence_window",
 )

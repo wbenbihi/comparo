@@ -15,8 +15,10 @@ from comparo.application.plan_occurrences import PlanMatrixCaseInspection
 from comparo.application.plan_occurrences import PlanOccurrenceInspection
 from comparo.application.plan_occurrences import PlanOccurrenceWindow
 from comparo.application.plan_occurrences import inspect_plan_comparison_window
+from comparo.application.plan_occurrences import inspect_plan_occurrence
 from comparo.application.plan_occurrences import inspect_plan_occurrence_window
 from comparo.application.preflight import PreparedProjectPlan
+from comparo.core.runtime.models import ExecutionWork
 
 _FINGERPRINT = "a" * 64
 
@@ -215,6 +217,11 @@ def test_occurrence_inspection_rejects_untyped_project() -> None:
             start_ordinal=0,
             maximum_occurrences=1,
         )
+
+
+def test_occurrence_projection_rejects_untyped_work() -> None:
+    with pytest.raises(TypeError, match="ExecutionWork"):
+        inspect_plan_occurrence(cast("ExecutionWork", object()))
 
 
 @pytest.mark.parametrize(

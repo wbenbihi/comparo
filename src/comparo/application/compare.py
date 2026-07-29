@@ -42,6 +42,8 @@ from comparo.application.render_preview import RenderPreviewSettings
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
 from comparo.application.render_preview import render_prepared_request_window
+from comparo.application.request_composition import RequestCompositionInspection
+from comparo.application.request_composition import inspect_request_composition
 from comparo.application.resolved_inspection import ResolvedValueInspectionBatch
 from comparo.application.resolved_inspection import ResolvedValueInspectionBatchResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
@@ -473,6 +475,24 @@ class CompareService:
             prepared.project,
             start_ordinal=start_ordinal,
             maximum_rules=maximum_rules,
+        )
+
+    def inspect_request_composition(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        *,
+        execution_ordinal: int,
+    ) -> RequestCompositionInspection | None:
+        """Inspect value-free field composition without consuming the preparation."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare request composition handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare request composition controls must be typed")
+        prepared = self._validate_inspection(handle, controls)
+        return inspect_request_composition(
+            prepared.project,
+            execution_ordinal=execution_ordinal,
         )
 
     def validate_start(

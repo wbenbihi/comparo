@@ -221,6 +221,24 @@ from comparo.application.report_retention import ReportRetentionPolicy as Report
 from comparo.application.report_retention import apply_report_retention as apply_report_retention
 from comparo.application.report_retention import plan_report_retention as plan_report_retention
 from comparo.application.report_retention import restore_report as restore_report
+from comparo.application.request_composition import (
+    RequestCompositionInspection as RequestCompositionInspection,
+)
+from comparo.application.request_composition import (
+    RequestCompositionStrategy as RequestCompositionStrategy,
+)
+from comparo.application.request_composition import (
+    RequestContributionKind as RequestContributionKind,
+)
+from comparo.application.request_composition import (
+    RequestFieldComposition as RequestFieldComposition,
+)
+from comparo.application.request_composition import (
+    RequestFieldContribution as RequestFieldContribution,
+)
+from comparo.application.request_composition import (
+    inspect_request_composition as inspect_request_composition,
+)
 from comparo.application.resolved_inspection import (
     ResolutionProvenanceInspection as ResolutionProvenanceInspection,
 )
@@ -461,6 +479,11 @@ __all__ = (
     "ReportRetentionPolicy",
     "RequestAggregate",
     "RequestBodyOmissionReason",
+    "RequestCompositionInspection",
+    "RequestCompositionStrategy",
+    "RequestContributionKind",
+    "RequestFieldComposition",
+    "RequestFieldContribution",
     "RequestOverride",
     "ResolutionProvenanceInspection",
     "ResolvedExecutionCoordinate",
@@ -548,6 +571,7 @@ __all__ = (
     "inspect_project_plan",
     "inspect_project_source",
     "inspect_project_workspace",
+    "inspect_request_composition",
     "inspect_runtime_limits",
     "list_report_archive",
     "persisted_production_execution_defaults_v1",
