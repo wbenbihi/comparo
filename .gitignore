@@ -13,10 +13,12 @@ dist/
 .pytest_cache/
 .import_linter_cache/
 .coverage
+.playwright-mcp/
 coverage.xml
 htmlcov/
 reports/
 runs/
+**/.comparo/artifacts/
 
 # Secrets — never commit resolved credentials or snapshot artifacts
 # (patterns target credential *files*, not source like secrets.py)
