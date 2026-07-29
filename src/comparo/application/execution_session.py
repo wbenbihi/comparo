@@ -537,6 +537,20 @@ class ExecutionSession:
         """Return whether the underlying production operation is terminal."""
         return self._task.done()
 
+    @property
+    def snapshot(self) -> ExecutionProgressSnapshot:
+        """Return the latest immutable progress snapshot without waiting."""
+        return self._mailbox.snapshot
+
+    @property
+    def task_cancelled(self) -> bool:
+        """Return whether the owned task itself ended through asyncio cancellation."""
+        return self._task.cancelled()
+
+    async def after(self, revision: int) -> ExecutionProgressSnapshot | None:
+        """Wait for one newer coalesced snapshot using a caller-owned revision cursor."""
+        return await self._mailbox.after(revision)
+
     async def updates(self) -> AsyncIterator[ExecutionProgressSnapshot]:
         """Yield coalesced progress without letting a slow UI grow runtime memory."""
         revision = -1

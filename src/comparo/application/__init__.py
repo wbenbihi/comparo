@@ -270,6 +270,14 @@ from comparo.application.results import ResultReference as ResultReference
 from comparo.application.results import ResultRelation as ResultRelation
 from comparo.application.results import ResultSummary as ResultSummary
 from comparo.application.results import project_results as project_results
+from comparo.application.run_service import RunHandle as RunHandle
+from comparo.application.run_service import RunInspection as RunInspection
+from comparo.application.run_service import RunQuery as RunQuery
+from comparo.application.run_service import RunResultAccess as RunResultAccess
+from comparo.application.run_service import RunService as RunService
+from comparo.application.run_service import RunServiceError as RunServiceError
+from comparo.application.run_service import RunServiceErrorCode as RunServiceErrorCode
+from comparo.application.run_service import RunWindow as RunWindow
 from comparo.application.runtime_capabilities import (
     RuntimeCapabilityPreflightResult as RuntimeCapabilityPreflightResult,
 )
@@ -452,6 +460,14 @@ __all__ = (
     "ResultRelation",
     "ResultSummary",
     "RuleAggregate",
+    "RunHandle",
+    "RunInspection",
+    "RunQuery",
+    "RunResultAccess",
+    "RunService",
+    "RunServiceError",
+    "RunServiceErrorCode",
+    "RunWindow",
     "RuntimeCapabilityPreflightResult",
     "RuntimeLimitInspection",
     "RuntimeLimitsInspection",
