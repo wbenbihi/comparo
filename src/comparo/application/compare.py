@@ -23,6 +23,8 @@ from comparo.application.execution_session import start_execution_session
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import inspect_diagnostic
 from comparo.application.inspection import inspect_plan
+from comparo.application.plan_occurrences import PlanOccurrenceWindow
+from comparo.application.plan_occurrences import inspect_plan_occurrence_window
 from comparo.application.plan_review import PlanReviewInspection
 from comparo.application.plan_review import inspect_execution_settings
 from comparo.application.plan_review import inspect_runtime_limits
@@ -360,6 +362,26 @@ class CompareService:
         return cast(
             "ResolvedValueInspectionResult",
             await self._run_inspection(handle, lease),
+        )
+
+    def list_occurrences(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        *,
+        start_ordinal: int,
+        maximum_occurrences: int,
+    ) -> PlanOccurrenceWindow:
+        """List a value-free canonical occurrence page without consuming the preparation."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare occurrence handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare occurrence controls must be typed")
+        prepared = self._validate_inspection(handle, controls)
+        return inspect_plan_occurrence_window(
+            prepared.project,
+            start_ordinal=start_ordinal,
+            maximum_occurrences=maximum_occurrences,
         )
 
     def validate_start(

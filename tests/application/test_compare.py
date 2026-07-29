@@ -28,6 +28,7 @@ from comparo.application.compare import CompareServiceErrorCode
 from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
+from comparo.application.plan_occurrences import PlanOccurrenceWindow
 from comparo.application.plan_review import PlanReviewInspection
 from comparo.application.planning import PlanningOptions
 from comparo.application.preflight import ProjectPlanRequest
@@ -1297,6 +1298,20 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
                 cast("ResolvedValueInspectionTarget", object()),
             )
         )
+    with pytest.raises(TypeError, match="occurrence handle"):
+        service.list_occurrences(
+            cast("ComparePreparationHandle", object()),
+            _controls(),
+            start_ordinal=0,
+            maximum_occurrences=1,
+        )
+    with pytest.raises(TypeError, match="occurrence controls"):
+        service.list_occurrences(
+            ComparePreparationHandle(value=str(_HANDLE_ID)),
+            cast("CompareExecutionControls", object()),
+            start_ordinal=0,
+            maximum_occurrences=1,
+        )
     with pytest.raises(TypeError, match="start handle"):
         service.validate_start(cast("ComparePreparationHandle", object()), _controls())
     with pytest.raises(TypeError, match="start controls"):
@@ -1312,6 +1327,84 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
     with pytest.raises(CompareServiceError) as captured:
         service.start(ComparePreparationHandle(value=str(_HANDLE_ID)), _controls())
     assert captured.value.code is CompareServiceErrorCode.HANDLE_UNKNOWN
+
+
+def test_compare_lists_canonical_occurrences_without_resolving_requests(tmp_path: Path) -> None:
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(
+        _request(
+            _write_project(tmp_path),
+            CompareIntent.COMPARISON,
+            PlanningOptions(
+                subjects=("ping",),
+                baseline="staging",
+                candidates=("prod",),
+                trials=2,
+            ),
+        )
+    )
+    assert prepared.handle is not None
+    assert prepared.review is not None
+
+    first = service.list_occurrences(
+        prepared.handle,
+        controls,
+        start_ordinal=0,
+        maximum_occurrences=3,
+    )
+    assert type(first) is PlanOccurrenceWindow
+    assert first.plan_fingerprint == prepared.review.plan.fingerprint
+    assert first.total_occurrences == 4
+    assert tuple(item.ordinal for item in first.occurrences) == (0, 1, 2)
+    assert tuple(item.environment.resource_id for item in first.occurrences) == (
+        "staging",
+        "prod",
+        "staging",
+    )
+    assert all(item.subject.resource_id == "ping" for item in first.occurrences)
+    assert tuple(item.trial_ordinal for item in first.occurrences) == (0, 0, 1)
+    assert first.next_ordinal == 3
+
+    final = service.list_occurrences(
+        prepared.handle,
+        controls,
+        start_ordinal=first.next_ordinal,
+        maximum_occurrences=3,
+    )
+    assert tuple(item.ordinal for item in final.occurrences) == (3,)
+    assert final.next_ordinal is None
+    assert service.outstanding == 1
+
+
+@pytest.mark.parametrize(
+    ("start_ordinal", "maximum_occurrences", "message"),
+    [
+        (-1, 1, "start"),
+        (True, 1, "start"),
+        (0, 0, "page size"),
+        (0, True, "page size"),
+    ],
+)
+def test_compare_occurrence_catalog_rejects_invalid_windows(
+    tmp_path: Path,
+    start_ordinal: object,
+    maximum_occurrences: object,
+    message: str,
+) -> None:
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+
+    with pytest.raises(ValueError, match=message):
+        service.list_occurrences(
+            prepared.handle,
+            controls,
+            start_ordinal=cast("int", start_ordinal),
+            maximum_occurrences=cast("int", maximum_occurrences),
+        )
+    assert service.outstanding == 1
 
 
 @pytest.mark.parametrize(

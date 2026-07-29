@@ -76,6 +76,13 @@ from comparo.application.inspection import (
 from comparo.application.inspection import inspect_diagnostic as inspect_diagnostic
 from comparo.application.inspection import inspect_plan as inspect_plan
 from comparo.application.inspection import inspect_policy_diagnostic as inspect_policy_diagnostic
+from comparo.application.plan_occurrences import (
+    PlanMatrixCaseInspection as PlanMatrixCaseInspection,
+)
+from comparo.application.plan_occurrences import (
+    PlanOccurrenceInspection as PlanOccurrenceInspection,
+)
+from comparo.application.plan_occurrences import PlanOccurrenceWindow as PlanOccurrenceWindow
 from comparo.application.plan_review import (
     ExecutionSettingsInspection as ExecutionSettingsInspection,
 )
@@ -347,6 +354,9 @@ __all__ = (
     "MatrixOverride",
     "PlanClipboardSummary",
     "PlanInspection",
+    "PlanMatrixCaseInspection",
+    "PlanOccurrenceInspection",
+    "PlanOccurrenceWindow",
     "PlanReviewInspection",
     "PlanningOptions",
     "PolicyLoadLimits",
