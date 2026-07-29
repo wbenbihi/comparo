@@ -33,6 +33,7 @@ from comparo.application.preflight import ProjectPlanRequest
 from comparo.application.preflight import prepare_project_plan
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionSettings
+from comparo.application.production_execution import ProductionRunAnnotations
 from comparo.application.profile_binding import bind_execution_profiles
 from comparo.application.render_preview import RenderPreviewRequest
 from comparo.application.render_preview import RenderPreviewSettings
@@ -103,6 +104,7 @@ class CompareExecutionControls(msgspec.Struct, frozen=True, kw_only=True):
     artifact_root: Path | None
     approve_mutations: bool
     tool_version: str
+    annotations: ProductionRunAnnotations | None = None
 
     def __post_init__(self) -> None:
         """Validate effectful choices before preparing or consuming a handle."""
@@ -120,6 +122,8 @@ class CompareExecutionControls(msgspec.Struct, frozen=True, kw_only=True):
             or len(self.tool_version) > 64
         ):
             raise ValueError("Compare tool version must be bounded non-empty text")
+        if self.annotations is not None and type(self.annotations) is not ProductionRunAnnotations:
+            raise TypeError("Compare run annotations must be typed or absent")
 
 
 @final
@@ -293,6 +297,7 @@ class CompareService:
                 artifact_root=prepared.controls.artifact_root,
                 approve_mutations=prepared.controls.approve_mutations,
                 tool_version=prepared.controls.tool_version,
+                annotations=prepared.controls.annotations,
             )
         )
 

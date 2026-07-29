@@ -37,6 +37,7 @@ from comparo.application.production_execution import ProductionExecutionFailure
 from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
+from comparo.application.production_execution import ProductionRunAnnotations
 from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
@@ -1225,6 +1226,7 @@ def test_compare_preparation_result_rejects_invalid_state(tmp_path: Path) -> Non
         ({"tool_version": 1}, ValueError, "tool version"),
         ({"tool_version": ""}, ValueError, "tool version"),
         ({"tool_version": "x" * 65}, ValueError, "tool version"),
+        ({"annotations": object()}, TypeError, "annotations"),
     ],
 )
 def test_compare_execution_controls_reject_invalid_state(
@@ -1237,10 +1239,39 @@ def test_compare_execution_controls_reject_invalid_state(
         "artifact_root": None,
         "approve_mutations": False,
         "tool_version": "test",
+        "annotations": None,
     }
     values.update(changes)
     with pytest.raises(error, match=message):
         CompareExecutionControls(**values)  # type: ignore[arg-type]
+
+
+def test_compare_start_forwards_run_annotations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    annotations = ProductionRunAnnotations(
+        title="Release comparison",
+        notes="Investigate any drift",
+        tags=("release",),
+    )
+    controls = msgspec.structs.replace(_controls(), annotations=annotations)
+    request = msgspec.structs.replace(
+        _assertion_request(_write_project(tmp_path)),
+        controls=controls,
+    )
+    service = CompareService(maximum_outstanding=1)
+    prepared = service.prepare(request)
+    assert prepared.handle is not None
+    captured: list[ProductionExecutionRequest] = []
+
+    def start(production: ProductionExecutionRequest) -> execution_session.ExecutionSession:
+        captured.append(production)
+        return cast("execution_session.ExecutionSession", object())
+
+    monkeypatch.setattr(compare, "start_execution_session", start)
+    assert service.start(prepared.handle, controls) is not None
+    assert captured[0].annotations == annotations
 
 
 def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
