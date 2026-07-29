@@ -164,6 +164,116 @@ class SourceWindow(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class AuthoredResourceInspectionRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """One exact resource-document window tied to a compiled resource revision."""
+
+    workspace: ProjectWorkspaceRequest
+    coordinate: ResourceCoordinate
+    limits: SourceInspectionLimits
+    start_resource_line: int = 1
+    mode: SourceViewMode = SourceViewMode.MASKED
+    expected_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact resource identity, disclosure, revision, and finite limits."""
+        if (
+            type(self.workspace) is not ProjectWorkspaceRequest
+            or type(self.coordinate) is not ResourceCoordinate
+            or type(self.limits) is not SourceInspectionLimits
+        ):
+            raise SourceInspectionError(SourceInspectionErrorCode.INVALID_REQUEST)
+        if type(self.start_resource_line) is not int or self.start_resource_line < 1:
+            raise SourceInspectionError(SourceInspectionErrorCode.INVALID_REQUEST)
+        if type(self.mode) is not SourceViewMode:
+            raise SourceInspectionError(SourceInspectionErrorCode.INVALID_REQUEST)
+        if self.expected_sha256 is not None and (
+            len(self.expected_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.expected_sha256)
+        ):
+            raise SourceInspectionError(SourceInspectionErrorCode.INVALID_REQUEST)
+
+
+@final
+class AuthoredResourceWindow(msgspec.Struct, frozen=True, kw_only=True):
+    """One line-bounded authored YAML document belonging to an exact resource revision."""
+
+    coordinate: ResourceCoordinate
+    source: SourceCoordinate
+    source_sha256: str
+    source_byte_count: int
+    mode: SourceViewMode
+    resource_start_line: int
+    resource_start_column: int
+    resource_end_line: int
+    resource_end_column: int
+    start_resource_line: int
+    returned_lines: int
+    total_resource_lines: int
+    content: str
+    next_resource_line: int | None
+    line_truncated: bool
+    redaction_count: int
+    contains_unmasked_values: bool
+    diagnostics: tuple[ApplicationDiagnostic, ...] = ()
+
+    def __post_init__(self) -> None:  # noqa: C901 - exact source-window coherence
+        """Require coherent resource-relative and source-absolute coordinates."""
+        if (
+            type(self.coordinate) is not ResourceCoordinate
+            or type(self.source) is not SourceCoordinate
+        ):
+            raise TypeError("authored resource window requires typed coordinates")
+        if (
+            type(self.source_sha256) is not str
+            or len(self.source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.source_sha256)
+        ):
+            raise ValueError("authored resource source revision must be SHA-256")
+        counts = (
+            self.source_byte_count,
+            self.returned_lines,
+            self.total_resource_lines,
+            self.redaction_count,
+        )
+        if any(type(value) is not int or value < 0 for value in counts):
+            raise ValueError("authored resource counts must be non-negative integers")
+        positions = (
+            self.resource_start_line,
+            self.resource_start_column,
+            self.resource_end_line,
+            self.resource_end_column,
+            self.start_resource_line,
+        )
+        if any(type(value) is not int or value < 1 for value in positions):
+            raise ValueError("authored resource positions must be positive integers")
+        if (self.resource_end_line, self.resource_end_column) < (
+            self.resource_start_line,
+            self.resource_start_column,
+        ):
+            raise ValueError("authored resource source interval must be ordered")
+        if self.start_resource_line > self.total_resource_lines:
+            raise ValueError("authored resource cursor exceeds its document")
+        if type(self.mode) is not SourceViewMode:
+            raise TypeError("authored resource disclosure mode must be typed")
+        if type(self.content) is not str:
+            raise TypeError("authored resource content must be text")
+        consumed = self.start_resource_line + self.returned_lines
+        expected_next = (
+            None if self.line_truncated or consumed > self.total_resource_lines else consumed
+        )
+        if self.next_resource_line != expected_next:
+            raise ValueError("authored resource continuation contradicts its page")
+        if type(self.line_truncated) is not bool or type(self.contains_unmasked_values) is not bool:
+            raise TypeError("authored resource disclosure flags must be bool")
+        if self.contains_unmasked_values != (self.mode is SourceViewMode.TRUSTED_EXACT):
+            raise ValueError("authored resource exact-disclosure marker contradicts its mode")
+        if type(self.diagnostics) is not tuple or any(
+            type(item) is not ApplicationDiagnostic for item in self.diagnostics
+        ):
+            raise TypeError("authored resource diagnostics must be immutable and typed")
+
+
+@final
 class EffectiveResourceInspectionRequest(msgspec.Struct, frozen=True, kw_only=True):
     """One caller-bounded effective structural resource window."""
 
@@ -253,6 +363,93 @@ def inspect_project_source(request: SourceInspectionRequest) -> SourceWindow:
         total_lines=total,
         content=window,
         next_line=next_line,
+        line_truncated=truncated,
+        redaction_count=redactions,
+        contains_unmasked_values=request.mode is SourceViewMode.TRUSTED_EXACT,
+        diagnostics=tuple(
+            inspect_configuration_diagnostic(item) for item in loaded.compilation.diagnostics
+        ),
+    )
+
+
+def inspect_authored_resource(
+    request: AuthoredResourceInspectionRequest,
+) -> AuthoredResourceWindow:
+    """Read only the authored YAML document for one exact compiled resource revision."""
+    if type(request) is not AuthoredResourceInspectionRequest:
+        raise SourceInspectionError(SourceInspectionErrorCode.INVALID_REQUEST)
+    loaded = compile_project_path(
+        request.workspace.config,
+        additional_sources=request.workspace.additional_sources,
+        limits=request.workspace.load_limits,
+    )
+    project = loaded.compilation.project
+    if project is None:
+        raise SourceInspectionError(SourceInspectionErrorCode.PROJECT_INVALID)
+    resource = next(
+        (
+            item
+            for item in (project.project, *project.resources)
+            if _coordinate(item) == request.coordinate
+        ),
+        None,
+    )
+    if resource is None:
+        raise SourceInspectionError(SourceInspectionErrorCode.RESOURCE_NOT_FOUND)
+    source = next(
+        (item for item in loaded.catalog if item.source_id == resource.location.source_id),
+        None,
+    )
+    if source is None:  # pragma: no cover - compiled-resource source closure invariant
+        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_NOT_FOUND)
+    document = next(
+        (
+            item
+            for item in loaded.documents
+            if item.number == resource.location.document.value
+            and item.root.span.start.source_id == resource.location.source_id
+        ),
+        None,
+    )
+    if document is None:  # pragma: no cover - compiled-resource document closure invariant
+        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_NOT_FOUND)
+    content = _read_source(source, request.limits.maximum_source_bytes)
+    digest = _digest(content)
+    if source.sha256 is None or source.sha256 != digest:
+        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_CHANGED)
+    if request.expected_sha256 is not None and request.expected_sha256 != digest:
+        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_CHANGED)
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise SourceInspectionError(SourceInspectionErrorCode.SOURCE_UNAVAILABLE) from error
+    redactions = 0
+    if request.mode is SourceViewMode.MASKED:
+        text, redactions = _mask_source(text, loaded.documents, source.source_id.value)
+    span = document.root.span
+    lines = text.splitlines(keepends=True)
+    resource_text = "".join(lines[span.start.line.value - 1 : span.end.line.value])
+    window, returned, total, next_line, truncated = _line_window(
+        resource_text,
+        start_line=request.start_resource_line,
+        maximum_lines=request.limits.maximum_lines,
+        maximum_bytes=request.limits.maximum_output_bytes,
+    )
+    return AuthoredResourceWindow(
+        coordinate=request.coordinate,
+        source=_source_coordinate(resource),
+        source_sha256=digest,
+        source_byte_count=len(content),
+        mode=request.mode,
+        resource_start_line=span.start.line.value,
+        resource_start_column=span.start.column.value,
+        resource_end_line=span.end.line.value,
+        resource_end_column=span.end.column.value,
+        start_resource_line=request.start_resource_line,
+        returned_lines=returned,
+        total_resource_lines=total,
+        content=window,
+        next_resource_line=next_line,
         line_truncated=truncated,
         redaction_count=redactions,
         contains_unmasked_values=request.mode is SourceViewMode.TRUSTED_EXACT,
@@ -500,6 +697,8 @@ def _source_coordinate(resource: CompiledResource) -> SourceCoordinate:
 
 
 __all__ = (
+    "AuthoredResourceInspectionRequest",
+    "AuthoredResourceWindow",
     "EffectiveResourceInspectionRequest",
     "EffectiveResourceWindow",
     "SourceInspectionError",
@@ -508,6 +707,7 @@ __all__ = (
     "SourceInspectionRequest",
     "SourceViewMode",
     "SourceWindow",
+    "inspect_authored_resource",
     "inspect_effective_resource",
     "inspect_project_source",
 )

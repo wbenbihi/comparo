@@ -15,6 +15,8 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.project_workspace import ProjectWorkspaceRequest
 from comparo.application.project_workspace import inspect_project_workspace
+from comparo.application.source_inspection import AuthoredResourceInspectionRequest
+from comparo.application.source_inspection import AuthoredResourceWindow
 from comparo.application.source_inspection import EffectiveResourceInspectionRequest
 from comparo.application.source_inspection import SourceInspectionError
 from comparo.application.source_inspection import SourceInspectionErrorCode
@@ -22,6 +24,7 @@ from comparo.application.source_inspection import SourceInspectionLimits
 from comparo.application.source_inspection import SourceInspectionRequest
 from comparo.application.source_inspection import SourceViewMode
 from comparo.application.source_inspection import SourceWindow
+from comparo.application.source_inspection import inspect_authored_resource
 from comparo.application.source_inspection import inspect_effective_resource
 from comparo.application.source_inspection import inspect_project_source
 from comparo.configuration.loader import compile_project_path
@@ -130,6 +133,83 @@ def test_effective_resource_projection_is_revision_exact_bounded_and_value_safe(
     assert window.total_fields > 1
     assert window.next_field == 1
     assert _SECRET_CANARY not in msgspec.json.encode(window).decode()
+
+
+def test_authored_resource_returns_only_its_revision_pinned_yaml_document(
+    tmp_path: Path,
+) -> None:
+    workspace = ProjectWorkspaceRequest(config=_write_project(tmp_path))
+    inspected = inspect_project_workspace(workspace)
+    assert inspected.snapshot is not None
+    resource = next(
+        item
+        for item in inspected.snapshot.resources
+        if item.coordinate.resource_id == "credentials"
+    )
+    source = next(item for item in inspected.sources if item.source_id == resource.source.source)
+    assert source.sha256 is not None
+
+    masked = inspect_authored_resource(
+        AuthoredResourceInspectionRequest(
+            workspace=workspace,
+            coordinate=resource.coordinate,
+            expected_sha256=source.sha256,
+            limits=_limits(lines=2),
+        )
+    )
+    assert type(masked) is AuthoredResourceWindow
+    assert masked.coordinate == resource.coordinate
+    assert masked.source.document == resource.source.document
+    assert masked.resource_start_line == resource.source.line
+    assert masked.total_resource_lines > masked.returned_lines
+    assert masked.next_resource_line == 3
+    assert "kind: Value" in masked.content
+    assert "kind: Request" not in masked.content
+    assert _SECRET_CANARY not in masked.content
+
+    exact = inspect_authored_resource(
+        msgspec.structs.replace(
+            AuthoredResourceInspectionRequest(
+                workspace=workspace,
+                coordinate=resource.coordinate,
+                expected_sha256=source.sha256,
+                limits=_limits(),
+            ),
+            mode=SourceViewMode.TRUSTED_EXACT,
+        )
+    )
+    assert _SECRET_CANARY in exact.content
+    assert exact.contains_unmasked_values
+    assert exact.source_sha256 == source.sha256
+
+
+def test_authored_resource_rejects_stale_or_absent_resource_revisions(tmp_path: Path) -> None:
+    workspace = ProjectWorkspaceRequest(config=_write_project(tmp_path))
+    inspected = inspect_project_workspace(workspace)
+    assert inspected.snapshot is not None
+    resource = inspected.snapshot.resources[0]
+    request = AuthoredResourceInspectionRequest(
+        workspace=workspace,
+        coordinate=resource.coordinate,
+        expected_sha256="0" * 64,
+        limits=_limits(),
+    )
+    with pytest.raises(SourceInspectionError) as stale:
+        inspect_authored_resource(request)
+    assert stale.value.code is SourceInspectionErrorCode.SOURCE_CHANGED
+
+    with pytest.raises(SourceInspectionError) as absent:
+        inspect_authored_resource(
+            msgspec.structs.replace(
+                request,
+                expected_sha256=None,
+                coordinate=msgspec.structs.replace(
+                    resource.coordinate,
+                    fingerprint="0" * 64,
+                ),
+            )
+        )
+    assert absent.value.code is SourceInspectionErrorCode.RESOURCE_NOT_FOUND
 
 
 def test_masked_source_conservatively_hides_every_scalar_below_resource_specs(
@@ -312,6 +392,107 @@ def test_source_request_and_window_contracts_reject_invalid_disclosure_state(
     for changes, error in window_cases:
         with pytest.raises(error):
             msgspec.structs.replace(window, **changes)
+
+
+def test_authored_resource_contracts_reject_invalid_state(tmp_path: Path) -> None:
+    workspace = ProjectWorkspaceRequest(config=_write_project(tmp_path))
+    inspected = inspect_project_workspace(workspace)
+    assert inspected.snapshot is not None
+    resource = inspected.snapshot.resources[0]
+    request = AuthoredResourceInspectionRequest(
+        workspace=workspace,
+        coordinate=resource.coordinate,
+        limits=_limits(),
+    )
+    request_cases: tuple[dict[str, object], ...] = (
+        {"workspace": cast("ProjectWorkspaceRequest", object())},
+        {"coordinate": cast("ResourceCoordinate", object())},
+        {"limits": cast("SourceInspectionLimits", object())},
+        {"start_resource_line": 0},
+        {"start_resource_line": cast("int", True)},
+        {"mode": cast("SourceViewMode", object())},
+        {"expected_sha256": "short"},
+        {"expected_sha256": "Z" * 64},
+    )
+    for request_changes in request_cases:
+        with pytest.raises(SourceInspectionError) as caught:
+            msgspec.structs.replace(request, **request_changes)
+        assert caught.value.code is SourceInspectionErrorCode.INVALID_REQUEST
+
+    actual = inspect_authored_resource(request)
+    diagnostic = ApplicationDiagnostic(code="source.test", severity="info", stage="test")
+    window_cases: tuple[tuple[dict[str, object], type[Exception]], ...] = (
+        ({"coordinate": object()}, TypeError),
+        ({"source": object()}, TypeError),
+        ({"source_sha256": "short"}, ValueError),
+        ({"source_sha256": "Z" * 64}, ValueError),
+        ({"source_byte_count": -1}, ValueError),
+        ({"returned_lines": cast("int", True)}, ValueError),
+        ({"resource_start_line": 0}, ValueError),
+        ({"resource_end_line": 0}, ValueError),
+        (
+            {
+                "resource_start_line": 2,
+                "resource_start_column": 2,
+                "resource_end_line": 2,
+                "resource_end_column": 1,
+            },
+            ValueError,
+        ),
+        ({"start_resource_line": actual.total_resource_lines + 1}, ValueError),
+        ({"mode": object()}, TypeError),
+        ({"content": object()}, TypeError),
+        ({"next_resource_line": 1}, ValueError),
+        ({"line_truncated": 1}, TypeError),
+        ({"contains_unmasked_values": True}, ValueError),
+        ({"diagnostics": [diagnostic]}, TypeError),
+        ({"diagnostics": (object(),)}, TypeError),
+    )
+    for window_changes, error in window_cases:
+        with pytest.raises(error):
+            msgspec.structs.replace(actual, **window_changes)
+
+    with pytest.raises(SourceInspectionError) as untyped:
+        inspect_authored_resource(cast("AuthoredResourceInspectionRequest", object()))
+    assert untyped.value.code is SourceInspectionErrorCode.INVALID_REQUEST
+
+    invalid = tmp_path / "invalid-authored.yaml"
+    invalid.write_text("not: [valid", encoding="utf-8")
+    with pytest.raises(SourceInspectionError) as project:
+        inspect_authored_resource(
+            msgspec.structs.replace(
+                request,
+                workspace=ProjectWorkspaceRequest(config=invalid),
+            )
+        )
+    assert project.value.code is SourceInspectionErrorCode.PROJECT_INVALID
+
+
+def test_authored_resource_maps_changed_and_non_utf8_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = ProjectWorkspaceRequest(config=_write_project(tmp_path))
+    inspected = inspect_project_workspace(workspace)
+    assert inspected.snapshot is not None
+    resource = inspected.snapshot.resources[0]
+    request = AuthoredResourceInspectionRequest(
+        workspace=workspace,
+        coordinate=resource.coordinate,
+        limits=_limits(),
+    )
+    monkeypatch.setattr(source_module, "_read_source", lambda _source, _maximum: b"changed")
+    with pytest.raises(SourceInspectionError) as changed:
+        inspect_authored_resource(request)
+    assert changed.value.code is SourceInspectionErrorCode.SOURCE_CHANGED
+
+    source = next(item for item in inspected.sources if item.source_id == resource.source.source)
+    assert source.sha256 is not None
+    monkeypatch.setattr(source_module, "_read_source", lambda _source, _maximum: b"\xff")
+    monkeypatch.setattr(source_module, "_digest", lambda _content: source.sha256)
+    with pytest.raises(SourceInspectionError) as unavailable:
+        inspect_authored_resource(request)
+    assert unavailable.value.code is SourceInspectionErrorCode.SOURCE_UNAVAILABLE
 
 
 def test_effective_inspection_rejects_invalid_windows_and_missing_resources(

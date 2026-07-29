@@ -277,6 +277,10 @@ from comparo.application.runtime_capabilities import (
     preflight_runtime_capabilities as preflight_runtime_capabilities,
 )
 from comparo.application.source_inspection import (
+    AuthoredResourceInspectionRequest as AuthoredResourceInspectionRequest,
+)
+from comparo.application.source_inspection import AuthoredResourceWindow as AuthoredResourceWindow
+from comparo.application.source_inspection import (
     EffectiveResourceInspectionRequest as EffectiveResourceInspectionRequest,
 )
 from comparo.application.source_inspection import EffectiveResourceWindow as EffectiveResourceWindow
@@ -288,6 +292,9 @@ from comparo.application.source_inspection import SourceInspectionLimits as Sour
 from comparo.application.source_inspection import SourceInspectionRequest as SourceInspectionRequest
 from comparo.application.source_inspection import SourceViewMode as SourceViewMode
 from comparo.application.source_inspection import SourceWindow as SourceWindow
+from comparo.application.source_inspection import (
+    inspect_authored_resource as inspect_authored_resource,
+)
 from comparo.application.source_inspection import (
     inspect_effective_resource as inspect_effective_resource,
 )
@@ -309,6 +316,8 @@ __all__ = (
     "ArtifactInspection",
     "ArtifactOperationError",
     "ArtifactReadLimits",
+    "AuthoredResourceInspectionRequest",
+    "AuthoredResourceWindow",
     "BoundExecutionProfiles",
     "BudgetOverride",
     "CapturedAmbientEnvironment",
@@ -467,6 +476,7 @@ __all__ = (
     "initialize_project_artifact_root",
     "inline_value_override",
     "inspect_artifact",
+    "inspect_authored_resource",
     "inspect_configuration_diagnostic",
     "inspect_diagnostic",
     "inspect_effective_resource",
