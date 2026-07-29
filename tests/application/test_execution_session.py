@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from uuid import UUID
 from uuid import uuid5
 
 import msgspec
@@ -11,6 +12,8 @@ import pytest
 
 from comparo.application import execution_session as sessions
 from comparo.application.inspection import ApplicationDiagnostic
+from comparo.application.plan_occurrences import inspect_plan_comparison_window
+from comparo.application.plan_occurrences import inspect_plan_occurrence_window
 from comparo.application.production_execution import ProductionExecutionFailure
 from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionRequest
@@ -139,6 +142,98 @@ def test_session_coalesces_safe_runtime_progress_and_returns_result(
         assert final.recent_events[-1].kind is RuntimeEventKind.RUN_FINISHED
         assert not session.cancel()
         await session.close()
+
+    asyncio.run(scenario())
+
+
+def test_session_live_rows_expose_exact_plan_coordinates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        request = _request(tmp_path)
+        executions = inspect_plan_occurrence_window(
+            request.project,
+            start_ordinal=0,
+            maximum_occurrences=10,
+        ).occurrences
+        comparisons = inspect_plan_comparison_window(
+            request.project,
+            start_ordinal=0,
+            maximum_comparisons=10,
+        ).comparisons
+
+        async def execute(owned: ProductionExecutionRequest) -> ProductionExecutionResult:
+            assert owned.events is not None
+            sequence = 0
+            await owned.events.emit(
+                RuntimeEvent(
+                    sequence=Count(value=sequence),
+                    run_id=request.project.prepared.plan.run_id,
+                    kind=RuntimeEventKind.RUN_STARTED,
+                )
+            )
+            sequence += 1
+            for execution_coordinate in executions:
+                execution_id = EnvironmentExecutionId(value=UUID(execution_coordinate.execution_id))
+                for kind in (
+                    RuntimeEventKind.EXECUTION_QUEUED,
+                    RuntimeEventKind.EXECUTION_STARTED,
+                    RuntimeEventKind.EXECUTION_FINISHED,
+                ):
+                    await owned.events.emit(
+                        RuntimeEvent(
+                            sequence=Count(value=sequence),
+                            run_id=request.project.prepared.plan.run_id,
+                            kind=kind,
+                            execution_id=execution_id,
+                            outcome=(
+                                RuntimeOccurrenceOutcome.OBSERVED
+                                if kind is RuntimeEventKind.EXECUTION_FINISHED
+                                else None
+                            ),
+                        )
+                    )
+                    sequence += 1
+            for comparison_coordinate in comparisons:
+                await owned.events.emit(
+                    RuntimeEvent(
+                        sequence=Count(value=sequence),
+                        run_id=request.project.prepared.plan.run_id,
+                        kind=RuntimeEventKind.COMPARISON_FINISHED,
+                        comparison_id=ComparisonId(value=UUID(comparison_coordinate.comparison_id)),
+                        outcome=RuntimeOccurrenceOutcome.EVALUATED,
+                    )
+                )
+                sequence += 1
+            await owned.events.emit(
+                RuntimeEvent(
+                    sequence=Count(value=sequence),
+                    run_id=request.project.prepared.plan.run_id,
+                    kind=RuntimeEventKind.RUN_FINISHED,
+                )
+            )
+            return _failure()
+
+        monkeypatch.setattr(sessions, "execute_production", execute)
+        session = sessions.start_execution_session(request)
+        await session.result()
+        snapshot = session.snapshot
+        execution_rows = tuple(
+            item
+            for item in snapshot.occurrences
+            if item.kind is sessions.LiveOccurrenceKind.EXECUTION
+        )
+        comparison_rows = tuple(
+            item
+            for item in snapshot.occurrences
+            if item.kind is sessions.LiveOccurrenceKind.COMPARISON
+        )
+
+        assert tuple(item.execution for item in execution_rows) == executions
+        assert tuple(item.comparison for item in comparison_rows) == comparisons
+        assert all(item.execution is None for item in comparison_rows)
+        assert all(item.comparison is None for item in execution_rows)
 
     asyncio.run(scenario())
 

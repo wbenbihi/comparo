@@ -77,12 +77,22 @@ from comparo.application.inspection import inspect_diagnostic as inspect_diagnos
 from comparo.application.inspection import inspect_plan as inspect_plan
 from comparo.application.inspection import inspect_policy_diagnostic as inspect_policy_diagnostic
 from comparo.application.plan_occurrences import (
+    PlanComparisonInspection as PlanComparisonInspection,
+)
+from comparo.application.plan_occurrences import PlanComparisonWindow as PlanComparisonWindow
+from comparo.application.plan_occurrences import (
     PlanMatrixCaseInspection as PlanMatrixCaseInspection,
 )
 from comparo.application.plan_occurrences import (
     PlanOccurrenceInspection as PlanOccurrenceInspection,
 )
 from comparo.application.plan_occurrences import PlanOccurrenceWindow as PlanOccurrenceWindow
+from comparo.application.plan_occurrences import (
+    inspect_plan_comparison_window as inspect_plan_comparison_window,
+)
+from comparo.application.plan_occurrences import (
+    inspect_plan_occurrence_window as inspect_plan_occurrence_window,
+)
 from comparo.application.plan_review import (
     ExecutionSettingsInspection as ExecutionSettingsInspection,
 )
@@ -390,6 +400,8 @@ __all__ = (
     "LiveProgressEvent",
     "MatrixOverride",
     "PlanClipboardSummary",
+    "PlanComparisonInspection",
+    "PlanComparisonWindow",
     "PlanInspection",
     "PlanMatrixCaseInspection",
     "PlanOccurrenceInspection",
@@ -529,6 +541,8 @@ __all__ = (
     "inspect_effective_resource",
     "inspect_execution_settings",
     "inspect_plan",
+    "inspect_plan_comparison_window",
+    "inspect_plan_occurrence_window",
     "inspect_plan_rule_window",
     "inspect_policy_diagnostic",
     "inspect_project_plan",

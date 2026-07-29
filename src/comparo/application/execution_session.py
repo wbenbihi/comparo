@@ -11,6 +11,11 @@ from typing import final
 
 import msgspec
 
+from comparo.application.plan_occurrences import PlanComparisonInspection
+from comparo.application.plan_occurrences import PlanOccurrenceInspection
+from comparo.application.plan_occurrences import inspect_plan_comparison_window
+from comparo.application.plan_occurrences import inspect_plan_occurrence_window
+from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
 from comparo.application.production_execution import execute_production
@@ -71,6 +76,8 @@ class LiveOccurrenceProgress(msgspec.Struct, frozen=True, kw_only=True):
     queued_at_nanoseconds: int | None = None
     started_at_nanoseconds: int | None = None
     finished_at_nanoseconds: int | None = None
+    execution: PlanOccurrenceInspection | None = None
+    comparison: PlanComparisonInspection | None = None
 
     def __post_init__(self) -> None:  # noqa: C901 - closed occurrence-shape validation
         """Require a coherent, safe, monotonic occurrence projection."""
@@ -102,6 +109,20 @@ class LiveOccurrenceProgress(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("finished live occurrence requires a finish timestamp")
         if self.outcome is not None and self.state is not LiveOccurrenceState.FINISHED:
             raise ValueError("live occurrence outcome requires a finished state")
+        if self.execution is not None and type(self.execution) is not PlanOccurrenceInspection:
+            raise TypeError("live execution occurrence coordinate must be typed or absent")
+        if self.comparison is not None and type(self.comparison) is not PlanComparisonInspection:
+            raise TypeError("live comparison occurrence coordinate must be typed or absent")
+        if self.kind is LiveOccurrenceKind.EXECUTION:
+            if self.comparison is not None:
+                raise ValueError("live execution cannot retain a comparison coordinate")
+            if self.execution is not None and self.execution.execution_id != self.occurrence_id:
+                raise ValueError("live execution coordinate contradicts its occurrence ID")
+        else:
+            if self.execution is not None:
+                raise ValueError("live comparison cannot retain an execution coordinate")
+            if self.comparison is not None and self.comparison.comparison_id != self.occurrence_id:
+                raise ValueError("live comparison coordinate contradicts its occurrence ID")
 
     @property
     def elapsed_nanoseconds(self) -> int | None:
@@ -268,6 +289,7 @@ class _ProgressMailbox:
         "_closed",
         "_limits",
         "_occurrences",
+        "_project",
         "_recent_events",
         "_snapshot",
     )
@@ -278,11 +300,15 @@ class _ProgressMailbox:
         *,
         limits: ExecutionSessionLimits = DEFAULT_EXECUTION_SESSION_LIMITS_V1,
         clock: Callable[[], int] = time.monotonic_ns,
+        project: PreparedProjectPlan | None = None,
     ) -> None:
         if type(limits) is not ExecutionSessionLimits or not callable(clock):
             raise TypeError("progress mailbox requires typed limits and a callable clock")
+        if project is not None and type(project) is not PreparedProjectPlan:
+            raise TypeError("progress mailbox project must be prepared or absent")
         self._snapshot = snapshot
         self._limits = limits
+        self._project = project
         self._clock = clock
         self._occurrences: dict[tuple[LiveOccurrenceKind, str], LiveOccurrenceProgress] = {}
         self._recent_events: list[LiveProgressEvent] = []
@@ -306,15 +332,23 @@ class _ProgressMailbox:
         last_execution = current.last_execution_id
         last_comparison = current.last_comparison_id
         observed_at = self._clock()
+        execution_coordinate: PlanOccurrenceInspection | None = None
+        comparison_coordinate: PlanComparisonInspection | None = None
         if type(observed_at) is not int or observed_at < 0:
             raise ValueError("progress mailbox clock must return non-negative integer nanoseconds")
 
         if event.kind is RuntimeEventKind.RUN_STARTED:
             phase = ExecutionSessionPhase.RUNNING
         elif event.kind is RuntimeEventKind.EXECUTION_QUEUED:
+            execution_coordinate = self._execution_coordinate(queued, event)
             queued += 1
             last_execution = str(event.execution_id.value) if event.execution_id else None
-            self._occurrence_event(event, observed_at, last_execution)
+            self._occurrence_event(
+                event,
+                observed_at,
+                last_execution,
+                execution=execution_coordinate,
+            )
         elif event.kind is RuntimeEventKind.EXECUTION_STARTED:
             started += 1
             last_execution = str(event.execution_id.value) if event.execution_id else None
@@ -324,9 +358,15 @@ class _ProgressMailbox:
             last_execution = str(event.execution_id.value) if event.execution_id else None
             self._occurrence_event(event, observed_at, last_execution)
         elif event.kind is RuntimeEventKind.COMPARISON_FINISHED:
+            comparison_coordinate = self._comparison_coordinate(comparisons, event)
             comparisons += 1
             last_comparison = str(event.comparison_id.value) if event.comparison_id else None
-            self._occurrence_event(event, observed_at, last_comparison)
+            self._occurrence_event(
+                event,
+                observed_at,
+                last_comparison,
+                comparison=comparison_coordinate,
+            )
         elif event.kind is RuntimeEventKind.RUN_FINISHED:
             phase = ExecutionSessionPhase.FINALIZING
         else:  # pragma: no cover - RuntimeEventKind is exhaustively handled above
@@ -367,6 +407,9 @@ class _ProgressMailbox:
         event: RuntimeEvent,
         observed_at: int,
         occurrence_id: str | None,
+        *,
+        execution: PlanOccurrenceInspection | None = None,
+        comparison: PlanComparisonInspection | None = None,
     ) -> None:
         if occurrence_id is None:  # pragma: no cover - RuntimeEvent invariant
             return
@@ -419,6 +462,8 @@ class _ProgressMailbox:
                 finished_at_nanoseconds=(
                     observed_at if state is LiveOccurrenceState.FINISHED else None
                 ),
+                execution=execution,
+                comparison=comparison,
             )
             return
         if event.kind is RuntimeEventKind.EXECUTION_STARTED:
@@ -436,6 +481,44 @@ class _ProgressMailbox:
                 failure_code=(None if event.failure_code is None else event.failure_code.value),
                 finished_at_nanoseconds=observed_at,
             )
+
+    def _execution_coordinate(
+        self,
+        ordinal: int,
+        event: RuntimeEvent,
+    ) -> PlanOccurrenceInspection | None:
+        if self._project is None or event.execution_id is None:
+            return None
+        window = inspect_plan_occurrence_window(
+            self._project,
+            start_ordinal=ordinal,
+            maximum_occurrences=1,
+        )
+        if not window.occurrences:
+            return None  # pragma: no cover - RuntimeEvent counter invariant
+        coordinate = window.occurrences[0]
+        if coordinate.execution_id != str(event.execution_id.value):
+            return None
+        return coordinate
+
+    def _comparison_coordinate(
+        self,
+        ordinal: int,
+        event: RuntimeEvent,
+    ) -> PlanComparisonInspection | None:
+        if self._project is None or event.comparison_id is None:
+            return None
+        window = inspect_plan_comparison_window(
+            self._project,
+            start_ordinal=ordinal,
+            maximum_comparisons=1,
+        )
+        if not window.comparisons:
+            return None  # pragma: no cover - RuntimeEvent counter invariant
+        coordinate = window.comparisons[0]
+        if coordinate.comparison_id != str(event.comparison_id.value):
+            return None
+        return coordinate
 
     def transition(self, phase: ExecutionSessionPhase) -> None:
         """Publish one application-owned lifecycle transition."""
@@ -519,6 +602,7 @@ class ExecutionSession:
                 total_comparisons=cardinality.comparisons.value,
             ),
             limits=limits,
+            project=request.project,
         )
         owned = msgspec.structs.replace(
             request,

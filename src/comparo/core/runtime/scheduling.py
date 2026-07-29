@@ -16,6 +16,7 @@ from comparo.core.domain.budgets import BudgetUsage
 from comparo.core.domain.budgets import ResourceBudget
 from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticStage
+from comparo.core.domain.identity import ComparisonId
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import EnvironmentExecutionId
 from comparo.core.domain.identity import TrialId
@@ -34,6 +35,7 @@ from comparo.core.planning.models import PreparedRun
 from comparo.core.resolution.control import RunCancellation
 from comparo.core.runtime.models import BlockedExecution
 from comparo.core.runtime.models import CancelledExecution
+from comparo.core.runtime.models import ComparisonWork
 from comparo.core.runtime.models import ExecutionOutcome
 from comparo.core.runtime.models import ExecutionRecord
 from comparo.core.runtime.models import ExecutionWork
@@ -284,11 +286,11 @@ async def _produce(
                 break
             await queue_slots.acquire()
             ledger.queued()
-            await queue.put(work)
             await emitter.emit(
                 RuntimeEventKind.EXECUTION_QUEUED,
                 execution_id=work.scope.execution_id,
             )
+            await queue.put(work)
     finally:
         for _worker_index in range(worker_count):
             await queue.put(None)
@@ -430,6 +432,78 @@ def execution_work_at(prepared: PreparedRun, ordinal: int) -> ExecutionWork | No
         )
     raise RuntimeError(
         "execution work lookup exceeded admitted slice cardinalities"
+    )  # pragma: no cover
+
+
+def comparison_work_at(prepared: PreparedRun, ordinal: int) -> ComparisonWork | None:
+    """Resolve one comparison ordinal directly from compact admitted plan cardinalities."""
+    if type(prepared) is not PreparedRun:
+        raise TypeError("comparison work lookup requires PreparedRun")
+    if type(ordinal) is not int or ordinal < 0:
+        raise ValueError("comparison work ordinal must be a non-negative integer")
+    if ordinal >= prepared.plan.cardinality.comparisons.value:
+        return None
+    local_ordinal = ordinal
+    preceding_executions = 0
+    for slice_index, plan_slice in enumerate(prepared.plan.slices):
+        slice_comparisons = plan_slice.cardinality.comparisons.value
+        if local_ordinal >= slice_comparisons:
+            local_ordinal -= slice_comparisons
+            preceding_executions += plan_slice.cardinality.environment_executions.value
+            continue
+        pairs = len(plan_slice.comparisons)
+        comparisons_per_cell = plan_slice.trial_count.value * pairs
+        cell_ordinal, within_cell = divmod(local_ordinal, comparisons_per_cell)
+        trial_ordinal, pair_ordinal = divmod(within_cell, pairs)
+        cell = plan_cell_at(
+            prepared.plan,
+            slice_index=slice_index,
+            cell_ordinal=cell_ordinal,
+        )
+        if cell is None:  # pragma: no cover - admitted cardinality invariant
+            raise RuntimeError("comparison work lookup resolved an absent plan cell")
+        trial = _planned_trial(prepared, cell, trial_ordinal)
+        pair = plan_slice.comparisons[pair_ordinal]
+        environment_index = {
+            environment.identity: index for index, environment in enumerate(plan_slice.environments)
+        }
+        execution_base = (
+            preceding_executions
+            + (cell_ordinal * plan_slice.trial_count.value * len(plan_slice.environments))
+            + (trial_ordinal * len(plan_slice.environments))
+        )
+        baseline = _execution_work(
+            prepared,
+            trial,
+            pair.baseline,
+            ordinal=execution_base + environment_index[pair.baseline.identity],
+        )
+        candidate = _execution_work(
+            prepared,
+            trial,
+            pair.candidate,
+            ordinal=execution_base + environment_index[pair.candidate.identity],
+        )
+        comparison_id = ComparisonId(
+            value=uuid5(
+                prepared.plan.run_id.value,
+                "comparison:"
+                f"{trial.trial_id.value}:"
+                f"{baseline.scope.execution_id.value}:"
+                f"{candidate.scope.execution_id.value}",
+            )
+        )
+        return ComparisonWork(
+            ordinal=Count(value=ordinal),
+            comparison_id=comparison_id,
+            subject=cell.recipe.subject,
+            trial=trial,
+            pair=pair,
+            baseline_execution_id=baseline.scope.execution_id,
+            candidate_execution_id=candidate.scope.execution_id,
+        )
+    raise RuntimeError(
+        "comparison work lookup exceeded admitted slice cardinalities"
     )  # pragma: no cover
 
 

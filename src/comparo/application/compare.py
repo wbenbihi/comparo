@@ -23,7 +23,9 @@ from comparo.application.execution_session import start_execution_session
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import inspect_diagnostic
 from comparo.application.inspection import inspect_plan
+from comparo.application.plan_occurrences import PlanComparisonWindow
 from comparo.application.plan_occurrences import PlanOccurrenceWindow
+from comparo.application.plan_occurrences import inspect_plan_comparison_window
 from comparo.application.plan_occurrences import inspect_plan_occurrence_window
 from comparo.application.plan_review import PlanReviewInspection
 from comparo.application.plan_review import inspect_execution_settings
@@ -431,6 +433,26 @@ class CompareService:
             prepared.project,
             start_ordinal=start_ordinal,
             maximum_occurrences=maximum_occurrences,
+        )
+
+    def list_comparisons(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        *,
+        start_ordinal: int,
+        maximum_comparisons: int,
+    ) -> PlanComparisonWindow:
+        """List canonical directed comparisons without consuming the preparation."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare comparison handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare comparison controls must be typed")
+        prepared = self._validate_inspection(handle, controls)
+        return inspect_plan_comparison_window(
+            prepared.project,
+            start_ordinal=start_ordinal,
+            maximum_comparisons=maximum_comparisons,
         )
 
     def list_rules(

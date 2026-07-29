@@ -36,6 +36,7 @@ from comparo.core.runtime.request_preparation import (
 )
 from comparo.core.runtime.scheduling import NullEventSink as NullEventSink
 from comparo.core.runtime.scheduling import RecordingEventSink as RecordingEventSink
+from comparo.core.runtime.scheduling import comparison_work_at as comparison_work_at
 from comparo.core.runtime.scheduling import execution_work_at as execution_work_at
 from comparo.core.runtime.scheduling import iter_execution_work as iter_execution_work
 from comparo.core.runtime.scheduling import iter_execution_work_window as iter_execution_work_window

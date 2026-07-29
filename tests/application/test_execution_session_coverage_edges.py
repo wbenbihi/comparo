@@ -11,6 +11,9 @@ import msgspec
 import pytest
 
 from comparo.application import execution_session as sessions
+from comparo.application.inspection import ResourceCoordinate
+from comparo.application.plan_occurrences import PlanComparisonInspection
+from comparo.application.plan_occurrences import PlanOccurrenceInspection
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
 from comparo.core.runtime.models import RuntimeEventKind
@@ -27,6 +30,42 @@ def _snapshot(*, total_executions: int = 2) -> sessions.ExecutionProgressSnapsho
         phase=sessions.ExecutionSessionPhase.PREPARING,
         total_executions=total_executions,
         total_comparisons=1,
+    )
+
+
+def _coordinate(kind: str, resource_id: str) -> ResourceCoordinate:
+    return ResourceCoordinate(
+        namespace="local",
+        kind=kind,
+        resource_id=resource_id,
+        fingerprint="f" * 64,
+    )
+
+
+def _execution_coordinate(execution_id: str = "execution-1") -> PlanOccurrenceInspection:
+    return PlanOccurrenceInspection(
+        ordinal=0,
+        execution_id=execution_id,
+        subject=_coordinate("Request", "ping"),
+        environment=_coordinate("Environment", "staging"),
+        cell_id="cell-1",
+        trial_id="trial-1",
+        trial_ordinal=0,
+    )
+
+
+def _comparison_coordinate(comparison_id: str = "comparison-1") -> PlanComparisonInspection:
+    return PlanComparisonInspection(
+        ordinal=0,
+        comparison_id=comparison_id,
+        subject=_coordinate("Request", "ping"),
+        cell_id="cell-1",
+        trial_id="trial-1",
+        trial_ordinal=0,
+        baseline_environment=_coordinate("Environment", "staging"),
+        baseline_execution_id="execution-1",
+        candidate_environment=_coordinate("Environment", "prod"),
+        candidate_execution_id="execution-2",
     )
 
 
@@ -70,6 +109,27 @@ def test_live_occurrence_contract_rejects_each_incoherent_shape() -> None:
     for changes, error, message in cases:
         with pytest.raises(error, match=message):
             msgspec.structs.replace(valid, **changes)
+
+    coordinate_cases: tuple[tuple[dict[str, Any], type[Exception], str], ...] = (
+        ({"execution": object()}, TypeError, "execution occurrence coordinate"),
+        ({"comparison": object()}, TypeError, "comparison occurrence coordinate"),
+        ({"comparison": _comparison_coordinate()}, ValueError, "cannot retain"),
+        ({"execution": _execution_coordinate("other")}, ValueError, "contradicts"),
+    )
+    for changes, error, message in coordinate_cases:
+        with pytest.raises(error, match=message):
+            msgspec.structs.replace(valid, **changes)
+    comparison = sessions.LiveOccurrenceProgress(
+        kind=sessions.LiveOccurrenceKind.COMPARISON,
+        occurrence_id="comparison-1",
+        state=sessions.LiveOccurrenceState.FINISHED,
+        finished_at_nanoseconds=1,
+        comparison=_comparison_coordinate(),
+    )
+    with pytest.raises(ValueError, match="cannot retain"):
+        msgspec.structs.replace(comparison, execution=_execution_coordinate())
+    with pytest.raises(ValueError, match="contradicts"):
+        msgspec.structs.replace(comparison, comparison=_comparison_coordinate("other"))
 
     assert valid.elapsed_nanoseconds is None
     finished = msgspec.structs.replace(
@@ -139,7 +199,7 @@ def test_progress_snapshot_rejects_invalid_collections_and_terminal_summary() ->
         )
 
 
-def test_mailbox_rejects_invalid_limits_clock_and_finalization() -> None:
+def test_mailbox_rejects_invalid_limits_clock_and_finalization(tmp_path: Path) -> None:
     with pytest.raises(TypeError, match="typed limits"):
         sessions._ProgressMailbox(
             _snapshot(),
@@ -147,8 +207,21 @@ def test_mailbox_rejects_invalid_limits_clock_and_finalization() -> None:
         )
     with pytest.raises(TypeError, match="callable clock"):
         sessions._ProgressMailbox(_snapshot(), clock=cast("Any", 1))
+    with pytest.raises(TypeError, match="project must be prepared"):
+        sessions._ProgressMailbox(
+            _snapshot(),
+            project=cast("Any", object()),
+        )
 
     mailbox = sessions._ProgressMailbox(_snapshot())
+    request = _request(tmp_path)
+    assert (
+        mailbox._comparison_coordinate(
+            0,
+            _event(request, 1, RuntimeEventKind.COMPARISON_FINISHED),
+        )
+        is None
+    )
     with pytest.raises(TypeError, match="ExecutionFinalSummary"):
         mailbox.finalize(cast("sessions.ExecutionFinalSummary", object()))
 

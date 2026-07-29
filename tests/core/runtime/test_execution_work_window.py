@@ -7,12 +7,17 @@ from typing import cast
 
 import pytest
 
+from comparo.core.domain.lifecycle import CancellationSource
 from comparo.core.domain.planning import PlannedCell
 from comparo.core.domain.planning import RunPlan
 from comparo.core.planning import iter_plan_cells
 from comparo.core.planning import plan_cell_at
 from comparo.core.planning.models import PreparedRun
 from comparo.core.planning.planner import plan_run
+from comparo.core.runtime import CancelledExecution
+from comparo.core.runtime import ExecutionRecord
+from comparo.core.runtime import comparison_work_at
+from comparo.core.runtime import engine as runtime_engine
 from comparo.core.runtime import execution_work_at
 from comparo.core.runtime import iter_execution_work
 from comparo.core.runtime import iter_execution_work_window
@@ -145,6 +150,31 @@ def test_execution_lookup_and_windows_match_the_complete_canonical_order() -> No
         )
         == ()
     )
+
+
+def test_comparison_lookup_matches_the_runtime_canonical_order() -> None:
+    prepared = _many_slice_run(subject_count=4)
+    records = tuple(
+        ExecutionRecord(
+            work=work,
+            outcome=CancelledExecution(source=CancellationSource.USER),
+        )
+        for work in iter_execution_work(prepared)
+    )
+    canonical = runtime_engine._comparison_work(prepared, records)
+
+    assert len(canonical) == 24
+    assert tuple(comparison_work_at(prepared, ordinal) for ordinal in range(24)) == canonical
+    assert comparison_work_at(prepared, 24) is None
+
+
+@pytest.mark.parametrize("ordinal", [-1, cast("int", True)])
+def test_comparison_lookup_rejects_invalid_ordinals(ordinal: int) -> None:
+    prepared = _many_slice_run(subject_count=1)
+    with pytest.raises(ValueError, match="ordinal"):
+        comparison_work_at(prepared, ordinal)
+    with pytest.raises(TypeError, match="PreparedRun"):
+        comparison_work_at(cast("Any", object()), 0)
 
 
 def test_deep_window_locates_once_then_advances_without_rescanning_slices(

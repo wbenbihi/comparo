@@ -28,6 +28,7 @@ from comparo.application.compare import CompareServiceErrorCode
 from comparo.application.environment_binding import CapturedAmbientEnvironment
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
+from comparo.application.plan_occurrences import PlanComparisonWindow
 from comparo.application.plan_occurrences import PlanOccurrenceWindow
 from comparo.application.plan_review import PlanReviewInspection
 from comparo.application.planning import PlanningOptions
@@ -1414,6 +1415,20 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
             start_ordinal=0,
             maximum_occurrences=1,
         )
+    with pytest.raises(TypeError, match="comparison handle"):
+        service.list_comparisons(
+            cast("ComparePreparationHandle", object()),
+            _controls(),
+            start_ordinal=0,
+            maximum_comparisons=1,
+        )
+    with pytest.raises(TypeError, match="comparison controls"):
+        service.list_comparisons(
+            ComparePreparationHandle(value=str(_HANDLE_ID)),
+            cast("CompareExecutionControls", object()),
+            start_ordinal=0,
+            maximum_comparisons=1,
+        )
     with pytest.raises(TypeError, match="rule handle"):
         service.list_rules(
             cast("ComparePreparationHandle", object()),
@@ -1490,6 +1505,20 @@ def test_compare_lists_canonical_occurrences_without_resolving_requests(tmp_path
     )
     assert tuple(item.ordinal for item in final.occurrences) == (3,)
     assert final.next_ordinal is None
+    comparisons = service.list_comparisons(
+        prepared.handle,
+        controls,
+        start_ordinal=0,
+        maximum_comparisons=1,
+    )
+    assert type(comparisons) is PlanComparisonWindow
+    assert comparisons.total_comparisons == 2
+    assert comparisons.next_ordinal == 1
+    assert comparisons.comparisons[0].subject.resource_id == "ping"
+    assert comparisons.comparisons[0].baseline_environment.resource_id == "staging"
+    assert comparisons.comparisons[0].candidate_environment.resource_id == "prod"
+    assert comparisons.comparisons[0].baseline_execution_id == first.occurrences[0].execution_id
+    assert comparisons.comparisons[0].candidate_execution_id == first.occurrences[1].execution_id
     assert service.outstanding == 1
 
 
@@ -1538,6 +1567,36 @@ def test_compare_occurrence_catalog_rejects_invalid_windows(
             controls,
             start_ordinal=cast("int", start_ordinal),
             maximum_occurrences=cast("int", maximum_occurrences),
+        )
+    assert service.outstanding == 1
+
+
+@pytest.mark.parametrize(
+    ("start_ordinal", "maximum_comparisons", "message"),
+    [
+        (-1, 1, "start"),
+        (True, 1, "start"),
+        (0, 0, "page size"),
+        (0, True, "page size"),
+    ],
+)
+def test_compare_comparison_catalog_rejects_invalid_windows(
+    tmp_path: Path,
+    start_ordinal: object,
+    maximum_comparisons: object,
+    message: str,
+) -> None:
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+
+    with pytest.raises(ValueError, match=message):
+        service.list_comparisons(
+            prepared.handle,
+            controls,
+            start_ordinal=cast("int", start_ordinal),
+            maximum_comparisons=cast("int", maximum_comparisons),
         )
     assert service.outstanding == 1
 
