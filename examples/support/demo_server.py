@@ -10,6 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from typing import Final
+from typing import override
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
@@ -38,6 +39,7 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
         status, payload = _response(environment, endpoint, query, self.headers)
         self._send_json(status, payload)
 
+    @override
     def log_message(self, message: str, *args: object) -> None:
         """Route request logs through the standard logging boundary."""
         _LOGGER.info("%s - %s", self.client_address[0], message % args)
