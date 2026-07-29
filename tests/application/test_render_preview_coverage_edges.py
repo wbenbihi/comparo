@@ -13,6 +13,7 @@ import pytest
 
 from comparo.application import render_preview as rendering
 from comparo.application.inspection import ApplicationDiagnostic
+from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.application.render_preview import RenderPreviewRequest
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
@@ -107,6 +108,33 @@ def test_window_result_accepts_mixed_pages_and_rejects_invalid_products() -> Non
 def test_public_window_boundary_rejects_untyped_requests() -> None:
     with pytest.raises(TypeError, match="RenderPreviewWindowRequest"):
         asyncio.run(render_prepared_request_window(cast("RenderPreviewWindowRequest", object())))
+
+
+def test_full_preview_maps_body_store_setup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    defaults = production_execution_defaults_v1()
+    settings = msgspec.structs.replace(
+        _settings(),
+        body_store=defaults.body_store,
+        request_body=defaults.request_body,
+    )
+
+    def fail(_config: object) -> object:
+        raise OSError
+
+    monkeypatch.setattr(rendering, "TransientBodyStore", fail)
+    result = asyncio.run(
+        render_prepared_requests(
+            RenderPreviewRequest(
+                project=_project(tmp_path),
+                settings=settings,
+            )
+        )
+    )
+    assert result.previews == ()
+    assert result.diagnostics[0].code == "render.preview.body-store-unavailable"
 
 
 def test_runtime_capability_diagnostics_short_circuit_both_preview_apis(

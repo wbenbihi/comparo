@@ -25,6 +25,7 @@ from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.inspection import ResourceCoordinate
 from comparo.application.preflight import PreparedProjectPlan
 from comparo.application.preflight import prepare_project_plan
+from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.application.render_preview import RenderedBodyOmission
 from comparo.application.render_preview import RenderedCookie
 from comparo.application.render_preview import RenderedHeader
@@ -73,6 +74,7 @@ from comparo.core.runtime.models import CancelledExecution
 from comparo.core.runtime.models import UnavailableExecution
 from comparo.core.runtime.ports import RequestPreparationFailure
 from tests.application.test_preflight import _request
+from tests.application.test_production_execution import _body_and_auth_project
 
 
 def _settings(*, maximum_patterns: int = 256) -> RenderPreviewSettings:
@@ -355,6 +357,39 @@ def test_body_preview_fails_closed_without_exposing_live_payload(tmp_path: Path)
     assert "canary" not in msgspec.json.encode(result).decode()
 
 
+def test_full_preview_materializes_body_and_auth_then_returns_only_sanitized_metadata(
+    tmp_path: Path,
+) -> None:
+    token = "preview-auth-secret-canary"
+    defaults = production_execution_defaults_v1()
+    settings = msgspec.structs.replace(
+        _settings(),
+        body_store=defaults.body_store,
+        request_body=defaults.request_body,
+    )
+    result = _render(
+        _body_and_auth_project(
+            tmp_path,
+            base_url="https://staging.example.test",
+            token=token,
+        ),
+        settings=settings,
+    )
+
+    assert not result.diagnostics
+    assert len(result.previews) == 2
+    assert all(
+        preview.body.reason is RequestBodyOmissionReason.CONTENT_OMITTED
+        and preview.body.byte_count == len(b'{"message":"hello"}')
+        for preview in result.previews
+    )
+    assert all(
+        any(header.name == "authorization" and header.redacted for header in preview.headers)
+        for preview in result.previews
+    )
+    assert token not in msgspec.json.encode(result).decode()
+
+
 def test_environment_snapshot_failures_discard_all_requests(tmp_path: Path) -> None:
     project = _project(
         tmp_path,
@@ -478,6 +513,21 @@ def test_public_contracts_reject_untyped_or_ambiguous_state(tmp_path: Path) -> N
     for field in ("files", "environment", "yaml", "sanitization"):
         with pytest.raises(TypeError, match="untyped section"):
             msgspec.structs.replace(settings, **{field: object()})
+    defaults = production_execution_defaults_v1()
+    with pytest.raises(ValueError, match="supplied together"):
+        msgspec.structs.replace(settings, body_store=defaults.body_store)
+    with pytest.raises(TypeError, match="body store"):
+        msgspec.structs.replace(
+            settings,
+            body_store=object(),
+            request_body=defaults.request_body,
+        )
+    with pytest.raises(TypeError, match="materialization"):
+        msgspec.structs.replace(
+            settings,
+            body_store=defaults.body_store,
+            request_body=object(),
+        )
     with pytest.raises(TypeError, match="PreparedProjectPlan"):
         RenderPreviewRequest(project=cast("PreparedProjectPlan", object()), settings=settings)
     with pytest.raises(TypeError, match="RenderPreviewSettings"):
@@ -523,8 +573,13 @@ def test_public_contracts_reject_untyped_or_ambiguous_state(tmp_path: Path) -> N
         RenderedBodyOmission(reason=cast("RequestBodyOmissionReason", "no-body"), byte_count=None)
     with pytest.raises(ValueError, match="non-negative"):
         RenderedBodyOmission(reason=RequestBodyOmissionReason.NO_BODY, byte_count=-1)
-    with pytest.raises(ValueError, match="body-free"):
+    with pytest.raises(ValueError, match="absent"):
         RenderedBodyOmission(reason=RequestBodyOmissionReason.NO_BODY, byte_count=0)
+    with pytest.raises(ValueError, match="requires exact"):
+        RenderedBodyOmission(
+            reason=RequestBodyOmissionReason.CONTENT_OMITTED,
+            byte_count=None,
+        )
 
     base = _preview()
     invalid_previews: tuple[tuple[dict[str, object], str], ...] = (
@@ -640,7 +695,7 @@ def test_structural_url_header_and_body_render_helpers() -> None:
         )
         == _body()
     )
-    with pytest.raises(TypeError, match="materialized"):
+    with pytest.raises(TypeError, match="unsupported"):
         rendering._body_omission(cast("FinalizedWireRequest", SimpleNamespace(body=object())))
 
 

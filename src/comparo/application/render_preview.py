@@ -11,6 +11,12 @@ from uuid import uuid5
 
 import msgspec
 
+from comparo.adapters.http import BodyMaterializationLimits
+from comparo.adapters.http import BodyStoreError
+from comparo.adapters.http import HttpRequestFinalizer
+from comparo.adapters.http import RequestBodyMaterializer
+from comparo.adapters.http import TransientBodyStore
+from comparo.adapters.http import TransientBodyStoreConfig
 from comparo.adapters.values import EnvironmentSourceLimits
 from comparo.adapters.values import LocalFileLimits
 from comparo.adapters.values import LocalFilesystemError
@@ -36,6 +42,7 @@ from comparo.core.artifacts.sanitization import SanitizationBudgetExceededError
 from comparo.core.credentials import MANDATORY_SENSITIVE_HEADER_NAMES
 from comparo.core.credentials import MANDATORY_SENSITIVE_QUERY_NAMES
 from comparo.core.domain.enums import DomainStrEnum
+from comparo.core.domain.http.bodies import MaterializedBody
 from comparo.core.domain.http.bodies import NoMaterializedBody
 from comparo.core.domain.http.fields import BareQueryValue
 from comparo.core.domain.http.fields import HeaderText
@@ -75,6 +82,8 @@ class RenderPreviewSettings(msgspec.Struct, frozen=True, kw_only=True):
     environment: EnvironmentSourceLimits
     yaml: YamlValueLimits
     sanitization: SanitizationLimits
+    body_store: TransientBodyStoreConfig | None = None
+    request_body: BodyMaterializationLimits | None = None
 
     def __post_init__(self) -> None:
         """Reject implicit or untyped resource ceilings."""
@@ -86,6 +95,15 @@ class RenderPreviewSettings(msgspec.Struct, frozen=True, kw_only=True):
         )
         if any(type(value) is not kind for value, kind in expected):
             raise TypeError("render preview settings contain an untyped section")
+        if (self.body_store is None) != (self.request_body is None):
+            raise ValueError("render preview body settings must be supplied together")
+        if self.body_store is not None and type(self.body_store) is not TransientBodyStoreConfig:
+            raise TypeError("render preview body store settings must be typed")
+        if (
+            self.request_body is not None
+            and type(self.request_body) is not BodyMaterializationLimits
+        ):
+            raise TypeError("render preview body materialization settings must be typed")
 
 
 @final
@@ -168,6 +186,7 @@ class RequestBodyOmissionReason(DomainStrEnum):
     """Why a safe preview contains request-body metadata but never body content."""
 
     NO_BODY = "no-body"
+    CONTENT_OMITTED = "content-omitted"
 
 
 @final
@@ -185,8 +204,10 @@ class RenderedBodyOmission(msgspec.Struct, frozen=True, kw_only=True):
             type(self.byte_count) is not int or self.byte_count < 0
         ):
             raise ValueError("rendered body byte count must be non-negative or absent")
-        if self.byte_count is not None:
-            raise ValueError("body-free render previews cannot retain body byte metadata")
+        if self.reason is RequestBodyOmissionReason.NO_BODY and self.byte_count is not None:
+            raise ValueError("absent preview bodies cannot retain byte metadata")
+        if self.reason is RequestBodyOmissionReason.CONTENT_OMITTED and self.byte_count is None:
+            raise ValueError("omitted preview body content requires exact byte metadata")
 
 
 @final
@@ -347,13 +368,14 @@ async def render_prepared_request_window(
 
 
 class _RenderResources:
-    __slots__ = ("boundary", "context", "files", "provider")
+    __slots__ = ("body_store", "boundary", "context", "files", "provider")
 
     def __init__(self) -> None:
         self.files: PinnedProjectFiles | None = None
         self.context: RunContext | None = None
         self.provider: ConfigurationRequestProvider | None = None
         self.boundary: SanitizationBoundary | None = None
+        self.body_store: TransientBodyStore | None = None
 
     async def close(self) -> bool:
         """Close every acquired resource best-effort and report only value-free failure state."""
@@ -370,6 +392,10 @@ class _RenderResources:
             cancellation_received = cancellation_received or outcome.cancellation_received
         if self.context is not None:
             outcome = await finish_cleanup(self.context.close())
+            failed = failed or outcome.failed
+            cancellation_received = cancellation_received or outcome.cancellation_received
+        if self.body_store is not None:
+            outcome = await finish_cleanup(self.body_store.close())
             failed = failed or outcome.failed
             cancellation_received = cancellation_received or outcome.cancellation_received
         if self.files is not None:
@@ -441,9 +467,19 @@ async def _render_products(
     if snapshots.diagnostics:
         return (), tuple(inspect_diagnostic(item) for item in snapshots.diagnostics), 0
     resources.context = _run_context(request, snapshots.snapshots, resources.files)
+    finalizer = None
+    if request.settings.body_store is not None and request.settings.request_body is not None:
+        try:
+            resources.body_store = TransientBodyStore(request.settings.body_store)
+        except (BodyStoreError, OSError, ValueError):
+            return (), _diagnostics("render.preview.body-store-unavailable", stage="render"), 0
+        finalizer = HttpRequestFinalizer(
+            RequestBodyMaterializer(resources.body_store, request.settings.request_body)
+        )
     resources.provider = ConfigurationRequestProvider(
         request.project.prepared,
         resources.context,
+        finalizer,
     )
     requests, diagnostics, processed = await _resolve_all(
         request.project.prepared,
@@ -681,12 +717,17 @@ def _render_header(
 
 
 def _body_omission(request: FinalizedWireRequest) -> RenderedBodyOmission:
-    if type(request.body) is not NoMaterializedBody:
-        raise TypeError("body-free render preview received materialized content")
-    return RenderedBodyOmission(
-        reason=RequestBodyOmissionReason.NO_BODY,
-        byte_count=None,
-    )
+    if type(request.body) is NoMaterializedBody:
+        return RenderedBodyOmission(
+            reason=RequestBodyOmissionReason.NO_BODY,
+            byte_count=None,
+        )
+    if type(request.body) is MaterializedBody:
+        return RenderedBodyOmission(
+            reason=RequestBodyOmissionReason.CONTENT_OMITTED,
+            byte_count=request.body.source.byte_count.value,
+        )
+    raise TypeError("render preview received an unsupported finalized body")
 
 
 def _failure(code: str, *, stage: str) -> RenderPreviewResult:

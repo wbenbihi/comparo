@@ -325,6 +325,8 @@ class CompareService:
                         environment=settings.environment,
                         yaml=settings.yaml,
                         sanitization=settings.artifact.limits.sanitization,
+                        body_store=settings.body_store,
+                        request_body=settings.request_body,
                     ),
                     ambient_environment=prepared.ambient_environment,
                 ),
