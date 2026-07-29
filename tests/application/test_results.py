@@ -56,12 +56,16 @@ from comparo.application.results import ResultHttpRequestSlot
 from comparo.application.results import ResultHttpResponseMetadata
 from comparo.application.results import ResultHttpResponseSlot
 from comparo.application.results import ResultNamedValue
+from comparo.application.results import ResultPage
+from comparo.application.results import ResultPageKind
+from comparo.application.results import ResultPageQuery
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
 from comparo.application.results import ResultRelation
 from comparo.application.results import ResultRunAnnotations
 from comparo.application.results import ResultTiming
 from comparo.application.results import ResultVcsProvenance
+from comparo.application.results import project_result_page
 from comparo.application.results import project_results
 from comparo.core.artifacts import ArtifactAttempt
 from comparo.core.artifacts import ArtifactCiProvenance
@@ -171,6 +175,7 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
             has_body_capture=True,
         ),
     )
+
     assert len(first.attempts) == 1
     attempt = first.attempts[0]
     assert (
@@ -254,6 +259,106 @@ def test_projection_exposes_shared_rows_facts_links_and_timings_without_bodies()
     assert b'"body"' not in encoded
     with pytest.raises(AttributeError):
         projection.executions = ()  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("kind", "total", "entity"),
+    [
+        (ResultPageKind.EXECUTIONS, 2, ResultEntity.EXECUTION),
+        (ResultPageKind.ASSERTIONS, 1, ResultEntity.ASSERTION),
+        (ResultPageKind.COMPARISONS, 1, ResultEntity.COMPARISON),
+        (ResultPageKind.DIFFS, 1, ResultEntity.DIFF),
+    ],
+)
+def test_result_collections_are_independently_pageable(
+    kind: ResultPageKind,
+    total: int,
+    entity: ResultEntity,
+) -> None:
+    artifact = _artifact()
+    first = project_result_page(
+        artifact,
+        ResultPageQuery(kind=kind, start=0, maximum_items=1),
+    )
+
+    assert first.summary.artifact_id == artifact.metadata.artifact_id
+    assert first.kind is kind
+    assert first.total_items == total
+    assert len(first.items) == 1
+    assert first.items[0].reference.entity is entity
+    assert first.next_start == (1 if total > 1 else None)
+    assert first.artifact_results_sha256 == fingerprint_run_artifact(artifact)
+    assert msgspec.json.decode(msgspec.json.encode(first), type=ResultPage) == first
+
+    if first.next_start is not None:
+        final = project_result_page(
+            artifact,
+            ResultPageQuery(
+                kind=kind,
+                start=first.next_start,
+                maximum_items=1,
+            ),
+        )
+        assert len(final.items) == 1
+        assert final.next_start is None
+
+
+def test_result_page_preserves_annotations_and_empty_out_of_range_windows() -> None:
+    artifact = msgspec.structs.replace(
+        _artifact(),
+        annotations=ArtifactRunAnnotations(title="Release", tags=("ci",)),
+    )
+    page = project_result_page(
+        artifact,
+        ResultPageQuery(kind=ResultPageKind.ASSERTIONS, start=2, maximum_items=5),
+    )
+
+    assert page.items == ()
+    assert page.next_start is None
+    assert page.annotations is not None
+    assert page.annotations.title == "Release"
+
+
+def test_result_page_queries_and_pages_reject_ambiguous_state() -> None:
+    query = ResultPageQuery(kind=ResultPageKind.EXECUTIONS, start=0, maximum_items=1)
+    for changes, error, message in (
+        ({"kind": object()}, TypeError, "kind"),
+        ({"start": -1}, ValueError, "start"),
+        ({"start": True}, ValueError, "start"),
+        ({"maximum_items": 0}, ValueError, "size"),
+        ({"maximum_items": True}, ValueError, "size"),
+    ):
+        with pytest.raises(error, match=message):
+            msgspec.structs.replace(query, **changes)
+
+    artifact = _artifact()
+    page = project_result_page(artifact, query)
+    page_cases: tuple[tuple[dict[str, object], type[Exception], str], ...] = (
+        ({"artifact_results_sha256": "short"}, ValueError, "SHA-256"),
+        ({"artifact_results_sha256": "z" * 64}, ValueError, "SHA-256"),
+        ({"summary": object()}, TypeError, "summary"),
+        ({"kind": object()}, TypeError, "kind"),
+        ({"start": -1}, ValueError, "start"),
+        ({"total_items": -1}, ValueError, "total"),
+        ({"items": []}, TypeError, "items"),
+        ({"items": (object(),)}, TypeError, "items"),
+        ({"total_items": 0}, ValueError, "exceed"),
+        (
+            {"items": (page.items[0], page.items[0]), "total_items": 1, "next_start": None},
+            ValueError,
+            "exceed",
+        ),
+        ({"next_start": 2}, ValueError, "continuation"),
+        ({"annotations": object()}, TypeError, "annotations"),
+    )
+    for changes, page_error, message in page_cases:
+        with pytest.raises(page_error, match=message):
+            msgspec.structs.replace(page, **changes)
+
+    with pytest.raises(TypeError, match="RunArtifact"):
+        project_result_page(cast("RunArtifact", object()), query)
+    with pytest.raises(TypeError, match="ResultPageQuery"):
+        project_result_page(artifact, cast("ResultPageQuery", object()))
 
 
 def test_projection_preserves_attempt_exchange_timings_and_url_redaction_accounting() -> None:

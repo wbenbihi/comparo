@@ -428,6 +428,19 @@ async def read_artifact_blob(
     return payload
 
 
+def read_artifact_manifest(
+    root: Path,
+    bundle_id: str,
+    limits: ArtifactReadLimits,
+) -> RunArtifact:
+    """Open and authenticate one sanitized manifest without reading detached blobs."""
+    try:
+        with open_local_artifact_bundle(root, bundle_id, limits=_limits(limits)) as bundle:
+            return bundle.artifact
+    except LocalArtifactStoreError:
+        raise ArtifactOperationError(ArtifactOperationErrorCode.ARTIFACT_UNAVAILABLE) from None
+
+
 async def read_artifact_body_window(
     root: Path,
     bundle_id: str,
@@ -680,6 +693,7 @@ __all__ = (
     "inspect_artifact",
     "read_artifact_blob",
     "read_artifact_body_window",
+    "read_artifact_manifest",
     "read_authenticated_artifact_request",
     "render_artifact_report",
     "validate_existing_artifact_root",

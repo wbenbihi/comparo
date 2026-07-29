@@ -16,6 +16,13 @@ from comparo.application.execution_session import ExecutionSession
 from comparo.application.execution_session import ExecutionSessionPhase
 from comparo.application.inspection import ApplicationDiagnostic
 from comparo.application.production_execution import ProductionExecutionResult
+from comparo.application.results import AssertionResultPage
+from comparo.application.results import ComparisonResultPage
+from comparo.application.results import DiffResultPage
+from comparo.application.results import ExecutionResultPage
+from comparo.application.results import ResultPage
+from comparo.application.results import ResultPageQuery
+from comparo.application.results import project_result_page
 
 
 class RunServiceErrorCode(StrEnum):
@@ -151,6 +158,31 @@ class RunResultAccess(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class RunResultPageAccess(msgspec.Struct, frozen=True, kw_only=True):
+    """Exactly one completed-run result page or value-free diagnostic rejection."""
+
+    page: ResultPage | None = None
+    diagnostics: tuple[ApplicationDiagnostic, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Keep successful and rejected page access structurally disjoint."""
+        if self.page is not None and type(self.page) not in {
+            ExecutionResultPage,
+            AssertionResultPage,
+            ComparisonResultPage,
+            DiffResultPage,
+        }:
+            raise TypeError("run result page access page must be typed")
+        if type(self.diagnostics) is not tuple or any(
+            type(item) is not ApplicationDiagnostic for item in self.diagnostics
+        ):
+            raise TypeError("run result page diagnostics must be immutable and typed")
+        if (self.page is None) == bool(self.diagnostics):
+            return
+        raise ValueError("run result page access requires exactly page or diagnostics")
+
+
+@final
 class RunService:
     """Own bounded discovery and control of local execution sessions by run ID."""
 
@@ -256,6 +288,25 @@ class RunService:
         except Exception:  # noqa: BLE001 - exception details cannot cross this boundary
             return _result_failure("run.service.internal")
 
+    async def result_page(
+        self,
+        handle: RunHandle,
+        query: ResultPageQuery,
+    ) -> RunResultPageAccess:
+        """Wait for one run and project a bounded page from its sanitized artifact."""
+        if type(query) is not ResultPageQuery:
+            raise TypeError("run service result paging requires ResultPageQuery")
+        access = await self.result(handle)
+        if access.result is None:
+            return RunResultPageAccess(diagnostics=access.diagnostics)
+        artifact = access.result.artifact
+        if artifact is None:
+            return _result_page_failure("run.service.artifact-unavailable")
+        try:
+            return RunResultPageAccess(page=project_result_page(artifact, query))
+        except Exception:  # noqa: BLE001 - projection defects remain value-free
+            return _result_page_failure("run.service.result-page-internal")
+
     def discard(self, handle: RunHandle) -> bool:
         """Release one terminal retained run; active runs cannot be orphaned."""
         session = self._session(handle)
@@ -321,11 +372,24 @@ def _result_failure(code: str) -> RunResultAccess:
     )
 
 
+def _result_page_failure(code: str) -> RunResultPageAccess:
+    return RunResultPageAccess(
+        diagnostics=(
+            ApplicationDiagnostic(
+                code=code,
+                severity="error",
+                stage="execution",
+            ),
+        )
+    )
+
+
 __all__ = (
     "RunHandle",
     "RunInspection",
     "RunQuery",
     "RunResultAccess",
+    "RunResultPageAccess",
     "RunService",
     "RunServiceError",
     "RunServiceErrorCode",

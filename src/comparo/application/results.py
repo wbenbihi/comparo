@@ -8,6 +8,7 @@ blob, re-evaluates a fact, or derives a gate verdict.
 from __future__ import annotations
 
 from enum import StrEnum
+from itertools import islice
 from typing import final
 
 import msgspec
@@ -24,6 +25,7 @@ from comparo.core.artifacts.common import ArtifactRunAnnotations
 from comparo.core.artifacts.common import ArtifactVcsProvenance
 from comparo.core.artifacts.common import require_stable_token
 from comparo.core.artifacts.common import require_text
+from comparo.core.artifacts.facts import ArtifactComparison
 from comparo.core.artifacts.facts import ArtifactEvidence
 from comparo.core.artifacts.facts import ArtifactExecution
 from comparo.core.artifacts.facts import ArtifactFact
@@ -53,6 +55,15 @@ class ResultEntity(StrEnum):
     ASSERTION = "assertion"
     COMPARISON = "comparison"
     DIFF = "diff"
+
+
+class ResultPageKind(StrEnum):
+    """Closed independently pageable result collections."""
+
+    EXECUTIONS = "executions"
+    ASSERTIONS = "assertions"
+    COMPARISONS = "comparisons"
+    DIFFS = "diffs"
 
 
 class ResultRelation(StrEnum):
@@ -742,6 +753,162 @@ class ResultProjection(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("result annotations must be typed or absent")
 
 
+@final
+class ResultPageQuery(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-bounded offset window over one authenticated manifest collection."""
+
+    kind: ResultPageKind
+    start: int
+    maximum_items: int
+
+    def __post_init__(self) -> None:
+        """Require one typed collection and finite positive page bounds."""
+        if type(self.kind) is not ResultPageKind:
+            raise TypeError("result page kind must be typed")
+        if type(self.start) is not int or self.start < 0:
+            raise ValueError("result page start must be a non-negative integer")
+        if type(self.maximum_items) is not int or self.maximum_items < 1:
+            raise ValueError("result page size must be a positive integer")
+
+
+class _ResultPageBase(msgspec.Struct, frozen=True, kw_only=True):
+    """Shared authenticated page header and invariant validation."""
+
+    artifact_results_sha256: str
+    summary: ResultSummary
+    start: int
+    total_items: int
+    next_start: int | None = None
+    annotations: ResultRunAnnotations | None = None
+
+    def _validate_page(  # noqa: C901 - one closed boundary owns every page invariant
+        self,
+        items: tuple[object, ...],
+        *,
+        expected_item_type: type[object],
+    ) -> None:
+        """Require a typed homogeneous page and truthful continuation metadata."""
+        if (
+            type(self.artifact_results_sha256) is not str
+            or len(self.artifact_results_sha256) != 64
+            or any(
+                character not in "0123456789abcdef" for character in self.artifact_results_sha256
+            )
+        ):
+            raise ValueError("result page requires a SHA-256 artifact fingerprint")
+        if type(self.summary) is not ResultSummary:
+            raise TypeError("result page summary must be typed")
+        if type(self.start) is not int or self.start < 0:
+            raise ValueError("result page start must be non-negative")
+        if type(self.total_items) is not int or self.total_items < 0:
+            raise ValueError("result page total must be non-negative")
+        if type(items) is not tuple:
+            raise TypeError("result page items must be immutable and typed")
+        if any(type(item) is not expected_item_type for item in items):
+            raise TypeError("result page items must be immutable and typed")
+        if items and self.start >= self.total_items:
+            raise ValueError("result page items exceed the declared collection")
+        if self.start < self.total_items and self.start + len(items) > self.total_items:
+            raise ValueError("result page items exceed the declared collection")
+        consumed = self.start + len(items)
+        expected_next = consumed if consumed < self.total_items else None
+        if self.next_start != expected_next:
+            raise ValueError("result page continuation contradicts its page")
+        if self.annotations is not None and type(self.annotations) is not ResultRunAnnotations:
+            raise TypeError("result page annotations must be typed or absent")
+
+
+@final
+class ExecutionResultPage(
+    _ResultPageBase,
+    tag=ResultPageKind.EXECUTIONS.value,
+    tag_field="kind",
+    frozen=True,
+    kw_only=True,
+):
+    """A bounded page of execution rows."""
+
+    items: tuple[ExecutionResultRow, ...] = ()
+
+    @property
+    def kind(self) -> ResultPageKind:
+        """Return the page collection discriminator."""
+        return ResultPageKind.EXECUTIONS
+
+    def __post_init__(self) -> None:
+        """Validate execution row page invariants."""
+        self._validate_page(self.items, expected_item_type=ExecutionResultRow)
+
+
+@final
+class AssertionResultPage(
+    _ResultPageBase,
+    tag=ResultPageKind.ASSERTIONS.value,
+    tag_field="kind",
+    frozen=True,
+    kw_only=True,
+):
+    """A bounded page of assertion facts."""
+
+    items: tuple[ResultFact, ...] = ()
+
+    @property
+    def kind(self) -> ResultPageKind:
+        """Return the page collection discriminator."""
+        return ResultPageKind.ASSERTIONS
+
+    def __post_init__(self) -> None:
+        """Validate assertion fact page invariants."""
+        self._validate_page(self.items, expected_item_type=ResultFact)
+
+
+@final
+class ComparisonResultPage(
+    _ResultPageBase,
+    tag=ResultPageKind.COMPARISONS.value,
+    tag_field="kind",
+    frozen=True,
+    kw_only=True,
+):
+    """A bounded page of comparison rows."""
+
+    items: tuple[ComparisonResultRow, ...] = ()
+
+    @property
+    def kind(self) -> ResultPageKind:
+        """Return the page collection discriminator."""
+        return ResultPageKind.COMPARISONS
+
+    def __post_init__(self) -> None:
+        """Validate comparison row page invariants."""
+        self._validate_page(self.items, expected_item_type=ComparisonResultRow)
+
+
+@final
+class DiffResultPage(
+    _ResultPageBase,
+    tag=ResultPageKind.DIFFS.value,
+    tag_field="kind",
+    frozen=True,
+    kw_only=True,
+):
+    """A bounded page of diff facts."""
+
+    items: tuple[ResultFact, ...] = ()
+
+    @property
+    def kind(self) -> ResultPageKind:
+        """Return the page collection discriminator."""
+        return ResultPageKind.DIFFS
+
+    def __post_init__(self) -> None:
+        """Validate diff fact page invariants."""
+        self._validate_page(self.items, expected_item_type=ResultFact)
+
+
+type ResultPage = ExecutionResultPage | AssertionResultPage | ComparisonResultPage | DiffResultPage
+
+
 def project_results(artifact: RunArtifact) -> ResultProjection:
     """Project one sanitized artifact without loading bodies or recomputing outcomes."""
     if type(artifact) is not RunArtifact:
@@ -779,6 +946,7 @@ def project_results(artifact: RunArtifact) -> ResultProjection:
         for execution in artifact.executions
         for fact in execution.assertions
     )
+
     diffs = tuple(
         _fact(
             fact,
@@ -829,6 +997,155 @@ def project_results(artifact: RunArtifact) -> ResultProjection:
         links=_links(artifact, execution_references, comparison_references),
         annotations=(
             None if artifact.annotations is None else _run_annotations(artifact.annotations)
+        ),
+    )
+
+
+def project_result_page(artifact: RunArtifact, query: ResultPageQuery) -> ResultPage:
+    """Project only one caller-bounded manifest collection window."""
+    if type(artifact) is not RunArtifact:
+        raise TypeError("result paging requires RunArtifact")
+    if type(query) is not ResultPageQuery:
+        raise TypeError("result paging requires ResultPageQuery")
+    artifact_results_sha256 = fingerprint_run_artifact(artifact)
+    summary = _summary(artifact)
+    annotations = None if artifact.annotations is None else _run_annotations(artifact.annotations)
+    if query.kind is ResultPageKind.EXECUTIONS:
+        selected = artifact.executions[query.start : query.start + query.maximum_items]
+        execution_items = tuple(
+            _execution_page_row(artifact, item, artifact_results_sha256) for item in selected
+        )
+        execution_total = len(artifact.executions)
+        execution_consumed = query.start + len(execution_items)
+        return ExecutionResultPage(
+            artifact_results_sha256=artifact_results_sha256,
+            summary=summary,
+            start=query.start,
+            total_items=execution_total,
+            items=execution_items,
+            next_start=(execution_consumed if execution_consumed < execution_total else None),
+            annotations=annotations,
+        )
+    if query.kind is ResultPageKind.COMPARISONS:
+        selected_comparisons = artifact.comparisons[query.start : query.start + query.maximum_items]
+        comparison_items = tuple(_comparison_page_row(item) for item in selected_comparisons)
+        comparison_total = len(artifact.comparisons)
+        comparison_consumed = query.start + len(comparison_items)
+        return ComparisonResultPage(
+            artifact_results_sha256=artifact_results_sha256,
+            summary=summary,
+            start=query.start,
+            total_items=comparison_total,
+            items=comparison_items,
+            next_start=(comparison_consumed if comparison_consumed < comparison_total else None),
+            annotations=annotations,
+        )
+    if query.kind is ResultPageKind.ASSERTIONS:
+        total = sum(len(item.assertions) for item in artifact.executions)
+        selected_assertions = islice(
+            (
+                (execution.execution_id, fact)
+                for execution in artifact.executions
+                for fact in execution.assertions
+            ),
+            query.start,
+            query.start + query.maximum_items,
+        )
+        assertion_items = tuple(
+            _fact(
+                fact,
+                owner=ResultReference(entity=ResultEntity.EXECUTION, result_id=execution_id),
+                entity=ResultEntity.ASSERTION,
+            )
+            for execution_id, fact in selected_assertions
+        )
+        assertion_consumed = query.start + len(assertion_items)
+        return AssertionResultPage(
+            artifact_results_sha256=artifact_results_sha256,
+            summary=summary,
+            start=query.start,
+            total_items=total,
+            items=assertion_items,
+            next_start=(assertion_consumed if assertion_consumed < total else None),
+            annotations=annotations,
+        )
+    diff_total = sum(len(item.diffs) for item in artifact.comparisons)
+    selected_diffs = islice(
+        (
+            (comparison.comparison_id, fact)
+            for comparison in artifact.comparisons
+            for fact in comparison.diffs
+        ),
+        query.start,
+        query.start + query.maximum_items,
+    )
+    diff_items = tuple(
+        _fact(
+            fact,
+            owner=ResultReference(entity=ResultEntity.COMPARISON, result_id=comparison_id),
+            entity=ResultEntity.DIFF,
+        )
+        for comparison_id, fact in selected_diffs
+    )
+    diff_consumed = query.start + len(diff_items)
+    return DiffResultPage(
+        artifact_results_sha256=artifact_results_sha256,
+        summary=summary,
+        start=query.start,
+        total_items=diff_total,
+        items=diff_items,
+        next_start=(diff_consumed if diff_consumed < diff_total else None),
+        annotations=annotations,
+    )
+
+
+def _execution_page_row(
+    artifact: RunArtifact,
+    item: ArtifactExecution,
+    artifact_results_sha256: str,
+) -> ExecutionResultRow:
+    reference = ResultReference(entity=ResultEntity.EXECUTION, result_id=item.execution_id)
+    comparisons = tuple(
+        ResultReference(entity=ResultEntity.COMPARISON, result_id=comparison.comparison_id)
+        for comparison in artifact.comparisons
+        if item.execution_id
+        in {comparison.baseline_execution_id, comparison.candidate_execution_id}
+    )
+    return _execution_row(
+        item,
+        reference=reference,
+        comparisons=comparisons,
+        artifact_api_version=artifact.api_version,
+        artifact_id=artifact.metadata.artifact_id,
+        artifact_results_sha256=artifact_results_sha256,
+    )
+
+
+def _comparison_page_row(item: ArtifactComparison) -> ComparisonResultRow:
+    return ComparisonResultRow(
+        ordinal=item.ordinal,
+        reference=ResultReference(
+            entity=ResultEntity.COMPARISON,
+            result_id=item.comparison_id,
+        ),
+        subject=_resource(item.subject),
+        cell_id=item.cell_id,
+        trial_id=item.trial_id,
+        outcome=item.outcome.value,
+        baseline=ResultReference(
+            entity=ResultEntity.EXECUTION,
+            result_id=item.baseline_execution_id,
+        ),
+        candidate=ResultReference(
+            entity=ResultEntity.EXECUTION,
+            result_id=item.candidate_execution_id,
+        ),
+        unavailable=tuple(
+            ResultReference(entity=ResultEntity.EXECUTION, result_id=execution_id)
+            for execution_id in item.unavailable_execution_ids
+        ),
+        diffs=tuple(
+            ResultReference(entity=ResultEntity.DIFF, result_id=fact.fact_id) for fact in item.diffs
         ),
     )
 
@@ -1333,7 +1650,11 @@ def result_value_preview(value: ArtifactValue, *, maximum_characters: int) -> st
 
 
 __all__ = (
+    "AssertionResultPage",
+    "ComparisonResultPage",
     "ComparisonResultRow",
+    "DiffResultPage",
+    "ExecutionResultPage",
     "ExecutionResultRow",
     "ResultCiProvenance",
     "ResultCoordinate",
@@ -1356,6 +1677,9 @@ __all__ = (
     "ResultHttpResponseSlot",
     "ResultMetric",
     "ResultNamedValue",
+    "ResultPage",
+    "ResultPageKind",
+    "ResultPageQuery",
     "ResultProjection",
     "ResultReference",
     "ResultRelation",
@@ -1365,6 +1689,7 @@ __all__ = (
     "ResultTiming",
     "ResultTimingSummary",
     "ResultVcsProvenance",
+    "project_result_page",
     "project_results",
     "result_value_preview",
 )

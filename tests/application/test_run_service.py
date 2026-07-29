@@ -11,6 +11,7 @@ import msgspec
 import pytest
 
 from comparo.application import execution_session as sessions
+from comparo.application import run_service as run_service_module
 from comparo.application.compare import CompareExecutionControls
 from comparo.application.compare import ComparePreparationHandle
 from comparo.application.compare import CompareService
@@ -21,10 +22,15 @@ from comparo.application.production_execution import ProductionExecutionFailure
 from comparo.application.production_execution import ProductionExecutionFailureKind
 from comparo.application.production_execution import ProductionExecutionRequest
 from comparo.application.production_execution import ProductionExecutionResult
+from comparo.application.results import ResultPage
+from comparo.application.results import ResultPageKind
+from comparo.application.results import ResultPageQuery
+from comparo.application.results import project_result_page
 from comparo.application.run_service import RunHandle
 from comparo.application.run_service import RunInspection
 from comparo.application.run_service import RunQuery
 from comparo.application.run_service import RunResultAccess
+from comparo.application.run_service import RunResultPageAccess
 from comparo.application.run_service import RunService
 from comparo.application.run_service import RunServiceError
 from comparo.application.run_service import RunServiceErrorCode
@@ -33,6 +39,7 @@ from tests.application.test_compare import _assertion_request
 from tests.application.test_compare import _controls
 from tests.application.test_compare import _write_project
 from tests.application.test_production_execution import _request
+from tests.core.artifacts.test_artifact_contracts import _artifact
 
 
 def _failure() -> ProductionExecutionResult:
@@ -152,9 +159,100 @@ def test_run_service_collapses_unexpected_execution_failures(
         accessed = await service.result(handle)
         assert accessed.result is None
         assert accessed.diagnostics[0].code == "run.service.internal"
+        page_access = await service.result_page(
+            handle,
+            ResultPageQuery(
+                kind=ResultPageKind.EXECUTIONS,
+                start=0,
+                maximum_items=1,
+            ),
+        )
+        assert page_access.page is None
+        assert page_access.diagnostics[0].code == "run.service.internal"
         await service.close()
 
     asyncio.run(scenario())
+
+
+def test_run_service_pages_terminal_sanitized_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async def execute(_owned: ProductionExecutionRequest) -> ProductionExecutionResult:
+            return ProductionExecutionResult(artifact=_artifact())
+
+        monkeypatch.setattr(sessions, "execute_production", execute)
+        service = RunService(maximum_runs=1)
+        handle = service.register(sessions.start_execution_session(_request(tmp_path)))
+        access = await service.result_page(
+            handle,
+            ResultPageQuery(
+                kind=ResultPageKind.EXECUTIONS,
+                start=0,
+                maximum_items=1,
+            ),
+        )
+
+        assert access.page is not None
+        assert len(access.page.items) == 1
+        assert access.page.next_start == 1
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_run_service_result_pages_report_unavailable_artifacts_and_projection_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unavailable() -> None:
+        async def execute(_owned: ProductionExecutionRequest) -> ProductionExecutionResult:
+            return _failure()
+
+        monkeypatch.setattr(sessions, "execute_production", execute)
+        service = RunService(maximum_runs=1)
+        handle = service.register(sessions.start_execution_session(_request(tmp_path)))
+        query = ResultPageQuery(
+            kind=ResultPageKind.EXECUTIONS,
+            start=0,
+            maximum_items=1,
+        )
+        access = await service.result_page(handle, query)
+        assert access.diagnostics[0].code == "run.service.artifact-unavailable"
+        with pytest.raises(TypeError, match="ResultPageQuery"):
+            await service.result_page(handle, cast("ResultPageQuery", object()))
+        await service.close()
+
+    asyncio.run(unavailable())
+
+    async def broken_projection() -> None:
+        async def execute(_owned: ProductionExecutionRequest) -> ProductionExecutionResult:
+            return ProductionExecutionResult(artifact=_artifact())
+
+        monkeypatch.setattr(sessions, "execute_production", execute)
+
+        def raise_projection_error(
+            _artifact_value: object,
+            _query: object,
+        ) -> object:
+            raise RuntimeError("canary")
+
+        monkeypatch.setattr(run_service_module, "project_result_page", raise_projection_error)
+        service = RunService(maximum_runs=1)
+        handle = service.register(sessions.start_execution_session(_request(tmp_path)))
+        access = await service.result_page(
+            handle,
+            ResultPageQuery(
+                kind=ResultPageKind.EXECUTIONS,
+                start=0,
+                maximum_items=1,
+            ),
+        )
+        assert access.diagnostics[0].code == "run.service.result-page-internal"
+        await service.close()
+
+    asyncio.run(broken_projection())
 
 
 def test_run_service_starts_compare_sessions_and_cleans_duplicate_start(
@@ -314,6 +412,25 @@ def test_run_service_contracts_reject_invalid_state() -> None:
         lambda: RunResultAccess(result=_failure(), diagnostics=(diagnostic,)),
     )
     for factory in result_access_cases:
+        with pytest.raises((TypeError, ValueError)):
+            factory()
+
+    page = project_result_page(
+        _artifact(),
+        ResultPageQuery(
+            kind=ResultPageKind.EXECUTIONS,
+            start=0,
+            maximum_items=1,
+        ),
+    )
+    page_access_cases: tuple[Callable[[], object], ...] = (
+        lambda: RunResultPageAccess(),
+        lambda: RunResultPageAccess(page=cast("ResultPage", object())),
+        lambda: RunResultPageAccess(diagnostics=cast("tuple[ApplicationDiagnostic, ...]", [])),
+        lambda: RunResultPageAccess(diagnostics=(cast("ApplicationDiagnostic", object()),)),
+        lambda: RunResultPageAccess(page=page, diagnostics=(diagnostic,)),
+    )
+    for factory in page_access_cases:
         with pytest.raises((TypeError, ValueError)):
             factory()
 
