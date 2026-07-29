@@ -548,6 +548,41 @@ class ResolvedValueInspectionResult(msgspec.Struct, frozen=True, kw_only=True):
         raise ValueError("resolved value result requires exactly inspection or diagnostics")
 
 
+@final
+class ResolvedValueInspectionBatch(msgspec.Struct, frozen=True, kw_only=True):
+    """Caller-bounded collection of independent resolved-value selections."""
+
+    targets: tuple[ResolvedValueInspectionTarget, ...]
+    maximum_targets: int
+
+    def __post_init__(self) -> None:
+        """Reject empty, untyped, or caller-limit-exceeding selections."""
+        if type(self.maximum_targets) is not int or self.maximum_targets < 1:
+            raise ValueError("resolved inspection batch limit must be a positive integer")
+        if type(self.targets) is not tuple or any(
+            type(item) is not ResolvedValueInspectionTarget for item in self.targets
+        ):
+            raise TypeError("resolved inspection batch targets must be immutable and typed")
+        if not self.targets or len(self.targets) > self.maximum_targets:
+            raise ValueError("resolved inspection batch exceeds its caller-owned limit")
+
+
+@final
+class ResolvedValueInspectionBatchResult(msgspec.Struct, frozen=True, kw_only=True):
+    """Ordered outcomes for one caller-bounded resolved-value batch."""
+
+    results: tuple[ResolvedValueInspectionResult, ...]
+
+    def __post_init__(self) -> None:
+        """Require one immutable typed result for every requested target."""
+        if (
+            type(self.results) is not tuple
+            or not self.results
+            or any(type(item) is not ResolvedValueInspectionResult for item in self.results)
+        ):
+            raise TypeError("resolved inspection batch results must be non-empty and typed")
+
+
 def _bind_resolved_value_target(
     project: PreparedProjectPlan,
     target: ResolvedValueInspectionTarget,
@@ -697,6 +732,23 @@ async def _inspect_resolved_value(
     if cleanup_failed:
         return _failure("resolution.inspect.cleanup-failed")
     return result
+
+
+async def _inspect_resolved_value_batch(
+    requests: tuple[_ResolvedValueInspectionRequest, ...],
+) -> ResolvedValueInspectionBatchResult:
+    """Inspect independent targets in order under one application-service lease."""
+    if (
+        type(requests) is not tuple
+        or not requests
+        or any(type(item) is not _ResolvedValueInspectionRequest for item in requests)
+    ):
+        raise TypeError("resolved value batch requires non-empty bound requests")
+    results: list[ResolvedValueInspectionResult] = []
+    for request in requests:
+        results.append(await _inspect_resolved_value(request))
+        await asyncio.sleep(0)
+    return ResolvedValueInspectionBatchResult(results=tuple(results))
 
 
 async def _inspect_with_resources(
@@ -1641,6 +1693,8 @@ __all__ = (
     "ResolvedValueFormat",
     "ResolvedValueFreshness",
     "ResolvedValueInspection",
+    "ResolvedValueInspectionBatch",
+    "ResolvedValueInspectionBatchResult",
     "ResolvedValueInspectionResult",
     "ResolvedValueInspectionTarget",
     "ResolvedValueNode",

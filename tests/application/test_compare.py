@@ -41,6 +41,8 @@ from comparo.application.production_execution import ProductionRunAnnotations
 from comparo.application.production_execution import production_execution_defaults_v1
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
+from comparo.application.resolved_inspection import ResolvedValueInspectionBatch
+from comparo.application.resolved_inspection import ResolvedValueInspectionBatchResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
 from comparo.application.resolved_inspection import ResolvedValueProjectionLimits
@@ -508,6 +510,50 @@ def test_compare_resolved_inspection_uses_retained_plan_controls_and_frozen_ambi
     assert request.settings.environment == controls.settings.environment
     assert request.settings.yaml == controls.settings.yaml
     assert _AMBIENT_SECRET_CANARY not in repr(request)
+
+
+def test_compare_resolved_batch_uses_one_lease_and_preserves_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[ResolvedValueInspectionRequest, ...]] = []
+    expected_item = ResolvedValueInspectionResult(
+        diagnostics=(
+            ApplicationDiagnostic(
+                code="resolution.inspect.test",
+                severity="error",
+                stage="resolution",
+            ),
+        )
+    )
+    expected = ResolvedValueInspectionBatchResult(results=(expected_item, expected_item))
+
+    async def inspect_batch(
+        bound: tuple[ResolvedValueInspectionRequest, ...],
+    ) -> ResolvedValueInspectionBatchResult:
+        requests.append(bound)
+        return expected
+
+    monkeypatch.setattr(compare, "_inspect_prepared_resolved_value_batch", inspect_batch)
+    service = CompareService(maximum_outstanding=1)
+    controls = _controls()
+    prepared = service.prepare(_assertion_request(_write_project(tmp_path)))
+    assert prepared.handle is not None
+    target = _resolved_target(service, prepared.handle)
+    batch = ResolvedValueInspectionBatch(
+        targets=(target, msgspec.structs.replace(target, field_path=("request",))),
+        maximum_targets=2,
+    )
+
+    result = asyncio.run(service.inspect_resolved_values(prepared.handle, controls, batch))
+
+    assert result is expected
+    assert len(requests) == 1
+    assert tuple(item.field_path for item in requests[0]) == (
+        ("request", "endpoint"),
+        ("request",),
+    )
+    assert service.outstanding == 1
 
 
 @pytest.mark.parametrize("operation", ["preview", "resolved"])
@@ -1328,6 +1374,30 @@ def test_compare_operations_reject_untyped_inputs(tmp_path: Path) -> None:
                 ComparePreparationHandle(value=str(_HANDLE_ID)),
                 _controls(),
                 cast("ResolvedValueInspectionTarget", object()),
+            )
+        )
+    with pytest.raises(TypeError, match="resolved batch handle"):
+        asyncio.run(
+            service.inspect_resolved_values(
+                cast("ComparePreparationHandle", object()),
+                _controls(),
+                cast("ResolvedValueInspectionBatch", object()),
+            )
+        )
+    with pytest.raises(TypeError, match="resolved batch controls"):
+        asyncio.run(
+            service.inspect_resolved_values(
+                ComparePreparationHandle(value=str(_HANDLE_ID)),
+                cast("CompareExecutionControls", object()),
+                cast("ResolvedValueInspectionBatch", object()),
+            )
+        )
+    with pytest.raises(TypeError, match="inspection batch"):
+        asyncio.run(
+            service.inspect_resolved_values(
+                ComparePreparationHandle(value=str(_HANDLE_ID)),
+                _controls(),
+                cast("ResolvedValueInspectionBatch", object()),
             )
         )
     with pytest.raises(TypeError, match="occurrence handle"):

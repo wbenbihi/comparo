@@ -228,6 +228,12 @@ from comparo.application.resolved_inspection import (
     ResolvedValueInspection as ResolvedValueInspection,
 )
 from comparo.application.resolved_inspection import (
+    ResolvedValueInspectionBatch as ResolvedValueInspectionBatch,
+)
+from comparo.application.resolved_inspection import (
+    ResolvedValueInspectionBatchResult as ResolvedValueInspectionBatchResult,
+)
+from comparo.application.resolved_inspection import (
     ResolvedValueInspectionResult as ResolvedValueInspectionResult,
 )
 from comparo.application.resolved_inspection import (
@@ -452,6 +458,8 @@ __all__ = (
     "ResolvedValueFormat",
     "ResolvedValueFreshness",
     "ResolvedValueInspection",
+    "ResolvedValueInspectionBatch",
+    "ResolvedValueInspectionBatchResult",
     "ResolvedValueInspectionResult",
     "ResolvedValueInspectionTarget",
     "ResolvedValueNode",

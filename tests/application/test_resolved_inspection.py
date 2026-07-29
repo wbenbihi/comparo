@@ -33,6 +33,8 @@ from comparo.application.resolved_inspection import ResolvedTaintSource
 from comparo.application.resolved_inspection import ResolvedValueFormat
 from comparo.application.resolved_inspection import ResolvedValueFreshness
 from comparo.application.resolved_inspection import ResolvedValueInspection
+from comparo.application.resolved_inspection import ResolvedValueInspectionBatch
+from comparo.application.resolved_inspection import ResolvedValueInspectionBatchResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
 from comparo.application.resolved_inspection import ResolvedValueNode
@@ -42,6 +44,9 @@ from comparo.application.resolved_inspection import (
 )
 from comparo.application.resolved_inspection import (
     _inspect_resolved_value as inspect_resolved_value,
+)
+from comparo.application.resolved_inspection import (
+    _inspect_resolved_value_batch as inspect_resolved_value_batch,
 )
 from comparo.application.resolved_inspection import (
     _ResolvedValueInspectionRequest as ResolvedValueInspectionRequest,
@@ -312,6 +317,22 @@ def test_resolves_matrix_and_environment_in_the_exact_execution_context(tmp_path
     assert env.inspection.masked is True
     assert env.inspection.nodes[0].preview == "<masked>"
     assert "staging-secret-label" not in msgspec.json.encode(env).decode()
+
+
+def test_resolves_a_whole_effective_request_expression(tmp_path: Path) -> None:
+    result = _inspect(
+        _inspection_request(
+            _project(tmp_path),
+            field_path=("request",),
+            maximum_nodes=8,
+        )
+    )
+
+    assert result.inspection is not None
+    assert result.inspection.state is ResolvedInspectionState.PRESENT
+    assert result.inspection.kind is ValueKind.OBJECT
+    assert result.inspection.nodes[0].path == ()
+    assert result.inspection.nodes[0].masked is True
 
 
 def test_secret_and_composed_sensitive_values_are_irreversibly_masked(tmp_path: Path) -> None:
@@ -1368,6 +1389,62 @@ def test_frontend_target_binds_only_inside_the_retained_plan_lifetime(
                 (),
                 limits=EnvironmentSourceLimits(),
             ),
+        )
+
+
+def test_resolved_value_batches_preserve_target_order_and_caller_limits(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    requests = (
+        _inspection_request(project, field_path=("request", "headers", "X-Region")),
+        _inspection_request(project, field_path=("request", "headers", "X-Label")),
+    )
+    targets = tuple(
+        ResolvedValueInspectionTarget(
+            resource=request.resource,
+            field_path=request.field_path,
+            execution_ordinal=request.execution_ordinal,
+            environment=request.environment,
+            limits=_projection_limits(),
+            start_node=request.start_node,
+            maximum_nodes=request.maximum_nodes,
+        )
+        for request in requests
+    )
+    batch = ResolvedValueInspectionBatch(targets=targets, maximum_targets=2)
+
+    result = asyncio.run(inspect_resolved_value_batch(requests))
+
+    assert type(result) is ResolvedValueInspectionBatchResult
+    assert tuple(item.inspection.field_path for item in result.results if item.inspection) == (
+        targets[0].field_path,
+        targets[1].field_path,
+    )
+    with pytest.raises(ValueError, match="positive integer"):
+        msgspec.structs.replace(batch, maximum_targets=0)
+    with pytest.raises(TypeError, match="targets"):
+        msgspec.structs.replace(
+            batch,
+            targets=cast("tuple[ResolvedValueInspectionTarget, ...]", (object(),)),
+        )
+    with pytest.raises(ValueError, match="caller-owned"):
+        msgspec.structs.replace(batch, maximum_targets=1)
+    with pytest.raises(ValueError, match="caller-owned"):
+        ResolvedValueInspectionBatch(targets=(), maximum_targets=1)
+    with pytest.raises(TypeError, match="batch results"):
+        ResolvedValueInspectionBatchResult(results=())
+    with pytest.raises(TypeError, match="batch results"):
+        ResolvedValueInspectionBatchResult(
+            results=cast("tuple[ResolvedValueInspectionResult, ...]", (object(),))
+        )
+    with pytest.raises(TypeError, match="bound requests"):
+        asyncio.run(inspect_resolved_value_batch(()))
+    with pytest.raises(TypeError, match="bound requests"):
+        asyncio.run(
+            inspect_resolved_value_batch(
+                cast("tuple[ResolvedValueInspectionRequest, ...]", (object(),))
+            )
         )
 
 

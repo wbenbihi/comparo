@@ -40,11 +40,16 @@ from comparo.application.render_preview import RenderPreviewSettings
 from comparo.application.render_preview import RenderPreviewWindowRequest
 from comparo.application.render_preview import RenderPreviewWindowResult
 from comparo.application.render_preview import render_prepared_request_window
+from comparo.application.resolved_inspection import ResolvedValueInspectionBatch
+from comparo.application.resolved_inspection import ResolvedValueInspectionBatchResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionResult
 from comparo.application.resolved_inspection import ResolvedValueInspectionTarget
 from comparo.application.resolved_inspection import _bind_resolved_value_target
 from comparo.application.resolved_inspection import (
     _inspect_resolved_value as _inspect_prepared_resolved_value,
+)
+from comparo.application.resolved_inspection import (
+    _inspect_resolved_value_batch as _inspect_prepared_resolved_value_batch,
 )
 from comparo.application.rule_inspection import PlanRuleWindow
 from comparo.application.rule_inspection import inspect_plan_rule_window
@@ -370,6 +375,41 @@ class CompareService:
         lease = self._begin_inspection(handle, operation)
         return cast(
             "ResolvedValueInspectionResult",
+            await self._run_inspection(handle, lease),
+        )
+
+    async def inspect_resolved_values(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        batch: ResolvedValueInspectionBatch,
+    ) -> ResolvedValueInspectionBatchResult:
+        """Inspect a caller-bounded target batch without consuming its preparation."""
+        if type(handle) is not ComparePreparationHandle:
+            raise TypeError("Compare resolved batch handle must be typed")
+        if type(controls) is not CompareExecutionControls:
+            raise TypeError("Compare resolved batch controls must be typed")
+        if type(batch) is not ResolvedValueInspectionBatch:
+            raise TypeError("Compare resolved inspection batch must be typed")
+        prepared = self._validate_inspection(handle, controls)
+        settings = prepared.controls.settings
+        requests = tuple(
+            _bind_resolved_value_target(
+                prepared.project,
+                target,
+                files=settings.files,
+                environment=settings.environment,
+                yaml=settings.yaml,
+                ambient_environment=prepared.ambient_environment,
+            )
+            for target in batch.targets
+        )
+        lease = self._begin_inspection(
+            handle,
+            _inspect_prepared_resolved_value_batch(requests),
+        )
+        return cast(
+            "ResolvedValueInspectionBatchResult",
             await self._run_inspection(handle, lease),
         )
 
