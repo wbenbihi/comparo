@@ -1,6 +1,7 @@
 """KeyValueList — aligned, styled key/value rows."""
 
 from dataclasses import dataclass
+from typing import override
 
 from textual.app import ComposeResult
 from textual.content import Content
@@ -30,11 +31,12 @@ class KeyValueList(Widget):
         separators: bool = False,
         classes: str | None = None,
     ) -> None:
-        """Init the list."""
+        """Initialize the list from immutable fields."""
         super().__init__(id=id, classes=classes)
         self.set_reactive(KeyValueList.entries, tuple(entries))
         self._separators = separators
 
+    @override
     def compose(self) -> ComposeResult:
         """One key cell and one value cell per field."""
         for idx, field in enumerate(self.entries):

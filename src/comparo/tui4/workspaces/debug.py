@@ -1,7 +1,11 @@
+"""Developer-only component gallery and interaction workspace."""
+
 from enum import StrEnum
 from typing import ClassVar
+from typing import override
 
-from textual.binding import Binding, BindingType
+from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Horizontal
 from textual.containers import VerticalScroll
 from textual.content import Content
@@ -9,20 +13,22 @@ from textual.reactive import reactive
 from textual.widgets import ContentSwitcher
 from textual.widgets import Static
 
+from comparo.tui4.bindings import debug_bindings
 from comparo.tui4.components.diffview import DiffView
 from comparo.tui4.components.filter import FilterInput
 from comparo.tui4.components.list import Field
 from comparo.tui4.components.list import KeyValueList
 from comparo.tui4.components.menu import Menu
 from comparo.tui4.components.panel import Panel
+from comparo.tui4.components.separator import Separator
 from comparo.tui4.components.table import Column
 from comparo.tui4.components.table import Record
 from comparo.tui4.components.table import Table
-from comparo.tui4.components.treemenu import MenuNode, TreeMenu
+from comparo.tui4.components.treemenu import MenuNode
+from comparo.tui4.components.treemenu import TreeMenu
 from comparo.tui4.components.typography import Caption
 from comparo.tui4.components.typography import Hint
 from comparo.tui4.components.typography import SectionTitle
-from comparo.tui4.components.separator import Separator
 from comparo.tui4.models.diff import build_diff_document
 from comparo.tui4.models.diff import build_source_document
 from comparo.tui4.models.diff import document_label
@@ -191,6 +197,8 @@ def _request_records() -> tuple[Record[str], ...]:
 
 
 class DebugSection(StrEnum):
+    """Available sections in the developer workspace."""
+
     STATE = "state"
     MESSAGE = "messages"
     STYLES = "styles"
@@ -198,11 +206,15 @@ class DebugSection(StrEnum):
 
 
 class FilteredTextLine(Static):
+    """Small reactive fixture used to exercise filter messages."""
+
     ELEMENTS: ClassVar[tuple[str, ...]] = ("foo", "bar", "hello", "world")
 
     filter_text: reactive[str] = reactive("")
 
+    @override
     def render(self) -> str:
+        """Render fixture elements matching the current filter."""
         selected = [el for el in self.ELEMENTS if self.filter_text in el]
         return " - ".join(selected) or "(no match)"
 
@@ -212,11 +224,11 @@ class ComponentsDebugPanel(Panel):
 
     filter_text: reactive[str] = reactive("", init=False)
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("/", "focus_filter", "Filter", key_display="/"),
-    ]
+    BINDINGS: ClassVar[list[BindingType]] = debug_bindings()
 
-    def compose(self):
+    @override
+    def compose(self) -> ComposeResult:
+        """Compose the reusable-component gallery."""
         with VerticalScroll():
             # Typography
             yield Panel(SectionTitle("Title"), Caption("Caption"), Hint("Hint"), title="Typography")
@@ -310,6 +322,7 @@ class ComponentsDebugPanel(Panel):
             yield Panel(TreeMenu(*NODES, initial="req-users-list"), title="Collections")
 
     def on_filter_input_changed(self, event: FilterInput.Changed) -> None:
+        """Project filter edits into the fixture line."""
         self.filter_text = event.value
 
     def action_focus_filter(self) -> None:
@@ -317,6 +330,7 @@ class ComponentsDebugPanel(Panel):
         self.query_one(FilterInput).focus()
 
     def watch_filter_text(self) -> None:
+        """Synchronize the filter fixture after reactive changes."""
         self.query_one(FilteredTextLine).filter_text = self.filter_text
 
 
@@ -329,8 +343,9 @@ class DebugWorkspace(Workspace):
     SCREEN = ComparoScreen.DEBUG
     section: reactive[DebugSection] = reactive(DebugSection.STATE, init=False)
 
-    def compose(self):
-        """Render."""
+    @override
+    def compose(self) -> ComposeResult:
+        """Compose the debug navigation and selected panel."""
         with Horizontal(id="debug-layout"):
             yield Panel(
                 Menu.from_enum(DebugSection, initial=self.section),
@@ -361,6 +376,7 @@ class DebugWorkspace(Workspace):
         """On menu item highlighted."""
         self.section = DebugSection(event.item)
 
+    @override
     def focus_default(self) -> None:
         """Focus on the menu."""
         self.query_one(Menu).focus()

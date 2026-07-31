@@ -1,7 +1,10 @@
 """TreeMenu — collapsible semantic menu over Tree."""
 
 from dataclasses import dataclass
+from typing import override
 
+from rich.text import Text
+from rich.text import TextType
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Tree
@@ -13,17 +16,23 @@ class MenuNode[T: str]:
     """One tree entry; a node with no children is a selectable leaf."""
 
     id: T
-    label: str
+    label: TextType
     children: tuple["MenuNode[T]", ...] = ()
     glyph: str | None = None
 
     @property
     def is_leaf(self) -> bool:
+        """Whether this node can be selected instead of expanded."""
         return not self.children
 
     @property
-    def prompt(self) -> str:
-        return f"{self.glyph} {self.label}" if self.glyph else self.label
+    def prompt(self) -> Text:
+        """Build the Rich label consumed by Textual's tree widget."""
+        if self.glyph is None:
+            return (
+                Text.from_markup(self.label) if isinstance(self.label, str) else self.label.copy()
+            )
+        return Text.assemble(f"{self.glyph} ", self.label)
 
 
 class TreeMenu[T: str](Tree[T]):
@@ -38,12 +47,15 @@ class TreeMenu[T: str](Tree[T]):
         """Cursor moved onto a leaf."""
 
         def __init__(self, menu: "TreeMenu[R]", item: R) -> None:
+            """Initialize the message with its tree and item identity."""
             self.menu = menu
             self.item = item
             super().__init__()
 
         @property
+        @override
         def control(self) -> "TreeMenu[R]":
+            """Return the tree that emitted this message."""
             return self.menu
 
     class Selected[R: str](Highlighted[R]):
@@ -56,21 +68,26 @@ class TreeMenu[T: str](Tree[T]):
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
+        """Initialize a tree from immutable semantic nodes."""
         super().__init__("root", id=id, classes=classes)
         self.show_root = False
-        self.set_reactive(TreeMenu.nodes, tuple(nodes))
+        self.nodes = tuple(nodes)
         self._initial = initial
         self._built = False
 
+    @override
     def on_mount(self) -> None:
+        """Build nodes and apply the initial cursor position."""
         self._rebuild(prefer=self._initial)
 
     def watch_nodes(self) -> None:
+        """Rebuild the mounted tree when its node projection changes."""
         if self.is_mounted:
             self._rebuild()
 
     @property
     def cursor_id(self) -> T | None:
+        """Return the stable identity under the cursor, when available."""
         return self.cursor_node.data if self.cursor_node is not None else None
 
     def _expanded_ids(self) -> set[T]:
@@ -112,19 +129,23 @@ class TreeMenu[T: str](Tree[T]):
             self.move_cursor(by_id[current])
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[T]) -> None:
+        """Emit a semantic highlight only for selectable leaves."""
         event.stop()
         node = event.node
         if node.data is not None and not node.allow_expand:
             self.post_message(self.Highlighted(self, node.data))
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[T]) -> None:
+        """Emit a semantic selection only for selectable leaves."""
         event.stop()
         node = event.node
         if node.data is not None and not node.allow_expand:
             self.post_message(self.Selected(self, node.data))
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded[T]) -> None:
+        """Keep Textual's structural event inside this component."""
         event.stop()
 
     def on_tree_node_collapsed(self, event: Tree.NodeCollapsed[T]) -> None:
+        """Keep Textual's structural event inside this component."""
         event.stop()

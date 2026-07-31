@@ -1,6 +1,6 @@
-Screen { 
-    background: $background; 
-    color: $foreground; 
+Screen {
+    background: $background;
+    color: $foreground;
 }
 
 AppHeader {
@@ -19,9 +19,9 @@ AppHeader > * {
 }
 
 ComparoLogo {
-    color: $accent; 
-    text-style: bold; 
-    width: auto; 
+    color: $accent;
+    text-style: bold;
+    width: auto;
 }
 
 /* Navigation */
@@ -50,7 +50,7 @@ NavHelper {
     background: $background;
     align-vertical: middle;
 }
-NavHelper > Static { 
+NavHelper > Static {
     width: auto;
     height: auto;
     padding: 1;
@@ -162,12 +162,12 @@ KeyValueList > .kv-sep {
     height: 1;
     hatch: horizontal $comparo-border;
 }
-KeyValueList .kv-key { 
+KeyValueList .kv-key {
     width: auto;
     color: $comparo-muted;
 }
-KeyValueList .kv-value { 
-    width: 1fr; 
+KeyValueList .kv-value {
+    width: 1fr;
 }
 
 /* Typography */
@@ -195,7 +195,7 @@ DiffView > .diffview--change   { background: $warning 20%; }
 DiffView > .diffview--emphasis-add    { background: $success 60%; text-style: bold; }
 DiffView > .diffview--emphasis-remove { background: $error 60%; text-style: bold; }
 /* marker column */
-DiffView > .diffview--marker-add    { color: $success; text-style: bold; }  
+DiffView > .diffview--marker-add    { color: $success; text-style: bold; }
 DiffView > .diffview--marker-remove { color: $error; text-style: bold; }
 DiffView > .diffview--marker-change { color: $warning; text-style: bold; }
 /* chrome */

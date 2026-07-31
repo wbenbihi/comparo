@@ -1,4 +1,4 @@
-"""The comparo palette — single source of truth for every color in tuibis.
+"""The Comparo palette — single source of truth for every terminal color.
 
 Widgets style themselves through tcss classes defined in ``styles.tcss``;
 Rich text fragments (tree labels, table cells) use the ``style()`` helper.
@@ -80,42 +80,53 @@ _STYLES: dict[str, str] = {
     "warn": WARN,
     "err": ERR,
     "error-op": ERROR_OP,
-    "pill.matrix": f"{'#9FB6D4'} on {'#1E2A3C'}",
-    "pill.live": f"{OK} on {'#11291B'}",
-    "pill.default": f"{LABEL} on {'#1C2434'}",
+    "pill.matrix": f"{WARN} on {PILL_AMBER_BG}",
+    "pill.local": f"{OK} on {PILL_GREEN_BG}",
+    "pill.live": f"{ERR} on {PILL_RED_BG}",
+    "pill.stream": f"{TEAL} on {PILL_TEAL_BG}",
+    "pill.default": f"{LABEL} on {PILL_SLATE_BG}",
     "pill.baseline": f"{BASELINE} on {'#0E2A31'}",
     "pill.candidate": f"{CANDIDATE} on {'#241B33'}",
     "chip.active": f"bold {'#08222B'} on {BASELINE}",
+    "kind.project": CANDIDATE,
+    "kind.environment": OK,
+    "kind.request": BASELINE,
+    "kind.matrix": WARN,
+    "kind.schema": BLUE,
+    "kind.value": TEAL,
+    "kind.scenario": LABEL,
+    "kind.assertion": OK,
+    "kind.diff": AMBER,
+    "kind.gate": ERROR_OP,
+    "kind.safety": ERR,
+    "kind.redaction": SLATE,
+    "kind.artifact": STEEL,
+    "kind.execution": BRIGHT,
+    "status.passed": OK,
+    "status.advisory": WARN,
+    "status.failed": ERR,
+    "status.error": ERROR_OP,
+    "status.running": BASELINE,
+    "status.queued": DIM,
+    "status.skipped": DIM,
+    "status.cancelled": DIM,
+    "status.redacted": WARN,
+    "status.drift": ERR,
+    "status.same": OK,
+    "status.outbound": WARN,
+    "status.verified": OK,
+    "diff.add": f"{OK} on #0D2117",
+    "diff.del": f"{ERR} on #250E15",
+    "diff.ctx": MUTED,
+    "diff.hunk": f"{BASELINE} on #0E1D28",
+    "diff.eadd": "bold #0D2117 on #7BD88F",
+    "diff.edel": "bold #250E15 on #F2637E",
+    "chip.warn": f"bold {'#2B1F04'} on {WARN}",
+    "chip.plain": f"{FG} on {'#1C2A3A'}",
+    "mark.on": BASELINE,
+    "mark.off": MUTED,
+    "cursor": BASELINE,
 }
-
-_STYLES.update(
-    {
-        "pill.matrix": f"{WARN} on {PILL_AMBER_BG}",
-        "pill.local": f"{OK} on {PILL_GREEN_BG}",
-        "pill.live": f"{ERR} on {PILL_RED_BG}",
-        "pill.stream": f"{TEAL} on {PILL_TEAL_BG}",
-        "pill.default": f"{LABEL} on {PILL_SLATE_BG}",
-    }
-)
-
-_STYLES.update(
-    {
-        "kind.project": CANDIDATE,
-        "kind.environment": OK,
-        "kind.request": BASELINE,
-        "kind.matrix": WARN,
-        "kind.schema": BLUE,
-        "kind.value": TEAL,
-        "kind.scenario": LABEL,
-        "kind.assertion": OK,
-        "kind.diff": AMBER,
-        "kind.gate": ERROR_OP,
-        "kind.safety": ERR,
-        "kind.redaction": SLATE,
-        "kind.artifact": STEEL,
-        "kind.execution": BRIGHT,
-    }
-)
 
 KIND_GLYPHS: dict[str, tuple[str, str]] = {
     "Project": (GLYPH_PROJECT, "kind.project"),
@@ -170,36 +181,6 @@ COMPARO_DARK = Theme(
         "comparo-label": LABEL,
     },
 )
-
-_STYLES.update(
-    {
-        "status.passed": OK,
-        "status.advisory": WARN,
-        "status.failed": ERR,
-        "status.error": ERROR_OP,
-        "status.running": BASELINE,
-        "status.queued": DIM,
-        "status.skipped": DIM,
-        "status.cancelled": DIM,
-        "status.redacted": WARN,
-        "status.drift": ERR,
-        "status.same": OK,
-        "status.outbound": WARN,
-        "status.verified": OK,
-        "diff.add": f"{OK} on #0D2117",
-        "diff.del": f"{ERR} on #250E15",
-        "diff.ctx": MUTED,
-        "diff.hunk": f"{BASELINE} on #0E1D28",
-        "diff.eadd": "bold #0D2117 on #7BD88F",
-        "diff.edel": "bold #250E15 on #F2637E",
-        "chip.warn": f"bold {'#2B1F04'} on {WARN}",
-        "chip.plain": f"{FG} on {'#1C2A3A'}",
-        "mark.on": BASELINE,
-        "mark.off": MUTED,
-        "cursor": BASELINE,
-    }
-)
-
 
 COMPARO_LIGHT = Theme(
     name="comparo-light",

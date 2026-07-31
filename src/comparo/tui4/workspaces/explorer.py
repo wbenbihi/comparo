@@ -2,29 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from typing import TYPE_CHECKING
 from typing import ClassVar
+from typing import override
 
 from textual import work
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.binding import BindingType
 from textual.containers import Horizontal
 from textual.reactive import reactive
-from textual.timer import Timer
 
-from comparo.application import SourceInspectionError
-from comparo.application.plan_inspection_identity import ResourceCoordinate
-from comparo.application.project_workspace import ProjectWorkspaceResult
+from comparo.tui4.bindings import FILTER_KEY
+from comparo.tui4.bindings import explorer_bindings
 from comparo.tui4.components.filter import FilterInput
 from comparo.tui4.components.legend import Legend
 from comparo.tui4.components.panel import Panel
-from comparo.tui4.components.resourceoverview import ResourceOverview
 from comparo.tui4.components.resourcedetail import ResourceDetailOverview
 from comparo.tui4.components.treemenu import TreeMenu
 from comparo.tui4.models.explorer import ExplorerCatalog
 from comparo.tui4.models.explorer import ResourceDetail
-from comparo.tui4.models.explorer import Section
 from comparo.tui4.models.explorer import build_catalog
 from comparo.tui4.models.explorer import catalog_nodes
 from comparo.tui4.models.explorer import initial_detail
@@ -33,8 +29,8 @@ from comparo.tui4.types import ComparoScreen
 
 from .base import Workspace
 
-FILTER_KEY = "/"
-DETAIL_DEBOUNCE_SECONDS = 0.2
+if TYPE_CHECKING:
+    from comparo.application import ProjectWorkspaceResult
 
 
 class ExplorerWorkspace(Workspace):
@@ -42,10 +38,7 @@ class ExplorerWorkspace(Workspace):
 
     SCREEN = ComparoScreen.EXPLORE
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding(FILTER_KEY, "focus_filter", "Filter", key_display=FILTER_KEY),
-        Binding("r", "reload", "Reload"),
-    ]
+    BINDINGS: ClassVar[list[BindingType]] = explorer_bindings()
 
     catalog: reactive[ExplorerCatalog | None] = reactive(None, init=False)
     filter_text: reactive[str] = reactive("", init=False)
@@ -54,6 +47,7 @@ class ExplorerWorkspace(Workspace):
 
     # ------------------------------------------------------------------ layout
 
+    @override
     def compose(self) -> ComposeResult:
         """Left: filterable tree over the glyph legend. Right: kind-aware overview."""
         with Horizontal(id="explorer-layout"):
@@ -66,6 +60,7 @@ class ExplorerWorkspace(Workspace):
             )
             yield ResourceDetailOverview(id="explorer-detail")
 
+    @override
     def focus_default(self) -> None:
         """Focus the resource tree."""
         self.query_one(TreeMenu).focus()
@@ -75,7 +70,6 @@ class ExplorerWorkspace(Workspace):
     def on_mount(self) -> None:
         """Load the project catalog."""
         self._load_generation = 0
-        self._detail_timer: Timer | None = None
         self.action_reload()
 
     def action_reload(self) -> None:
@@ -88,8 +82,6 @@ class ExplorerWorkspace(Workspace):
     def _load_workspace(self, generation: int) -> None:
         """Blocking application call — thread worker only."""
         result = self.backend.load_workspace()
-        if result.snapshot is not None:
-            self.backend.ensure_artifact_root()
         self.app.call_from_thread(self._apply_workspace, generation, result)
 
     def _apply_workspace(self, generation: int, result: ProjectWorkspaceResult) -> None:
@@ -139,66 +131,13 @@ class ExplorerWorkspace(Workspace):
         self.selected = event.item
 
     def watch_selected(self) -> None:
-        """Instant snapshot detail; debounced fetches for the rest."""
+        """Project the selected catalog entry into the detail column."""
         if self.catalog is None or self.selected is None:
             return
         entry = self.catalog.entries.get(self.selected)
         if entry is None:
             return
         self.detail = initial_detail(entry)
-        if self._detail_timer is not None:
-            self._detail_timer.stop()
-        self._detail_timer = self.set_timer(DETAIL_DEBOUNCE_SECONDS, self._load_detail)
-
-    def _load_detail(self) -> None:
-        """Debounce fired: kick both fetched sections for the current selection."""
-        if self.detail is None or self.catalog is None:
-            return
-        key = self.detail.key
-        summary = self.detail.entry.summary
-        source_summary = self.catalog.sources.get(summary.source.source)
-        if source_summary is not None and source_summary.sha256 is not None:
-            self.detail = replace(self.detail, source=replace(self.detail.source, state="loading"))
-            self._load_source(
-                key, summary.source.source, source_summary.sha256, summary.source.line
-            )
-        self.detail = replace(
-            self.detail, effective=replace(self.detail.effective, state="loading")
-        )
-        self._load_effective(key, summary.coordinate)
-
-    @work(thread=True, exclusive=True, group="source-page")
-    def _load_source(self, key: str, source_id: str, sha256: str, line: int) -> None:
-        """Blocking authored-window fetch."""
-        try:
-            window = self.backend.inspect_source(source_id, sha256, line)
-        except SourceInspectionError as error:
-            self.app.call_from_thread(self._apply_section, key, "source", None, error.code.value)
-            return
-        self.app.call_from_thread(self._apply_section, key, "source", window, None)
-
-    @work(thread=True, exclusive=True, group="effective-page")
-    def _load_effective(self, key: str, coordinate: ResourceCoordinate) -> None:
-        """Blocking effective-window fetch."""
-        try:
-            window = self.backend.inspect_effective(coordinate)
-        except SourceInspectionError as error:
-            self.app.call_from_thread(self._apply_section, key, "effective", None, error.code.value)
-            return
-        self.app.call_from_thread(self._apply_section, key, "effective", window, None)
-
-    def _apply_section(self, key: str, name: str, value: object, error_code: str | None) -> None:
-        """Fold one worker result into the aggregate unless stale."""
-        if self.detail is None or self.detail.key != key:
-            return
-        section: Section = getattr(self.detail, name)
-        updated = replace(
-            section,
-            state="failed" if error_code else "ready",
-            value=value,
-            error_code=error_code,
-        )
-        self.detail = replace(self.detail, **{name: updated})
 
     # ------------------------------------------------------------------ filter
 

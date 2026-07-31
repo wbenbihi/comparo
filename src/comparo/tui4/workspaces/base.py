@@ -1,11 +1,19 @@
-from typing import cast
-from typing import ClassVar
+"""Shared base class for top-level workspaces."""
 
-from textual.app import App
+from typing import ClassVar
+from typing import Protocol
+from typing import cast
+
 from textual.containers import Vertical
 
-from comparo.tui4.types import ComparoScreen
 from comparo.tui4.backend import TuiBackend
+from comparo.tui4.types import ComparoScreen
+
+
+class _BackendOwner(Protocol):
+    """Minimal application shape required by a workspace."""
+
+    backend: TuiBackend
 
 
 class Workspace(Vertical):
@@ -13,19 +21,17 @@ class Workspace(Vertical):
 
     SCREEN: ClassVar[ComparoScreen]
 
-    def __init__(self, backend: TuiBackend | None = None) -> None:
-        """Init the workspace."""
+    def __init__(self) -> None:
+        """Initialize the workspace with its stable screen identifier."""
         super().__init__(id=self.SCREEN, classes="Workspace")
-        self._backend = backend
 
     @property
     def backend(self) -> TuiBackend:
         """The process backend owned by the app."""
-        self.app: App[None]
-        return cast(TuiBackend, getattr(self.app, "backend"))
+        return cast(_BackendOwner, self.app).backend
 
     def on_show(self) -> None:
-        """On Show Callback."""
+        """Restore the workspace's natural focus when it becomes visible."""
         self.focus_default()
 
     def focus_default(self) -> None:

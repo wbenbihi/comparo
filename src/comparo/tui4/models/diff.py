@@ -5,8 +5,6 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Literal
-from xml.dom import minidom
-from xml.parsers.expat import ExpatError
 
 MAX_DOCUMENT_LINES = 5_000
 MIN_FOLDABLE_LINES = 3
@@ -86,22 +84,17 @@ def detect_language(text: str) -> str | None:
 
 
 def _prettify(text: str, language: str | None) -> tuple[str, bool]:
-    """Reformat complete json/xml; anything unparseable passes through untouched."""
+    """Reformat complete JSON; anything else passes through untouched.
+
+    XML remains verbatim because the standard-library XML formatters are not
+    hardened for untrusted HTTP response bodies.
+    """
     if language == "json":
         try:
             parsed = json.loads(text)
         except ValueError:
             return text, False
         pretty = json.dumps(parsed, indent=2, ensure_ascii=False)
-        return pretty, pretty != text
-    if language == "xml":
-        try:
-            document = minidom.parseString(text)
-        except (ExpatError, ValueError):
-            return text, False
-        pretty = "\n".join(
-            line for line in document.toprettyxml(indent="  ").splitlines() if line.strip()
-        )
         return pretty, pretty != text
     return text, False
 

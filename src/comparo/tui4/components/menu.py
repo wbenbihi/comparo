@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 from typing import Self
+from typing import override
 
 from textual.message import Message
 from textual.reactive import reactive
@@ -37,12 +37,13 @@ class Menu(OptionList):
         """Cursor moved onto an item."""
 
         def __init__(self, menu: "Menu", item: str) -> None:
-            """Init Message."""
+            """Initialize a menu event with its semantic item identity."""
             self.menu = menu
             self.item = item
             super().__init__()
 
         @property
+        @override
         def control(self) -> "Menu":
             """Originating widget, for @on selectors."""
             return self.menu
@@ -57,16 +58,26 @@ class Menu(OptionList):
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
-        """Init Menu."""
+        """Initialize the menu from immutable items."""
         super().__init__(id=id, classes=classes)
         self.set_reactive(Menu.items, tuple(items))
         self._initial = initial
 
     @classmethod
-    def from_enum(cls, source: type[StrEnum], **kwargs: Any) -> Self:
+    def from_enum(
+        cls,
+        source: type[StrEnum],
+        *,
+        initial: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> Self:
         """Build a menu with one item per enum member."""
         return cls(
-            *[MenuItem(id=member, label=member.value.title()) for member in source], **kwargs
+            *(MenuItem(id=member.value, label=member.value.title()) for member in source),
+            initial=initial,
+            id=id,
+            classes=classes,
         )
 
     @property
@@ -76,6 +87,7 @@ class Menu(OptionList):
             return None
         return self.get_option_at_index(self.highlighted).id
 
+    @override
     def on_mount(self) -> None:
         """Build options and apply the initial highlight."""
         self._rebuild(prefer=self._initial)

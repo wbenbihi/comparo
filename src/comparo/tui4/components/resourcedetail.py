@@ -1,114 +1,82 @@
-"""ResourceOverview — kind-aware detail column for one selected resource."""
+"""Kind-aware detail column for one selected resource."""
 
+from typing import override
+
+from rich.text import Text
 from textual.app import ComposeResult
+from textual.containers import Vertical
+from textual.content import Content
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.content import Content
-from textual.widget import Text
 from textual.widgets import Static
-from textual.containers import Vertical
 
-from comparo.tui4.components.separator import Separator
-from comparo.tui4.components.panel import Panel
+from comparo.tui4.components.list import Field
 from comparo.tui4.components.list import KeyValueList
+from comparo.tui4.components.panel import Panel
+from comparo.tui4.components.separator import Separator
 from comparo.tui4.components.typography import Hint
-from comparo.tui4.models.explorer import ResourceDetail, Field
-from comparo.tui4.models.explorer import identity_fields
+from comparo.tui4.fragments import glyph
+from comparo.tui4.fragments import pill
+from comparo.tui4.models.explorer import ResourceDetail
+from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.explorer import kind_fields
-from comparo.tui4.fragments import entity_label, glyph
 from comparo.tui4.theme import kind_glyph
 from comparo.tui4.theme import style
-from comparo.tui4.fragments import pill
 
 
-class BaseResourceKindDetail(Vertical):
-    """Base Class for specifiic Kind detail."""
+class ResourceKindDetails(Vertical):
+    """Render the existing kind-specific resource details."""
 
-    def __init__(self, resource: ResourceDetail, *args, **kwargs) -> None:
-        """Init."""
-        super().__init__(*args, **kwargs)
-        self._resource = resource
+    def __init__(self, entry: ResourceEntry) -> None:
+        """Initialize the section for one resource entry."""
+        super().__init__()
+        self._entry = entry
 
-    @property
-    def entries(self):
-        """Retrieve entries."""
-        return self._resource.entry
-
-
-class ResourceProjectDetail(BaseResourceKindDetail):
-    """Class for Project Kind detail."""
-
-    def compose(self):
-        """Render."""
-
-        yield KeyValueList(*kind_fields(self._resource.entry))
-
-
-class ResourceWIPDetail(BaseResourceKindDetail):
-    """Display basic detail about resource."""
-
-    def compose(self):
-        """Render."""
-        yield Separator(label="WIP", classes="warning")
-
-
-_KIND_MAPPER = {"Project": ResourceProjectDetail}
+    @override
+    def compose(self) -> ComposeResult:
+        """Render project fields or the existing work-in-progress marker."""
+        if self._entry.summary.coordinate.kind == "Project":
+            yield KeyValueList(*kind_fields(self._entry))
+        else:
+            yield Separator(label="WIP", classes="warning")
 
 
 class ResourceSummary(Vertical):
     """Display basic detail about resource."""
 
-    def __init__(self, resource: ResourceDetail, *args, **kwargs) -> None:
-        """Init."""
-        super().__init__(*args, **kwargs)
+    def __init__(self, resource: ResourceDetail) -> None:
+        """Initialize the summary from an immutable resource projection."""
+        super().__init__()
         self._resource = resource
 
     @property
-    def entries(self):
-        """Retrieve entries."""
+    def entry(self) -> ResourceEntry:
+        """Return the selected resource entry."""
         return self._resource.entry
 
+    @override
     def compose(self) -> ComposeResult:
-        """."""
-        yield Static()
-        yield Static(self.get_field_description().value)
+        """Compose the generic summary and current kind-specific section."""
+        yield Static(self.entry.summary.description or "N/A")
         yield Separator(label="Detail")
-        yield KeyValueList(*self.get_fields(), separators=False)
-        yield _KIND_MAPPER.get(self.get_field_kind().value, ResourceWIPDetail)(
-            resource=self._resource
-        )
+        yield KeyValueList(*self._fields(), separators=False)
+        yield ResourceKindDetails(self.entry)
 
-    def get_field_description(self) -> Field:
-        """Return Description."""
-        return Field(key="description", value=self.entries.summary.description or "N/A")
-
-    def get_field_tag(self) -> Field | None:
-        """Retrieve tags."""
-        if not self._resource.entry.summary.tags:
+    def _tag_field(self) -> Field | None:
+        """Build the optional Rich tag row."""
+        if not self.entry.summary.tags:
             return None
-
-        tags = Text()
-        for tag in self._resource.entry.summary.tags:
-            tags.append_text(pill(tag, "pill.default"))
-            tags.append(" · ")
+        tags = Text(" · ").join(pill(tag, "pill.default") for tag in self.entry.summary.tags)
         return Field(key="tags", value=Content.from_rich_text(tags))
 
-    def get_field_id(self) -> Field:
-        """Retrieve id."""
-        return Field(key="id", value=self.entries.summary.coordinate.resource_id)
-
-    def get_field_kind(self) -> Field:
-        """Retrieve Kind."""
-        return Field(key="kind", value=self.entries.summary.coordinate.kind)
-
-    def get_fields(self) -> list[Field]:
-        """Retrieve the required fields."""
-        fields: list[Field | None] = [
-            self.get_field_id(),
-            self.get_field_kind(),
-            self.get_field_tag(),
+    def _fields(self) -> tuple[Field, ...]:
+        """Build the stable identity rows shown for every resource."""
+        fields = [
+            Field(key="id", value=self.entry.summary.coordinate.resource_id),
+            Field(key="kind", value=self.entry.summary.coordinate.kind),
+            self._tag_field(),
         ]
-        return [f for f in fields if isinstance(f, Field)]
+        return tuple(field for field in fields if field is not None)
 
 
 class ResourceDetailOverview(Widget):
@@ -116,6 +84,7 @@ class ResourceDetailOverview(Widget):
 
     detail: reactive[ResourceDetail | None] = reactive(None, recompose=True, init=False)
 
+    @override
     def compose(self) -> ComposeResult:
         """Sections chosen by the selected resource's kind."""
         detail = self.detail
@@ -131,4 +100,4 @@ class ResourceDetailOverview(Widget):
         if summary.name:
             title.append(f" · {summary.coordinate.resource_id}", style("dim"))
 
-        yield Panel(ResourceSummary(resource=detail), title=title, hint="HINT TO DO")
+        yield Panel(ResourceSummary(resource=detail), title=title)

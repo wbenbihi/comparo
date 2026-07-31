@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.containers import Vertical
 from textual.widget import Widget
-from textual.widget import Text
 
 
 class Panel(Vertical):

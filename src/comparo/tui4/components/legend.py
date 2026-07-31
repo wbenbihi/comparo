@@ -1,5 +1,7 @@
 """Legend — one-line glyph legend for any vocabulary."""
 
+from typing import override
+
 from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -16,6 +18,7 @@ class Legend(Widget):
 
     items: reactive[tuple[LegendItem, ...]] = reactive(())
 
+    @override
     def render(self) -> Text:
         """Glyph + label per item; wraps only between items."""
         legend = Text()

@@ -1,22 +1,15 @@
 """Explorer view-models — snapshot facts and presentation builders, no I/O."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from typing import Literal
 
 from rich.text import Text
 from textual.content import Content
 
-from comparo.application import ProjectSourceSummary
-from comparo.application.plan_inspection_identity import ResourceCoordinate
-from comparo.application.project_outline import ProjectOutlineField
-from comparo.application.project_outline import ProjectRelationship
-from comparo.application.project_workspace import ProjectResourceSummary
-from comparo.application.project_workspace import ProjectWorkspaceResult
-from comparo.application.source_inspection import EffectiveResourceWindow
-from comparo.application.source_inspection import SourceWindow
 from comparo.tui4.components.list import Field
-from comparo.tui4.components.table import Column
-from comparo.tui4.components.table import Record
 from comparo.tui4.components.treemenu import MenuNode
 from comparo.tui4.fragments import chip
 from comparo.tui4.fragments import entity_label
@@ -25,22 +18,13 @@ from comparo.tui4.fragments import pill
 from comparo.tui4.theme import kind_glyph
 from comparo.tui4.theme import style
 
-type SectionState = Literal["pending", "loading", "ready", "failed"]
+if TYPE_CHECKING:
+    from comparo.application import ProjectResourceSummary
+    from comparo.application import ProjectWorkspaceResult
+    from comparo.application.plan_inspection_identity import ResourceCoordinate
+
 type EnvironmentRole = Literal["baseline", "candidate"]
 type Locality = Literal["local", "live"]
-
-CATEGORY_TONES: dict[str, str] = {"sensitive": "danger"}
-
-RELATIONSHIP_COLUMNS = (
-    Column("path", "Path"),
-    Column("target", "Target"),
-    Column("origin", "Origin", width=12),
-)
-
-CONSUMER_COLUMNS = (
-    Column("target", "Consumer"),
-    Column("path", "Via"),
-)
 
 PROFILE_KINDS = frozenset(
     {
@@ -62,13 +46,6 @@ SECTIONS: tuple[tuple[str, frozenset[str]], ...] = (
     ("Values", frozenset({"Value"})),
     ("Profiles", PROFILE_KINDS),
 )
-
-KIND_SECTION_TITLES: dict[str, str] = {
-    "Project": "Defaults",
-    "Environment": "Environment",
-    "Request": "Request",
-    "Matrix": "Matrix",
-}
 
 LOCAL_TAGS = frozenset({"local"})
 LIVE_TAGS = frozenset({"live", "production", "prod"})
@@ -132,7 +109,6 @@ class ExplorerCatalog:
     project: ResourceEntry
     sections: tuple[CatalogSection, ...]
     entries: dict[str, ResourceEntry]
-    sources: dict[str, ProjectSourceSummary]
     kinds: tuple[str, ...]
 
 
@@ -216,7 +192,6 @@ def build_catalog(result: ProjectWorkspaceResult) -> ExplorerCatalog | None:
         project=project_entry,
         sections=tuple(sections),
         entries=entries,
-        sources={source.source_id: source for source in result.sources},
         kinds=tuple(kinds),
     )
 
@@ -293,42 +268,16 @@ def legend_items(catalog: ExplorerCatalog) -> tuple[tuple[str, str, str], ...]:
 
 
 @dataclass(frozen=True)
-class Section[T]:
-    """One independently loaded slice of resource data."""
-
-    label: str
-    state: SectionState = "pending"
-    value: T | None = None
-    error_code: str | None = None
-
-
-@dataclass(frozen=True)
 class ResourceDetail:
-    """Everything displayable about one selected resource."""
+    """Snapshot information displayed for one selected resource."""
 
     key: str
     entry: ResourceEntry
-    source: Section[SourceWindow]
-    effective: Section[EffectiveResourceWindow]
 
 
 def initial_detail(entry: ResourceEntry) -> ResourceDetail:
-    """Snapshot data ready, fetched sections pending."""
-    return ResourceDetail(
-        key=entry.key,
-        entry=entry,
-        source=Section("Authored · masked"),
-        effective=Section("Effective"),
-    )
-
-
-def section_subtitle(section: Section) -> str:
-    """Disclosure label plus load state or error code."""
-    if section.state == "failed":
-        return f"{section.label} · {section.error_code}"
-    if section.state != "ready":
-        return f"{section.label} · {section.state}"
-    return section.label
+    """Build the selected resource's immutable detail projection."""
+    return ResourceDetail(key=entry.key, entry=entry)
 
 
 # ------------------------------------------------------- overview fields
@@ -361,166 +310,89 @@ def _targets(
     )
 
 
-def identity_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Identity rows shared by every kind."""
+def _project_fields(entry: ResourceEntry) -> tuple[Field, ...]:
+    """Rows derived from project defaults."""
     summary = entry.summary
-    source = summary.source
-    return (
-        Field("id", Content(summary.coordinate.resource_id)),
-        Field("kind", summary.coordinate.kind),
-        Field("name", Content(summary.name) if summary.name else "—"),
-        Field("tags", Content(", ".join(summary.tags)) if summary.tags else "—"),
-        Field("revision", summary.coordinate.fingerprint[:12]),
-        Field("source", Content(f"{source.source} · L{source.line}")),
-        Field("description", Content(summary.description) if summary.description else "—"),
-    )
-
-
-def _join(ids: tuple[str, ...]) -> Field | None:
-    """Helper for optional list rows."""
-    return None
-
-
-def kind_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Kind-specific rows; empty for kinds with nothing beyond identity."""
-    summary = entry.summary
-    facts = entry.facts
-    kind = summary.coordinate.kind
     rows: list[Field] = []
-    if kind == "Project":
-        baseline = _targets(summary, "Environment")
-        subjects = _targets(summary, "Request")
-        gates = _targets(summary, "GateProfile")
-        roles = _environment_roles(summary)
-        base = [rid for rid, role in roles.items() if role == "baseline"]
-        cands = [rid for rid, role in roles.items() if role == "candidate"]
-        if base:
-            rows.append(Field("baseline", Content(", ".join(base))))
-        if cands:
-            rows.append(Field("candidates", Content(", ".join(cands))))
-        if subjects:
-            rows.append(Field("default subjects", Content(", ".join(subjects))))
-        if gates:
-            rows.append(Field("gate", Content(", ".join(gates))))
-        del baseline
-    elif kind == "Environment":
-        rows.append(Field("role", facts.role or "—"))
-        rows.append(
-            Field(
-                "locality",
-                facts.locality or "—",
-                tone="danger" if facts.locality == "live" else None,
-            )
-        )
-        safety = _targets(summary, "SafetyProfile")
-        if safety:
-            rows.append(Field("safety", Content(", ".join(safety))))
-        variables = _outline_value(summary, "variables")
-        if variables:
-            rows.append(Field("variables", Content(variables)))
-    elif kind == "Request":
-        rows.append(Field("method", facts.method or "—"))
-        endpoint = _outline_value(summary, "endpoint") or _outline_value(summary, "url")
-        if endpoint:
-            rows.append(Field("endpoint", Content(endpoint)))
-        matrices = _targets(summary, "Matrix")
-        if matrices:
-            rows.append(Field("matrices", Content(", ".join(matrices))))
-        schemas = _targets(summary, "Schema")
-        if schemas:
-            rows.append(Field("response schema", Content(", ".join(schemas))))
-        profiles = _targets(summary, PROFILE_KINDS)
-        if profiles:
-            rows.append(Field("profiles", Content(", ".join(profiles))))
-        rows.append(Field("streaming", "yes (tagged)" if facts.streaming else "—"))
-    elif kind == "Matrix":
-        spec = _outline_value(summary, "spec")
-        if spec:
-            rows.append(Field("shape", Content(spec)))
-        used_by = _targets(summary, "Request", inbound=True)
-        if used_by:
-            rows.append(Field("used by", Content(", ".join(used_by))))
+    subjects = _targets(summary, "Request")
+    gates = _targets(summary, "GateProfile")
+    roles = _environment_roles(summary)
+    baseline = [resource_id for resource_id, role in roles.items() if role == "baseline"]
+    candidates = [resource_id for resource_id, role in roles.items() if role == "candidate"]
+    if baseline:
+        rows.append(Field("baseline", Content(", ".join(baseline))))
+    if candidates:
+        rows.append(Field("candidates", Content(", ".join(candidates))))
+    if subjects:
+        rows.append(Field("default subjects", Content(", ".join(subjects))))
+    if gates:
+        rows.append(Field("gate", Content(", ".join(gates))))
     return tuple(rows)
 
 
-def kind_section_title(kind: str) -> str:
-    """Panel title for the kind-specific section."""
-    return KIND_SECTION_TITLES.get(kind, kind)
-
-
-def dependency_records(entry: ResourceEntry) -> tuple[Record[str], ...]:
-    """Outbound dependencies (link and composition)."""
-    if entry.summary.outline is None:
-        return ()
-    return tuple(
-        Record(
-            id=str(index),
-            cells=(
-                Content(".".join(relationship.path) or "(root)"),
-                Content(f"{relationship.target.kind}/{relationship.target.resource_id}"),
-                relationship.origin,
-            ),
-        )
-        for index, relationship in enumerate(entry.summary.outline.relationships)
-        if relationship.origin != "used-by"
-    )
-
-
-def consumer_records(entry: ResourceEntry) -> tuple[Record[str], ...]:
-    """Inbound used-by relationships."""
-    if entry.summary.outline is None:
-        return ()
-    return tuple(
-        Record(
-            id=str(index),
-            cells=(
-                Content(f"{relationship.target.kind}/{relationship.target.resource_id}"),
-                Content(".".join(relationship.path) or "(root)"),
-            ),
-        )
-        for index, relationship in enumerate(entry.summary.outline.relationships)
-        if relationship.origin == "used-by"
-    )
-
-
-def _outline_rows(fields: tuple[ProjectOutlineField, ...]) -> tuple[Field, ...]:
-    """Structural rows, indented by depth, toned by category."""
-    return tuple(
+def _environment_fields(entry: ResourceEntry) -> tuple[Field, ...]:
+    """Rows derived from one environment summary."""
+    summary = entry.summary
+    facts = entry.facts
+    rows = [
+        Field("role", facts.role or "—"),
         Field(
-            key="  " * field.depth + field.label,
-            value=Content(field.value),
-            tone=CATEGORY_TONES.get(field.category),
-        )
-        for field in fields
-    )
+            "locality",
+            facts.locality or "—",
+            tone="danger" if facts.locality == "live" else None,
+        ),
+    ]
+    safety = _targets(summary, "SafetyProfile")
+    if safety:
+        rows.append(Field("safety", Content(", ".join(safety))))
+    variables = _outline_value(summary, "variables")
+    if variables:
+        rows.append(Field("variables", Content(variables)))
+    return tuple(rows)
 
 
-def outline_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Snapshot outline rows."""
-    outline = entry.summary.outline
-    return _outline_rows(outline.fields) if outline else ()
+def _request_fields(entry: ResourceEntry) -> tuple[Field, ...]:
+    """Rows derived from one request summary."""
+    summary = entry.summary
+    facts = entry.facts
+    rows = [Field("method", facts.method or "—")]
+    endpoint = _outline_value(summary, "endpoint") or _outline_value(summary, "url")
+    if endpoint:
+        rows.append(Field("endpoint", Content(endpoint)))
+    for label, target in (
+        ("matrices", "Matrix"),
+        ("response schema", "Schema"),
+        ("profiles", PROFILE_KINDS),
+    ):
+        targets = _targets(summary, target)
+        if targets:
+            rows.append(Field(label, Content(", ".join(targets))))
+    rows.append(Field("streaming", "yes (tagged)" if facts.streaming else "—"))
+    return tuple(rows)
 
 
-def effective_fields(window: EffectiveResourceWindow) -> tuple[Field, ...]:
-    """Effective structural rows."""
-    return _outline_rows(window.fields)
+def _matrix_fields(entry: ResourceEntry) -> tuple[Field, ...]:
+    """Rows derived from one matrix summary."""
+    summary = entry.summary
+    rows: list[Field] = []
+    spec = _outline_value(summary, "spec")
+    if spec:
+        rows.append(Field("shape", Content(spec)))
+    used_by = _targets(summary, "Request", inbound=True)
+    if used_by:
+        rows.append(Field("used by", Content(", ".join(used_by))))
+    return tuple(rows)
 
 
-def effective_subtitle(section: Section[EffectiveResourceWindow]) -> str:
-    """Effective panel subtitle including paging honesty."""
-    if section.state != "ready" or section.value is None:
-        return section_subtitle(section)
-    window = section.value
-    if window.next_field is not None:
-        return f"{section.label} · {len(window.fields)} of {window.total_fields} fields"
-    return f"{section.label} · {window.total_fields} fields"
-
-
-def source_subtitle(section: Section[SourceWindow]) -> str:
-    """Authored panel subtitle including redaction honesty."""
-    if section.state != "ready" or section.value is None:
-        return section_subtitle(section)
-    window = section.value
-    if window.redaction_count:
-        return f"{section.label} · {window.redaction_count} redactions"
-    return section.label
+def kind_fields(entry: ResourceEntry) -> tuple[Field, ...]:
+    """Return kind-specific rows, or no rows for generic resources."""
+    kind = entry.summary.coordinate.kind
+    if kind == "Project":
+        return _project_fields(entry)
+    if kind == "Environment":
+        return _environment_fields(entry)
+    if kind == "Request":
+        return _request_fields(entry)
+    if kind == "Matrix":
+        return _matrix_fields(entry)
+    return ()

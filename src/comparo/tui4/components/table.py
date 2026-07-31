@@ -1,6 +1,7 @@
 """Table — semantic record table used across workspaces."""
 
 from dataclasses import dataclass
+from typing import override
 
 from textual.content import Content
 from textual.message import Message
@@ -39,12 +40,15 @@ class Table[T: str](DataTable[Cell]):
         """Cursor moved onto a row."""
 
         def __init__(self, table: "Table[R]", row: R) -> None:
+            """Initialize the message with its table and row identity."""
             self.table = table
             self.row = row
             super().__init__()
 
         @property
+        @override
         def control(self) -> "Table[R]":
+            """Return the table that emitted this message."""
             return self.table
 
     class RowSelected[R: str](RowHighlighted[R]):
@@ -58,24 +62,29 @@ class Table[T: str](DataTable[Cell]):
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
+        """Initialize a table from immutable column and row models."""
         super().__init__(id=id, classes=classes)
         self.cursor_type = "row"
         self.zebra_stripes = True
         self._columns = columns
         self._by_key: dict[str, Record[T]] = {}
-        self.set_reactive(Table.records, records)
+        self.records = records
 
+    @override
     def on_mount(self) -> None:
+        """Create the fixed columns and populate the initial rows."""
         for column in self._columns:
             self.add_column(column.label, width=column.width, key=column.id)
         self._rebuild()
 
     def watch_records(self) -> None:
+        """Rebuild mounted rows when the record projection changes."""
         if self.is_mounted:
             self._rebuild()
 
     @property
     def cursor_row_id(self) -> T | None:
+        """Return the stable identity under the cursor, when available."""
         if 0 <= self.cursor_row < len(self.records):
             return self.records[self.cursor_row].id
         return None
@@ -91,12 +100,14 @@ class Table[T: str](DataTable[Cell]):
             self.move_cursor(row=ids.index(current))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Translate Textual's row key into the semantic row identity."""
         event.stop()
         record = self._by_key.get(event.row_key.value or "")
         if record is not None:
             self.post_message(self.RowHighlighted(self, record.id))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Translate a committed Textual row into a semantic selection."""
         event.stop()
         record = self._by_key.get(event.row_key.value or "")
         if record is not None:

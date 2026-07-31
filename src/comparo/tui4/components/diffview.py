@@ -3,22 +3,23 @@
 Presentation only: never a Comparo verdict. Markup is never parsed.
 """
 
+from collections.abc import Iterable
 from typing import ClassVar
-from typing import Iterable
 from typing import Literal
+from typing import override
 
 from rich.color import ColorType
 from rich.segment import Segment
 from rich.style import Style
 from rich.syntax import Syntax
 from rich.text import Text
-from textual.binding import Binding
 from textual.binding import BindingType
 from textual.geometry import Size
 from textual.reactive import reactive
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
 
+from comparo.tui4.bindings import diff_view_bindings
 from comparo.tui4.models.diff import DiffDocument
 from comparo.tui4.models.diff import VisibleEntry
 from comparo.tui4.models.diff import project_visible
@@ -46,12 +47,7 @@ class DiffView(ScrollView, can_focus=True):
         "diffview--cursor",
     }
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter,space", "toggle_fold", "Fold"),
-        Binding("v", "toggle_view", "Unified/split"),
-    ]
+    BINDINGS: ClassVar[list[BindingType]] = diff_view_bindings()
 
     document: reactive[DiffDocument | None] = reactive(None, init=False)
     view_mode: reactive[Literal["unified", "split"]] = reactive("unified", init=False)
@@ -64,7 +60,7 @@ class DiffView(ScrollView, can_focus=True):
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
-        """Init the view."""
+        """Initialize the viewer with an optional immutable document."""
         super().__init__(id=id, classes=classes)
         self._folds: frozenset[int] = frozenset()
         self._entries: tuple[VisibleEntry, ...] = ()
@@ -75,6 +71,7 @@ class DiffView(ScrollView, can_focus=True):
 
     # ------------------------------------------------------------- document
 
+    @override
     def on_mount(self) -> None:
         """First projection, with real geometry."""
         self._ingest()
@@ -171,6 +168,7 @@ class DiffView(ScrollView, can_focus=True):
         """Switch unified/split."""
         self.view_mode = "split" if self.view_mode == "unified" else "unified"
 
+    @override
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Hide the split toggle for one-sided documents."""
         if action == "toggle_view":
@@ -209,6 +207,7 @@ class DiffView(ScrollView, can_focus=True):
             )
         return merged
 
+    @override
     def render_line(self, y: int) -> Strip:
         """Render one visible line."""
         index = y + self.scroll_offset.y
@@ -229,8 +228,8 @@ class DiffView(ScrollView, can_focus=True):
         row = document.rows[row_index]
         base = self._row_base(row.kind, index == self.cursor and self.has_focus)
         if document.sided and self.view_mode == "split":
-            return self._render_split(row_index, width, base, fold_char, hidden)
-        return self._render_unified(row_index, width, base, fold_char, hidden)
+            return self._render_split(document, row_index, width, base, fold_char, hidden)
+        return self._render_unified(document, row_index, width, base, fold_char, hidden)
 
     def _gutter(self) -> int:
         """Line-number column width."""
@@ -285,10 +284,9 @@ class DiffView(ScrollView, can_focus=True):
         """Render styled text to segments."""
         return list(text.render(self.app.console, end=""))
 
-    def _content_text(self, row_index: int) -> Text:
+    def _content_text(self, document: DiffDocument, row_index: int) -> Text:
         """The emphasized side of one row for single-column rendering."""
-        assert self.document is not None
-        row = self.document.rows[row_index]
+        row = document.rows[row_index]
         if row.kind == "remove":
             return self._emphasize(
                 self._side_text(self._old_lines, row.old_lineno, row.old_text),
@@ -302,28 +300,38 @@ class DiffView(ScrollView, can_focus=True):
         )
 
     def _render_unified(
-        self, row_index: int, width: int, base: Style, fold_char: str, hidden: int
+        self,
+        document: DiffDocument,
+        row_index: int,
+        width: int,
+        base: Style,
+        fold_char: str,
+        hidden: int,
     ) -> Strip:
         """Single-column row (explorer, and unified diff)."""
-        assert self.document is not None
-        row = self.document.rows[row_index]
+        row = document.rows[row_index]
         segments: list[Segment] = []
-        if self.document.sided:
+        if document.sided:
             segments += self._lineno(row.old_lineno)
         segments += self._lineno(row.new_lineno if row.kind != "remove" else None)
-        if self.document.sided:
+        if document.sided:
             segments += self._marker(_UNIFIED_MARKERS[row.kind], row.kind)
         segments += self._fold_cell(fold_char)
-        segments += self._segments(self._content_text(row_index))
+        segments += self._segments(self._content_text(document, row_index))
         segments += self._badge(hidden)
         return Strip(self._merge(segments, base)).adjust_cell_length(width, base)
 
     def _render_split(
-        self, row_index: int, width: int, base: Style, fold_char: str, hidden: int
+        self,
+        document: DiffDocument,
+        row_index: int,
+        width: int,
+        base: Style,
+        fold_char: str,
+        hidden: int,
     ) -> Strip:
         """Two half-width columns with a divider."""
-        assert self.document is not None
-        row = self.document.rows[row_index]
+        row = document.rows[row_index]
         half = max(12, (width - 1) // 2)
         left_marker = "-" if row.kind in ("remove", "change") else " "
         right_marker = "+" if row.kind in ("add", "change") else " "

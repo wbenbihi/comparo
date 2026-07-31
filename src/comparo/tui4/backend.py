@@ -1,27 +1,27 @@
-"""TuiBackend — the only tui4 module that talks to comparo.application."""
+"""Process-scoped owner of effectful Comparo application services."""
 
 from decimal import Decimal
 from pathlib import Path
 
+from comparo.application import CompareCloseResult
+from comparo.application import ComparePreparationHandle
 from comparo.application import CompareService
 from comparo.application import EffectiveResourceInspectionRequest
+from comparo.application import EffectiveResourceWindow
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ProjectWorkspaceResult
 from comparo.application import RunService
 from comparo.application import SourceInspectionLimits
 from comparo.application import SourceInspectionRequest
 from comparo.application import SourceViewMode
+from comparo.application import SourceWindow
 from comparo.application import initialize_project_artifact_root
 from comparo.application import inspect_effective_resource
 from comparo.application import inspect_project_source
 from comparo.application import inspect_project_workspace
 from comparo.application import persisted_production_execution_defaults_v1
 from comparo.application import resolve_project_root
-from comparo.application.compare import ComparePreparationHandle
-from comparo.application.compare import CompareCloseResult
 from comparo.application.plan_inspection_identity import ResourceCoordinate
-from comparo.application.source_inspection import EffectiveResourceWindow
-from comparo.application.source_inspection import SourceWindow
 from comparo.core.domain.primitives import Duration
 
 SOURCE_LIMITS = SourceInspectionLimits(
@@ -40,14 +40,15 @@ MAXIMUM_REGISTERED_RUNS = 8
 class TuiBackend:
     """Process-scoped owner of application services and launch choices.
 
-    One instance per app. Workspaces receive it by injection and call its
-    methods; they never import comparo.application themselves. Synchronous
-    methods block (filesystem/compile) and belong in thread workers; the
-    async surface belongs on the event loop.
+    One instance belongs to each app. Workspaces access its narrow methods
+    through their base class; immutable application DTOs are adapted by
+    presentation models. Synchronous filesystem and compilation methods run
+    in thread workers, while asynchronous lifecycle methods stay on the event
+    loop.
     """
 
     def __init__(self, config: Path) -> None:
-        """Init with the user-selected comparo.yaml or project directory."""
+        """Initialize services for the selected configuration or project directory."""
         self._workspace_request = ProjectWorkspaceRequest(config=config.resolve())
         self.compare = CompareService(
             maximum_outstanding=MAXIMUM_OUTSTANDING_PREPARATIONS,

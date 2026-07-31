@@ -1,3 +1,5 @@
+"""Top-level workspace registry."""
+
 from comparo.tui4.types import ComparoScreen
 
 from .base import Workspace
@@ -9,8 +11,4 @@ WORKSPACES: dict[ComparoScreen, type[Workspace]] = {
     ComparoScreen.DEBUG: DebugWorkspace,
 }
 
-__all__ = [
-    "WORKSPACES",
-    "DebugWorkspace",
-    "ExplorerWorkspace",
-]
+__all__ = ["WORKSPACES"]

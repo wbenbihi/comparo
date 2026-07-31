@@ -1,33 +1,34 @@
 """FilterInput — bordered filter box with key hint and semantic messages."""
 
 from typing import ClassVar
+from typing import override
 
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.binding import BindingType
 from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Input
 from textual.widgets import Static
 
+from comparo.tui4.bindings import filter_bindings
+
 
 class FilterInput(Horizontal):
     """Filter box: live Changed, Submitted on enter, two-stage escape."""
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "release", "Clear / close", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingType]] = filter_bindings()
 
     class Changed(Message):
         """Filter text edited."""
 
         def __init__(self, filter_input: "FilterInput", value: str) -> None:
-            """Init Message."""
+            """Initialize a filter change emitted by the given component."""
             self.filter_input = filter_input
             self.value = value
             super().__init__()
 
         @property
+        @override
         def control(self) -> "FilterInput":
             """Originating widget, for @on selectors."""
             return self.filter_input
@@ -39,11 +40,12 @@ class FilterInput(Horizontal):
         """Filter closed (escape on empty)."""
 
         def __init__(self, filter_input: "FilterInput") -> None:
-            """Init Message."""
+            """Initialize a dismissal emitted by the given component."""
             self.filter_input = filter_input
             super().__init__()
 
         @property
+        @override
         def control(self) -> "FilterInput":
             """Originating widget, for @on selectors."""
             return self.filter_input
@@ -57,13 +59,14 @@ class FilterInput(Horizontal):
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
-        """Init the filter box."""
+        """Initialize the filter box and its presentation labels."""
         super().__init__(id=id, classes=classes)
         self._placeholder = placeholder
         self._key_hint = key_hint
         if title:
             self.border_title = title
 
+    @override
     def compose(self) -> ComposeResult:
         """Key hint chip, then the borderless field."""
         yield Static(self._key_hint, classes="filter-key")
@@ -74,6 +77,7 @@ class FilterInput(Horizontal):
         """Current filter text."""
         return self.query_one(Input).value
 
+    @override
     def focus(self, scroll_visible: bool = True) -> "FilterInput":
         """Forward focus to the inner field."""
         self.query_one(Input).focus(scroll_visible)
