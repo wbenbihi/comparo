@@ -1,0 +1,278 @@
+Screen { 
+    background: $background; 
+    color: $foreground; 
+}
+
+AppHeader {
+    background: $background;
+    height: 3;
+    layout: grid;
+    grid-size: 3;
+    grid-columns: auto 1fr auto;
+    grid-gutter: 1 2;
+    padding: 0 1;
+}
+
+AppHeader > * {
+    height: 100%;
+    content-align-vertical: middle;
+}
+
+ComparoLogo {
+    color: $accent; 
+    text-style: bold; 
+    width: auto; 
+}
+
+/* Navigation */
+NavBar {
+    height: 3;
+    background: $background;
+    align-vertical: middle;
+}
+NavTab {
+    width: auto;
+    padding: 0 1;
+    margin-right: 1;
+}
+NavTab.active{
+    text-style: bold;
+    color: $panel;
+    background: $accent;
+}
+NavTab:hover {
+    color: $accent;
+    text-style: bold;
+}
+NavHelper {
+    height: 3;
+    width: auto;
+    background: $background;
+    align-vertical: middle;
+}
+NavHelper > Static { 
+    width: auto;
+    height: auto;
+    padding: 1;
+}
+
+#main {
+    background: $background;
+    width: 100%;
+    height: 1fr;
+}
+
+.Workspace {
+    background: $background;
+}
+
+AppMain {
+    background: $background;
+    height: 1fr
+}
+
+Footer {
+    background: $background;
+}
+
+/* Panels */
+
+Panel { height: auto; }
+.line-block { height: auto; }
+#project-panel, #inspector-panel { height: 1fr; }
+#scope-left > Panel { height: 1fr; }
+.analyse-list { height: 1fr; }
+.analyse-inspect { height: 1fr; }
+.analyse-inspect .line-block { height: 1fr; }
+#reports-archive, #reports-preview { height: 1fr; }
+#settings-nav, #settings-detail { height: 1fr; }
+.right-col > Panel { height: auto; }
+.dive-panel { height: 1fr; }
+Panel {
+    border: round $comparo-border;
+    border-title-color: $comparo-muted;
+    border-subtitle-color: $comparo-muted;
+    padding: 0 1;
+}
+Panel:focus-within {
+    border: round $primary;
+    border-title-color: $foreground;
+    border-title-style: bold;
+}
+Panel.tone-danger { border: round $error; }
+Panel.tone-warning { border: round $warning; }
+
+Panel.overflow {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+
+/* Menu */
+Menu {
+    border: none;
+    background: $background;
+}
+Menu:focus-within {
+    border: none;
+    background: $background;
+}
+
+
+/* TreeMenu */
+TreeMenu {
+    height: 1fr;
+    background: transparent;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+    scrollbar-gutter: stable;
+}
+
+/* indent guides — chrome-colored, like panel borders */
+TreeMenu > .tree--guides {
+    color: $comparo-border;
+}
+TreeMenu > .tree--guides-hover {
+    color: $comparo-muted;
+}
+TreeMenu > .tree--guides-selected {
+    color: $accent;
+}
+
+/* Debug workspace */
+#debug-layout {
+    width: 100%;
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 1fr 5fr;
+}
+/* showcase exhibits live inside a VerticalScroll (auto context) — fixed heights */
+#debug-diff, #debug-source, #debug-source-html { height: 16; }
+
+/* KeyValue List */
+KeyValueList {
+    layout: grid;
+    grid-size: 2;
+    grid-columns: auto 1fr;
+    grid-gutter: 0 2;
+    height: auto;
+}
+KeyValueList > .kv-sep {
+    column-span: 2;
+    height: 1;
+    hatch: horizontal $comparo-border;
+}
+KeyValueList .kv-key { 
+    width: auto;
+    color: $comparo-muted;
+}
+KeyValueList .kv-value { 
+    width: 1fr; 
+}
+
+/* Typography */
+SectionTitle {
+    text-style: bold;
+    color: $foreground;
+    width: 100%;
+    margin: 1 0 0 0;
+}
+Caption  { color: $text-muted; }
+Hint     { color: $text-disabled; text-style: italic; }
+
+/* DiffView */
+DiffView {
+    height: 1fr;
+    background: $background;
+    scrollbar-size-vertical: 1;
+    scrollbar-gutter: stable;
+}
+/* row backgrounds — vibrant tints */
+DiffView > .diffview--add      { background: $success 30%; }
+DiffView > .diffview--remove   { background: $error 30%; }
+DiffView > .diffview--change   { background: $warning 20%; }
+/* intra-line emphasis — strong, side-specific */
+DiffView > .diffview--emphasis-add    { background: $success 60%; text-style: bold; }
+DiffView > .diffview--emphasis-remove { background: $error 60%; text-style: bold; }
+/* marker column */
+DiffView > .diffview--marker-add    { color: $success; text-style: bold; }  
+DiffView > .diffview--marker-remove { color: $error; text-style: bold; }
+DiffView > .diffview--marker-change { color: $warning; text-style: bold; }
+/* chrome */
+DiffView > .diffview--lineno { color: $text-disabled; }
+DiffView > .diffview--fold   { color: $accent; text-style: bold; }
+DiffView > .diffview--cursor { background: $accent; color: auto; text-style: bold; }
+
+/* Separator */
+Separator {
+    height: 1;
+    width: 100%;
+    color: $comparo-border;
+    margin: 1 0;
+}
+Separator.tight { margin: 0; }
+Separator.accent { color: $accent; }
+Separator.error { color: $error; }
+Separator.success { color: $success; }
+Separator.warning { color: $warning; }
+
+/* FilterInput */
+FilterInput {
+    height: auto;
+    border: round $comparo-border;
+    border-title-color: $comparo-muted;
+}
+FilterInput:focus-within {
+    border: round $primary;
+    border-title-color: $foreground;
+    border-title-style: bold;
+}
+FilterInput > .filter-key {
+    width: auto;
+    padding: 0 1;
+    color: $accent;
+    text-style: bold;
+}
+FilterInput > Input {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0 1 0 0;
+    background: transparent;
+}
+
+/* Legend (generic component) */
+Legend { height: auto; color: $comparo-muted; }
+
+/* Explorer workspace */
+#explorer-layout {
+    width: 100%;
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 1fr 5fr;
+}
+#explorer-tree-panel { height: 100%; }
+#explorer-tree { height: 1fr; }
+#explorer-legend { padding: 0 1; border-top: solid $comparo-border; margin-top: 1; }
+#explorer-detail { height: 100%; }
+#explorer-detail > Panel { height: 1fr; margin-bottom: 0; }
+#explorer-detail KeyValueList { height: auto; }
+#explorer-detail ResourceSummary { height: auto; }
+.overview-table { height: 10; }
+#overview-source { height: 18; }
+#explorer-overview, #explorer-structure, #explorer-effective { height: auto; }
+#explorer-relationships, #explorer-effective-relationships { height: 10; }
+
+/* CSS Helpers */
+.width-auto {
+    width: auto;
+}
+.height-auto {
+    height: auto;
+}
+.width-full {
+    width: 100%;
+}
+.height-full {
+    height: 100%;
+}
