@@ -62,6 +62,7 @@ _REVIEWED_SECURITY_MODULES = frozenset(
 _REVIEWED_PACKAGE_ASSETS = frozenset(
     {
         "src/comparo/tui/components/comparo.tcss",
+        "src/comparo/tui4/styles/main.tcss",
     }
 )
 
