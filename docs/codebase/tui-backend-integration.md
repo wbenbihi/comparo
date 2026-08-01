@@ -264,7 +264,23 @@ fingerprint; resolve them against the current workspace snapshot before navigati
 
 ### 6.4 Authored source view
 
-Use `SourceInspectionRequest`:
+For one selected resource, prefer `AuthoredResourceInspectionRequest`. It pins the exact resource
+coordinate and returns only that YAML document through `AuthoredResourceWindow`:
+
+| Field | Rule |
+| --- | --- |
+| `workspace` | Same request used for the catalog |
+| `coordinate` | Exact `ProjectResourceSummary.coordinate`, including fingerprint |
+| `limits` | Explicit source bytes, output bytes, and line count |
+| `start_resource_line` | One-based paging cursor relative to the resource document |
+| `mode` | `MASKED` by default |
+| `expected_sha256` | Set from the owning `ProjectSourceSummary` to reject reload races |
+
+The result includes the resource's absolute source span, resource-relative paging state, content,
+redaction count, and disclosure marker. It prevents an Explorer detail panel from accidentally
+showing adjacent YAML documents in the same source.
+
+Use `SourceInspectionRequest` only for an intentional whole-source browser:
 
 | Field | Rule |
 | --- | --- |
