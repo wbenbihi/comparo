@@ -85,7 +85,8 @@ another. In particular, Explorer must not resolve a Request without an execution
 The overview header is intentionally compact. It renders the plain description followed by one
 muted provenance line: abbreviated resource revision, logical source and start line, then authored
 tags. Stable identity remains in `ResourceDetail` and the panel title instead of consuming a
-separate key/value block.
+separate key/value block. The active representation is the panel's secondary border hint, keeping
+`overview`, `authored`, `effective`, or `resolved` out of the identity title.
 
 ## Kind widgets
 

@@ -25,6 +25,7 @@ from comparo.tui4.components.explorernavigator import ExplorerNavigator
 from comparo.tui4.components.explorernavigator import ExplorerResourceTree
 from comparo.tui4.components.legend import Legend
 from comparo.tui4.components.list import KeyValueList
+from comparo.tui4.components.panel import Panel
 from comparo.tui4.components.resourcedetail import ResourceDetailOverview
 from comparo.tui4.components.resourcedetail import ResourceSummary
 from comparo.tui4.components.resources import RESOURCE_WIDGETS
@@ -257,6 +258,9 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
             f"{request.summary.source.source} · line {request.summary.source.line} | {tags}"
         )
         assert not any(isinstance(child, KeyValueList) for child in summary.children)
+        panel = app.query_one("#resource-detail-panel", Panel)
+        assert panel.border_subtitle == ResourceRepresentation.OVERVIEW.value
+        assert ResourceRepresentation.OVERVIEW.value not in str(panel.border_title)
 
         app.query_one("#resource-action-authored", Button).focus()
         await pilot.press("2")
@@ -273,6 +277,9 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
         assert authored.representation is ResourceRepresentation.AUTHORED
         assert authored.authored.value.contains_unmasked_values is False
         assert authored.authored.value.coordinate == request.summary.coordinate
+        panel = app.query_one("#resource-detail-panel", Panel)
+        assert panel.border_subtitle == ResourceRepresentation.AUTHORED.value
+        assert ResourceRepresentation.AUTHORED.value not in str(panel.border_title)
 
         await pilot.click("#resource-action-effective")
         await _wait_until(

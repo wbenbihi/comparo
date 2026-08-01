@@ -243,6 +243,7 @@ class ResourceDetailOverview(Widget):
             Separator(classes="tight"),
             self._representation(detail),
             title=self._title(detail),
+            hint=detail.representation.value,
             id="resource-detail-panel",
         )
 
@@ -258,14 +259,13 @@ class ResourceDetailOverview(Widget):
 
     @staticmethod
     def _title(detail: ResourceDetail) -> Text:
-        """Build the stable glyph/name/revision title."""
+        """Build the stable resource identity title."""
         summary = detail.entry.summary
         character, token = kind_glyph(summary.coordinate.kind)
         title = glyph(character, token)
         title.append(summary.name or summary.coordinate.resource_id)
         if summary.name:
             title.append(f" · {summary.coordinate.resource_id}", style("dim"))
-        title.append(f" · {detail.representation.value}", style("dim"))
         return title
 
     def action_resource_action(self, action_id: str) -> None:
