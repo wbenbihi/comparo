@@ -262,6 +262,7 @@ ExplorerNavigator { height: 1fr; }
 #explorer-detail > Panel { height: 1fr; margin-bottom: 0; }
 #explorer-detail KeyValueList { height: auto; }
 #explorer-detail ResourceSummary { height: auto; }
+.resource-description, .resource-provenance { height: auto; }
 .resource-kind-details { height: auto; }
 .resource-representation { height: 1fr; }
 .resource-source-view { height: 1fr; }

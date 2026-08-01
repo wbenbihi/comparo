@@ -82,6 +82,11 @@ resource message.
 Authored, effective, and resolved are separate products. A widget must never synthesize one from
 another. In particular, Explorer must not resolve a Request without an execution context.
 
+The overview header is intentionally compact. It renders the plain description followed by one
+muted provenance line: abbreviated resource revision, logical source and start line, then authored
+tags. Stable identity remains in `ResourceDetail` and the panel title instead of consuming a
+separate key/value block.
+
 ## Kind widgets
 
 `BaseKindResourceDetails` supplies immutable `resource` and `entry` accessors plus the shared

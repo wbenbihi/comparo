@@ -10,6 +10,7 @@ import pytest
 from rich.text import Text
 from textual.pilot import Pilot
 from textual.widgets import Button
+from textual.widgets import Static
 
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import inspect_project_workspace
@@ -23,11 +24,14 @@ from comparo.tui4.components.badge import badge_text
 from comparo.tui4.components.explorernavigator import ExplorerNavigator
 from comparo.tui4.components.explorernavigator import ExplorerResourceTree
 from comparo.tui4.components.legend import Legend
+from comparo.tui4.components.list import KeyValueList
 from comparo.tui4.components.resourcedetail import ResourceDetailOverview
+from comparo.tui4.components.resourcedetail import ResourceSummary
 from comparo.tui4.components.resources import RESOURCE_WIDGETS
 from comparo.tui4.components.resources import resource_widget
 from comparo.tui4.components.resources.matrix import MatrixResourceDetails
 from comparo.tui4.components.resources.standard import RequestResourceDetails
+from comparo.tui4.components.typography import Caption
 from comparo.tui4.models.explorer import ExplorerCatalog
 from comparo.tui4.models.explorer import build_catalog
 from comparo.tui4.models.explorer import catalog_nodes
@@ -242,6 +246,17 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
             pilot,
             lambda: len(app.query("#resource-action-authored")) == 1,
         )
+
+        summary = app.query_one(ResourceSummary)
+        description = summary.query_one(".resource-description", Static)
+        provenance = summary.query_one(".resource-provenance", Caption)
+        tags = " ".join(f"#{tag}" for tag in request.summary.tags) or "untagged"
+        assert str(description.content) == request.summary.description
+        assert str(provenance.content) == (
+            f"rev {request.summary.coordinate.fingerprint[:12]}… | "
+            f"{request.summary.source.source} · line {request.summary.source.line} | {tags}"
+        )
+        assert not any(isinstance(child, KeyValueList) for child in summary.children)
 
         app.query_one("#resource-action-authored", Button).focus()
         await pilot.press("2")

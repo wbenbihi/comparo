@@ -10,17 +10,13 @@ from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Vertical
 from textual.containers import VerticalScroll
-from textual.content import Content
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
 
 from comparo.tui4.bindings import resource_detail_bindings
-from comparo.tui4.components.badge import BadgeTone
-from comparo.tui4.components.badge import badge_text
 from comparo.tui4.components.diffview import DiffView
-from comparo.tui4.components.list import Field
 from comparo.tui4.components.list import KeyValueList
 from comparo.tui4.components.panel import Panel
 from comparo.tui4.components.resourceactions import ResourceActionBar
@@ -70,36 +66,21 @@ class ResourceSummary(Vertical):
     @override
     def compose(self) -> ComposeResult:
         """Compose shared metadata and the kind-owned details."""
-        yield Static(self.entry.summary.description or "No description.")
-        yield Separator(label="Identity", align="left")
-        yield KeyValueList(*self._fields(), separators=False)
+        yield Static(
+            self.entry.summary.description or "No description.",
+            classes="resource-description",
+        )
+        yield Caption(self._provenance(), classes="resource-provenance")
         yield Separator(label="Resource", align="left")
         yield resource_widget(self._resource)
 
-    def _tag_field(self) -> Field | None:
-        """Build the optional Rich tag row."""
-        if not self.entry.summary.tags:
-            return None
-        tags = Text(" ").join(
-            badge_text(tag, tone=BadgeTone.NEUTRAL) for tag in self.entry.summary.tags
-        )
-        return Field(key="tags", value=Content.from_rich_text(tags))
-
-    def _fields(self) -> tuple[Field, ...]:
-        """Build stable identity and source rows shared by every kind."""
-        coordinate = self.entry.summary.coordinate
-        fields = [
-            Field(key="id", value=coordinate.resource_id),
-            Field(key="kind", value=coordinate.kind),
-            Field(key="namespace", value=coordinate.namespace),
-            Field(
-                key="source",
-                value=f"{self.entry.source.source_id} · document "
-                f"{self.entry.summary.source.document}:{self.entry.summary.source.line}",
-            ),
-            self._tag_field(),
-        ]
-        return tuple(field for field in fields if field is not None)
+    def _provenance(self) -> str:
+        """Build one compact, value-safe revision, source, and tag line."""
+        summary = self.entry.summary
+        revision = f"{summary.coordinate.fingerprint[:12]}…"
+        source = summary.source
+        tags = " ".join(f"#{tag}" for tag in summary.tags) or "untagged"
+        return f"rev {revision} | {source.source} · line {source.line} | {tags}"
 
 
 class OverviewRepresentation(VerticalScroll):
