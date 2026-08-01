@@ -24,14 +24,13 @@ TEAL = "#4DD0C9"
 AMBER = "#E8B44C"
 SLATE = "#8299B3"
 STEEL = "#9FB6D4"
-PILL_GREEN_BG = "#11291B"
-PILL_RED_BG = "#2B0F16"
-PILL_AMBER_BG = "#2B2109"
-PILL_TEAL_BG = "#0D2B29"
-PILL_SLATE_BG = "#1C2434"
-
-PILL_LEFT = "◖"
-PILL_RIGHT = "◗"
+BADGE_GREEN_BG = "#11291B"
+BADGE_RED_BG = "#2B0F16"
+BADGE_AMBER_BG = "#2B2109"
+BADGE_TEAL_BG = "#0D2B29"
+BADGE_SLATE_BG = "#1C2434"
+BADGE_BASELINE_BG = "#0E2A31"
+BADGE_CANDIDATE_BG = "#241B33"
 
 BASELINE = "#4FD6E3"
 CANDIDATE = "#C89BF5"
@@ -80,13 +79,22 @@ _STYLES: dict[str, str] = {
     "warn": WARN,
     "err": ERR,
     "error-op": ERROR_OP,
-    "pill.matrix": f"{WARN} on {PILL_AMBER_BG}",
-    "pill.local": f"{OK} on {PILL_GREEN_BG}",
-    "pill.live": f"{ERR} on {PILL_RED_BG}",
-    "pill.stream": f"{TEAL} on {PILL_TEAL_BG}",
-    "pill.default": f"{LABEL} on {PILL_SLATE_BG}",
-    "pill.baseline": f"{BASELINE} on {'#0E2A31'}",
-    "pill.candidate": f"{CANDIDATE} on {'#241B33'}",
+    "badge.solid.neutral": f"bold {LABEL} on {BADGE_SLATE_BG}",
+    "badge.solid.info": f"bold {TEAL} on {BADGE_TEAL_BG}",
+    "badge.solid.success": f"bold {OK} on {BADGE_GREEN_BG}",
+    "badge.solid.warning": f"bold {WARN} on {BADGE_AMBER_BG}",
+    "badge.solid.danger": f"bold {ERR} on {BADGE_RED_BG}",
+    "badge.solid.baseline": f"bold {BASELINE} on {BADGE_BASELINE_BG}",
+    "badge.solid.candidate": f"bold {CANDIDATE} on {BADGE_CANDIDATE_BG}",
+    "badge.quiet.frame": DIM,
+    "badge.quiet.neutral": LABEL,
+    "badge.quiet.info": TEAL,
+    "badge.quiet.success": OK,
+    "badge.quiet.warning": WARN,
+    "badge.quiet.danger": ERR,
+    "badge.quiet.baseline": BASELINE,
+    "badge.quiet.candidate": CANDIDATE,
+    "badge.status.label": LABEL,
     "chip.active": f"bold {'#08222B'} on {BASELINE}",
     "kind.project": CANDIDATE,
     "kind.environment": OK,

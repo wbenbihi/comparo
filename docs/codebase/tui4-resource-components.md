@@ -45,8 +45,16 @@ cursor preservation, expansion, and generic highlighted/selected messages. It kn
 Comparo resources.
 
 `ExplorerResourceTree(TreeMenu[str])` owns the conversion from an `ExplorerCatalog` plus filter
-text to menu nodes. `ExplorerNavigator` owns the filter, resource tree, legend, focus transitions,
-and conversion from a generic menu message to `ResourceHighlighted(entry)`.
+text to menu nodes and the Explorer-specific row grammar. `TreeMenu.format_node(node)` is the
+single formatting hook called for every branch and leaf during a rebuild; subclasses customize
+rows there without duplicating tree construction, expansion, cursor, or mouse mechanics.
+Explorer rows deliberately display the resource name but not its internal ID; the ID remains in
+the immutable node key for stable selection and in the resource detail data for inspection.
+`ExplorerNavigator` owns the filter, resource tree, optional legend, focus transitions, and
+conversion from a generic menu message to `ResourceHighlighted(entry)`. The Explorer workspace's
+default `l` binding delegates to the navigator, which hides the legend completely so the tree
+reclaims the available rows. The key declaration remains centralized in `bindings.py` for future
+remapping.
 
 `ExplorerWorkspace` must not:
 
@@ -126,6 +134,9 @@ attachments, filters, includes/excludes, and invocation overrides affect the rea
 
 - Colors, glyphs, and semantic tones come from `theme.py` and TCSS; kind widgets do not embed
   palette values.
+- `BadgeSpec` is the shared badge contract. `badge_text()` embeds it in Rich tree/table text and
+  the native `Badge` widget uses the same renderer in layouts. Its `solid`, `quiet`, and `status`
+  emphasis variants express role, metadata, and live state without faux rounded Unicode caps.
 - Buttons are native Textual `Button` components and expose the same semantic action as their key.
 - Widgets emit Textual messages rather than callback closures or workspace imports.
 - Authored content is masked by default. Failures cross the boundary only as closed, value-free

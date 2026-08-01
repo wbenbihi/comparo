@@ -270,3 +270,7 @@ class ExplorerWorkspace(Workspace):
     def action_focus_filter(self) -> None:
         """Focus the filter box."""
         self.query_one(ExplorerNavigator).focus_filter()
+
+    def action_toggle_legend(self) -> None:
+        """Delegate optional legend visibility to the navigator component."""
+        self.query_one(ExplorerNavigator).toggle_legend()

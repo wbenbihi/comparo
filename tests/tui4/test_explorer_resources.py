@@ -7,6 +7,7 @@ from functools import wraps
 from pathlib import Path
 
 import pytest
+from rich.text import Text
 from textual.pilot import Pilot
 from textual.widgets import Button
 
@@ -14,8 +15,14 @@ from comparo.application import ProjectWorkspaceRequest
 from comparo.application import inspect_project_workspace
 from comparo.core.domain.identity import ResourceKind
 from comparo.tui4.app import ComparoApp
+from comparo.tui4.components.badge import Badge
+from comparo.tui4.components.badge import BadgeEmphasis
+from comparo.tui4.components.badge import BadgeSpec
+from comparo.tui4.components.badge import BadgeTone
+from comparo.tui4.components.badge import badge_text
 from comparo.tui4.components.explorernavigator import ExplorerNavigator
 from comparo.tui4.components.explorernavigator import ExplorerResourceTree
+from comparo.tui4.components.legend import Legend
 from comparo.tui4.components.resourcedetail import ResourceDetailOverview
 from comparo.tui4.components.resources import RESOURCE_WIDGETS
 from comparo.tui4.components.resources import resource_widget
@@ -23,6 +30,7 @@ from comparo.tui4.components.resources.matrix import MatrixResourceDetails
 from comparo.tui4.components.resources.standard import RequestResourceDetails
 from comparo.tui4.models.explorer import ExplorerCatalog
 from comparo.tui4.models.explorer import build_catalog
+from comparo.tui4.models.explorer import catalog_nodes
 from comparo.tui4.models.resource import InspectionPhase
 from comparo.tui4.models.resource import ResourceActionId
 from comparo.tui4.models.resource import ResourceInspection
@@ -62,6 +70,59 @@ def _catalog() -> ExplorerCatalog:
     catalog = build_catalog(result)
     assert catalog is not None
     return catalog
+
+
+def _legend_is_visible(legend: Legend) -> bool:
+    """Read reactive visibility without retaining a stale narrowed test value."""
+    return legend.display
+
+
+def test_badges_share_one_terminal_native_contract_for_inline_and_widget_use() -> None:
+    solid = badge_text("live", tone=BadgeTone.DANGER, emphasis=BadgeEmphasis.SOLID)
+    quiet = badge_text("matrix", tone=BadgeTone.WARNING)
+    status = badge_text("in progress", tone=BadgeTone.INFO, emphasis=BadgeEmphasis.STATUS)
+    widget = Badge("local", tone=BadgeTone.SUCCESS)
+    rendered_widget = widget.render()
+
+    assert solid.plain == " LIVE "
+    assert quiet.plain == "[matrix]"
+    assert status.plain == "● in progress"
+    assert isinstance(rendered_widget, Text)
+    assert rendered_widget.plain == "[local]"
+    assert "◖" not in solid.plain
+    assert "◗" not in solid.plain
+    with pytest.raises(ValueError, match="printable"):
+        BadgeSpec(" invalid ")
+    with pytest.raises(ValueError, match="printable"):
+        BadgeSpec("invalid\nlabel")
+
+
+def test_explorer_tree_centrally_formats_sections_and_resource_rows() -> None:
+    catalog = _catalog()
+    tree = ExplorerResourceTree()
+    tree.catalog = catalog
+    nodes = catalog_nodes(catalog)
+    sections = [node for node in nodes if node.id.startswith("section:")]
+    request_section = next(node for node in sections if node.id == "section:Requests")
+    request_node = request_section.children[0]
+
+    assert request_node.prompt.plain == catalog.entries[request_node.id].summary.name
+    assert tree.format_node(request_section).plain == f"Requests {len(request_section.children)}"
+    formatted_resource = tree.format_node(request_node)
+    entry = catalog.entries[request_node.id]
+    assert entry.summary.name is not None
+    assert entry.summary.name in formatted_resource.plain
+    assert formatted_resource.plain != request_node.prompt.plain
+
+    resource_nodes = [node for node in nodes if node.id in catalog.entries]
+    for section in sections:
+        resource_nodes.extend(section.children)
+    for node in resource_nodes:
+        entry = catalog.entries[node.id]
+        formatted = tree.format_node(node).plain
+        resource_id = entry.summary.coordinate.resource_id
+        display_name = entry.summary.name or f"Unnamed {entry.summary.coordinate.kind}"
+        assert formatted.count(resource_id) == display_name.count(resource_id)
 
 
 def test_catalog_retains_revision_pinned_sources_and_all_kinds_have_widgets() -> None:
@@ -139,6 +200,14 @@ async def test_navigator_owns_filter_tree_and_legend_mechanics() -> None:
         assert tree.filter_text == "audiences"
         assert len(tree.nodes) == 2
         navigator.focus_tree()
+        legend = app.query_one(Legend)
+        assert _legend_is_visible(legend)
+        await pilot.press("l")
+        await pilot.pause()
+        assert not _legend_is_visible(legend)
+        await pilot.press("l")
+        await pilot.pause()
+        assert _legend_is_visible(legend)
         await pilot.press("down", "down", "down")
         await pilot.pause()
         detail = app.query_one(ResourceDetailOverview).detail

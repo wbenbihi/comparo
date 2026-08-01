@@ -6,15 +6,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Literal
 
-from rich.text import Text
-
-from comparo.tui4.fragments import chip
-from comparo.tui4.fragments import entity_label
-from comparo.tui4.fragments import glyph
-from comparo.tui4.fragments import pill
 from comparo.tui4.models.navigation import MenuNode
 from comparo.tui4.theme import kind_glyph
-from comparo.tui4.theme import style
 
 if TYPE_CHECKING:
     from comparo.application import ProjectResourceSummary
@@ -49,15 +42,6 @@ SECTIONS: tuple[tuple[str, frozenset[str]], ...] = (
 LOCAL_TAGS = frozenset({"local"})
 LIVE_TAGS = frozenset({"live", "production", "prod"})
 STREAM_TAGS = frozenset({"stream", "streaming", "sse"})
-
-_ROLE_PILLS = {
-    "baseline": ("base", "pill.baseline"),
-    "candidate": ("cand", "pill.candidate"),
-}
-_LOCALITY_PILLS = {
-    "local": ("local", "pill.local"),
-    "live": ("live", "pill.live"),
-}
 
 
 def coordinate_key(coordinate: ResourceCoordinate) -> str:
@@ -204,33 +188,6 @@ def build_catalog(result: ProjectWorkspaceResult) -> ExplorerCatalog | None:
     )
 
 
-def entry_label(entry: ResourceEntry) -> Text:
-    """Build a kind glyph, method chip, identity, and fact pills."""
-    summary = entry.summary
-    facts = entry.facts
-    character, token = kind_glyph(summary.coordinate.kind)
-    prefix: list[Text] = [glyph(character, token)]
-    if facts.method is not None:
-        prefix.append(chip(facts.method, f"method.{facts.method}", width=7))
-    pills: list[Text] = []
-    if facts.role is not None:
-        text, pill_token = _ROLE_PILLS[facts.role]
-        pills.append(pill(text, pill_token))
-    if facts.locality is not None:
-        text, pill_token = _LOCALITY_PILLS[facts.locality]
-        pills.append(pill(text, pill_token))
-    if facts.uses_matrix:
-        pills.append(pill("mtx", "pill.matrix"))
-    if facts.streaming:
-        pills.append(pill("sse", "pill.stream"))
-    return entity_label(
-        summary.name,
-        summary.coordinate.resource_id,
-        prefix=tuple(prefix),
-        pills=tuple(pills),
-    )
-
-
 def _entry_matches(entry: ResourceEntry, needle: str) -> bool:
     """Filter on kind, name, ID, description, and tags."""
     if not needle:
@@ -247,9 +204,12 @@ def _entry_matches(entry: ResourceEntry, needle: str) -> bool:
 
 
 def catalog_nodes(catalog: ExplorerCatalog, needle: str = "") -> tuple[MenuNode[str], ...]:
-    """Return the Project root and filtered fixed-order sections."""
+    """Return unformatted Project and resource nodes in fixed section order."""
     needle = needle.casefold()
-    nodes: list[MenuNode[str]] = [MenuNode(catalog.project.key, entry_label(catalog.project))]
+    project = catalog.project.summary
+    nodes: list[MenuNode[str]] = [
+        MenuNode(catalog.project.key, project.name or project.coordinate.resource_id)
+    ]
     for section in catalog.sections:
         entries = [entry for entry in section.entries if _entry_matches(entry, needle)]
         if not entries:
@@ -257,8 +217,14 @@ def catalog_nodes(catalog: ExplorerCatalog, needle: str = "") -> tuple[MenuNode[
         nodes.append(
             MenuNode(
                 f"section:{section.title}",
-                Text.assemble((section.title, style("label")), (f" {len(entries)}", style("dim"))),
-                children=tuple(MenuNode(entry.key, entry_label(entry)) for entry in entries),
+                section.title,
+                children=tuple(
+                    MenuNode(
+                        entry.key,
+                        entry.summary.name or entry.summary.coordinate.resource_id,
+                    )
+                    for entry in entries
+                ),
             )
         )
     return tuple(nodes)

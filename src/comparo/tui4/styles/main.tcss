@@ -180,6 +180,9 @@ SectionTitle {
 Caption  { color: $text-muted; }
 Hint     { color: $text-disabled; text-style: italic; }
 
+/* Badge */
+Badge { width: auto; height: 1; }
+
 /* DiffView */
 DiffView {
     height: 1fr;

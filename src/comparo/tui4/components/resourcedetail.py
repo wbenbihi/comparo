@@ -17,6 +17,8 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from comparo.tui4.bindings import resource_detail_bindings
+from comparo.tui4.components.badge import BadgeTone
+from comparo.tui4.components.badge import badge_text
 from comparo.tui4.components.diffview import DiffView
 from comparo.tui4.components.list import Field
 from comparo.tui4.components.list import KeyValueList
@@ -31,7 +33,6 @@ from comparo.tui4.components.table import Table
 from comparo.tui4.components.typography import Caption
 from comparo.tui4.components.typography import Hint
 from comparo.tui4.fragments import glyph
-from comparo.tui4.fragments import pill
 from comparo.tui4.models.diff import build_source_document
 from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.resource import InspectionPhase
@@ -79,7 +80,9 @@ class ResourceSummary(Vertical):
         """Build the optional Rich tag row."""
         if not self.entry.summary.tags:
             return None
-        tags = Text(" · ").join(pill(tag, "pill.default") for tag in self.entry.summary.tags)
+        tags = Text(" ").join(
+            badge_text(tag, tone=BadgeTone.NEUTRAL) for tag in self.entry.summary.tags
+        )
         return Field(key="tags", value=Content.from_rich_text(tags))
 
     def _fields(self) -> tuple[Field, ...]:

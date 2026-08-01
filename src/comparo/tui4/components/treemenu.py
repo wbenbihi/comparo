@@ -2,6 +2,7 @@
 
 from typing import override
 
+from rich.text import Text
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Tree
@@ -77,6 +78,14 @@ class TreeMenu[T: str](Tree[T]):
         walk(self.root)
         return expanded
 
+    def format_node(self, node: MenuNode[T]) -> Text:
+        """Format every node before Textual receives it.
+
+        Subclasses override this single hook to apply domain-specific row
+        grammar without reimplementing tree construction or navigation.
+        """
+        return node.prompt
+
     def _rebuild(self, prefer: T | None = None) -> None:
         """Recreate nodes; first populated build expands everything."""
         expanded = self._expanded_ids() if self._built else None
@@ -86,10 +95,11 @@ class TreeMenu[T: str](Tree[T]):
         self.root.expand()
 
         def build(parent: TreeNode[T], node: MenuNode[T]) -> None:
+            prompt = self.format_node(node)
             if node.is_leaf:
-                tree_node = parent.add_leaf(node.prompt, data=node.id)
+                tree_node = parent.add_leaf(prompt, data=node.id)
             else:
-                tree_node = parent.add(node.prompt, data=node.id)
+                tree_node = parent.add(prompt, data=node.id)
                 for child in node.children:
                     build(tree_node, child)
                 if expanded is None or node.id in expanded:

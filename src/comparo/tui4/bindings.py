@@ -6,6 +6,7 @@ from textual.binding import BindingType
 from comparo.tui4.types import ComparoScreen
 
 FILTER_KEY = "/"
+LEGEND_KEY = "l"
 RELOAD_KEY = "r"
 
 RESOURCE_ACTION_KEYS: dict[str, str] = {
@@ -47,6 +48,7 @@ def explorer_bindings() -> list[BindingType]:
     """Build bindings for the Explorer workspace."""
     return [
         Binding(FILTER_KEY, "focus_filter", "Filter", key_display=FILTER_KEY),
+        Binding(LEGEND_KEY, "toggle_legend", "Legend", key_display=LEGEND_KEY),
         Binding(RELOAD_KEY, "reload", "Reload"),
     ]
 
