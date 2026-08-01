@@ -8,6 +8,16 @@ from comparo.tui4.types import ComparoScreen
 FILTER_KEY = "/"
 RELOAD_KEY = "r"
 
+RESOURCE_ACTION_KEYS: dict[str, str] = {
+    "overview": "1",
+    "authored": "2",
+    "effective": "3",
+    "resolved": "4",
+    "use-in-compare": "u",
+    "inspect-composition": "c",
+    "plan-matrix-cells": "m",
+}
+
 
 def application_bindings() -> list[BindingType]:
     """Build global application and workspace bindings."""
@@ -38,6 +48,19 @@ def explorer_bindings() -> list[BindingType]:
     return [
         Binding(FILTER_KEY, "focus_filter", "Filter", key_display=FILTER_KEY),
         Binding(RELOAD_KEY, "reload", "Reload"),
+    ]
+
+
+def resource_detail_bindings() -> list[BindingType]:
+    """Build configurable action bindings for the focused resource detail."""
+    return [
+        Binding(
+            key,
+            f'resource_action("{action_id}")',
+            action_id.replace("-", " ").title(),
+            show=False,
+        )
+        for action_id, key in RESOURCE_ACTION_KEYS.items()
     ]
 
 

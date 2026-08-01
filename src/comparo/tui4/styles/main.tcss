@@ -252,12 +252,42 @@ Legend { height: auto; color: $comparo-muted; }
     grid-columns: 1fr 5fr;
 }
 #explorer-tree-panel { height: 100%; }
+ExplorerNavigator { height: 1fr; }
 #explorer-tree { height: 1fr; }
 #explorer-legend { padding: 0 1; border-top: solid $comparo-border; margin-top: 1; }
 #explorer-detail { height: 100%; }
 #explorer-detail > Panel { height: 1fr; margin-bottom: 0; }
 #explorer-detail KeyValueList { height: auto; }
 #explorer-detail ResourceSummary { height: auto; }
+.resource-kind-details { height: auto; }
+.resource-representation { height: 1fr; }
+.resource-source-view { height: 1fr; }
+ResourceActionBar {
+    height: auto;
+    overflow-x: auto;
+    scrollbar-size-horizontal: 1;
+}
+ResourceActionBar Button {
+    width: auto;
+    min-width: 0;
+    height: 1;
+    min-height: 1;
+    padding: 0 1;
+    margin: 0 1 0 0;
+    border: none;
+    background: transparent;
+    color: $comparo-muted;
+}
+ResourceActionBar Button:hover,
+ResourceActionBar Button:focus {
+    background: $accent 20%;
+    color: $foreground;
+    text-style: bold;
+}
+ResourceActionBar Button:disabled { color: $text-disabled; }
+.resource-matrix-table { height: 8; }
+.resource-effective-table { height: 14; }
+.resource-relationship-table { height: 10; }
 .overview-table { height: 10; }
 #overview-source { height: 18; }
 #explorer-overview, #explorer-structure, #explorer-effective { height: auto; }

@@ -1,4 +1,4 @@
-"""Explorer view-models — snapshot facts and presentation builders, no I/O."""
+"""Explorer catalog and tree projections over safe workspace snapshots."""
 
 from __future__ import annotations
 
@@ -7,19 +7,18 @@ from typing import TYPE_CHECKING
 from typing import Literal
 
 from rich.text import Text
-from textual.content import Content
 
-from comparo.tui4.components.list import Field
-from comparo.tui4.components.treemenu import MenuNode
 from comparo.tui4.fragments import chip
 from comparo.tui4.fragments import entity_label
 from comparo.tui4.fragments import glyph
 from comparo.tui4.fragments import pill
+from comparo.tui4.models.navigation import MenuNode
 from comparo.tui4.theme import kind_glyph
 from comparo.tui4.theme import style
 
 if TYPE_CHECKING:
     from comparo.application import ProjectResourceSummary
+    from comparo.application import ProjectSourceSummary
     from comparo.application import ProjectWorkspaceResult
     from comparo.application.plan_inspection_identity import ResourceCoordinate
 
@@ -62,7 +61,7 @@ _LOCALITY_PILLS = {
 
 
 def coordinate_key(coordinate: ResourceCoordinate) -> str:
-    """Opaque stable selection key for one exact resource revision."""
+    """Return an opaque stable selection key for one exact resource revision."""
     return (
         f"{coordinate.namespace}/{coordinate.kind}/"
         f"{coordinate.resource_id}#{coordinate.fingerprint}"
@@ -73,9 +72,8 @@ def coordinate_key(coordinate: ResourceCoordinate) -> str:
 class ResourceFacts:
     """Safe display facts derived from one resource summary.
 
-    method comes from the outline's explicitly safe scalar; matrix use from
-    relationship targets; locality and streaming are authored tag conventions
-    (URLs and booleans are concealed by contract).
+    Method comes from the outline's explicitly safe scalar, Matrix use from
+    relationship targets, and locality/streaming from authored tag conventions.
     """
 
     method: str | None = None
@@ -87,10 +85,11 @@ class ResourceFacts:
 
 @dataclass(frozen=True)
 class ResourceEntry:
-    """One selectable resource with its display facts."""
+    """One selectable resource with its source revision and display facts."""
 
     key: str
     summary: ProjectResourceSummary
+    source: ProjectSourceSummary
     facts: ResourceFacts
 
 
@@ -104,7 +103,7 @@ class CatalogSection:
 
 @dataclass(frozen=True)
 class ExplorerCatalog:
-    """Everything the Explorer needs from one workspace snapshot."""
+    """Everything resource navigation needs from one workspace snapshot."""
 
     project: ResourceEntry
     sections: tuple[CatalogSection, ...]
@@ -112,8 +111,8 @@ class ExplorerCatalog:
     kinds: tuple[str, ...]
 
 
-def _environment_roles(project: ProjectResourceSummary) -> dict[str, EnvironmentRole]:
-    """Environment resource id → role from Project defaults."""
+def environment_roles(project: ProjectResourceSummary) -> dict[str, EnvironmentRole]:
+    """Return Environment resource ID to role from Project defaults."""
     roles: dict[str, EnvironmentRole] = {}
     if project.outline is None:
         return roles
@@ -128,7 +127,7 @@ def _environment_roles(project: ProjectResourceSummary) -> dict[str, Environment
 
 
 def _request_method(summary: ProjectResourceSummary) -> str | None:
-    """The explicitly safe exact method scalar from the outline."""
+    """Return the explicitly safe exact method scalar from the outline."""
     if summary.outline is None:
         return None
     for field in summary.outline.fields:
@@ -138,7 +137,7 @@ def _request_method(summary: ProjectResourceSummary) -> str | None:
 
 
 def _facts(summary: ProjectResourceSummary, roles: dict[str, EnvironmentRole]) -> ResourceFacts:
-    """Derive display facts for one resource."""
+    """Derive safe display facts for one resource."""
     tags = set(summary.tags)
     locality: Locality | None = None
     if tags & LOCAL_TAGS:
@@ -158,21 +157,30 @@ def _facts(summary: ProjectResourceSummary, roles: dict[str, EnvironmentRole]) -
 
 
 def build_catalog(result: ProjectWorkspaceResult) -> ExplorerCatalog | None:
-    """Fixed section order, per-resource facts, keys by exact coordinate."""
+    """Build fixed sections and exact-coordinate entries from a safe snapshot."""
     snapshot = result.snapshot
     if snapshot is None:
         return None
-    roles = _environment_roles(snapshot.project)
+    roles = environment_roles(snapshot.project)
+    source_by_resource = {
+        coordinate: source for source in result.sources for coordinate in source.resources
+    }
     entries: dict[str, ResourceEntry] = {}
     by_kind: dict[str, list[ResourceEntry]] = {}
     for resource in snapshot.resources:
         entry = ResourceEntry(
-            coordinate_key(resource.coordinate), resource, _facts(resource, roles)
+            coordinate_key(resource.coordinate),
+            resource,
+            source_by_resource[resource.coordinate],
+            _facts(resource, roles),
         )
         entries[entry.key] = entry
         by_kind.setdefault(resource.coordinate.kind, []).append(entry)
     project_entry = ResourceEntry(
-        coordinate_key(snapshot.project.coordinate), snapshot.project, ResourceFacts()
+        coordinate_key(snapshot.project.coordinate),
+        snapshot.project,
+        source_by_resource[snapshot.project.coordinate],
+        ResourceFacts(),
     )
     entries[project_entry.key] = project_entry
 
@@ -196,11 +204,8 @@ def build_catalog(result: ProjectWorkspaceResult) -> ExplorerCatalog | None:
     )
 
 
-# ---------------------------------------------------------- presentation
-
-
 def entry_label(entry: ResourceEntry) -> Text:
-    """Kind glyph, method chip, name + dim id, pills."""
+    """Build a kind glyph, method chip, identity, and fact pills."""
     summary = entry.summary
     facts = entry.facts
     character, token = kind_glyph(summary.coordinate.kind)
@@ -227,7 +232,7 @@ def entry_label(entry: ResourceEntry) -> Text:
 
 
 def _entry_matches(entry: ResourceEntry, needle: str) -> bool:
-    """Filter on kind, name, id, description, and tags."""
+    """Filter on kind, name, ID, description, and tags."""
     if not needle:
         return True
     summary = entry.summary
@@ -242,7 +247,7 @@ def _entry_matches(entry: ResourceEntry, needle: str) -> bool:
 
 
 def catalog_nodes(catalog: ExplorerCatalog, needle: str = "") -> tuple[MenuNode[str], ...]:
-    """Project root plus filtered fixed-order sections."""
+    """Return the Project root and filtered fixed-order sections."""
     needle = needle.casefold()
     nodes: list[MenuNode[str]] = [MenuNode(catalog.project.key, entry_label(catalog.project))]
     for section in catalog.sections:
@@ -260,139 +265,5 @@ def catalog_nodes(catalog: ExplorerCatalog, needle: str = "") -> tuple[MenuNode[
 
 
 def legend_items(catalog: ExplorerCatalog) -> tuple[tuple[str, str, str], ...]:
-    """One (glyph, token, label) legend item per kind present in this project."""
+    """Return one glyph/token/label legend item per kind in the project."""
     return tuple((*kind_glyph(kind), kind) for kind in catalog.kinds)
-
-
-# ----------------------------------------------------------- detail model
-
-
-@dataclass(frozen=True)
-class ResourceDetail:
-    """Snapshot information displayed for one selected resource."""
-
-    key: str
-    entry: ResourceEntry
-
-
-def initial_detail(entry: ResourceEntry) -> ResourceDetail:
-    """Build the selected resource's immutable detail projection."""
-    return ResourceDetail(key=entry.key, entry=entry)
-
-
-# ------------------------------------------------------- overview fields
-
-
-def _outline_value(summary: ProjectResourceSummary, label: str) -> str | None:
-    """The conservative outline value for one field label, when present."""
-    if summary.outline is None:
-        return None
-    for field in summary.outline.fields:
-        if field.label == label:
-            return field.value
-    return None
-
-
-def _targets(
-    summary: ProjectResourceSummary,
-    kind: str | frozenset[str],
-    *,
-    inbound: bool = False,
-) -> tuple[str, ...]:
-    """Related resource ids by target kind and direction."""
-    if summary.outline is None:
-        return ()
-    kinds = {kind} if isinstance(kind, str) else kind
-    return tuple(
-        relationship.target.resource_id
-        for relationship in summary.outline.relationships
-        if relationship.target.kind in kinds and (relationship.origin == "used-by") == inbound
-    )
-
-
-def _project_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Rows derived from project defaults."""
-    summary = entry.summary
-    rows: list[Field] = []
-    subjects = _targets(summary, "Request")
-    gates = _targets(summary, "GateProfile")
-    roles = _environment_roles(summary)
-    baseline = [resource_id for resource_id, role in roles.items() if role == "baseline"]
-    candidates = [resource_id for resource_id, role in roles.items() if role == "candidate"]
-    if baseline:
-        rows.append(Field("baseline", Content(", ".join(baseline))))
-    if candidates:
-        rows.append(Field("candidates", Content(", ".join(candidates))))
-    if subjects:
-        rows.append(Field("default subjects", Content(", ".join(subjects))))
-    if gates:
-        rows.append(Field("gate", Content(", ".join(gates))))
-    return tuple(rows)
-
-
-def _environment_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Rows derived from one environment summary."""
-    summary = entry.summary
-    facts = entry.facts
-    rows = [
-        Field("role", facts.role or "—"),
-        Field(
-            "locality",
-            facts.locality or "—",
-            tone="danger" if facts.locality == "live" else None,
-        ),
-    ]
-    safety = _targets(summary, "SafetyProfile")
-    if safety:
-        rows.append(Field("safety", Content(", ".join(safety))))
-    variables = _outline_value(summary, "variables")
-    if variables:
-        rows.append(Field("variables", Content(variables)))
-    return tuple(rows)
-
-
-def _request_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Rows derived from one request summary."""
-    summary = entry.summary
-    facts = entry.facts
-    rows = [Field("method", facts.method or "—")]
-    endpoint = _outline_value(summary, "endpoint") or _outline_value(summary, "url")
-    if endpoint:
-        rows.append(Field("endpoint", Content(endpoint)))
-    for label, target in (
-        ("matrices", "Matrix"),
-        ("response schema", "Schema"),
-        ("profiles", PROFILE_KINDS),
-    ):
-        targets = _targets(summary, target)
-        if targets:
-            rows.append(Field(label, Content(", ".join(targets))))
-    rows.append(Field("streaming", "yes (tagged)" if facts.streaming else "—"))
-    return tuple(rows)
-
-
-def _matrix_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Rows derived from one matrix summary."""
-    summary = entry.summary
-    rows: list[Field] = []
-    spec = _outline_value(summary, "spec")
-    if spec:
-        rows.append(Field("shape", Content(spec)))
-    used_by = _targets(summary, "Request", inbound=True)
-    if used_by:
-        rows.append(Field("used by", Content(", ".join(used_by))))
-    return tuple(rows)
-
-
-def kind_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Return kind-specific rows, or no rows for generic resources."""
-    kind = entry.summary.coordinate.kind
-    if kind == "Project":
-        return _project_fields(entry)
-    if kind == "Environment":
-        return _environment_fields(entry)
-    if kind == "Request":
-        return _request_fields(entry)
-    if kind == "Matrix":
-        return _matrix_fields(entry)
-    return ()

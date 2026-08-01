@@ -1,22 +1,13 @@
 """KeyValueList — aligned, styled key/value rows."""
 
-from dataclasses import dataclass
 from typing import override
 
 from textual.app import ComposeResult
-from textual.content import Content
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
 
-
-@dataclass(frozen=True)
-class Field:
-    """One key/value row."""
-
-    key: str
-    value: str | Content
-    tone: str | None = None
+from comparo.tui4.models.fields import Field as Field
 
 
 class KeyValueList(Widget):

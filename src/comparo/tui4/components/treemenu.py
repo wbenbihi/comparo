@@ -1,38 +1,13 @@
 """TreeMenu — collapsible semantic menu over Tree."""
 
-from dataclasses import dataclass
 from typing import override
 
-from rich.text import Text
-from rich.text import TextType
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 
-
-@dataclass(frozen=True)
-class MenuNode[T: str]:
-    """One tree entry; a node with no children is a selectable leaf."""
-
-    id: T
-    label: TextType
-    children: tuple["MenuNode[T]", ...] = ()
-    glyph: str | None = None
-
-    @property
-    def is_leaf(self) -> bool:
-        """Whether this node can be selected instead of expanded."""
-        return not self.children
-
-    @property
-    def prompt(self) -> Text:
-        """Build the Rich label consumed by Textual's tree widget."""
-        if self.glyph is None:
-            return (
-                Text.from_markup(self.label) if isinstance(self.label, str) else self.label.copy()
-            )
-        return Text.assemble(f"{self.glyph} ", self.label)
+from comparo.tui4.models.navigation import MenuNode as MenuNode
 
 
 class TreeMenu[T: str](Tree[T]):

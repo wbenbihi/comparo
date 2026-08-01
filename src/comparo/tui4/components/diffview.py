@@ -13,6 +13,7 @@ from rich.segment import Segment
 from rich.style import Style
 from rich.syntax import Syntax
 from rich.text import Text
+from textual.app import App
 from textual.binding import BindingType
 from textual.geometry import Size
 from textual.reactive import reactive
@@ -214,7 +215,7 @@ class DiffView(ScrollView, can_focus=True):
         width = self.scrollable_content_region.width
         document = self.document
         if document is None or index >= len(self._entries):
-            return Strip.blank(width)
+            return Strip.blank(width, self.rich_style)
         kind, payload = self._entries[index]
         if kind == "fold":
             region = document.regions[payload]
@@ -282,7 +283,11 @@ class DiffView(ScrollView, can_focus=True):
 
     def _segments(self, text: Text) -> list[Segment]:
         """Render styled text to segments."""
-        return list(text.render(self.app.console, end=""))
+        self.app: App[None]
+        return [
+            Segment(segment.text, segment.style or Style.null(), segment.control)
+            for segment in text.render(self.app.console, end="")
+        ]
 
     def _content_text(self, document: DiffDocument, row_index: int) -> Text:
         """The emphasized side of one row for single-column rendering."""

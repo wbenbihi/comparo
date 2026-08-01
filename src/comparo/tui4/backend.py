@@ -3,6 +3,8 @@
 from decimal import Decimal
 from pathlib import Path
 
+from comparo.application import AuthoredResourceInspectionRequest
+from comparo.application import AuthoredResourceWindow
 from comparo.application import CompareCloseResult
 from comparo.application import ComparePreparationHandle
 from comparo.application import CompareService
@@ -16,6 +18,7 @@ from comparo.application import SourceInspectionRequest
 from comparo.application import SourceViewMode
 from comparo.application import SourceWindow
 from comparo.application import initialize_project_artifact_root
+from comparo.application import inspect_authored_resource
 from comparo.application import inspect_effective_resource
 from comparo.application import inspect_project_source
 from comparo.application import inspect_project_workspace
@@ -78,6 +81,19 @@ class TuiBackend:
                 start_line=max(1, around_line - 10),
                 mode=SourceViewMode.MASKED,
                 limits=SOURCE_LIMITS,
+            )
+        )
+
+    def inspect_authored(
+        self, coordinate: ResourceCoordinate, expected_sha256: str | None
+    ) -> AuthoredResourceWindow:
+        """Inspect exactly one masked authored resource document. Blocking."""
+        return inspect_authored_resource(
+            AuthoredResourceInspectionRequest(
+                workspace=self._workspace_request,
+                coordinate=coordinate,
+                limits=SOURCE_LIMITS,
+                expected_sha256=expected_sha256,
             )
         )
 

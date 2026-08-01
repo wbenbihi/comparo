@@ -16,6 +16,8 @@ from textual.widgets import ContentSwitcher
 from textual.widgets import Footer
 from textual.widgets import Static
 
+from comparo.application.plan_inspection_identity import ResourceCoordinate
+
 from .backend import TuiBackend
 from .bindings import application_bindings
 from .components.header import AppHeader
@@ -64,6 +66,14 @@ class ComparoApp(App[None]):
         """Switch workspace — string entry point for key bindings."""
         if ws in ComparoScreen:
             self.state = replace(self.state, active_screen=ComparoScreen(ws))
+
+    def use_in_compare(self, subject: ResourceCoordinate) -> None:
+        """Retain an exact Request revision and open the Compare workspace."""
+        self.state = replace(
+            self.state,
+            active_screen=ComparoScreen.LAUNCH,
+            compare_subject=subject,
+        )
 
     def on_nav_tab_selected(self, message: NavTab.Selected) -> None:
         """Switch workspace from the navbar."""
