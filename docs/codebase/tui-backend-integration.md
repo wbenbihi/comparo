@@ -241,10 +241,11 @@ path from either projection.
 ### 6.2 Structural overview rows
 
 `ProjectOutlineField` contains `path`, `label`, `value`, `depth`, `category`, the optional paired
-fields `exact_value` / `exact_kind`, and an optional typed `reference` identity. `reference` exists
-exactly when `exact_kind == "reference"`; frontends must use its namespace/kind/ID rather than
-parsing `exact_value`. Field order and repeated references are preserved, unlike the deliberately
-deduplicated one-hop relationship graph. Current categories include containers, references,
+fields `exact_value` / `exact_kind`, and an optional revision-bearing `ResourceCoordinate`
+reference. `reference` exists exactly when `exact_kind == "reference"`; frontends must pass its
+namespace/kind/ID/fingerprint back to application operations rather than parsing `exact_value`.
+Field order and repeated references are preserved, unlike the deliberately deduplicated one-hop
+relationship graph. Current categories include containers, references,
 inline definitions, directives, literals, sensitive values, and generic structure. The ordinary
 `value` is purposefully conservative:
 

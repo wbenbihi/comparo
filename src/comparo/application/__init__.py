@@ -79,6 +79,7 @@ from comparo.application.inspection import (
 from comparo.application.inspection import inspect_diagnostic as inspect_diagnostic
 from comparo.application.inspection import inspect_plan as inspect_plan
 from comparo.application.inspection import inspect_policy_diagnostic as inspect_policy_diagnostic
+from comparo.application.plan_inspection_identity import ResourceCoordinate as ResourceCoordinate
 from comparo.application.plan_occurrences import (
     PlanComparisonInspection as PlanComparisonInspection,
 )
@@ -537,6 +538,7 @@ __all__ = (
     "ResolvedValueInspectionTarget",
     "ResolvedValueNode",
     "ResolvedValueProjectionLimits",
+    "ResourceCoordinate",
     "ResourceIdentityCoordinate",
     "ResultCiProvenance",
     "ResultCrossLink",

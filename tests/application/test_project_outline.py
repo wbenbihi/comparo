@@ -8,6 +8,7 @@ from typing import cast
 import msgspec
 import pytest
 
+from comparo.application.plan_inspection_identity import ResourceCoordinate
 from comparo.application.project_outline import ProjectOutlineField
 from comparo.application.project_outline import ProjectRelationship
 from comparo.application.project_outline import ProjectResourceOutline
@@ -268,10 +269,11 @@ def test_outline_projects_every_supported_shape_without_values_or_locations() ->
         (ResourceKind.ENVIRONMENT.value, "link"),
     }
     linked = next(field for field in projected.fields if field.path == ("linked",))
-    assert linked.reference == ResourceIdentityCoordinate(
+    assert linked.reference == ResourceCoordinate(
         namespace=candidate.namespace.value,
         kind=candidate.kind.value,
         resource_id=candidate.resource_id.value,
+        fingerprint=link.fingerprint.digest.hex_value,
     )
 
     unknown = outline_resource(owner, object())
@@ -397,6 +399,12 @@ def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
         kind=ResourceKind.ENVIRONMENT.value,
         resource_id="baseline",
     )
+    revision = ResourceCoordinate(
+        namespace="local",
+        kind=ResourceKind.ENVIRONMENT.value,
+        resource_id="baseline",
+        fingerprint="0" * 64,
+    )
     field = ProjectOutlineField(
         path=("request",),
         label="request",
@@ -406,6 +414,13 @@ def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
     )
     relationship = ProjectRelationship(path=("environment",), target=coordinate, origin="link")
     assert ProjectResourceOutline(fields=(field,), relationships=(relationship,)).fields == (field,)
+    referenced = msgspec.structs.replace(
+        field,
+        exact_value="Environment/baseline",
+        exact_kind="reference",
+        reference=revision,
+    )
+    assert referenced.reference == revision
 
     for changes, error, message in (
         ({"path": cast("tuple[str, ...]", ["request"])}, TypeError, "path"),
@@ -420,8 +435,8 @@ def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
             "exact kind",
         ),
         ({"exact_value": "one", "exact_kind": "unsupported"}, ValueError, "supported"),
-        ({"reference": cast("ResourceIdentityCoordinate", object())}, TypeError, "reference"),
-        ({"reference": coordinate}, ValueError, "reference"),
+        ({"reference": cast("ResourceCoordinate", object())}, TypeError, "reference"),
+        ({"reference": coordinate}, TypeError, "reference"),
         (
             {
                 "exact_value": "Environment/baseline",

@@ -9,6 +9,7 @@ from typing import final
 
 import msgspec
 
+from comparo.application.plan_inspection_identity import ResourceCoordinate
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import InlineResource
@@ -74,7 +75,7 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
     category: str
     exact_value: str | None = None
     exact_kind: str | None = None
-    reference: ResourceIdentityCoordinate | None = None
+    reference: ResourceCoordinate | None = None
 
     def __post_init__(self) -> None:
         """Require a fully typed, renderer-independent row."""
@@ -98,10 +99,10 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
 
 def _require_reference_shape(
     exact_kind: str | None,
-    reference: ResourceIdentityCoordinate | None,
+    reference: ResourceCoordinate | None,
 ) -> None:
     """Keep exact reference display and typed identity structurally inseparable."""
-    if reference is not None and type(reference) is not ResourceIdentityCoordinate:
+    if reference is not None and type(reference) is not ResourceCoordinate:
         raise TypeError("project outline reference must be typed or absent")
     if (reference is None) != (exact_kind != "reference"):
         raise ValueError("project outline reference must match an exact reference value")
@@ -216,10 +217,11 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
         return
     if type(node) is LinkedResource:
         target = node.target.identity
-        coordinate = ResourceIdentityCoordinate(
+        coordinate = ResourceCoordinate(
             namespace=target.namespace.value,
             kind=target.kind.value,
             resource_id=target.resource_id.value,
+            fingerprint=node.target.fingerprint.digest.hex_value,
         )
         _field(
             fields,
@@ -332,7 +334,7 @@ def _field(
     *,
     exact_value: str | None = None,
     exact_kind: str | None = None,
-    reference: ResourceIdentityCoordinate | None = None,
+    reference: ResourceCoordinate | None = None,
 ) -> None:
     fields.append(
         ProjectOutlineField(
