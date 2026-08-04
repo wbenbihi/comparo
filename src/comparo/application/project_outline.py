@@ -443,9 +443,23 @@ def _safe_exact_display(
     path: tuple[str, ...],
     owner: ResourceIdentity,
 ) -> tuple[str, str] | None:
-    """Return a bounded terminal-safe exact Project value when disclosure is inert."""
-    if owner.kind is not ResourceKind.PROJECT or _sensitive_path(path):
+    """Return a bounded terminal-safe exact value when disclosure is structurally inert."""
+    if _sensitive_path(path):
         return None
+    if owner.kind is ResourceKind.MATRIX:
+        return _safe_matrix_exact_display(value, path)
+    if owner.kind is ResourceKind.SCHEMA:
+        return _safe_schema_exact_display(value, path)
+    if owner.kind is not ResourceKind.PROJECT:
+        return None
+    return _safe_project_exact_display(value, path)
+
+
+def _safe_project_exact_display(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose inert Project controls while keeping every value namespace concealed."""
     if path[:1] in {("variables",), ("secrets",)} or path[:2] in {
         ("defaults", "parameters"),
         ("defaults", "variables"),
@@ -466,6 +480,76 @@ def _safe_exact_display(
     if path[:1] in {("data",), ("sources",)}:
         text = Path(text).name or "<project root>"
     escaped = json.dumps(text, ensure_ascii=True)[1:-1]
+    return (escaped, "text") if len(escaped) <= 256 else None
+
+
+def _safe_matrix_exact_display(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose Matrix control identities, never the case values they select."""
+    structural_string = (
+        path == ("combine",)
+        or (len(path) == 2 and path[0] == "exclude")
+        or (path[-1:] == ("id",) and path[:1] in {("axes",), ("cases",), ("include",)})
+    )
+    if not structural_string or type(value) is not JsonString:
+        return None
+    return _bounded_exact_text(value.value)
+
+
+def _safe_schema_exact_display(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose JSON Schema structure and constraints while concealing example payloads."""
+    if not path:
+        return None
+    keyword = path[-1]
+    if type(value) is JsonString and (
+        keyword in {"type", "format"} or (len(path) == 2 and path[0] == "required")
+    ):
+        return _bounded_exact_text(value.value)
+    if keyword in {
+        "additionalProperties",
+        "deprecated",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "multipleOf",
+        "readOnly",
+        "uniqueItems",
+        "writeOnly",
+    }:
+        return _bounded_exact_scalar(value)
+    return None
+
+
+def _bounded_exact_scalar(value: ExactValue) -> tuple[str, str] | None:
+    """Render one non-payload scalar under the outline's exact-value ceiling."""
+    if type(value) is JsonNull:
+        return "null", "null"
+    if type(value) is JsonBoolean:
+        return ("true" if value.value else "false"), "boolean"
+    if type(value) is JsonInteger:
+        return str(value.value), "integer"
+    if type(value) is JsonDecimal:
+        return str(value.value), "number"
+    if type(value) is JsonString:
+        return _bounded_exact_text(value.value)
+    return None
+
+
+def _bounded_exact_text(value: str) -> tuple[str, str] | None:
+    """Escape a short exact string for terminal-safe structural presentation."""
+    escaped = json.dumps(value, ensure_ascii=True)[1:-1]
     return (escaped, "text") if len(escaped) <= 256 else None
 
 

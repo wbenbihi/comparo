@@ -420,6 +420,78 @@ def test_outline_never_exposes_request_shaped_value_payloads() -> None:
     assert canary not in repr(projected)
 
 
+def test_outline_exposes_matrix_control_ids_but_not_case_values() -> None:
+    owner = _identity(ResourceKind.MATRIX, "audiences")
+    secret_value = "private-segment-canary"
+    spec = CanonicalObject(
+        members=(
+            CanonicalMember(
+                name="axes",
+                value=CanonicalObject(
+                    members=(
+                        CanonicalMember(
+                            name="region",
+                            value=CanonicalArray(
+                                items=(
+                                    CanonicalObject(
+                                        members=(
+                                            CanonicalMember(
+                                                name="id", value=JsonString(value="eu")
+                                            ),
+                                            CanonicalMember(
+                                                name="value",
+                                                value=JsonString(value=secret_value),
+                                            ),
+                                        )
+                                    ),
+                                )
+                            ),
+                        ),
+                    )
+                ),
+            ),
+            CanonicalMember(name="combine", value=JsonString(value="product")),
+            CanonicalMember(
+                name="exclude", value=CanonicalArray(items=(JsonString(value="eu-free"),))
+            ),
+        )
+    )
+
+    projected = outline_resource(owner, spec)
+    exact = {field.path: field.exact_value for field in projected.fields}
+
+    assert exact[("axes", "region", "0", "id")] == "eu"
+    assert exact[("combine",)] == "product"
+    assert exact[("exclude", "0")] == "eu-free"
+    assert exact[("axes", "region", "0", "value")] is None
+    assert secret_value not in repr(projected)
+
+
+def test_outline_exposes_schema_structure_but_not_payload_examples() -> None:
+    owner = _identity(ResourceKind.SCHEMA, "catalog-response")
+    example_canary = "customer-payload-canary"
+    spec = CanonicalObject(
+        members=(
+            CanonicalMember(name="type", value=JsonString(value="object")),
+            CanonicalMember(
+                name="required",
+                value=CanonicalArray(items=(JsonString(value="items"),)),
+            ),
+            CanonicalMember(name="minProperties", value=JsonInteger(value=1)),
+            CanonicalMember(name="example", value=JsonString(value=example_canary)),
+        )
+    )
+
+    projected = outline_resource(owner, spec)
+    exact = {field.path: field.exact_value for field in projected.fields}
+
+    assert exact[("type",)] == "object"
+    assert exact[("required", "0")] == "items"
+    assert exact[("minProperties",)] == "1"
+    assert exact[("example",)] is None
+    assert example_canary not in repr(projected)
+
+
 def test_project_outline_exposes_only_bounded_safe_exact_configuration_values() -> None:
     canary = "project-variable-secret-canary"
     owner = _identity(ResourceKind.PROJECT, "demo")
