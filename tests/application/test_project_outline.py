@@ -267,6 +267,12 @@ def test_outline_projects_every_supported_shape_without_values_or_locations() ->
         (ResourceKind.ENVIRONMENT.value, "composition"),
         (ResourceKind.ENVIRONMENT.value, "link"),
     }
+    linked = next(field for field in projected.fields if field.path == ("linked",))
+    assert linked.reference == ResourceIdentityCoordinate(
+        namespace=candidate.namespace.value,
+        kind=candidate.kind.value,
+        resource_id=candidate.resource_id.value,
+    )
 
     unknown = outline_resource(owner, object())
     assert unknown.fields[0].label == "value"
@@ -414,6 +420,16 @@ def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
             "exact kind",
         ),
         ({"exact_value": "one", "exact_kind": "unsupported"}, ValueError, "supported"),
+        ({"reference": cast("ResourceIdentityCoordinate", object())}, TypeError, "reference"),
+        ({"reference": coordinate}, ValueError, "reference"),
+        (
+            {
+                "exact_value": "Environment/baseline",
+                "exact_kind": "reference",
+            },
+            ValueError,
+            "reference",
+        ),
         ({"depth": cast("int", True)}, ValueError, "depth"),
         ({"depth": -1}, ValueError, "depth"),
     ):

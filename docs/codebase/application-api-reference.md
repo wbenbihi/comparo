@@ -71,6 +71,9 @@ On success:
 - Project outline fields may expose a separately typed, bounded `exact_value` for safe inert
   configuration and linked identities; runtime value namespaces remain excluded and require the
   masked resolver;
+- linked outline fields additionally expose `reference: ResourceIdentityCoordinate`, preserving
+  ordered/repeated namespace-kind-ID identities without requiring a frontend to parse display
+  text or reconstruct execution selections from the deduplicated relationship graph;
 - outlines expose both authored relationships and inverse `used-by` relationships;
 - `sources` exposes logical source IDs, safe basenames for display, entry membership, resource
   membership, and safe source revision metadata without local paths.

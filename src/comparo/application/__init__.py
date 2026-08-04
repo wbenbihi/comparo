@@ -165,6 +165,9 @@ from comparo.application.profile_binding import (
 from comparo.application.profile_binding import ProfileBindingResult as ProfileBindingResult
 from comparo.application.profile_binding import RemoteSchemaRestriction as RemoteSchemaRestriction
 from comparo.application.profile_binding import bind_execution_profiles as bind_execution_profiles
+from comparo.application.project_outline import (
+    ResourceIdentityCoordinate as ResourceIdentityCoordinate,
+)
 from comparo.application.project_workspace import ProjectResourceSummary as ProjectResourceSummary
 from comparo.application.project_workspace import ProjectSourceSummary as ProjectSourceSummary
 from comparo.application.project_workspace import ProjectWorkspaceRequest as ProjectWorkspaceRequest
@@ -534,6 +537,7 @@ __all__ = (
     "ResolvedValueInspectionTarget",
     "ResolvedValueNode",
     "ResolvedValueProjectionLimits",
+    "ResourceIdentityCoordinate",
     "ResultCiProvenance",
     "ResultCrossLink",
     "ResultEntity",

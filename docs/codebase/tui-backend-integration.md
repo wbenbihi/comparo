@@ -240,8 +240,11 @@ path from either projection.
 
 ### 6.2 Structural overview rows
 
-`ProjectOutlineField` contains `path`, `label`, `value`, `depth`, `category`, and the optional
-paired fields `exact_value` / `exact_kind`. Current categories include containers, references,
+`ProjectOutlineField` contains `path`, `label`, `value`, `depth`, `category`, the optional paired
+fields `exact_value` / `exact_kind`, and an optional typed `reference` identity. `reference` exists
+exactly when `exact_kind == "reference"`; frontends must use its namespace/kind/ID rather than
+parsing `exact_value`. Field order and repeated references are preserved, unlike the deliberately
+deduplicated one-hop relationship graph. Current categories include containers, references,
 inline definitions, directives, literals, sensitive values, and generic structure. The ordinary
 `value` is purposefully conservative:
 
@@ -252,8 +255,9 @@ inline definitions, directives, literals, sensitive values, and generic structur
 - remote schema URIs and `$file` paths are concealed; and
 - Request methods are an explicitly safe exact scalar.
 
-For Project resources only, `exact_value` can additionally carry a bounded terminal-safe display
-of inert compiled null/boolean/number/string leaves and linked-resource identities. Project value
+For Project resources, `exact_value` can additionally carry a bounded terminal-safe display of
+inert compiled null/boolean/number/string leaves. Linked-resource identities carry an exact display
+and typed `reference` on every resource kind. Project value
 namespaces (`variables`, `secrets`, and their defaults equivalents) never receive this shortcut;
 they must use masked runtime resolution. Project data/source paths are reduced to safe basenames,
 oversized strings are omitted, and control/non-ASCII code points are escaped. This lets a Project

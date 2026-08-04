@@ -47,6 +47,23 @@ _EXACT_KINDS = frozenset({"null", "boolean", "integer", "number", "text", "refer
 
 
 @final
+class ResourceIdentityCoordinate(msgspec.Struct, frozen=True, kw_only=True):
+    """One resource identity without pretending a provenance entry carries a revision."""
+
+    namespace: str
+    kind: str
+    resource_id: str
+
+    def __post_init__(self) -> None:
+        """Require a complete bounded resource identity."""
+        if any(
+            type(item) is not str or not item or len(item) > 255
+            for item in (self.namespace, self.kind, self.resource_id)
+        ):
+            raise ValueError("resource identity coordinate must be bounded non-empty text")
+
+
+@final
 class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
     """One bounded, value-safe structural row in a compiled resource."""
 
@@ -57,6 +74,7 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
     category: str
     exact_value: str | None = None
     exact_kind: str | None = None
+    reference: ResourceIdentityCoordinate | None = None
 
     def __post_init__(self) -> None:
         """Require a fully typed, renderer-independent row."""
@@ -73,25 +91,20 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
                 raise TypeError("project outline exact kind must be text or None")
             if self.exact_kind not in _EXACT_KINDS:
                 raise ValueError("project outline exact kind must be supported")
+        _require_reference_shape(self.exact_kind, self.reference)
         if type(self.depth) is not int or self.depth < 0:
             raise ValueError("project outline depth must be a non-negative integer")
 
 
-@final
-class ResourceIdentityCoordinate(msgspec.Struct, frozen=True, kw_only=True):
-    """One resource identity without pretending a provenance entry carries a revision."""
-
-    namespace: str
-    kind: str
-    resource_id: str
-
-    def __post_init__(self) -> None:
-        """Require a complete bounded resource identity."""
-        if any(
-            type(item) is not str or not item or len(item) > 255
-            for item in (self.namespace, self.kind, self.resource_id)
-        ):
-            raise ValueError("resource identity coordinate must be bounded non-empty text")
+def _require_reference_shape(
+    exact_kind: str | None,
+    reference: ResourceIdentityCoordinate | None,
+) -> None:
+    """Keep exact reference display and typed identity structurally inseparable."""
+    if reference is not None and type(reference) is not ResourceIdentityCoordinate:
+        raise TypeError("project outline reference must be typed or absent")
+    if (reference is None) != (exact_kind != "reference"):
+        raise ValueError("project outline reference must match an exact reference value")
 
 
 @final
@@ -203,6 +216,11 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
         return
     if type(node) is LinkedResource:
         target = node.target.identity
+        coordinate = ResourceIdentityCoordinate(
+            namespace=target.namespace.value,
+            kind=target.kind.value,
+            resource_id=target.resource_id.value,
+        )
         _field(
             fields,
             path,
@@ -210,6 +228,7 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
             "reference",
             exact_value=f"{target.kind.value}/{target.resource_id.value}",
             exact_kind="reference",
+            reference=coordinate,
         )
         _relationship(path, node.target, relationships, "link")
         return
@@ -313,6 +332,7 @@ def _field(
     *,
     exact_value: str | None = None,
     exact_kind: str | None = None,
+    reference: ResourceIdentityCoordinate | None = None,
 ) -> None:
     fields.append(
         ProjectOutlineField(
@@ -323,6 +343,7 @@ def _field(
             category=category,
             exact_value=exact_value,
             exact_kind=exact_kind,
+            reference=reference,
         )
     )
 
