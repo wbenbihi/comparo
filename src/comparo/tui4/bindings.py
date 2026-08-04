@@ -15,7 +15,7 @@ PROJECT_VIEW_KEYS: dict[str, str] = {
     "dependencies": "g",
 }
 PROJECT_RESOLUTION_KEY = "r"
-EXECUTION_CONTEXT_KEY = "e"
+EXECUTION_CONTEXT_KEY = "space"
 
 RESOURCE_ACTION_KEYS: dict[str, str] = {
     "overview": "1",
@@ -76,7 +76,8 @@ def explorer_bindings() -> list[BindingType]:
             EXECUTION_CONTEXT_KEY,
             "set_execution_environment",
             "Set context",
-            key_display=EXECUTION_CONTEXT_KEY,
+            key_display="Space",
+            priority=True,
         ),
         Binding(RELOAD_KEY, "reload", "Reload", key_display="^r"),
     ]

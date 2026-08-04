@@ -166,13 +166,6 @@ class ExplorerWorkspace(Workspace):
         """Track the resource selected by the Explorer-specific navigator."""
         self.selected = event.entry.key
 
-    def on_explorer_navigator_resource_selected(
-        self, event: ExplorerNavigator.ResourceSelected
-    ) -> None:
-        """Use committed Environment rows as the execution context."""
-        if event.entry.summary.coordinate.kind == "Environment":
-            self._set_execution_environment(event.entry)
-
     def watch_selected(self) -> None:
         """Project the selected catalog entry into the detail column."""
         self._resource_generation += 1
@@ -329,7 +322,7 @@ class ExplorerWorkspace(Workspace):
         return super().check_action(action, parameters)
 
     def action_set_execution_environment(self) -> None:
-        """Make the highlighted Environment the shared execution context."""
+        """Make the highlighted Environment the shared context on explicit Space."""
         detail = self.detail
         if detail is not None and detail.entry.summary.coordinate.kind == "Environment":
             self._set_execution_environment(detail.entry)

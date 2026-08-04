@@ -125,9 +125,10 @@ must not parse `Kind/id` strings to rediscover that metadata.
 The execution context is shared application presentation state, not a property of one widget. On
 project load it rebinds an existing Environment identity to the new revision, otherwise defaults
 to the Project baseline (or the first Environment when no baseline exists). The active Environment
-has an `EXEC` badge in `ExplorerResourceTree`. Highlighting an Environment and pressing `e`, or
-committing it through the generic TreeMenu Enter/mouse selection, changes the context and
-invalidates any stale resolved inspection.
+has an `EXEC` badge in `ExplorerResourceTree`. Highlighting an Environment and pressing `Space`
+changes the context and invalidates any stale resolved inspection. Enter and mouse selection only
+select/open a resource; they never mutate the execution context. The contextual footer binding is
+shown only while an Environment is selected.
 The `EXEC` badge uses the shared semantic `active` badge tone, keeping its blue treatment distinct
 from baseline, candidate, locality, and live-danger badges and replaceable by future themes.
 

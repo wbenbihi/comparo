@@ -508,7 +508,12 @@ async def test_environment_commit_and_context_binding_switch_the_shared_default(
             pilot,
             lambda: workspace.detail is not None and workspace.detail.key == candidate.key,
         )
-        await pilot.press("e")
+        app.refresh_bindings()
+        await pilot.pause()
+        context_binding = app.screen.active_bindings["space"]
+        assert context_binding.binding.description == "Set context"
+        assert context_binding.enabled
+        await pilot.press("space")
         await _wait_until(
             pilot,
             lambda: app.state.execution_environment == candidate.summary.coordinate,
@@ -545,6 +550,15 @@ async def test_environment_commit_and_context_binding_switch_the_shared_default(
             entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
         )
         navigator.post_message(ExplorerNavigator.ResourceSelected(navigator, baseline))
+        await pilot.pause()
+        assert app.state.execution_environment == candidate.summary.coordinate
+
+        workspace.selected = baseline.key
+        await _wait_until(
+            pilot,
+            lambda: workspace.detail is not None and workspace.detail.key == baseline.key,
+        )
+        await pilot.press("space")
         await _wait_until(
             pilot,
             lambda: app.state.execution_environment == baseline.summary.coordinate,
