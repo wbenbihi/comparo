@@ -181,6 +181,11 @@ RESOURCE_SCHEMAS: tuple[ResourceSchema, ...] = (
             _field("tls", FieldMode.STATIC),
             _field("proxy", FieldMode.RESOLVABLE),
             _field(
+                "healthChecks",
+                FieldMode.REFERENCE_LIST,
+                kinds=(ResourceKind.REQUEST,),
+            ),
+            _field(
                 "safety", FieldMode.REFERENCE, kinds=(ResourceKind.SAFETY_PROFILE,), inline=True
             ),
             _field(

@@ -9,6 +9,8 @@ spec:
   baseUrl: http://127.0.0.1:18080/baseline
   safety:
     $use: SafetyProfile/local-read-only
+  healthChecks:
+    - $use: Request/health
   variables:
     environment: baseline
 ---
@@ -23,6 +25,8 @@ spec:
   baseUrl: http://127.0.0.1:18080/candidate
   safety:
     $use: SafetyProfile/local-read-only
+  healthChecks:
+    - $use: Request/health
   variables:
     environment: candidate
 ---
@@ -37,5 +41,7 @@ spec:
   baseUrl: http://127.0.0.1:18080/development
   safety:
     $use: SafetyProfile/local-read-only
+  healthChecks:
+    - $use: Request/health
   variables:
     environment: development

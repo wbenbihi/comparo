@@ -200,7 +200,7 @@ Used by `Environment.spec.timeout` and `Request.spec.timeout`.
 
 ### Header
 
-A single HTTP header. Appears in `Environment.spec.headers` and `HealthCheck.headers`.
+A single HTTP header. Appears in Environment and Request header mappings.
 
 | Field       | YAML key      | Type    | Required | Description                                                  |
 | ----------- | ------------- | ------- | -------- | ------------------------------------------------------------ |
@@ -300,22 +300,29 @@ spec:
 
 A target the requests run against.
 
-| Field     | YAML key     | Type                          | Required | Description                                                             |
-| --------- | ------------ | ----------------------------- | -------- | ---------------------------------------------------------------------- |
-| base_url  | `baseUrl`    | string                        | yes      | Base URL; each request's `endpoint` is joined onto it.                 |
-| timeout   | `timeout`    | [Duration](#duration)         | no       | Per-request timeout budget.                                            |
-| secrets   | `secrets`    | map of name → source          | no       | Declared secrets — see [Secrets and masking](#secrets-and-masking).    |
-| variables | `variables`  | map of string → string        | no       | Values available to `${...}` interpolation.                            |
-| headers   | `headers`    | list of [Header](#header)     | no       | Headers merged into every request (request headers override by name).  |
-| health    | `health`     | list of health checks         | no       | Readiness probes (`method`, `endpoint`, optional `headers`).           |
-| auth      | `auth`       | [Auth](#auth)                 | no       | Default Basic/Bearer auth applied to every request unless it sets its own. |
+| YAML key | Type | Required | Description |
+| -------- | ---- | -------- | ----------- |
+| `baseUrl` | resolvable value | yes | Base URL joined with Request endpoints. |
+| `env` | static environment-source declaration | no | Dotenv files, explicitly inherited process names, and inline `$env` values. |
+| `variables` | resolvable mapping | no | Environment-scoped variables. |
+| `secrets` | resolvable mapping | no | Environment-scoped sealed secrets. |
+| `headers` | resolvable mapping | no | Default headers merged before Request headers. |
+| `cookies` | resolvable mapping | no | Default cookies merged before Request cookies. |
+| `auth` | resolvable value | no | Default authentication, replaceable by a Request. |
+| `timeout` | resolvable value | no | Default timeout policy, replaceable by a Request. |
+| `tls` | static value | no | Environment-only TLS policy. |
+| `proxy` | resolvable value | no | Environment-only proxy policy. |
+| `healthChecks` | list of Request references | no | Normal Requests executed as one Environment health run. |
+| `safety` | SafetyProfile reference or inline profile | no | Environment-specific safety restrictions. |
+| `redaction` | RedactionProfile reference or inline profile | no | Environment-specific redaction attachment. |
+| `artifacts` | ArtifactProfile reference or inline profile | no | Environment-specific artifact attachment. |
 
 ```yaml
-apiVersion: comparo/v1
+apiVersion: comparo/v1alpha1
 kind: Environment
 metadata:
+  id: production
   name: Production
-  id: environment.prod
   description: The public httpbin instance.
 spec:
   baseUrl: https://httpbin.org
@@ -328,13 +335,15 @@ spec:
       $env: COMPARO_DEMO_TOKEN
   variables:
     DEFAULT_LOCALE: en-US
-  health:
-    - method: GET
-      endpoint: /status/200
+  healthChecks:
+    - $use: Request/health
 ```
 
-A **health check** entry has `method` (required), `endpoint` (required), and an optional
-`headers` list.
+There is deliberately no separate health-check request language. Each `healthChecks` entry links
+to a normal `Request`, so endpoint resolution, headers, auth, safety, assertions, redaction,
+artifact persistence, and Reports use the same contracts as every other execution. A frontend may
+run all declared references as one assertions-only run for that Environment. A transport failure,
+incomplete run, failed gate, or adverse assertion fact makes the health result unhealthy.
 
 ### Request
 

@@ -214,3 +214,13 @@ def test_field_catalog_rejects_contradictory_definitions() -> None:
         schema_for(cast("ResourceKind", "Value"))
     with pytest.raises(ValueError, match="no project schema"):
         schema_for(ResourceKind.EXECUTION_POLICY)
+
+
+def test_environment_health_checks_are_typed_request_references() -> None:
+    """Keep Environment probes on the normal Request execution path."""
+    environment = schema_for(ResourceKind.ENVIRONMENT)
+    health_checks = next(field for field in environment.fields if field.name == "healthChecks")
+
+    assert health_checks.mode is FieldMode.REFERENCE_LIST
+    assert health_checks.reference_kinds == (ResourceKind.REQUEST,)
+    assert not health_checks.inline

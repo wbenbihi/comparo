@@ -65,6 +65,7 @@ _ENVIRONMENT_SUPPORTED = frozenset(
         "timeout",
         "tls",
         "proxy",
+        "healthChecks",
         "safety",
     }
 )

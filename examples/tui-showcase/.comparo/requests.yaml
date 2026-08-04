@@ -34,6 +34,8 @@ spec:
     endpoint: /health
     headers:
       $use: common-headers
+  assertions:
+    - $use: usable-response
 ---
 apiVersion: comparo/v1alpha1
 kind: Request

@@ -163,6 +163,12 @@
             "headers": {
               "$ref": "#/$defs/resolvableValue"
             },
+            "healthChecks": {
+              "items": {
+                "$ref": "#/$defs/resourceUse"
+              },
+              "type": "array"
+            },
             "proxy": {
               "$ref": "#/$defs/resolvableValue"
             },
