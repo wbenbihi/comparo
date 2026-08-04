@@ -50,6 +50,8 @@ from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonObjectMember
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import Present
+from comparo.core.resolution.models import SanitizationPatternDisposition
+from comparo.core.resolution.provenance import COMPOSITE_PROVIDER
 from comparo.core.resolution.registry import SensitiveValueRegistry
 
 _ORIGIN = TaintOriginId(value="secret/project/token")
@@ -84,11 +86,16 @@ async def _untyped_chunks() -> AsyncIterator[bytes]:
     yield bytearray(b"unsafe")  # type: ignore[misc]
 
 
-def _provenance(run: RunScope) -> ResolutionProvenance:
+def _provenance(
+    run: RunScope,
+    *,
+    provider: ValueProviderIdentity | None = None,
+    namespace: ValueNamespace | None = ValueNamespace.SECRETS,
+) -> ResolutionProvenance:
     symbol = SymbolPath(segments=("token",))
-    provider = ValueProviderIdentity(namespace="test", name="literal", version="1")
+    provider = provider or ValueProviderIdentity(namespace="test", name="literal", version="1")
     source = ResolutionSource(
-        namespace=ValueNamespace.SECRETS,
+        namespace=namespace,
         symbol=symbol,
         provider=provider,
         configuration=ValueProvenance(
@@ -97,7 +104,7 @@ def _provenance(run: RunScope) -> ResolutionProvenance:
         scope=run,
     )
     return ResolutionProvenance(
-        namespace=ValueNamespace.SECRETS,
+        namespace=namespace,
         symbol=symbol,
         provider=provider,
         scope=run,
@@ -306,6 +313,151 @@ async def _assert_registry_snapshot_seeds_boundary() -> None:
     assert boundary.sanitize_text("snapshot-secret").value == "<redacted>"
     with pytest.raises(SanitizationBudgetExceededError, match="budget exceeded"):
         SanitizationBoundary.from_snapshot(snapshot, _limits(value_bytes=1))
+
+
+def test_snapshot_ignores_public_structure_from_taint_derived_composites() -> None:
+    asyncio.run(_assert_snapshot_ignores_public_structure_from_taint_derived_composites())
+
+
+async def _assert_snapshot_ignores_public_structure_from_taint_derived_composites() -> None:
+    run = RunScope(run_id=RunId(value=UUID("00000000-0000-0000-0000-000000000001")))
+    registry = SensitiveValueRegistry(run)
+    secret = _secret(JsonString(value="not-a-real-credential"))
+    leaf = Present(value=secret, provenance=_provenance(run))
+    composite = Present(
+        value=_secret(
+            JsonObject(
+                members=(
+                    JsonObjectMember(name="type", value=JsonString(value="apiKey")),
+                    JsonObjectMember(name="in", value=JsonString(value="header")),
+                    JsonObjectMember(
+                        name="value",
+                        value=JsonString(value="not-a-real-credential"),
+                    ),
+                )
+            )
+        ),
+        provenance=_provenance(run, provider=COMPOSITE_PROVIDER, namespace=None),
+    )
+    await registry.register(leaf, symbol=SymbolPath(segments=("auth", "value")), scope=run)
+    await registry.register(
+        composite,
+        symbol=SymbolPath(segments=("auth",)),
+        scope=run,
+        pattern_disposition=SanitizationPatternDisposition.COVERED_COMPOSITE,
+    )
+    boundary = SanitizationBoundary.from_snapshot(await registry.snapshot(), _limits())
+    boundary.seal()
+
+    result = boundary.sanitize_text("/baseline/type/apiKey/in/header/not-a-real-credential").value
+
+    assert result == "/baseline/type/apiKey/in/header/<redacted>"
+
+    boundary.close()
+    composite_first_registry = SensitiveValueRegistry(run)
+    await composite_first_registry.register(
+        composite,
+        symbol=SymbolPath(segments=("auth",)),
+        scope=run,
+        pattern_disposition=SanitizationPatternDisposition.COVERED_COMPOSITE,
+    )
+    with pytest.raises(ValueError, match="earlier pattern sources"):
+        await composite_first_registry.snapshot()
+
+    partial_origin_registry = SensitiveValueRegistry(run)
+    await partial_origin_registry.register(
+        leaf,
+        symbol=SymbolPath(segments=("auth", "value")),
+        scope=run,
+    )
+    partial_composite = Present(
+        value=SensitiveValue(
+            JsonObject(
+                members=(
+                    JsonObjectMember(
+                        name="value",
+                        value=JsonString(value="not-a-real-credential"),
+                    ),
+                )
+            ),
+            origins=(_ORIGIN, TaintOriginId(value="secret/project/second")),
+        ),
+        provenance=_provenance(run, provider=COMPOSITE_PROVIDER, namespace=None),
+    )
+    await partial_origin_registry.register(
+        partial_composite,
+        symbol=SymbolPath(segments=("auth",)),
+        scope=run,
+        pattern_disposition=SanitizationPatternDisposition.COVERED_COMPOSITE,
+    )
+    with pytest.raises(ValueError, match="earlier pattern sources"):
+        await partial_origin_registry.snapshot()
+
+    secret_namespace_composite = Present(
+        value=composite.value,
+        provenance=_provenance(
+            run,
+            provider=COMPOSITE_PROVIDER,
+            namespace=ValueNamespace.SECRETS,
+        ),
+    )
+    with pytest.raises(ValueError, match="secrets-namespace"):
+        await SensitiveValueRegistry(run).register(
+            secret_namespace_composite,
+            symbol=SymbolPath(segments=("auth",)),
+            scope=run,
+            pattern_disposition=SanitizationPatternDisposition.COVERED_COMPOSITE,
+        )
+
+    uncovered_registry = SensitiveValueRegistry(run)
+    await uncovered_registry.register(
+        composite,
+        symbol=SymbolPath(segments=("auth",)),
+        scope=run,
+    )
+    fail_closed = SanitizationBoundary.from_snapshot(
+        await uncovered_registry.snapshot(),
+        _limits(),
+    )
+    fail_closed.seal()
+
+    uncovered = fail_closed.sanitize_text("/baseline/in/not-a-real-credential").value
+
+    assert "not-a-real-credential" not in uncovered
+    assert "/in/" not in uncovered
+
+    same_origin_registry = SensitiveValueRegistry(run)
+    await same_origin_registry.register(
+        Present(
+            value=_secret(JsonString(value="alpha")),
+            provenance=_provenance(run),
+        ),
+        symbol=SymbolPath(segments=("alpha",)),
+        scope=run,
+    )
+    await same_origin_registry.register(
+        Present(
+            value=_secret(
+                JsonObject(
+                    members=(JsonObjectMember(name="token", value=JsonString(value="bravo")),)
+                )
+            ),
+            provenance=_provenance(run, provider=COMPOSITE_PROVIDER, namespace=None),
+        ),
+        symbol=SymbolPath(segments=("composite",)),
+        scope=run,
+    )
+    same_origin = SanitizationBoundary.from_snapshot(
+        await same_origin_registry.snapshot(),
+        _limits(),
+    )
+    same_origin.seal()
+
+    adversarial = same_origin.sanitize_text("alpha/bravo/token").value
+
+    assert "alpha" not in adversarial
+    assert "bravo" not in adversarial
+    assert "token" not in adversarial
 
 
 def test_boundary_lifecycle_fails_closed_and_close_is_idempotent() -> None:

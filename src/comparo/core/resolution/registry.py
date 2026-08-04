@@ -13,6 +13,7 @@ from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.values import Present
 from comparo.core.domain.values import ResolvedValue
 from comparo.core.resolution.models import RegisteredSensitiveValue
+from comparo.core.resolution.models import SanitizationPatternDisposition
 from comparo.core.resolution.models import SanitizationSnapshot
 
 
@@ -37,6 +38,9 @@ class SensitiveValueRegistry:
         *,
         symbol: SymbolPath,
         scope: RuntimeScope,
+        pattern_disposition: SanitizationPatternDisposition = (
+            SanitizationPatternDisposition.PATTERN_SOURCE
+        ),
     ) -> None:
         """Retain a sensitive result once by sealed-container identity."""
         value = result.value
@@ -44,6 +48,8 @@ class SensitiveValueRegistry:
             return
         if type(symbol) is not SymbolPath:
             raise TypeError("sensitive registration requires a SymbolPath")
+        if type(pattern_disposition) is not SanitizationPatternDisposition:
+            raise TypeError("sensitive registration requires a pattern disposition")
         if run_scope_of(scope) != self._run:
             raise ValueError("sensitive registration must belong to the registry run")
         entry = RegisteredSensitiveValue(
@@ -51,6 +57,7 @@ class SensitiveValueRegistry:
             symbol=symbol,
             scope=scope,
             provenance=result.provenance,
+            pattern_disposition=pattern_disposition,
         )
         identity = id(value)
         async with self._lock:

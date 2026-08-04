@@ -81,6 +81,7 @@ from comparo.core.resolution import mask_resolution
 from comparo.core.resolution.models import ExternalValueRequest
 from comparo.core.resolution.models import FileReadRequest
 from comparo.core.resolution.models import ProviderOutcome
+from comparo.core.resolution.models import SanitizationPatternDisposition
 from tests.core.resolution.conftest import configuration_provenance
 from tests.core.resolution.conftest import execution_scope
 from tests.core.resolution.conftest import matrix_inputs
@@ -421,6 +422,10 @@ def test_fallback_optional_composites_interpolation_and_explicit_conversion(
         assert revealed_object.members[0].value == JsonInteger(value=42)
         assert revealed_object.members[1].value == JsonString(value="token=s3cr3t")
         assert wire.sanitization.entries[-1].value is wire.result.value
+        assert (
+            wire.sanitization.entries[-1].pattern_disposition
+            is SanitizationPatternDisposition.COVERED_COMPOSITE
+        )
         await context.close()
 
     _run(scenario())

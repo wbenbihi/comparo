@@ -33,6 +33,7 @@ from comparo.core.domain.scopes import TrialScope
 from comparo.core.domain.scopes import ValueScopeKind
 from comparo.core.domain.scopes import run_scope_of
 from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.sensitivity import is_sensitive_value
 from comparo.core.domain.value_references import SymbolPath
 from comparo.core.domain.value_references import ValueNamespace
@@ -41,6 +42,8 @@ from comparo.core.domain.value_references import runtime_value_scope_kind
 from comparo.core.domain.values import Blocked
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import Error
+from comparo.core.domain.values import JsonArray
+from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import Missing
 from comparo.core.domain.values import Present
@@ -424,6 +427,13 @@ class GenerationRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("generation request requires a UtcInstant")
 
 
+class SanitizationPatternDisposition(DomainStrEnum):
+    """Whether one registered payload contributes new literal redaction patterns."""
+
+    PATTERN_SOURCE = "pattern-source"
+    COVERED_COMPOSITE = "covered-composite"
+
+
 @final
 class RegisteredSensitiveValue(msgspec.Struct, frozen=True, kw_only=True):
     """One sealed value retained for later mandatory sanitization."""
@@ -432,6 +442,9 @@ class RegisteredSensitiveValue(msgspec.Struct, frozen=True, kw_only=True):
     symbol: SymbolPath
     scope: RuntimeScope
     provenance: ResolutionProvenance
+    pattern_disposition: SanitizationPatternDisposition = (
+        SanitizationPatternDisposition.PATTERN_SOURCE
+    )
 
     def __post_init__(self) -> None:
         """Keep only sealed payloads and safe exact coordinates."""
@@ -444,6 +457,13 @@ class RegisteredSensitiveValue(msgspec.Struct, frozen=True, kw_only=True):
         runtime_value_scope_kind(self.scope)
         if type(self.provenance) is not ResolutionProvenance:
             raise TypeError("registered sensitive value requires ResolutionProvenance")
+        if type(self.pattern_disposition) is not SanitizationPatternDisposition:
+            raise TypeError("registered sensitive value requires a pattern disposition")
+        if self.pattern_disposition is SanitizationPatternDisposition.COVERED_COMPOSITE:
+            if self.value.payload_type not in {JsonArray, JsonObject}:
+                raise ValueError("covered sanitization values must be JSON composites")
+            if self.provenance.namespace is ValueNamespace.SECRETS:
+                raise ValueError("secrets-namespace composites must remain pattern sources")
 
 
 @final
@@ -468,6 +488,15 @@ class SanitizationSnapshot(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("sanitization snapshot revision must equal its entry count")
         if any(run_scope_of(entry.scope) != self.run for entry in self.entries):
             raise ValueError("sanitization snapshot entries must belong to its run")
+        pattern_origins: set[TaintOriginId] = set()
+        for entry in self.entries:
+            if entry.pattern_disposition is SanitizationPatternDisposition.COVERED_COMPOSITE:
+                if not set(entry.value.origins).issubset(pattern_origins):
+                    raise ValueError(
+                        "covered sanitization composites require earlier pattern sources"
+                    )
+            else:
+                pattern_origins.update(entry.value.origins)
 
 
 @final

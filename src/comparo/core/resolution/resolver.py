@@ -54,6 +54,7 @@ from comparo.core.resolution.conversions import ConversionError
 from comparo.core.resolution.conversions import convert
 from comparo.core.resolution.conversions import trim_bytes
 from comparo.core.resolution.models import ResolutionTarget
+from comparo.core.resolution.models import SanitizationPatternDisposition
 from comparo.core.resolution.provenance import COMPOSITE_PROVIDER
 from comparo.core.resolution.provenance import CONVERSION_PROVIDER
 from comparo.core.resolution.provenance import FALLBACK_PROVIDER
@@ -104,6 +105,7 @@ class ResolutionHost(Protocol):
         self,
         result: Present[ResolvedValue],
         target: ResolutionTarget,
+        pattern_disposition: SanitizationPatternDisposition,
     ) -> None:
         """Retain a sensitive result for the run's sanitization boundary."""
         ...
@@ -168,7 +170,18 @@ class ExpressionResolver:
         else:
             result = await self._interpolation(expression, target, stack)
         if type(result) is Present:
-            await self._host.register_resolution(result, target)
+            covered_composite = type(expression) in {ArrayExpr, ObjectExpr} and (
+                target.namespace is not ValueNamespace.SECRETS
+            )
+            await self._host.register_resolution(
+                result,
+                target,
+                (
+                    SanitizationPatternDisposition.COVERED_COMPOSITE
+                    if covered_composite
+                    else SanitizationPatternDisposition.PATTERN_SOURCE
+                ),
+            )
         return result
 
     async def _fallback(

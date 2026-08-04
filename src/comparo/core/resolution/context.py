@@ -42,6 +42,7 @@ from comparo.core.resolution.models import GenerationSpec
 from comparo.core.resolution.models import ProviderOutcome
 from comparo.core.resolution.models import ResolutionTarget
 from comparo.core.resolution.models import ResolvedForWire
+from comparo.core.resolution.models import SanitizationPatternDisposition
 from comparo.core.resolution.models import SanitizationSnapshot
 from comparo.core.resolution.models import StructuredDocument
 from comparo.core.resolution.models import WireResolution
@@ -355,9 +356,15 @@ class RunContext:
         self,
         result: Present[ResolvedValue],
         target: ResolutionTarget,
+        pattern_disposition: SanitizationPatternDisposition,
     ) -> None:
         """Retain one resolved sensitive value until this run closes."""
-        await self._registry.register(result, symbol=target.symbol, scope=target.scope)
+        await self._registry.register(
+            result,
+            symbol=target.symbol,
+            scope=target.scope,
+            pattern_disposition=pattern_disposition,
+        )
 
     async def resolve_lookup(
         self,

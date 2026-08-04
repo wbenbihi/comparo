@@ -29,6 +29,7 @@ from comparo.core.domain.values import JsonNull
 from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
 from comparo.core.domain.values import ResolvedValue
+from comparo.core.resolution.models import SanitizationPatternDisposition
 from comparo.core.resolution.models import SanitizationSnapshot
 
 _ACCESS = SensitiveValueAccess(purpose="artifact.sanitization")
@@ -110,12 +111,14 @@ class SanitizationBoundary:
         *,
         marker: str = "<redacted>",
     ) -> SanitizationBoundary:
-        """Collect every sealed resolution value in one same-run registry snapshot."""
+        """Collect secret sources and derivatives without treating public structure as secret."""
         if type(snapshot) is not SanitizationSnapshot:
             raise TypeError("sanitization boundary requires a SanitizationSnapshot")
         boundary = cls(limits, marker=marker)
         try:
             for entry in snapshot.entries:
+                if entry.pattern_disposition is SanitizationPatternDisposition.COVERED_COMPOSITE:
+                    continue
                 boundary.register(cast("SensitiveValue[object]", entry.value))
         except BaseException:
             boundary.close()

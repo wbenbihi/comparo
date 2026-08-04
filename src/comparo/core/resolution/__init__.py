@@ -16,6 +16,9 @@ from comparo.core.resolution.models import ProviderPresent as ProviderPresent
 from comparo.core.resolution.models import ProviderUnavailable as ProviderUnavailable
 from comparo.core.resolution.models import ResolutionTarget as ResolutionTarget
 from comparo.core.resolution.models import ResolvedForWire as ResolvedForWire
+from comparo.core.resolution.models import (
+    SanitizationPatternDisposition as SanitizationPatternDisposition,
+)
 from comparo.core.resolution.models import SanitizationSnapshot as SanitizationSnapshot
 from comparo.core.resolution.models import WireResolution as WireResolution
 from comparo.core.resolution.models import YamlDecodeRequest as YamlDecodeRequest
