@@ -107,7 +107,10 @@ class RequestOverview:
 
     routing: tuple[ResourceSetting, ...]
     parameters: tuple[ResourceSetting, ...]
-    inputs: tuple[ResourceSetting, ...]
+    query: tuple[ResourceSetting, ...]
+    headers: tuple[ResourceSetting, ...]
+    cookies: tuple[ResourceSetting, ...]
+    authentication: tuple[ResourceSetting, ...]
     payload: tuple[ResourceSetting, ...]
     behavior: tuple[ResourceSetting, ...]
     expansion: tuple[ResourceSetting, ...]
@@ -348,9 +351,10 @@ def request_overview(entry: ResourceEntry) -> RequestOverview:
             setting for setting in request_settings if setting.name in _REQUEST_ROUTING_FIELDS
         ),
         parameters=_resource_settings(entry, ("parameters",)),
-        inputs=tuple(
-            setting for setting in request_settings if setting.name in _REQUEST_INPUT_FIELDS
-        ),
+        query=tuple(setting for setting in request_settings if setting.name == "query"),
+        headers=tuple(setting for setting in request_settings if setting.name == "headers"),
+        cookies=tuple(setting for setting in request_settings if setting.name == "cookies"),
+        authentication=tuple(setting for setting in request_settings if setting.name == "auth"),
         payload=tuple(
             setting for setting in request_settings if setting.name in _REQUEST_PAYLOAD_FIELDS
         ),

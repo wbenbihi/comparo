@@ -14,6 +14,10 @@ import pytest
 from rich.text import Text
 from textual.pilot import Pilot
 from textual.widgets import Static
+from textual.widgets import Tab
+from textual.widgets import TabbedContent
+from textual.widgets import TabPane
+from textual.widgets import Tabs
 
 from comparo.application import AuthoredResourceWindow
 from comparo.application import ProjectWorkspaceRequest
@@ -51,6 +55,7 @@ from comparo.tui4.components.resources.project import ProjectEnvironmentRow
 from comparo.tui4.components.resources.project import ProjectResourceDetails
 from comparo.tui4.components.resources.request import RequestContextStrip
 from comparo.tui4.components.resources.request import RequestResourceDetails
+from comparo.tui4.components.resources.request import RequestTabBody
 from comparo.tui4.components.resources.request import RequestTargetPill
 from comparo.tui4.components.resources.shared import ResourceSettingList
 from comparo.tui4.components.typography import Caption
@@ -337,12 +342,10 @@ def test_request_overview_groups_every_authored_field_without_losing_structure()
     assert style("request.target.resolved")
     assert [setting.name for setting in overview.routing] == ["method", "endpoint"]
     assert [setting.name for setting in overview.parameters] == ["label"]
-    assert [setting.name for setting in overview.inputs] == [
-        "query",
-        "headers",
-        "cookies",
-        "auth",
-    ]
+    assert [setting.name for setting in overview.query] == ["query"]
+    assert [setting.name for setting in overview.headers] == ["headers"]
+    assert [setting.name for setting in overview.cookies] == ["cookies"]
+    assert [setting.name for setting in overview.authentication] == ["auth"]
     assert overview.payload == ()
     assert [setting.name for setting in overview.behavior] == [
         "timeout",
@@ -377,6 +380,15 @@ def test_request_overview_groups_every_authored_field_without_losing_structure()
         "responseSchema",
         "diffs",
     ]
+
+    payload_request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "json-payload"
+    )
+    payload_overview = request_overview(payload_request)
+    assert [setting.name for setting in payload_overview.payload] == ["body", "bodyType"]
+    assert [setting.name for setting in payload_overview.headers] == ["headers"]
 
     absolute_request = next(
         entry
@@ -1360,8 +1372,24 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
         assert raw_target.method == "GET"
         assert raw_target.target == "/catalog"
         assert not raw_target.resolved
+        request_details = app.query_one(RequestResourceDetails)
         assert len(app.query(RequestResourceDetails)) == 1
-        assert len(app.query(ResourceSettingList)) == 4
+        tabbed = request_details.query_one("#request-tabs", TabbedContent)
+        assert tabbed.active == "request-url"
+        assert [pane.id for pane in request_details.query(TabPane)] == [
+            "request-url",
+            "request-query",
+            "request-headers",
+            "request-cookies",
+            "request-auth",
+            "request-body",
+            "request-runtime",
+            "request-contracts",
+        ]
+        assert len(request_details.query(RequestTabBody)) == 8
+        assert len(app.query(ResourceSettingList)) == 5
+        body_empty = request_details.query_one("#request-body .request-tab-empty", Static)
+        assert str(body_empty.content) == "This Request has no body."
         assert not list(app.query("#resource-action-overview"))
         assert not list(app.query("#resource-action-authored"))
         assert not list(app.query("#resource-action-effective"))
@@ -1370,6 +1398,14 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
         panel = app.query_one("#resource-detail-panel", Panel)
         assert panel.border_subtitle == "overview · raw"
         assert ResourceRepresentation.OVERVIEW.value not in str(panel.border_title)
+
+        native_tabs = tabbed.query_one(Tabs)
+        query_tab = next(tab for tab in native_tabs.query(Tab) if tab.label.plain == "Query")
+        assert await pilot.click(query_tab)
+        assert tabbed.active == "request-query"
+        native_tabs.focus()
+        await pilot.press("right")
+        assert tabbed.active == "request-headers"
 
         await pilot.press("s")
         await _wait_until(
@@ -1405,6 +1441,7 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
         assert resolved.resolved.phase is InspectionPhase.READY
         assert resolved.resolved.value is not None
         assert resolved.resolved.value.environment == app.state.execution_environment
+        assert app.query_one("#request-tabs", TabbedContent).active == "request-headers"
         resolved_target = app.query_one(RequestTargetPill)
         assert resolved_target.method == "GET"
         assert resolved_target.target.startswith("http://127.0.0.1:18080/baseline/catalog?")
@@ -1419,3 +1456,19 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
         }
         assert any("region  eu" in line for line in resolved_lines)
         assert any("0  ▦ Matrix/audiences" in line for line in resolved_lines)
+
+        next_request = next(
+            entry
+            for entry in catalog.entries.values()
+            if entry.summary.coordinate.resource_id == "all-inputs"
+        )
+        workspace.selected = next_request.key
+        await _wait_until(
+            pilot,
+            lambda: (
+                (detail := app.query_one(ResourceDetailOverview).detail) is not None
+                and detail.key == next_request.key
+                and len(app.query("#request-tabs")) == 1
+            ),
+        )
+        assert app.query_one("#request-tabs", TabbedContent).active == "request-headers"

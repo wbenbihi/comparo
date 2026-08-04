@@ -131,10 +131,11 @@ changing the selected view. Environment resolution is bound to the Environment b
 the shared execution context remains the default for other resource kinds. Project reload also
 preserves the active view while rebinding it to the latest catalog and source revision.
 
-Request Overview has an HTTP-specific hierarchy rather than a generic field list: routing,
-parameters, inputs, payload, transport behavior, Matrix expansion, validation/comparison, and
-safety/output. Optional empty sections are suppressed, while every authored capability remains
-available when present. Its leading method/target pill shows the application-sanitized authored
+Request Overview is a native tabbed HTTP inspector rather than a generic field list. Stable tabs
+cover URL and parameters, query, headers, cookies, authentication, body, runtime behavior, and
+contracts/policies; absent capabilities show an explicit empty state. Tabs support mouse and
+left/right navigation, and the selected tab persists across raw/resolved toggling and Request
+selection. Its leading method/target pill shows the application-sanitized authored
 endpoint in raw mode. In resolved mode it shows the canonical sanitized prepared URL, including
 the selected Environment's `baseUrl` and effective endpoint/query composition; the TUI does not
 join URL strings itself. `r` prepares only that Request in the selected execution Environment,

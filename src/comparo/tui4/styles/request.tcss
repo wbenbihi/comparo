@@ -15,3 +15,41 @@
 .request-context-badge {
     margin-right: 1;
 }
+#request-tabs {
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+    background: transparent;
+}
+#request-tabs > ContentTabs {
+    height: 2;
+    background: transparent;
+}
+#request-tabs Tab {
+    color: $comparo-muted;
+}
+#request-tabs Tab:hover {
+    color: $foreground;
+    background: $surface;
+}
+#request-tabs Tab.-active {
+    color: $primary;
+    background: $surface;
+    text-style: bold;
+}
+#request-tabs > ContentSwitcher,
+#request-tabs TabPane,
+.request-tab-body {
+    width: 100%;
+    height: auto;
+    background: transparent;
+}
+.request-tab-body {
+    min-height: 5;
+    padding-top: 1;
+}
+.request-tab-empty {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+}

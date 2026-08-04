@@ -40,11 +40,15 @@ def _build_registry() -> dict[str, type[BaseKindResourceDetails]]:
 RESOURCE_WIDGETS = _build_registry()
 
 
-def resource_widget(detail: ResourceDetail) -> BaseKindResourceDetails:
+def resource_widget(
+    detail: ResourceDetail,
+    *,
+    section: str | None = None,
+) -> BaseKindResourceDetails:
     """Construct the registered widget or the forward-compatible fallback."""
     kind = detail.entry.summary.coordinate.kind
     widget = RESOURCE_WIDGETS.get(kind, GenericResourceDetails)
-    return widget(detail)
+    return widget(detail, section=section)
 
 
 def resource_presentation(kind: str) -> ResourcePresentation:

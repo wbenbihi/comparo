@@ -67,10 +67,11 @@ def _inspection_message(phase: InspectionPhase, message: str | None) -> str:
 class ResourceSummary(Vertical):
     """Generic identity followed by the explicitly registered kind widget."""
 
-    def __init__(self, resource: ResourceDetail) -> None:
+    def __init__(self, resource: ResourceDetail, *, section: str | None = None) -> None:
         """Initialize the summary from immutable resource state."""
         super().__init__()
         self._resource = resource
+        self._section = section
 
     @property
     def entry(self) -> ResourceEntry:
@@ -86,7 +87,7 @@ class ResourceSummary(Vertical):
         )
         yield Caption(self._provenance(), classes="resource-provenance")
         yield Separator(label="Resource", align="left")
-        yield resource_widget(self._resource)
+        yield resource_widget(self._resource, section=self._section)
 
     def _provenance(self) -> str:
         """Build one compact, value-safe revision, source, and tag line."""
@@ -101,15 +102,16 @@ class ResourceSummary(Vertical):
 class OverviewRepresentation(VerticalScroll):
     """Scrollable identity and kind-specific overview."""
 
-    def __init__(self, detail: ResourceDetail) -> None:
+    def __init__(self, detail: ResourceDetail, *, section: str | None = None) -> None:
         """Initialize the overview representation."""
         super().__init__(classes="resource-representation")
         self._detail = detail
+        self._section = section
 
     @override
     def compose(self) -> ComposeResult:
         """Compose overview content."""
-        yield ResourceSummary(self._detail)
+        yield ResourceSummary(self._detail, section=self._section)
 
 
 class AuthoredRepresentation(Vertical):
@@ -234,6 +236,11 @@ class ResourceDetailOverview(Widget):
 
     detail: reactive[ResourceDetail | None] = reactive(None, recompose=True, init=False)
 
+    def __init__(self, *, id: str | None = None, classes: str | None = None) -> None:
+        """Initialize the host and its resource-kind section memory."""
+        super().__init__(id=id, classes=classes)
+        self._kind_sections: dict[str, str] = {}
+
     class ActionRequested(Message):
         """The host requested an effectful or representation-changing action."""
 
@@ -283,7 +290,18 @@ class ResourceDetailOverview(Widget):
             return ResolvedRepresentation(detail)
         if detail.representation is ResourceRepresentation.DEPENDENCIES:
             return ResourceDependencyGraph(detail.entry)
-        return OverviewRepresentation(detail)
+        return OverviewRepresentation(
+            detail,
+            section=self._kind_sections.get(detail.entry.summary.coordinate.kind),
+        )
+
+    def on_base_kind_resource_details_section_changed(
+        self,
+        event: BaseKindResourceDetails.SectionChanged,
+    ) -> None:
+        """Retain a native kind-tab selection across host recomposition and resources."""
+        event.stop()
+        self._kind_sections[event.kind] = event.section
 
     @staticmethod
     def _hint(detail: ResourceDetail) -> str:

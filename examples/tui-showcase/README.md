@@ -20,7 +20,9 @@ uv run --frozen comparo tui --config examples/tui-showcase/comparo.yaml
 Use `o` for Overview, `s` for masked source, `g` for dependencies, and `r` to switch the Overview
 between raw and masked-resolved values. `Space` changes the shared execution Environment while
 an Environment is selected, and `h` runs its declared health check when available. Request
-selection and composition begin in the Compare workspace rather than through Explorer actions.
+Overview uses stable URL, Query, Headers, Cookies, Auth, Body, Runtime, and Contracts tabs; use
+left/right or the mouse to move between them. The active tab survives `r` and selection changes.
+Request selection and composition begin in Compare rather than through Explorer actions.
 
 The Request catalog is intentionally broad:
 

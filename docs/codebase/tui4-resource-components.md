@@ -207,25 +207,29 @@ the shared execution context badge. In resolved mode, typed public values and ma
 semantic theme tokens; reference kind glyphs appear only when the overlay proves the resolved
 target metadata.
 
-The Request widget likewise retains one layout across raw and resolved modes: method/routing,
-parameters, query/headers/cookies/authentication, payload/body type, stream/timeouts/retry/redirect
-behavior, Matrix expansion, Schema/assertion/diff evaluation, and safety/redaction/artifact
-attachments. Empty optional sections are omitted so a minimal Request remains compact; every
-authored section appears as soon as the corresponding capability exists. The compact top strip
-renders the method and target as one terminal-native unit. Raw mode uses the application outline's
-bounded authored route preview: it may show an endpoint path or absolute URL, but conceals query
-values and URL user information and never reads YAML in the widget. Resolved mode replaces that
-route with the application renderer's canonical sanitized prepared URL for the exact occurrence.
+The Request widget likewise retains one layout across raw and resolved modes. A native Textual
+`TabbedContent` inspector separates URL/parameters, query, headers, cookies, authentication, body,
+runtime behavior, and execution contracts. The eight tabs remain stable for every Request;
+missing capabilities have explicit empty states instead of changing the navigation. Textual owns
+mouse selection, focus, and left/right tab navigation. The generic resource host remembers the
+selected kind section, so the active Request tab survives raw/resolved recomposition, source or
+graph visits, and selection of another Request without placing this state in domain models.
+
+The compact top strip renders the method and target as one terminal-native unit. Raw mode uses the
+application outline's bounded authored route preview: it may show an endpoint path or absolute
+URL, but conceals query values and URL user information and never reads YAML in the widget.
+Resolved mode replaces that route with the application renderer's canonical sanitized prepared
+URL for the exact occurrence.
 Consequently Environment `baseUrl`, its path prefix, the endpoint, and effective query parameters
 follow the same joining and redaction semantics as execution rather than being concatenated by
 TUI code. If rendering is unavailable, the strip fails closed to the authored safe preview.
 Streaming and Matrix count remain adjacent context badges. Resolved field inspection selects
-visible Request fields independently;
-this is security-significant because a sensitive cookie or authentication object collapses to
-`<masked>` without unnecessarily collapsing unrelated public method, endpoint, query, or header
-values. Exact linked Matrix, Schema, and profile identities gain their kind glyph only in resolved
-mode. Compare owns Request selection and composition within its execution workflow; Explorer does
-not expose a cross-workspace shortcut or imply a locally synthesized effective request.
+visible Request fields independently; this is security-significant because a sensitive cookie or
+authentication object collapses to `<masked>` without unnecessarily collapsing unrelated public
+method, endpoint, query, or header values. Exact linked Matrix, Schema, and profile identities gain
+their kind glyph only in resolved mode. Compare owns Request selection and composition within its
+execution workflow; Explorer does not expose a cross-workspace shortcut or imply a locally
+synthesized effective request.
 
 An Environment may declare ordered `healthChecks` references to `Request` resources. The
 contextual `h` binding is available only when at least one probe is declared and no probe run is
