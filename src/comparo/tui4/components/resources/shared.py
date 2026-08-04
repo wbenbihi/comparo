@@ -174,6 +174,9 @@ def resolution_status(resource: ResourceDetail, context: str) -> Static:
     if inspection.phase is not InspectionPhase.READY or inspection.value is None:
         return Hint(inspection.message or f"Resolved values are unavailable for {context}.")
     resolved = inspection.value
+    subject = f"{resolved.subject.kind}/{resolved.subject.resource_id}"
+    occurrence = f"occurrence {resolved.execution_ordinal + 1}/{resolved.total_occurrences}"
+    matrices = ", ".join(f"{item.binding}={item.case_id}" for item in resolved.matrices)
     cell = f"{resolved.cell_id[:8]}…"
     trial = f"{resolved.trial_id[:8]}…"
     suffixes: list[str] = []
@@ -181,9 +184,11 @@ def resolution_status(resource: ResourceDetail, context: str) -> Static:
         suffixes.append(f"{len(resolved.diagnostics)} unavailable")
     if resolved.incomplete:
         suffixes.append("bounded partial view")
+    if matrices:
+        suffixes.insert(0, f"matrices {matrices}")
     suffix = "" if not suffixes else f" · {' · '.join(suffixes)}"
     return Caption(
-        f"Resolved for {context} · execution {resolved.execution_ordinal} · "
+        f"Resolved preview for {context} · {subject} · {occurrence} · "
         f"cell {cell} · trial {trial} · masked{suffix}"
     )
 

@@ -120,6 +120,85 @@ class RequestOverview:
 
 
 @dataclass(frozen=True)
+class MatrixOption:
+    """One authored axis option and its still-unresolved value expression."""
+
+    id: str
+    value: ResourceSetting
+
+
+@dataclass(frozen=True)
+class MatrixAxis:
+    """One named Matrix axis with its ordered authored options."""
+
+    id: str
+    options: tuple[MatrixOption, ...]
+
+
+@dataclass(frozen=True)
+class MatrixCase:
+    """One explicit or included Matrix case with its named values."""
+
+    id: str
+    source: str
+    values: ResourceSetting
+
+
+@dataclass(frozen=True)
+class MatrixOverview:
+    """Complete safe Matrix declaration independent from Compare planning context."""
+
+    mode: str
+    combine: str
+    axes: tuple[MatrixAxis, ...]
+    cases: tuple[MatrixCase, ...]
+    exclusions: tuple[str, ...]
+    consumers: tuple[ResourceDependency, ...]
+
+
+@dataclass(frozen=True)
+class SchemaProperty:
+    """One JSON Schema property projected as structural contract metadata."""
+
+    path: tuple[str, ...]
+    type: str
+    required: bool
+    shape: str
+    constraints: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SchemaOverview:
+    """Safe JSON Schema anatomy without examples, defaults, or payload literals."""
+
+    source: str
+    root_type: str
+    required: tuple[str, ...]
+    properties: tuple[SchemaProperty, ...]
+    composition: tuple[ResourceSetting, ...]
+    constraints: tuple[ResourceSetting, ...]
+    consumers: tuple[ResourceDependency, ...]
+
+
+@dataclass(frozen=True)
+class ValueOverview:
+    """One reusable Value expression tree and its dependency topology."""
+
+    value: ResourceSetting | None
+    directives: tuple[ValueDirective, ...]
+    dependencies: tuple[ResourceDependency, ...]
+    consumers: tuple[ResourceDependency, ...]
+
+
+@dataclass(frozen=True)
+class ValueDirective:
+    """One value-expression directive at an exact reusable-Value path."""
+
+    path: tuple[str, ...]
+    expression: str
+
+
+@dataclass(frozen=True)
 class ResourceDependency:
     """One directed edge in a resource's safe dependency graph."""
 
@@ -410,54 +489,13 @@ def resource_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ..
     """Select bounded expression roots that the kind-specific Overview displays."""
     kind = entry.summary.coordinate.kind
     if kind == "Environment":
-        outline = entry.summary.outline
-        if outline is None:
-            return ()
-        available = {field.path for field in outline.fields}
-        return tuple(
-            (name,)
-            for name in (
-                "baseUrl",
-                "variables",
-                "secrets",
-                "headers",
-                "cookies",
-                "auth",
-                "timeout",
-                "proxy",
-            )
-            if (name,) in available
-        )
+        return _environment_resolution_paths(entry)
     if kind == "Request":
-        outline = entry.summary.outline
-        if outline is None:
-            return ()
-        available = {field.path for field in outline.fields}
-        parameters = tuple(
-            field.path
-            for field in outline.fields
-            if len(field.path) == 2 and field.path[0] == "parameters"
-        )
-        return tuple(
-            path
-            for path in (
-                *parameters,
-                ("request", "method"),
-                ("request", "endpoint"),
-                ("request", "url"),
-                ("request", "query"),
-                ("request", "headers"),
-                ("request", "cookies"),
-                ("request", "auth"),
-                ("request", "body"),
-                ("request", "bodyType"),
-                ("request", "stream"),
-                ("request", "timeout"),
-                ("request", "redirects"),
-                ("request", "retries"),
-            )
-            if path in available
-        )
+        return _request_resolution_paths(entry)
+    if kind == "Matrix":
+        return _matrix_resolution_paths(entry)
+    if kind == "Value":
+        return (("value",),) if _field_at(entry, ("value",)) is not None else ()
     if kind != "Project":
         return ()
     overview = project_overview(entry)
@@ -479,6 +517,83 @@ def resource_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ..
             if path in available
         )
     return tuple(dict.fromkeys(paths))
+
+
+def _environment_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
+    """Select Environment expression roots displayed by its overview."""
+    available = {field.path for field in _outline_fields(entry)}
+    return tuple(
+        (name,)
+        for name in (
+            "baseUrl",
+            "variables",
+            "secrets",
+            "headers",
+            "cookies",
+            "auth",
+            "timeout",
+            "proxy",
+        )
+        if (name,) in available
+    )
+
+
+def _request_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
+    """Select Request expression roots displayed by its HTTP tabs."""
+    fields = _outline_fields(entry)
+    available = {field.path for field in fields}
+    parameters = tuple(
+        field.path for field in fields if len(field.path) == 2 and field.path[0] == "parameters"
+    )
+    candidates = (
+        *parameters,
+        *(
+            ("request", name)
+            for name in (
+                "method",
+                "endpoint",
+                "url",
+                "query",
+                "headers",
+                "cookies",
+                "auth",
+                "body",
+                "bodyType",
+                "stream",
+                "timeout",
+                "redirects",
+                "retries",
+            )
+        ),
+    )
+    return tuple(path for path in candidates if path in available)
+
+
+def _matrix_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
+    """Select Matrix declaration roots resolvable inside one consumer cell."""
+    available = {field.path for field in _outline_fields(entry)}
+    return tuple(path for path in (("axes",), ("cases",), ("include",)) if path in available)
+
+
+def resource_resolution_subject_id(entry: ResourceEntry) -> str | None:
+    """Return the only declared executable consumer, rejecting ambiguous context."""
+    subjects = resource_resolution_subject_ids(entry)
+    return subjects[0] if len(subjects) == 1 else None
+
+
+def resource_resolution_subject_ids(entry: ResourceEntry) -> tuple[str, ...]:
+    """Return unique executable consumer IDs in declared relationship order."""
+    outline = entry.summary.outline
+    if outline is None:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            relationship.target.resource_id
+            for relationship in outline.relationships
+            if relationship.origin == "used-by"
+            and relationship.target.kind in {"Request", "Scenario"}
+        )
+    )
 
 
 def resolved_fields(
@@ -581,6 +696,119 @@ def request_fields(entry: ResourceEntry) -> tuple[Field, ...]:
     return tuple(rows)
 
 
+def _outline_fields(entry: ResourceEntry) -> tuple[ProjectOutlineField, ...]:
+    """Return the immutable safe outline field collection for one entry."""
+    outline = entry.summary.outline
+    return () if outline is None else outline.fields
+
+
+def _field_at(entry: ResourceEntry, path: tuple[str, ...]) -> ProjectOutlineField | None:
+    """Find one exact outline path without interpreting configuration semantics."""
+    return next((field for field in _outline_fields(entry) if field.path == path), None)
+
+
+def _field_display(field: ProjectOutlineField | None, fallback: str = "—") -> str:
+    """Prefer an application-approved exact structural value over its safe shape."""
+    if field is None:
+        return fallback
+    return field.exact_value if field.exact_value is not None else field.value
+
+
+def _setting_at(
+    entry: ResourceEntry,
+    path: tuple[str, ...],
+    *,
+    name: str | None = None,
+    structural_exact: bool = False,
+) -> ResourceSetting | None:
+    """Project one outline subtree through the shared resource-setting contract."""
+    root = _field_at(entry, path)
+    if root is None:
+        return None
+    details = tuple(
+        ResourceSettingDetail(
+            path=field.path[len(path) :],
+            value=_field_display(field) if structural_exact else field.value,
+            category=field.category,
+        )
+        for field in _outline_fields(entry)
+        if len(field.path) > len(path) and field.path[: len(path)] == path
+    )
+    return ResourceSetting(
+        path=path,
+        name=name or (path[-1] if path else "value"),
+        value=_field_display(root) if structural_exact else root.value,
+        category=root.category,
+        details=details,
+    )
+
+
+def _matrix_case(entry: ResourceEntry, source: str, index: str) -> MatrixCase | None:
+    """Build one explicit/include case from application-approved structural fields."""
+    root = (source, index)
+    case_id = _field_display(_field_at(entry, (*root, "id")), f"case {index}")
+    values = _setting_at(entry, (*root, "values"), name=case_id)
+    if values is None:
+        return None
+    return MatrixCase(id=case_id, source=source, values=values)
+
+
+def matrix_overview(entry: ResourceEntry) -> MatrixOverview:
+    """Return axes, explicit cases, includes, exclusions, and consumers in source order."""
+    fields = _outline_fields(entry)
+    axes: list[MatrixAxis] = []
+    for axis_field in fields:
+        if len(axis_field.path) != 2 or axis_field.path[0] != "axes":
+            continue
+        axis_id = axis_field.path[1]
+        option_indexes = tuple(
+            field.path[2]
+            for field in fields
+            if len(field.path) == 3
+            and field.path[:2] == axis_field.path
+            and field.category == "container"
+        )
+        options: list[MatrixOption] = []
+        for index in option_indexes:
+            option_id = _field_display(
+                _field_at(entry, ("axes", axis_id, index, "id")),
+                f"option {index}",
+            )
+            value = _setting_at(
+                entry,
+                ("axes", axis_id, index, "value"),
+                name=option_id,
+            )
+            if value is not None:
+                options.append(MatrixOption(id=option_id, value=value))
+        axes.append(MatrixAxis(id=axis_id, options=tuple(options)))
+
+    cases = tuple(
+        case
+        for source in ("cases", "include")
+        for field in fields
+        if len(field.path) == 2
+        and field.path[0] == source
+        and field.category == "container"
+        and (case := _matrix_case(entry, source, field.path[1])) is not None
+    )
+    exclusions = tuple(
+        _field_display(field)
+        for field in fields
+        if len(field.path) == 2 and field.path[0] == "exclude"
+    )
+    dependencies = resource_dependencies(entry)
+    mode = "axes" if axes else "explicit cases"
+    return MatrixOverview(
+        mode=mode,
+        combine=_field_display(_field_at(entry, ("combine",)), "product"),
+        axes=tuple(axes),
+        cases=cases,
+        exclusions=exclusions,
+        consumers=tuple(item for item in dependencies if item.direction == "used-by"),
+    )
+
+
 def matrix_fields(entry: ResourceEntry) -> tuple[Field, ...]:
     """Return rows derived from one Matrix summary."""
     summary = entry.summary
@@ -626,6 +854,112 @@ def matrix_dimensions(entry: ResourceEntry) -> tuple[MatrixDimension, ...]:
         and field.value.startswith("array ·")
     )
     return tuple(dimensions)
+
+
+_SCHEMA_COMPOSITION_FIELDS = frozenset(
+    {"$defs", "definitions", "allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
+)
+_SCHEMA_RESERVED_FIELDS = _SCHEMA_COMPOSITION_FIELDS | frozenset(
+    {"type", "properties", "required", "$schema", "$id", "title", "description"}
+)
+
+
+def _schema_property_path(path: tuple[str, ...]) -> tuple[str, ...]:
+    """Translate nested JSON Schema `properties` coordinates to a dotted data path."""
+    return tuple(
+        path[index + 1] for index, segment in enumerate(path[:-1]) if segment == "properties"
+    )
+
+
+def _schema_required_names(
+    entry: ResourceEntry,
+    schema_path: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return exact required property names for one schema object."""
+    prefix = (*schema_path, "required")
+    return tuple(
+        field.exact_value
+        for field in _outline_fields(entry)
+        if len(field.path) == len(prefix) + 1
+        and field.path[: len(prefix)] == prefix
+        and field.exact_value is not None
+    )
+
+
+def schema_overview(entry: ResourceEntry) -> SchemaOverview:
+    """Return a recursive structural JSON Schema projection and usage topology."""
+    fields = _outline_fields(entry)
+    properties: list[SchemaProperty] = []
+    for field in fields:
+        if len(field.path) < 2 or field.path[-2] != "properties":
+            continue
+        schema_path = field.path[:-2]
+        property_name = field.path[-1]
+        required = property_name in _schema_required_names(entry, schema_path)
+        exact_constraints = tuple(
+            f"{child.path[-1]}={child.exact_value}"
+            for child in fields
+            if len(child.path) == len(field.path) + 1
+            and child.path[: len(field.path)] == field.path
+            and child.path[-1] != "type"
+            and child.exact_value is not None
+        )
+        properties.append(
+            SchemaProperty(
+                path=_schema_property_path(field.path),
+                type=_field_display(
+                    _field_at(entry, (*field.path, "type")),
+                    "boolean schema" if field.category == "literal" else "any",
+                ),
+                required=required,
+                shape=field.value,
+                constraints=exact_constraints,
+            )
+        )
+    top_names = tuple(field.path[0] for field in fields if len(field.path) == 1)
+    top_level = tuple(
+        setting
+        for name in top_names
+        if (setting := _setting_at(entry, (name,), structural_exact=True)) is not None
+    )
+    root_field = _field_at(entry, ())
+    dependencies = resource_dependencies(entry)
+    return SchemaOverview(
+        source=(
+            "remote"
+            if root_field is not None and root_field.value.startswith("remote schema")
+            else "local"
+        ),
+        root_type=_field_display(_field_at(entry, ("type",)), "any"),
+        required=_schema_required_names(entry, ()),
+        properties=tuple(properties),
+        composition=tuple(
+            setting for setting in top_level if setting.name in _SCHEMA_COMPOSITION_FIELDS
+        ),
+        constraints=tuple(
+            setting for setting in top_level if setting.name not in _SCHEMA_RESERVED_FIELDS
+        ),
+        consumers=tuple(item for item in dependencies if item.direction == "used-by"),
+    )
+
+
+def value_overview(entry: ResourceEntry) -> ValueOverview:
+    """Return the complete reusable expression tree and directed dependencies."""
+    value = _setting_at(entry, ("value",), name="value")
+    if value is None:
+        value = _setting_at(entry, (), name="value")
+    directives = tuple(
+        ValueDirective(path=field.path[1:], expression=field.value)
+        for field in _outline_fields(entry)
+        if field.category == "directive"
+    )
+    dependencies = resource_dependencies(entry)
+    return ValueOverview(
+        value=value,
+        directives=directives,
+        dependencies=tuple(item for item in dependencies if item.direction == "uses"),
+        consumers=tuple(item for item in dependencies if item.direction == "used-by"),
+    )
 
 
 def schema_fields(entry: ResourceEntry) -> tuple[Field, ...]:

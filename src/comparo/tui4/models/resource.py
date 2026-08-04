@@ -99,17 +99,105 @@ class ResolvedRequestTarget:
 
 
 @dataclass(frozen=True)
+class ResolvedMatrixPlan:
+    """Compiled Matrix cases for one exact Compare subject and binding."""
+
+    subject: ResourceCoordinate
+    binding: str
+    cases: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Require one bounded non-empty Matrix axis projection."""
+        if type(self.subject) is not ResourceCoordinate:
+            raise TypeError("resolved Matrix plan subject must be a ResourceCoordinate")
+        if self.subject.kind not in {"Request", "Scenario"}:
+            raise ValueError("resolved Matrix plan subject must be executable")
+        if (
+            type(self.binding) is not str
+            or not self.binding
+            or len(self.binding) > 255
+            or not self.binding.isprintable()
+        ):
+            raise ValueError("resolved Matrix binding must be bounded printable text")
+        if (
+            type(self.cases) is not tuple
+            or not self.cases
+            or len(set(self.cases)) != len(self.cases)
+            or any(
+                type(case) is not str or not case or len(case) > 255 or not case.isprintable()
+                for case in self.cases
+            )
+        ):
+            raise ValueError("resolved Matrix cases must be unique bounded printable text")
+
+
+@dataclass(frozen=True)
+class ResolvedMatrixSelection:
+    """One exact Matrix binding and case selected by a resolved occurrence."""
+
+    binding: str
+    matrix: ResourceCoordinate
+    case_id: str
+
+    def __post_init__(self) -> None:
+        """Require a complete bounded Matrix assignment."""
+        if type(self.matrix) is not ResourceCoordinate or self.matrix.kind != "Matrix":
+            raise TypeError("resolved Matrix selection must identify a Matrix resource")
+        if any(
+            type(value) is not str or not value or len(value) > 255 or not value.isprintable()
+            for value in (self.binding, self.case_id)
+        ):
+            raise ValueError("resolved Matrix selection must contain bounded printable text")
+
+
+@dataclass(frozen=True)
 class ResolvedResourceView:
     """Frontend projection for one context-bound masked value overlay."""
 
     environment: ResourceCoordinate
+    subject: ResourceCoordinate
     execution_ordinal: int
+    total_occurrences: int
     cell_id: str
     trial_id: str
     fields: tuple[ResolvedResourceField, ...]
+    matrices: tuple[ResolvedMatrixSelection, ...] = ()
     request_target: ResolvedRequestTarget | None = None
+    matrix_plan: ResolvedMatrixPlan | None = None
     diagnostics: tuple[str, ...] = ()
     incomplete: bool = False
+
+    def __post_init__(self) -> None:
+        """Require exact executable context and coherent optional kind products."""
+        if (
+            type(self.environment) is not ResourceCoordinate
+            or self.environment.kind != "Environment"
+        ):
+            raise TypeError("resolved resource view requires an Environment coordinate")
+        if type(self.subject) is not ResourceCoordinate or self.subject.kind not in {
+            "Request",
+            "Scenario",
+        }:
+            raise TypeError("resolved resource view requires an executable subject coordinate")
+        if (
+            type(self.execution_ordinal) is not int
+            or type(self.total_occurrences) is not int
+            or self.execution_ordinal < 0
+            or self.total_occurrences < 1
+            or self.execution_ordinal >= self.total_occurrences
+        ):
+            raise ValueError("resolved resource view occurrence coordinates are inconsistent")
+        if type(self.matrices) is not tuple or any(
+            type(item) is not ResolvedMatrixSelection for item in self.matrices
+        ):
+            raise TypeError("resolved resource Matrix assignments must be immutable and typed")
+        bindings = tuple(item.binding for item in self.matrices)
+        if len(bindings) != len(set(bindings)):
+            raise ValueError("resolved resource Matrix bindings must be unique")
+        if self.matrix_plan is not None and type(self.matrix_plan) is not ResolvedMatrixPlan:
+            raise TypeError("resolved resource Matrix plan must be typed")
+        if self.matrix_plan is not None and self.matrix_plan.subject != self.subject:
+            raise ValueError("resolved Matrix plan subject differs from its execution context")
 
 
 @dataclass(frozen=True)

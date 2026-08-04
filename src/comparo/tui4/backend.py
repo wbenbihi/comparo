@@ -47,6 +47,7 @@ from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
 from comparo.tui4.models.resource import EnvironmentHealthCheckResult
+from comparo.tui4.models.resource import ResolvedMatrixPlan
 from comparo.tui4.models.resource import ResolvedRequestTarget
 
 SOURCE_LIMITS = SourceInspectionLimits(
@@ -83,7 +84,9 @@ class ResolvedFieldBatch:
     values: ResolvedValueInspectionBatchResult | None = None
     diagnostics: tuple[str, ...] = ()
     selection_incomplete: bool = False
+    total_occurrences: int | None = None
     request_target: ResolvedRequestTarget | None = None
+    matrix_plan: ResolvedMatrixPlan | None = None
 
     def __post_init__(self) -> None:
         """Keep success and value-free failure structurally disjoint."""
@@ -94,8 +97,14 @@ class ResolvedFieldBatch:
             raise ValueError("resolved field batch requires success or diagnostics")
         if self.selection_incomplete and not successful:
             raise ValueError("only a successful resolved batch may be incomplete")
+        if successful != (self.total_occurrences is not None):
+            raise ValueError("resolved field batch must retain its total occurrence count")
+        if self.total_occurrences is not None and self.total_occurrences < 1:
+            raise ValueError("resolved field batch total occurrences must be positive")
         if self.request_target is not None and not successful:
             raise ValueError("only a successful Request batch may carry a rendered target")
+        if self.matrix_plan is not None and not successful:
+            raise ValueError("only a successful Matrix batch may carry a compiled plan")
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +138,44 @@ def _resolved_field_selection(
     ):
         return None
     return selected, len(field_paths) > MAXIMUM_RESOLVED_FIELDS
+
+
+def _resolved_context_diagnostic(
+    resource: ResourceCoordinate,
+    environment: ResourceCoordinate,
+    subject_id: str | None,
+    execution_ordinal: int,
+) -> str | None:
+    """Validate the complete caller-owned resolved inspection context."""
+    if resource.kind not in {"Project", "Environment", "Request", "Matrix", "Value"} or (
+        environment.kind != "Environment"
+    ):
+        return "resolution.context.invalid"
+    if type(execution_ordinal) is not int or execution_ordinal < 0:
+        return "resolution.execution.invalid"
+    if resource.kind in {"Matrix", "Value"} and subject_id is None:
+        return "resolution.subject.required"
+    if subject_id is not None and (
+        type(subject_id) is not str
+        or not subject_id
+        or len(subject_id) > 255
+        or not subject_id.isprintable()
+    ):
+        return "resolution.subject.invalid"
+    return None
+
+
+def _resolved_occurrence_diagnostic(
+    occurrence: PlanOccurrenceInspection,
+    resource: ResourceCoordinate,
+    environment: ResourceCoordinate,
+) -> str | None:
+    """Verify that one prepared occurrence matches the requested exact context."""
+    if occurrence.environment != environment:
+        return "resolution.environment.mismatch"
+    if resource.kind == "Request" and occurrence.subject != resource:
+        return "resolution.subject.mismatch"
+    return None
 
 
 def _health_revisions_match(
@@ -244,12 +291,19 @@ class TuiBackend:
         resource: ResourceCoordinate,
         environment: ResourceCoordinate,
         field_paths: tuple[tuple[str, ...], ...],
+        *,
+        subject_id: str | None = None,
+        execution_ordinal: int = 0,
     ) -> ResolvedFieldBatch:
         """Resolve the bounded first field page through an ephemeral masked Compare plan."""
-        if resource.kind not in {"Project", "Environment", "Request"} or (
-            environment.kind != "Environment"
-        ):
-            return ResolvedFieldBatch(diagnostics=("resolution.context.invalid",))
+        context_diagnostic = _resolved_context_diagnostic(
+            resource,
+            environment,
+            subject_id,
+            execution_ordinal,
+        )
+        if context_diagnostic is not None:
+            return ResolvedFieldBatch(diagnostics=(context_diagnostic,))
         selection = _resolved_field_selection(field_paths)
         if selection is None:
             return ResolvedFieldBatch(diagnostics=("resolution.selection.invalid",))
@@ -262,7 +316,7 @@ class TuiBackend:
                     asyncio.to_thread(
                         self._prepare_resolved_context,
                         environment.resource_id,
-                        resource.resource_id if resource.kind == "Request" else None,
+                        resource.resource_id if resource.kind == "Request" else subject_id,
                     )
                 )
             )
@@ -275,16 +329,19 @@ class TuiBackend:
                 occurrences = self.compare.list_occurrences(
                     handle,
                     controls,
-                    start_ordinal=0,
+                    start_ordinal=execution_ordinal,
                     maximum_occurrences=1,
                 )
                 if not occurrences.occurrences:
                     return ResolvedFieldBatch(diagnostics=("resolution.execution.unavailable",))
                 occurrence = occurrences.occurrences[0]
-                if occurrence.environment != environment:
-                    return ResolvedFieldBatch(diagnostics=("resolution.environment.mismatch",))
-                if resource.kind == "Request" and occurrence.subject != resource:
-                    return ResolvedFieldBatch(diagnostics=("resolution.subject.mismatch",))
+                occurrence_diagnostic = _resolved_occurrence_diagnostic(
+                    occurrence,
+                    resource,
+                    environment,
+                )
+                if occurrence_diagnostic is not None:
+                    return ResolvedFieldBatch(diagnostics=(occurrence_diagnostic,))
                 request_target = (
                     await self._preview_request_target(
                         handle,
@@ -296,6 +353,11 @@ class TuiBackend:
                     if resource.kind == "Request"
                     else None
                 )
+                matrix_plan = self._resolved_matrix_plan(prepared, resource)
+                if resource.kind == "Matrix" and matrix_plan is None:
+                    return ResolvedFieldBatch(
+                        diagnostics=("resolution.context.matrix-binding-ambiguous",)
+                    )
                 targets = tuple(
                     ResolvedValueInspectionTarget(
                         resource=resource,
@@ -320,7 +382,9 @@ class TuiBackend:
                     occurrence=occurrence,
                     values=values,
                     selection_incomplete=selection_incomplete,
+                    total_occurrences=occurrences.total_occurrences,
                     request_target=request_target,
+                    matrix_plan=matrix_plan,
                 )
             except asyncio.CancelledError:
                 raise
@@ -329,6 +393,29 @@ class TuiBackend:
             finally:
                 with suppress(Exception):
                     self.compare.discard(handle)
+
+    @staticmethod
+    def _resolved_matrix_plan(
+        prepared: ComparePreparationResult,
+        resource: ResourceCoordinate,
+    ) -> ResolvedMatrixPlan | None:
+        """Project one exact Matrix axis from the prepared Compare topology."""
+        if resource.kind != "Matrix" or prepared.review is None:
+            return None
+        matching = tuple(
+            (plan_slice.subject, axis)
+            for plan_slice in prepared.review.plan.slices
+            for axis in plan_slice.matrices
+            if axis.matrix == resource
+        )
+        if len(matching) != 1:
+            return None
+        subject, axis = matching[0]
+        return ResolvedMatrixPlan(
+            subject=subject,
+            binding=axis.binding,
+            cases=axis.cases,
+        )
 
     async def _preview_request_target(
         self,

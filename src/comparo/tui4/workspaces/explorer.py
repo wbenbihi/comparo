@@ -27,6 +27,7 @@ from comparo.tui4.models.explorer import build_catalog
 from comparo.tui4.models.explorer import select_execution_environment
 from comparo.tui4.models.resource import EnvironmentHealthCheckResult
 from comparo.tui4.models.resource import InspectionPhase
+from comparo.tui4.models.resource import ResolvedMatrixSelection
 from comparo.tui4.models.resource import ResolvedResourceView
 from comparo.tui4.models.resource import ResourceActionId
 from comparo.tui4.models.resource import ResourceDetail
@@ -52,6 +53,8 @@ from comparo.tui4.models.resource import with_health_check
 from comparo.tui4.models.resource_presenters import environment_health_check_targets
 from comparo.tui4.models.resource_presenters import resolved_fields
 from comparo.tui4.models.resource_presenters import resource_resolution_paths
+from comparo.tui4.models.resource_presenters import resource_resolution_subject_id
+from comparo.tui4.models.resource_presenters import resource_resolution_subject_ids
 from comparo.tui4.types import ComparoScreen
 
 from .base import Workspace
@@ -496,6 +499,18 @@ class ExplorerWorkspace(Workspace):
                 "This resource has no fields that require resolution.",
             )
             return
+        if detail.entry.summary.coordinate.kind in {"Matrix", "Value"}:
+            subjects = resource_resolution_subject_ids(detail.entry)
+            if len(subjects) != 1:
+                message = (
+                    "This resource has no executable consumer context."
+                    if not subjects
+                    else (
+                        f"Choose an explicit consumer before resolving ({len(subjects)} available)."
+                    )
+                )
+                self.detail = unavailable_resolved(detail, message)
+                return
         self.detail = loading_resolved(detail)
         self._load_resource_resolved(
             self._resolution_generation,
@@ -503,6 +518,7 @@ class ExplorerWorkspace(Workspace):
             detail.entry.summary.coordinate,
             environment,
             paths,
+            resource_resolution_subject_id(detail.entry),
         )
 
     @work(exclusive=True, group="resource-resolution")
@@ -513,10 +529,16 @@ class ExplorerWorkspace(Workspace):
         resource: ResourceCoordinate,
         environment: ResourceCoordinate,
         paths: tuple[tuple[str, ...], ...],
+        subject_id: str | None,
     ) -> None:
         """Load one masked field batch without blocking the event loop."""
         try:
-            result = await self.backend.inspect_resolved_fields(resource, environment, paths)
+            result = await self.backend.inspect_resolved_fields(
+                resource,
+                environment,
+                paths,
+                subject_id=subject_id,
+            )
         except Exception:  # noqa: BLE001 - never expose source-bearing adapter details
             self._apply_resolved_failure(generation, key, environment, "internal")
             return
@@ -545,11 +567,22 @@ class ExplorerWorkspace(Workspace):
             detail,
             ResolvedResourceView(
                 environment=environment,
+                subject=occurrence.subject,
                 execution_ordinal=occurrence.ordinal,
+                total_occurrences=result.total_occurrences or 1,
                 cell_id=occurrence.cell_id,
                 trial_id=occurrence.trial_id,
                 fields=projected.fields,
+                matrices=tuple(
+                    ResolvedMatrixSelection(
+                        binding=item.binding,
+                        matrix=item.matrix,
+                        case_id=item.case_id,
+                    )
+                    for item in occurrence.matrices
+                ),
                 request_target=result.request_target,
+                matrix_plan=result.matrix_plan,
                 diagnostics=projected.diagnostics,
                 incomplete=projected.incomplete or result.selection_incomplete,
             ),
