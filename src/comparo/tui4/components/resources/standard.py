@@ -8,24 +8,11 @@ from comparo.tui4.models.explorer import PROFILE_KINDS
 from comparo.tui4.models.resource_presenters import environment_fields
 from comparo.tui4.models.resource_presenters import generic_fields
 from comparo.tui4.models.resource_presenters import profile_fields
-from comparo.tui4.models.resource_presenters import project_fields
 from comparo.tui4.models.resource_presenters import request_fields
 from comparo.tui4.models.resource_presenters import schema_fields
 from comparo.tui4.models.resource_presenters import value_fields
 
 from .base import BaseKindResourceDetails
-
-
-class ProjectResourceDetails(BaseKindResourceDetails):
-    """Project defaults and their referenced execution scope."""
-
-    KINDS: ClassVar[frozenset[str]] = frozenset({"Project"})
-
-    @property
-    @override
-    def fields(self) -> tuple[Field, ...]:
-        """Return Project-specific overview rows."""
-        return project_fields(self.entry)
 
 
 class EnvironmentResourceDetails(BaseKindResourceDetails):

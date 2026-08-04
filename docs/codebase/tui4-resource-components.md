@@ -118,6 +118,13 @@ compiler objects. Matrix presentation lists declared axes and case collections f
 outline. Expanded execution cells are deliberately a Compare-plan action because multiple Matrix
 attachments, filters, includes/excludes, and invocation overrides affect the real cell set.
 
+The Project widget is intentionally more explicit than the generic field-based widgets. Its two
+comparison cards obtain baseline/candidate names and `local`/`live` locality from the related
+Environment catalog entries. Dedicated source, variable, secret, and semantic default sections
+then enumerate every field available in the Project's safe structural outline, including nested
+definitions. Literal secrets remain redacted and other literals retain the outline contract's
+safe previews; the widget never reparses `comparo.yaml` or resolves a value itself.
+
 ## Adding a kind
 
 1. Confirm that `inspect_project_workspace` exposes enough secret-safe structure. Add an

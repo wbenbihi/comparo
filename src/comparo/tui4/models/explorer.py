@@ -68,6 +68,23 @@ class ResourceFacts:
 
 
 @dataclass(frozen=True)
+class ProjectEnvironmentFact:
+    """One Project-default Environment with safe display metadata."""
+
+    resource_id: str
+    name: str | None
+    locality: Locality | None
+
+
+@dataclass(frozen=True)
+class ProjectEnvironmentDefaults:
+    """Comparison topology attached only to the Project catalog entry."""
+
+    baseline: ProjectEnvironmentFact | None = None
+    candidates: tuple[ProjectEnvironmentFact, ...] = ()
+
+
+@dataclass(frozen=True)
 class ResourceEntry:
     """One selectable resource with its source revision and display facts."""
 
@@ -75,6 +92,7 @@ class ResourceEntry:
     summary: ProjectResourceSummary
     source: ProjectSourceSummary
     facts: ResourceFacts
+    project_environments: ProjectEnvironmentDefaults | None = None
 
 
 @dataclass(frozen=True)
@@ -151,20 +169,42 @@ def build_catalog(result: ProjectWorkspaceResult) -> ExplorerCatalog | None:
     }
     entries: dict[str, ResourceEntry] = {}
     by_kind: dict[str, list[ResourceEntry]] = {}
+    by_identity: dict[tuple[str, str], ResourceEntry] = {}
     for resource in snapshot.resources:
         entry = ResourceEntry(
-            coordinate_key(resource.coordinate),
-            resource,
-            source_by_resource[resource.coordinate],
-            _facts(resource, roles),
+            key=coordinate_key(resource.coordinate),
+            summary=resource,
+            source=source_by_resource[resource.coordinate],
+            facts=_facts(resource, roles),
         )
         entries[entry.key] = entry
         by_kind.setdefault(resource.coordinate.kind, []).append(entry)
+        by_identity[(resource.coordinate.kind, resource.coordinate.resource_id)] = entry
+
+    def environment_fact(resource_id: str) -> ProjectEnvironmentFact:
+        environment = by_identity.get(("Environment", resource_id))
+        if environment is None:
+            return ProjectEnvironmentFact(resource_id, None, None)
+        return ProjectEnvironmentFact(
+            resource_id=resource_id,
+            name=environment.summary.name,
+            locality=environment.facts.locality,
+        )
+
+    baseline_id = next(
+        (resource_id for resource_id, role in roles.items() if role == "baseline"),
+        None,
+    )
+    candidate_ids = tuple(resource_id for resource_id, role in roles.items() if role == "candidate")
     project_entry = ResourceEntry(
-        coordinate_key(snapshot.project.coordinate),
-        snapshot.project,
-        source_by_resource[snapshot.project.coordinate],
-        ResourceFacts(),
+        key=coordinate_key(snapshot.project.coordinate),
+        summary=snapshot.project,
+        source=source_by_resource[snapshot.project.coordinate],
+        facts=ResourceFacts(),
+        project_environments=ProjectEnvironmentDefaults(
+            baseline=environment_fact(baseline_id) if baseline_id is not None else None,
+            candidates=tuple(environment_fact(resource_id) for resource_id in candidate_ids),
+        ),
     )
     entries[project_entry.key] = project_entry
 

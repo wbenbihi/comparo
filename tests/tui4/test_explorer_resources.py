@@ -3,9 +3,11 @@
 import asyncio
 from collections.abc import Callable
 from collections.abc import Coroutine
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 
+import msgspec
 import pytest
 from rich.text import Text
 from textual.pilot import Pilot
@@ -14,6 +16,8 @@ from textual.widgets import Static
 
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import inspect_project_workspace
+from comparo.application.project_outline import ProjectOutlineField
+from comparo.application.project_outline import ProjectResourceOutline
 from comparo.core.domain.identity import ResourceKind
 from comparo.tui4.app import ComparoApp
 from comparo.tui4.components.badge import Badge
@@ -31,6 +35,9 @@ from comparo.tui4.components.resourcedetail import ResourceSummary
 from comparo.tui4.components.resources import RESOURCE_WIDGETS
 from comparo.tui4.components.resources import resource_widget
 from comparo.tui4.components.resources.matrix import MatrixResourceDetails
+from comparo.tui4.components.resources.project import ProjectEnvironmentCard
+from comparo.tui4.components.resources.project import ProjectEnvironmentRow
+from comparo.tui4.components.resources.project import ProjectResourceDetails
 from comparo.tui4.components.resources.standard import RequestResourceDetails
 from comparo.tui4.components.typography import Caption
 from comparo.tui4.models.explorer import ExplorerCatalog
@@ -42,6 +49,7 @@ from comparo.tui4.models.resource import ResourceInspection
 from comparo.tui4.models.resource import ResourceRepresentation
 from comparo.tui4.models.resource import initial_detail
 from comparo.tui4.models.resource_presenters import matrix_dimensions
+from comparo.tui4.models.resource_presenters import project_overview
 from comparo.tui4.types import ComparoScreen
 from comparo.tui4.workspaces.explorer import ExplorerWorkspace
 
@@ -140,6 +148,76 @@ def test_catalog_retains_revision_pinned_sources_and_all_kinds_have_widgets() ->
         assert entry.summary.coordinate.kind in widget.KINDS
 
 
+def test_project_overview_retains_topology_and_every_safe_project_setting() -> None:
+    catalog = _catalog()
+    overview = project_overview(catalog.project)
+
+    assert overview.baseline is not None
+    assert (overview.baseline.name, overview.baseline.locality) == (
+        "Production baseline",
+        "local",
+    )
+    assert [(candidate.name, candidate.locality) for candidate in overview.candidates] == [
+        ("Staging candidate", "local")
+    ]
+    assert [setting.name for setting in overview.sources] == ["data"]
+    assert [setting.name for setting in overview.variables] == ["client"]
+    assert overview.secrets == ()
+    assert [group.title for group in overview.default_groups] == [
+        "Selection",
+        "Execution",
+        "Evaluation & output",
+    ]
+
+    settings = [*overview.sources, *overview.variables, *overview.secrets, *overview.additional]
+    for group in overview.default_groups:
+        settings.extend(group.settings)
+    projected_paths = {
+        path
+        for setting in settings
+        for path in (
+            setting.path,
+            *(setting.path + detail.path for detail in setting.details),
+        )
+    }
+    outline = catalog.project.summary.outline
+    assert outline is not None
+    section_paths = {("variables",), ("secrets",), ("defaults",)}
+    expected_paths = {
+        field.path for field in outline.fields if field.path and field.path not in section_paths
+    }
+    assert projected_paths == expected_paths
+
+    secret_outline = ProjectResourceOutline(
+        fields=(
+            *outline.fields,
+            ProjectOutlineField(
+                path=("secrets",),
+                label="secrets",
+                value="object · 1 member",
+                depth=1,
+                category="container",
+            ),
+            ProjectOutlineField(
+                path=("secrets", "apiToken"),
+                label="apiToken",
+                value="$env.API_TOKEN",
+                depth=2,
+                category="directive",
+            ),
+        ),
+        relationships=outline.relationships,
+    )
+    summary_with_secret = msgspec.structs.replace(
+        catalog.project.summary,
+        outline=secret_outline,
+    )
+    overview_with_secret = project_overview(replace(catalog.project, summary=summary_with_secret))
+    assert [
+        (setting.name, setting.value, setting.category) for setting in overview_with_secret.secrets
+    ] == [("apiToken", "$env.API_TOKEN", "directive")]
+
+
 def test_kind_projections_keep_matrix_planning_and_request_composition_context_bound() -> None:
     catalog = _catalog()
     matrix = next(
@@ -218,6 +296,30 @@ async def test_navigator_owns_filter_tree_and_legend_mechanics() -> None:
         detail = app.query_one(ResourceDetailOverview).detail
         assert detail is not None
         assert detail.entry.summary.coordinate.resource_id == "audiences"
+
+
+@_run_async
+async def test_project_resource_uses_two_environment_cards_and_explicit_sections() -> None:
+    app = ComparoApp(PROJECT)
+
+    async with app.run_test(size=(180, 70)) as pilot:
+        navigator = app.query_one(ExplorerNavigator)
+        await _wait_until(pilot, lambda: navigator.catalog is not None)
+        catalog = navigator.catalog
+        assert catalog is not None
+        app.query_one(ExplorerWorkspace).selected = catalog.project.key
+        await _wait_until(pilot, lambda: len(app.query(ProjectResourceDetails)) == 1)
+
+        project = app.query_one(ProjectResourceDetails)
+        cards = list(project.query(ProjectEnvironmentCard))
+        assert len(cards) == 2
+        assert [str(card.border_title) for card in cards] == ["Baseline", "Candidate"]
+        rows = list(project.query(ProjectEnvironmentRow))
+        assert [
+            str(row.query_one(".project-environment-name", Static).content) for row in rows
+        ] == ["Production baseline", "Staging candidate"]
+        assert [row.query_one(Badge).spec.label for row in rows] == ["local", "local"]
+        assert not list(project.query(KeyValueList))
 
 
 @_run_async

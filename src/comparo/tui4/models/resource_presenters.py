@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING
 from textual.content import Content
 
 from comparo.tui4.models.explorer import PROFILE_KINDS
+from comparo.tui4.models.explorer import ProjectEnvironmentFact
 from comparo.tui4.models.explorer import ResourceEntry
-from comparo.tui4.models.explorer import environment_roles
 from comparo.tui4.models.fields import Field
 
 if TYPE_CHECKING:
     from comparo.application import ProjectResourceSummary
+    from comparo.application.project_outline import ProjectOutlineField
 
 
 def _outline_value(summary: ProjectResourceSummary, label: str) -> str | None:
@@ -43,24 +44,145 @@ def _targets(
     )
 
 
-def project_fields(entry: ResourceEntry) -> tuple[Field, ...]:
-    """Return rows derived from Project defaults."""
-    summary = entry.summary
-    rows: list[Field] = []
-    subjects = _targets(summary, "Request")
-    gates = _targets(summary, "GateProfile")
-    roles = environment_roles(summary)
-    baseline = [resource_id for resource_id, role in roles.items() if role == "baseline"]
-    candidates = [resource_id for resource_id, role in roles.items() if role == "candidate"]
-    if baseline:
-        rows.append(Field("baseline", Content(", ".join(baseline))))
-    if candidates:
-        rows.append(Field("candidates", Content(", ".join(candidates))))
-    if subjects:
-        rows.append(Field("default subjects", Content(", ".join(subjects))))
-    if gates:
-        rows.append(Field("gate", Content(", ".join(gates))))
-    return tuple(rows)
+@dataclass(frozen=True)
+class ProjectSettingDetail:
+    """One nested, value-safe Project configuration field."""
+
+    path: tuple[str, ...]
+    value: str
+    category: str
+
+
+@dataclass(frozen=True)
+class ProjectSetting:
+    """One named Project setting with its complete nested safe outline."""
+
+    path: tuple[str, ...]
+    name: str
+    value: str
+    category: str
+    details: tuple[ProjectSettingDetail, ...] = ()
+
+
+@dataclass(frozen=True)
+class ProjectSettingGroup:
+    """A semantic group of Project settings rendered as one explicit section."""
+
+    title: str
+    settings: tuple[ProjectSetting, ...]
+
+
+@dataclass(frozen=True)
+class ProjectOverview:
+    """Complete value-safe projection for the Project-specific overview widget."""
+
+    baseline: ProjectEnvironmentFact | None
+    candidates: tuple[ProjectEnvironmentFact, ...]
+    sources: tuple[ProjectSetting, ...]
+    variables: tuple[ProjectSetting, ...]
+    secrets: tuple[ProjectSetting, ...]
+    default_groups: tuple[ProjectSettingGroup, ...]
+    additional: tuple[ProjectSetting, ...]
+
+
+_PROJECT_SOURCE_FIELDS = frozenset({"data", "sources"})
+_DEFAULT_GROUPS: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "Selection",
+        frozenset({"subjects", "baseline", "candidates", "environments", "matrices"}),
+    ),
+    (
+        "Execution",
+        frozenset({"trials", "maximumAttempts", "failFast", "budgets"}),
+    ),
+    (
+        "Inputs",
+        frozenset({"parameters", "variables", "secrets"}),
+    ),
+    (
+        "Evaluation & output",
+        frozenset({"assertions", "diffs", "gate", "safety", "redaction", "artifacts"}),
+    ),
+)
+
+
+def _project_settings(
+    entry: ResourceEntry,
+    prefix: tuple[str, ...],
+    names: frozenset[str] | None = None,
+) -> tuple[ProjectSetting, ...]:
+    """Group every safe outline field below a Project configuration namespace."""
+    outline = entry.summary.outline
+    if outline is None:
+        return ()
+    grouped: dict[str, list[ProjectOutlineField]] = {}
+    for field in outline.fields:
+        if len(field.path) <= len(prefix) or field.path[: len(prefix)] != prefix:
+            continue
+        name = field.path[len(prefix)]
+        if names is not None and name not in names:
+            continue
+        grouped.setdefault(name, []).append(field)
+
+    settings: list[ProjectSetting] = []
+    for name, untyped_fields in grouped.items():
+        fields = tuple(untyped_fields)
+        root_path = (*prefix, name)
+        root = next((field for field in fields if field.path == root_path), None)
+        if root is None:
+            continue
+        details = tuple(
+            ProjectSettingDetail(
+                path=field.path[len(root_path) :],
+                value=field.value,
+                category=field.category,
+            )
+            for field in fields
+            if field.path != root_path
+        )
+        settings.append(
+            ProjectSetting(
+                path=root_path,
+                name=name,
+                value=root.value,
+                category=root.category,
+                details=details,
+            )
+        )
+    return tuple(settings)
+
+
+def project_overview(entry: ResourceEntry) -> ProjectOverview:
+    """Return every Project spec field available through the safe outline contract."""
+    sources = _project_settings(entry, (), _PROJECT_SOURCE_FIELDS)
+    variables = _project_settings(entry, ("variables",))
+    secrets = _project_settings(entry, ("secrets",))
+    defaults = _project_settings(entry, ("defaults",))
+    grouped_names: set[str] = set()
+    default_groups: list[ProjectSettingGroup] = []
+    for title, names in _DEFAULT_GROUPS:
+        settings = tuple(setting for setting in defaults if setting.name in names)
+        grouped_names.update(setting.name for setting in settings)
+        if settings:
+            default_groups.append(ProjectSettingGroup(title, settings))
+    remaining_defaults = tuple(setting for setting in defaults if setting.name not in grouped_names)
+    if remaining_defaults:
+        default_groups.append(ProjectSettingGroup("Additional defaults", remaining_defaults))
+
+    reserved = _PROJECT_SOURCE_FIELDS | frozenset({"variables", "secrets", "defaults"})
+    additional = tuple(
+        setting for setting in _project_settings(entry, ()) if setting.name not in reserved
+    )
+    environment_defaults = entry.project_environments
+    return ProjectOverview(
+        baseline=None if environment_defaults is None else environment_defaults.baseline,
+        candidates=() if environment_defaults is None else environment_defaults.candidates,
+        sources=sources,
+        variables=variables,
+        secrets=secrets,
+        default_groups=tuple(default_groups),
+        additional=additional,
+    )
 
 
 def environment_fields(entry: ResourceEntry) -> tuple[Field, ...]:
