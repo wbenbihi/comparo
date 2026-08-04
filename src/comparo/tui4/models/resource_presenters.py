@@ -495,7 +495,7 @@ def resolved_fields(
             value = f"<{inspection.state.value}>"
             if inspection.code is not None:
                 value = f"{value} · {inspection.code}"
-            fields.append(ResolvedResourceField(base, value, "warning"))
+            fields.append(ResolvedResourceField(base, value, "warn"))
             continue
         for node in inspection.nodes:
             path = (*base, *node.path)

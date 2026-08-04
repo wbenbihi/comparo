@@ -76,6 +76,7 @@ from comparo.tui4.models.resource_presenters import project_overview
 from comparo.tui4.models.resource_presenters import request_overview
 from comparo.tui4.models.resource_presenters import resolved_fields
 from comparo.tui4.models.resource_presenters import resource_resolution_paths
+from comparo.tui4.theme import style
 from comparo.tui4.types import ComparoScreen
 from comparo.tui4.workspaces.explorer import ExplorerWorkspace
 
@@ -410,6 +411,36 @@ async def test_backend_resolves_the_exact_request_revision_and_masks_credentials
     assert fields[("request", "method")].value == "GET"
     assert fields[("request", "auth")].value == "<masked>"
     assert fields[("request", "cookies")].value == "<masked>"
+
+
+@_run_async
+async def test_unavailable_resolved_request_field_uses_a_registered_warning_tone() -> None:
+    catalog = _catalog()
+    request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "unavailable-credential"
+    )
+    environment = next(
+        entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+    )
+    backend = TuiBackend(PROJECT)
+    try:
+        batch = await backend.inspect_resolved_fields(
+            request.summary.coordinate,
+            environment.summary.coordinate,
+            resource_resolution_paths(request),
+        )
+    finally:
+        await backend.shutdown()
+
+    assert batch.diagnostics == ()
+    assert batch.values is not None
+    fields = {field.path: field for field in resolved_fields(batch.values).fields}
+    unavailable = fields[("request", "auth")]
+    assert unavailable.value == "<unavailable> · not-defined"
+    assert unavailable.tone == "warn"
+    assert style(unavailable.tone) == style("warn")
 
 
 @_run_async
