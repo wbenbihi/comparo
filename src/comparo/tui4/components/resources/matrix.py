@@ -1,57 +1,297 @@
-"""Matrix-specific resource overview."""
+"""Matrix overview with authored axes and context-compiled cases."""
 
+from collections.abc import Mapping
 from typing import ClassVar
 from typing import override
 
+from rich.text import Text
+from textual import on
 from textual.app import ComposeResult
+from textual.containers import Horizontal
+from textual.containers import Vertical
+from textual.widgets import Static
+from textual.widgets import TabbedContent
+from textual.widgets import TabPane
 
-from comparo.tui4.components.list import Field
-from comparo.tui4.components.list import KeyValueList
+from comparo.tui4.components.badge import Badge
+from comparo.tui4.components.badge import BadgeTone
 from comparo.tui4.components.separator import Separator
 from comparo.tui4.components.table import Column
 from comparo.tui4.components.table import Record
 from comparo.tui4.components.table import Table
 from comparo.tui4.components.typography import Hint
-from comparo.tui4.models.resource_presenters import matrix_dimensions
-from comparo.tui4.models.resource_presenters import matrix_fields
+from comparo.tui4.models.resource import InspectionPhase
+from comparo.tui4.models.resource import ResolvedResourceField
+from comparo.tui4.models.resource import ResourceOverviewMode
+from comparo.tui4.models.resource import ResourcePresentation
+from comparo.tui4.models.resource_presenters import MatrixOverview
+from comparo.tui4.models.resource_presenters import compiled_exact_fields
+from comparo.tui4.models.resource_presenters import matrix_overview
+from comparo.tui4.theme import style
 
 from .base import BaseKindResourceDetails
+from .shared import ResourceSettingList
+from .shared import resolution_status
+
+_MATRIX_TAB_DEFINITION = "matrix-definition"
+_MATRIX_TAB_CASES = "matrix-cases"
+_MATRIX_TAB_PLAN = "matrix-plan"
+_MATRIX_TAB_USAGE = "matrix-usage"
+_MATRIX_TABS = frozenset(
+    {_MATRIX_TAB_DEFINITION, _MATRIX_TAB_CASES, _MATRIX_TAB_PLAN, _MATRIX_TAB_USAGE}
+)
 
 
-class MatrixResourceDetails(BaseKindResourceDetails):
-    """Declared Matrix structure with execution-cell boundary made explicit."""
+class MatrixContextStrip(Horizontal):
+    """Compact authored mode, combination, dimensions, and compiled-case facts."""
 
-    KINDS: ClassVar[frozenset[str]] = frozenset({"Matrix"})
+    def __init__(self, overview: MatrixOverview, planned_cases: int | None) -> None:
+        """Build semantic badges without coupling the component to Explorer state."""
+        axis_count = len(overview.axes)
+        children = [
+            Badge(overview.mode, tone=BadgeTone.WARNING, classes="matrix-context-badge"),
+            Badge(overview.combine, tone=BadgeTone.NEUTRAL, classes="matrix-context-badge"),
+        ]
+        if axis_count:
+            children.append(
+                Badge(
+                    f"{axis_count} {'axis' if axis_count == 1 else 'axes'}",
+                    tone=BadgeTone.INFO,
+                    classes="matrix-context-badge",
+                )
+            )
+        if planned_cases is not None:
+            children.append(
+                Badge(
+                    f"{planned_cases} {'case' if planned_cases == 1 else 'cases'}",
+                    tone=BadgeTone.ACTIVE,
+                    classes="matrix-context-badge",
+                )
+            )
+        super().__init__(*children, classes="matrix-context-strip")
 
-    @property
-    @override
-    def fields(self) -> tuple[Field, ...]:
-        """Return Matrix shape and consumer rows."""
-        return matrix_fields(self.entry)
+
+class MatrixDefinitionBody(Vertical):
+    """Axis-oriented Matrix declaration using the shared setting renderer."""
+
+    def __init__(
+        self,
+        overview: MatrixOverview,
+        resolved: Mapping[tuple[str, ...], ResolvedResourceField],
+    ) -> None:
+        """Initialize from the pure Matrix projection."""
+        super().__init__(classes="matrix-tab-body")
+        self._overview = overview
+        self._resolved = resolved
 
     @override
     def compose(self) -> ComposeResult:
-        """Render declared dimensions without locally compiling execution cells."""
-        if self.fields:
-            yield KeyValueList(*self.fields)
-        dimensions = matrix_dimensions(self.entry)
-        yield Separator(label="Declared dimensions", align="left", classes="tight")
-        if not dimensions:
-            yield Hint("No declared axes or explicit case collection was found.")
+        """Render each axis and every ordered option without local expansion logic."""
+        if not self._overview.axes:
+            yield Hint("This Matrix uses explicit cases instead of declared axes.")
+            return
+        for axis in self._overview.axes:
+            count = len(axis.options)
+            yield Separator(
+                label=f"{axis.id} · {count} {'option' if count == 1 else 'options'}",
+                align="left",
+                classes="tight",
+            )
+            yield ResourceSettingList(
+                tuple(option.value for option in axis.options),
+                empty="This axis has no options.",
+                resolved=self._resolved,
+            )
+
+
+class MatrixCasesBody(Vertical):
+    """Explicit/include/exclude Matrix controls in authored order."""
+
+    def __init__(
+        self,
+        overview: MatrixOverview,
+        resolved: Mapping[tuple[str, ...], ResolvedResourceField],
+    ) -> None:
+        """Initialize from the pure Matrix projection."""
+        super().__init__(classes="matrix-tab-body")
+        self._overview = overview
+        self._resolved = resolved
+
+    @override
+    def compose(self) -> ComposeResult:
+        """Render case values grouped by their declaration semantics."""
+        for source, title in (("cases", "Explicit cases"), ("include", "Included cases")):
+            cases = tuple(case for case in self._overview.cases if case.source == source)
+            if not cases:
+                continue
+            yield Separator(label=title, align="left", classes="tight")
+            yield ResourceSettingList(
+                tuple(case.values for case in cases),
+                empty="",
+                resolved=self._resolved,
+            )
+        if self._overview.exclusions:
+            yield Separator(label="Excluded case IDs", align="left", classes="tight")
+            yield Static(
+                Text("  ").join(
+                    Text(case_id, style("warn")) for case_id in self._overview.exclusions
+                ),
+                classes="matrix-exclusions",
+            )
+        if not self._overview.cases and not self._overview.exclusions:
+            yield Hint("No explicit, included, or excluded cases are declared.")
+
+
+class MatrixPlanBody(Vertical):
+    """Compiled Matrix case IDs qualified by the exact Compare subject."""
+
+    def __init__(self, resource: BaseKindResourceDetails) -> None:
+        """Retain only the common immutable detail state."""
+        super().__init__(classes="matrix-tab-body")
+        self._resource = resource.resource
+
+    @override
+    def compose(self) -> ComposeResult:
+        """Render the planner-owned case list or a truthful context hint."""
+        inspection = self._resource.resolved
+        plan = (
+            inspection.value.matrix_plan
+            if self._resource.overview_mode is ResourceOverviewMode.RESOLVED
+            and inspection.value is not None
+            else None
+        )
+        if plan is None:
+            if self._resource.overview_mode is not ResourceOverviewMode.RESOLVED:
+                yield Hint(
+                    "Press r to compile cases in the selected Environment and consumer scope."
+                )
+            elif inspection.phase is InspectionPhase.LOADING:
+                yield Hint("Compiling Matrix cases for the selected execution context…")
+            elif inspection.phase is InspectionPhase.FAILED:
+                yield Hint(f"Matrix case compilation failed: {inspection.message}")
+            elif inspection.phase is InspectionPhase.UNAVAILABLE:
+                yield Hint(inspection.message or "Matrix case compilation is unavailable.")
+            else:
+                yield Hint("This Matrix is not attached under one unambiguous binding.")
+            return
+        subject = f"{plan.subject.kind}/{plan.subject.resource_id}"
+        yield Static(
+            Text.assemble(
+                ("Binding  ", style("muted")),
+                (plan.binding, style("kind.matrix")),
+                ("   Subject  ", style("muted")),
+                (subject, style("fg")),
+            ),
+            classes="matrix-plan-context",
+        )
+        yield Table(
+            columns=(Column("ordinal", "#", width=4), Column("case", "Compiled case ID")),
+            records=tuple(
+                Record(case_id, (str(index), case_id))
+                for index, case_id in enumerate(plan.cases, start=1)
+            ),
+            classes="matrix-plan-table",
+        )
+
+
+class MatrixUsageBody(Vertical):
+    """Compact consumer list; the full directional topology remains available on g."""
+
+    def __init__(self, overview: MatrixOverview) -> None:
+        """Initialize from the pure Matrix projection."""
+        super().__init__(classes="matrix-tab-body")
+        self._overview = overview
+
+    @override
+    def compose(self) -> ComposeResult:
+        """Render executable consumers with their attachment paths."""
+        if not self._overview.consumers:
+            yield Hint("This Matrix has no declared consumers.")
             return
         yield Table(
-            columns=(
-                Column("name", "Name"),
-                Column("role", "Role", width=10),
-                Column("shape", "Declared shape"),
-            ),
+            columns=(Column("kind", "Kind", width=12), Column("resource", "Consumer")),
             records=tuple(
                 Record(
-                    f"{dimension.role}:{dimension.id}",
-                    (dimension.id, dimension.role, dimension.shape),
+                    f"consumer:{index}",
+                    (item.target_kind, item.target_id),
                 )
-                for dimension in dimensions
+                for index, item in enumerate(self._overview.consumers)
             ),
-            classes="resource-matrix-table",
+            classes="matrix-usage-table",
         )
-        yield Hint("Expanded cells are computed from the complete Compare scope.")
+        yield Hint("Press g for the complete directional dependency graph.")
+
+
+class MatrixResourceDetails(BaseKindResourceDetails):
+    """Matrix declaration and context-compiled case inspection."""
+
+    KINDS: ClassVar[frozenset[str]] = frozenset({"Matrix"})
+    PRESENTATION: ClassVar[ResourcePresentation] = ResourcePresentation(
+        common_representation_hints=True,
+        visible_actions=frozenset(),
+    )
+
+    @override
+    def compose(self) -> ComposeResult:
+        """Render one stable native-tab layout in both raw and resolved modes."""
+        overview = matrix_overview(self.entry)
+        resolved = self._resolved_fields()
+        plan = (
+            self.resource.resolved.value.matrix_plan
+            if self.resource.overview_mode is ResourceOverviewMode.RESOLVED
+            and self.resource.resolved.phase is InspectionPhase.READY
+            and self.resource.resolved.value is not None
+            else None
+        )
+        yield MatrixContextStrip(overview, None if plan is None else len(plan.cases))
+        if self.resource.overview_mode is ResourceOverviewMode.RESOLVED:
+            yield resolution_status(
+                self.resource,
+                self.entry.summary.name or self.entry.summary.coordinate.resource_id,
+            )
+        with TabbedContent(initial=self._active_tab(), id="matrix-tabs"):
+            yield TabPane(
+                "Definition",
+                MatrixDefinitionBody(overview, resolved),
+                id=_MATRIX_TAB_DEFINITION,
+            )
+            yield TabPane(
+                "Cases",
+                MatrixCasesBody(overview, resolved),
+                id=_MATRIX_TAB_CASES,
+            )
+            yield TabPane("Plan", MatrixPlanBody(self), id=_MATRIX_TAB_PLAN)
+            yield TabPane("Usage", MatrixUsageBody(overview), id=_MATRIX_TAB_USAGE)
+
+    def _active_tab(self) -> str:
+        """Restore only a known Matrix section."""
+        section = self.initial_section
+        return section if section in _MATRIX_TABS else _MATRIX_TAB_DEFINITION
+
+    @on(TabbedContent.TabActivated, "#matrix-tabs")
+    def on_matrix_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Publish native tab selection for cross-recomposition retention."""
+        event.stop()
+        section = event.pane.id
+        if section is not None and section in _MATRIX_TABS:
+            self.select_section(section)
+
+    def _resolved_fields(self) -> dict[tuple[str, ...], ResolvedResourceField]:
+        """Index exact structural values and masked resolution overlays."""
+        if self.resource.overview_mode is not ResourceOverviewMode.RESOLVED:
+            return {}
+        fields = {field.path: field for field in compiled_exact_fields(self.entry)}
+        inspection = self.resource.resolved
+        if inspection.phase is InspectionPhase.READY and inspection.value is not None:
+            fields.update((field.path, field) for field in inspection.value.fields)
+        return fields
+
+
+__all__ = [
+    "MatrixCasesBody",
+    "MatrixContextStrip",
+    "MatrixDefinitionBody",
+    "MatrixPlanBody",
+    "MatrixResourceDetails",
+    "MatrixUsageBody",
+]

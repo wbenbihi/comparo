@@ -8,11 +8,11 @@ from .environment import EnvironmentResourceDetails
 from .matrix import MatrixResourceDetails
 from .project import ProjectResourceDetails
 from .request import RequestResourceDetails
+from .schema import SchemaResourceDetails
 from .standard import GenericResourceDetails
 from .standard import ProfileResourceDetails
 from .standard import ScenarioResourceDetails
-from .standard import SchemaResourceDetails
-from .standard import ValueResourceDetails
+from .value import ValueResourceDetails
 
 _REGISTERED_WIDGETS: tuple[type[BaseKindResourceDetails], ...] = (
     ProjectResourceDetails,

@@ -1,0 +1,88 @@
+/* Matrix, Schema, and Value inspectors share one terminal-native tab grammar. */
+.matrix-context-strip,
+.schema-context-strip,
+.value-context-strip {
+    width: 100%;
+    height: 1;
+    margin-bottom: 1;
+}
+
+.matrix-context-badge,
+.schema-context-badge,
+.value-context-badge {
+    margin-right: 1;
+}
+
+#matrix-tabs,
+#schema-tabs,
+#value-tabs {
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+    background: transparent;
+}
+
+#matrix-tabs > ContentTabs,
+#schema-tabs > ContentTabs,
+#value-tabs > ContentTabs {
+    height: 2;
+    background: transparent;
+}
+
+#matrix-tabs Tab,
+#schema-tabs Tab,
+#value-tabs Tab {
+    color: $comparo-muted;
+}
+
+#matrix-tabs Tab:hover,
+#schema-tabs Tab:hover,
+#value-tabs Tab:hover {
+    color: $foreground;
+    background: $surface;
+}
+
+#matrix-tabs Tab.-active,
+#schema-tabs Tab.-active,
+#value-tabs Tab.-active {
+    color: $primary;
+    background: $surface;
+    text-style: bold;
+}
+
+#matrix-tabs > ContentSwitcher,
+#schema-tabs > ContentSwitcher,
+#value-tabs > ContentSwitcher,
+#matrix-tabs TabPane,
+#schema-tabs TabPane,
+#value-tabs TabPane,
+.matrix-tab-body,
+.schema-tab-body,
+.value-tab-body {
+    width: 100%;
+    height: auto;
+    background: transparent;
+}
+
+.matrix-tab-body,
+.schema-tab-body,
+.value-tab-body {
+    min-height: 5;
+    padding-top: 1;
+}
+
+.matrix-exclusions,
+.matrix-plan-context {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+}
+
+.matrix-plan-table,
+.matrix-usage-table,
+.schema-properties-table,
+.schema-usage-table,
+.value-inputs-table,
+.value-usage-table {
+    height: 10;
+}

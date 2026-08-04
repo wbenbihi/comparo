@@ -7,35 +7,9 @@ from comparo.tui4.components.list import Field
 from comparo.tui4.models.explorer import PROFILE_KINDS
 from comparo.tui4.models.resource_presenters import generic_fields
 from comparo.tui4.models.resource_presenters import profile_fields
-from comparo.tui4.models.resource_presenters import schema_fields
-from comparo.tui4.models.resource_presenters import value_fields
 
 from .base import BaseKindResourceDetails
 from .request import RequestResourceDetails as RequestResourceDetails
-
-
-class SchemaResourceDetails(BaseKindResourceDetails):
-    """Schema shape and consumers."""
-
-    KINDS: ClassVar[frozenset[str]] = frozenset({"Schema"})
-
-    @property
-    @override
-    def fields(self) -> tuple[Field, ...]:
-        """Return Schema-specific overview rows."""
-        return schema_fields(self.entry)
-
-
-class ValueResourceDetails(BaseKindResourceDetails):
-    """Reusable Value shape and consumers without expression resolution."""
-
-    KINDS: ClassVar[frozenset[str]] = frozenset({"Value"})
-
-    @property
-    @override
-    def fields(self) -> tuple[Field, ...]:
-        """Return Value-specific overview rows."""
-        return value_fields(self.entry)
 
 
 class ProfileResourceDetails(BaseKindResourceDetails):
