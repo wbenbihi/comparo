@@ -207,6 +207,11 @@ def _project(
         "    - {id: us, values: {region: us}}\n"
         "---\n"
         "apiVersion: comparo/v1alpha1\n"
+        "kind: Value\n"
+        "metadata: {id: private-value, name: Private value}\n"
+        "spec: {value: literal-value-inspection-canary}\n"
+        "---\n"
+        "apiVersion: comparo/v1alpha1\n"
         "kind: Request\n"
         "metadata: {id: ping, name: Ping}\n"
         "spec:\n"
@@ -359,6 +364,29 @@ def test_secret_and_composed_sensitive_values_are_irreversibly_masked(tmp_path: 
         encoded = msgspec.json.encode(result).decode()
         assert "super-secret-inspection-canary" not in encoded
         assert "staging-secret-label" not in encoded
+
+
+def test_value_resource_payloads_remain_masked_during_resolved_inspection(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    value = _resource(project, ResourceKind.VALUE, "private-value")
+
+    result = _inspect(
+        _inspection_request(
+            project,
+            resource=value,
+            field_path=("value",),
+        )
+    )
+
+    assert result.inspection is not None
+    assert result.inspection.state is ResolvedInspectionState.PRESENT
+    assert result.inspection.kind is ValueKind.STRING
+    assert result.inspection.masked
+    assert result.inspection.nodes[0].preview == "<masked>"
+    assert result.inspection.taint_sources == (ResolvedTaintSource.CONFIGURATION,)
+    assert "literal-value-inspection-canary" not in msgspec.json.encode(result).decode()
 
 
 def test_project_expression_windows_are_bounded_serializable_and_paginated(

@@ -1040,6 +1040,14 @@ async def _project_result(
             start_node=request.start_node,
         )
     value = result.value
+    if (
+        request.resource.kind == ResourceKind.VALUE.value
+        and type(value) is not MaskedSensitiveValue
+    ):
+        value = MaskedSensitiveValue(
+            kind=_kind(value),
+            origins=(TaintOriginId(value="configuration/value-resource"),),
+        )
     if type(value) is MaskedSensitiveValue:
         sources, omitted = await _bounded_taint_sources(value.origins, request.settings)
         fingerprint = _masked_projection_fingerprint(value.kind, sources, omitted)
