@@ -18,6 +18,7 @@ from comparo.tui4.components.typography import Hint
 from comparo.tui4.models.resource import InspectionPhase
 from comparo.tui4.models.resource import ResolvedResourceField
 from comparo.tui4.models.resource import ResourceOverviewMode
+from comparo.tui4.models.resource import ResourcePresentation
 from comparo.tui4.models.resource_presenters import EnvironmentOverview
 from comparo.tui4.models.resource_presenters import compiled_exact_fields
 from comparo.tui4.models.resource_presenters import environment_overview
@@ -151,6 +152,10 @@ class EnvironmentResourceDetails(BaseKindResourceDetails):
     """Complete Environment topology, inputs, defaults, policies, and probes."""
 
     KINDS: ClassVar[frozenset[str]] = frozenset({"Environment"})
+    PRESENTATION: ClassVar[ResourcePresentation] = ResourcePresentation(
+        common_representation_hints=True,
+        visible_actions=frozenset(),
+    )
 
     @override
     def compose(self) -> ComposeResult:

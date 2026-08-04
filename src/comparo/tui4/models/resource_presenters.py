@@ -102,6 +102,21 @@ class EnvironmentOverview:
 
 
 @dataclass(frozen=True)
+class RequestOverview:
+    """Complete value-safe projection for a Request overview widget."""
+
+    routing: tuple[ResourceSetting, ...]
+    parameters: tuple[ResourceSetting, ...]
+    inputs: tuple[ResourceSetting, ...]
+    payload: tuple[ResourceSetting, ...]
+    behavior: tuple[ResourceSetting, ...]
+    expansion: tuple[ResourceSetting, ...]
+    evaluation: tuple[ResourceSetting, ...]
+    policies: tuple[ResourceSetting, ...]
+    additional: tuple[ResourceSetting, ...]
+
+
+@dataclass(frozen=True)
 class ResourceDependency:
     """One directed edge in a resource's safe dependency graph."""
 
@@ -297,6 +312,62 @@ def environment_health_check_ids(entry: ResourceEntry) -> tuple[str, ...]:
     return tuple(check.resource_id for check in environment_health_check_targets(entry))
 
 
+_REQUEST_ROUTING_FIELDS = frozenset({"method", "endpoint", "url"})
+_REQUEST_INPUT_FIELDS = frozenset({"headers", "query", "cookies", "auth"})
+_REQUEST_PAYLOAD_FIELDS = frozenset({"body", "bodyType"})
+_REQUEST_BEHAVIOR_FIELDS = frozenset({"stream", "timeout", "redirects", "retries"})
+_REQUEST_EXPANSION_FIELDS = frozenset({"matrices"})
+_REQUEST_EVALUATION_FIELDS = frozenset({"responseSchema", "assertions", "diffs"})
+_REQUEST_POLICY_FIELDS = frozenset({"safety", "redaction", "artifacts"})
+_REQUEST_RESERVED_FIELDS = (
+    frozenset({"parameters", "request"})
+    | _REQUEST_EXPANSION_FIELDS
+    | _REQUEST_EVALUATION_FIELDS
+    | _REQUEST_POLICY_FIELDS
+)
+
+
+def request_overview(entry: ResourceEntry) -> RequestOverview:
+    """Return every Request field in stable HTTP and execution-oriented groups."""
+    request_settings = _resource_settings(entry, ("request",))
+    top_level = _resource_settings(entry, ())
+    known_request_fields = (
+        _REQUEST_ROUTING_FIELDS
+        | _REQUEST_INPUT_FIELDS
+        | _REQUEST_PAYLOAD_FIELDS
+        | _REQUEST_BEHAVIOR_FIELDS
+    )
+    additional_request = tuple(
+        setting for setting in request_settings if setting.name not in known_request_fields
+    )
+    additional_top_level = tuple(
+        setting for setting in top_level if setting.name not in _REQUEST_RESERVED_FIELDS
+    )
+    return RequestOverview(
+        routing=tuple(
+            setting for setting in request_settings if setting.name in _REQUEST_ROUTING_FIELDS
+        ),
+        parameters=_resource_settings(entry, ("parameters",)),
+        inputs=tuple(
+            setting for setting in request_settings if setting.name in _REQUEST_INPUT_FIELDS
+        ),
+        payload=tuple(
+            setting for setting in request_settings if setting.name in _REQUEST_PAYLOAD_FIELDS
+        ),
+        behavior=tuple(
+            setting for setting in request_settings if setting.name in _REQUEST_BEHAVIOR_FIELDS
+        ),
+        expansion=tuple(
+            setting for setting in top_level if setting.name in _REQUEST_EXPANSION_FIELDS
+        ),
+        evaluation=tuple(
+            setting for setting in top_level if setting.name in _REQUEST_EVALUATION_FIELDS
+        ),
+        policies=tuple(setting for setting in top_level if setting.name in _REQUEST_POLICY_FIELDS),
+        additional=(*additional_request, *additional_top_level),
+    )
+
+
 def resource_dependencies(entry: ResourceEntry) -> tuple[ResourceDependency, ...]:
     """Return every outbound and inverse edge from a resource's safe outline."""
     outline = entry.summary.outline
@@ -352,6 +423,36 @@ def resource_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ..
                 "proxy",
             )
             if (name,) in available
+        )
+    if kind == "Request":
+        outline = entry.summary.outline
+        if outline is None:
+            return ()
+        available = {field.path for field in outline.fields}
+        parameters = tuple(
+            field.path
+            for field in outline.fields
+            if len(field.path) == 2 and field.path[0] == "parameters"
+        )
+        return tuple(
+            path
+            for path in (
+                *parameters,
+                ("request", "method"),
+                ("request", "endpoint"),
+                ("request", "url"),
+                ("request", "query"),
+                ("request", "headers"),
+                ("request", "cookies"),
+                ("request", "auth"),
+                ("request", "body"),
+                ("request", "bodyType"),
+                ("request", "stream"),
+                ("request", "timeout"),
+                ("request", "redirects"),
+                ("request", "retries"),
+            )
+            if path in available
         )
     if kind != "Project":
         return ()

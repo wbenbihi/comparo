@@ -449,7 +449,30 @@ class ExplorerWorkspace(Workspace):
                 and detail.health.phase is not InspectionPhase.LOADING
                 and bool(environment_health_check_targets(detail.entry))
             )
+        if action == "resource_workflow":
+            detail = self.detail
+            if detail is None or len(parameters) != 1 or type(parameters[0]) is not str:
+                return False
+            try:
+                requested = ResourceActionId(parameters[0])
+            except ValueError:
+                return False
+            selected = next((item for item in detail.actions if item.id is requested), None)
+            return selected is not None and selected.enabled
         return super().check_action(action, parameters)
+
+    def action_resource_workflow(self, action_id: str) -> None:
+        """Apply a selected resource workflow independently of current child focus."""
+        try:
+            action = ResourceActionId(action_id)
+        except ValueError:
+            return
+        detail = self.detail
+        if detail is None:
+            return
+        selected = next((item for item in detail.actions if item.id is action), None)
+        if selected is not None and selected.enabled:
+            self._apply_resource_action(action)
 
     def action_set_execution_environment(self) -> None:
         """Make the highlighted Environment the shared context on explicit Space."""
@@ -553,7 +576,7 @@ class ExplorerWorkspace(Workspace):
                 trial_id=occurrence.trial_id,
                 fields=projected.fields,
                 diagnostics=projected.diagnostics,
-                incomplete=projected.incomplete,
+                incomplete=projected.incomplete or result.selection_incomplete,
             ),
         )
 

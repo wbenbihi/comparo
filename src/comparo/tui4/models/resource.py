@@ -131,6 +131,14 @@ class ResourceActionId(StrEnum):
 
 
 @dataclass(frozen=True)
+class ResourcePresentation:
+    """Kind-owned chrome policy consumed by the generic resource host."""
+
+    common_representation_hints: bool = False
+    visible_actions: frozenset[ResourceActionId] | None = None
+
+
+@dataclass(frozen=True)
 class ResourceAction:
     """One renderable action and its capability decision."""
 

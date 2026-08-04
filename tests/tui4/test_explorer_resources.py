@@ -12,6 +12,7 @@ from pathlib import Path
 import msgspec
 import pytest
 from rich.text import Text
+from textual.content import Content
 from textual.pilot import Pilot
 from textual.widgets import Button
 from textual.widgets import Static
@@ -20,10 +21,10 @@ from comparo.application import AuthoredResourceWindow
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ResourceCoordinate
 from comparo.application import inspect_project_workspace
-from comparo.application.project_outline import ProjectOutlineField
-from comparo.application.project_outline import ProjectResourceOutline
 from comparo.core.domain.identity import ResourceKind
 from comparo.tui4.app import ComparoApp
+from comparo.tui4.backend import MAXIMUM_RESOLVED_FIELDS
+from comparo.tui4.backend import RESOLVED_PROJECTION_LIMITS
 from comparo.tui4.backend import HealthCheckBatch
 from comparo.tui4.backend import TuiBackend
 from comparo.tui4.components.badge import Badge
@@ -50,7 +51,9 @@ from comparo.tui4.components.resources.project import ProjectDependencyTree
 from comparo.tui4.components.resources.project import ProjectEnvironmentCard
 from comparo.tui4.components.resources.project import ProjectEnvironmentRow
 from comparo.tui4.components.resources.project import ProjectResourceDetails
-from comparo.tui4.components.resources.standard import RequestResourceDetails
+from comparo.tui4.components.resources.request import RequestContextStrip
+from comparo.tui4.components.resources.request import RequestResourceDetails
+from comparo.tui4.components.resources.shared import ResourceSettingList
 from comparo.tui4.components.typography import Caption
 from comparo.tui4.models.explorer import ExplorerCatalog
 from comparo.tui4.models.explorer import build_catalog
@@ -70,6 +73,9 @@ from comparo.tui4.models.resource_presenters import environment_overview
 from comparo.tui4.models.resource_presenters import matrix_dimensions
 from comparo.tui4.models.resource_presenters import project_compiled_exact_fields
 from comparo.tui4.models.resource_presenters import project_overview
+from comparo.tui4.models.resource_presenters import request_overview
+from comparo.tui4.models.resource_presenters import resolved_fields
+from comparo.tui4.models.resource_presenters import resource_resolution_paths
 from comparo.tui4.types import ComparoScreen
 from comparo.tui4.workspaces.explorer import ExplorerWorkspace
 
@@ -207,11 +213,17 @@ def test_project_overview_retains_topology_and_every_safe_project_setting() -> N
         ("Staging candidate", "local")
     ]
     assert [setting.name for setting in overview.sources] == ["data"]
-    assert [setting.name for setting in overview.variables] == ["client"]
-    assert overview.secrets == ()
+    assert [setting.name for setting in overview.variables] == [
+        "client",
+        "releaseChannel",
+        "sampleCount",
+        "featureEnabled",
+    ]
+    assert [setting.name for setting in overview.secrets] == ["demoToken"]
     assert [group.title for group in overview.default_groups] == [
         "Selection",
         "Execution",
+        "Inputs",
         "Evaluation & output",
     ]
 
@@ -241,7 +253,7 @@ def test_project_overview_retains_topology_and_every_safe_project_setting() -> N
     assert (
         exact_fields[("defaults", "maximumAttempts")].value,
         exact_fields[("defaults", "maximumAttempts")].tone,
-    ) == ("1", "value.integer")
+    ) == ("3", "value.integer")
     assert (
         exact_fields[("defaults", "failFast")].value,
         exact_fields[("defaults", "failFast")].tone,
@@ -253,34 +265,9 @@ def test_project_overview_retains_topology_and_every_safe_project_setting() -> N
         "Environment",
     )
 
-    secret_outline = ProjectResourceOutline(
-        fields=(
-            *outline.fields,
-            ProjectOutlineField(
-                path=("secrets",),
-                label="secrets",
-                value="object · 1 member",
-                depth=1,
-                category="container",
-            ),
-            ProjectOutlineField(
-                path=("secrets", "apiToken"),
-                label="apiToken",
-                value="$env.API_TOKEN",
-                depth=2,
-                category="directive",
-            ),
-        ),
-        relationships=outline.relationships,
-    )
-    summary_with_secret = msgspec.structs.replace(
-        catalog.project.summary,
-        outline=secret_outline,
-    )
-    overview_with_secret = project_overview(replace(catalog.project, summary=summary_with_secret))
-    assert [
-        (setting.name, setting.value, setting.category) for setting in overview_with_secret.secrets
-    ] == [("apiToken", "$env.API_TOKEN", "directive")]
+    assert [(setting.name, setting.value, setting.category) for setting in overview.secrets] == [
+        ("demoToken", "* REDACTED", "sensitive")
+    ]
 
 
 def test_environment_overview_groups_every_field_and_declared_health_request() -> None:
@@ -291,7 +278,7 @@ def test_environment_overview_groups_every_field_and_declared_health_request() -
     overview = environment_overview(environment)
 
     assert [setting.name for setting in overview.connection] == ["baseUrl"]
-    assert [setting.name for setting in overview.runtime_inputs] == ["variables"]
+    assert [setting.name for setting in overview.runtime_inputs] == ["variables", "env"]
     assert overview.request_defaults == ()
     assert [setting.name for setting in overview.policies] == ["safety"]
     assert [check.resource_id for check in overview.health_checks] == ["health"]
@@ -326,6 +313,138 @@ def test_environment_overview_groups_every_field_and_declared_health_request() -
         summary=msgspec.structs.replace(environment.summary, outline=duplicate_outline),
     )
     assert environment_health_check_ids(duplicate_entry) == ("health", "health")
+
+
+def test_request_overview_groups_every_authored_field_without_losing_structure() -> None:
+    catalog = _catalog()
+    complete = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "all-inputs"
+    )
+    overview = request_overview(complete)
+
+    assert [setting.name for setting in overview.routing] == ["method", "endpoint"]
+    assert [setting.name for setting in overview.parameters] == ["label"]
+    assert [setting.name for setting in overview.inputs] == [
+        "query",
+        "headers",
+        "cookies",
+        "auth",
+    ]
+    assert overview.payload == ()
+    assert [setting.name for setting in overview.behavior] == [
+        "timeout",
+        "retries",
+        "redirects",
+    ]
+    assert overview.expansion == ()
+    assert overview.evaluation == ()
+    assert overview.policies == ()
+    assert overview.additional == ()
+    assert resource_resolution_paths(complete) == (
+        ("parameters", "label"),
+        ("request", "method"),
+        ("request", "endpoint"),
+        ("request", "query"),
+        ("request", "headers"),
+        ("request", "cookies"),
+        ("request", "auth"),
+        ("request", "timeout"),
+        ("request", "redirects"),
+        ("request", "retries"),
+    )
+
+    catalog_request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "catalog"
+    )
+    catalog_overview = request_overview(catalog_request)
+    assert [setting.name for setting in catalog_overview.expansion] == ["matrices"]
+    assert [setting.name for setting in catalog_overview.evaluation] == [
+        "responseSchema",
+        "diffs",
+    ]
+
+    local_policies = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "request-local-policies"
+    )
+    assert [setting.name for setting in request_overview(local_policies).policies] == [
+        "safety",
+        "redaction",
+        "artifacts",
+    ]
+
+
+@_run_async
+async def test_backend_resolves_the_exact_request_revision_and_masks_credentials() -> None:
+    catalog = _catalog()
+    request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "all-inputs"
+    )
+    environment = next(
+        entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+    )
+    backend = TuiBackend(PROJECT)
+    try:
+        batch = await backend.inspect_resolved_fields(
+            request.summary.coordinate,
+            environment.summary.coordinate,
+            resource_resolution_paths(request),
+        )
+    finally:
+        await backend.shutdown()
+
+    assert batch.diagnostics == ()
+    assert batch.occurrence is not None
+    assert batch.values is not None
+    assert batch.occurrence.subject == request.summary.coordinate
+    assert batch.occurrence.environment == environment.summary.coordinate
+    fields = {field.path: field for field in resolved_fields(batch.values).fields}
+    assert fields[("parameters", "label")].value == "request-parameter"
+    assert fields[("request", "method")].value == "GET"
+    assert fields[("request", "auth")].value == "<masked>"
+    assert fields[("request", "cookies")].value == "<masked>"
+
+
+@_run_async
+async def test_backend_returns_a_bounded_partial_request_projection() -> None:
+    catalog = _catalog()
+    request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "all-inputs"
+    )
+    environment = next(
+        entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+    )
+    field_paths = (
+        *resource_resolution_paths(request),
+        *(("parameters", f"additional-{index}") for index in range(MAXIMUM_RESOLVED_FIELDS + 1)),
+    )
+    backend = TuiBackend(PROJECT)
+    try:
+        batch = await backend.inspect_resolved_fields(
+            request.summary.coordinate,
+            environment.summary.coordinate,
+            field_paths,
+        )
+    finally:
+        await backend.shutdown()
+
+    assert batch.diagnostics == ()
+    assert batch.selection_incomplete
+    assert batch.values is not None
+    assert len(batch.values.results) == MAXIMUM_RESOLVED_FIELDS
+    assert (
+        MAXIMUM_RESOLVED_FIELDS * RESOLVED_PROJECTION_LIMITS.maximum_traversal_bytes.value
+        <= 4 * 1024 * 1024
+    )
 
 
 def test_kind_projections_keep_matrix_planning_and_request_composition_context_bound() -> None:
@@ -527,7 +646,7 @@ async def test_project_resource_uses_two_environment_cards_and_explicit_sections
         }
         assert any("client  comparo-tui" in item for item in resolved_headings)
         assert any("data  .comparo" in item for item in resolved_headings)
-        assert any("maximumAttempts  1" in item for item in resolved_headings)
+        assert any("maximumAttempts  3" in item for item in resolved_headings)
         assert any("failFast  false" in item for item in resolved_headings)
         assert any("baseline  ◉ Environment/baseline" in item for item in resolved_headings)
         assert list(resolved_project.query(ProjectEnvironmentCard))
@@ -1141,6 +1260,7 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
             entry
             for entry in catalog.entries.values()
             if entry.summary.coordinate.kind == ResourceKind.REQUEST.value
+            and entry.summary.coordinate.resource_id == "catalog"
         )
         workspace.selected = request.key
         await _wait_until(
@@ -1152,7 +1272,7 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
         )
         await _wait_until(
             pilot,
-            lambda: len(app.query("#resource-action-authored")) == 1,
+            lambda: len(app.query("#resource-action-use-in-compare")) == 1,
         )
 
         summary = app.query_one(ResourceSummary)
@@ -1165,12 +1285,26 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
             f"{request.source.filename} · line {request.summary.source.line} | {tags}"
         )
         assert not any(isinstance(child, KeyValueList) for child in summary.children)
+        assert len(app.query(RequestContextStrip)) == 1
+        assert len(app.query(RequestResourceDetails)) == 1
+        assert len(app.query(ResourceSettingList)) == 4
+        assert not list(app.query("#resource-action-overview"))
+        assert not list(app.query("#resource-action-authored"))
+        assert not list(app.query("#resource-action-effective"))
+        assert not list(app.query("#resource-action-resolved"))
+        assert len(app.query("#resource-action-inspect-composition")) == 1
+        use_button = app.query_one("#resource-action-use-in-compare", Button)
+        composition_button = app.query_one("#resource-action-inspect-composition", Button)
+        assert isinstance(use_button.label, Content)
+        assert isinstance(composition_button.label, Content)
+        assert use_button.label.plain == "[u] Use in Compare"
+        assert composition_button.label.plain == "[c] Composition"
+        assert composition_button.disabled
         panel = app.query_one("#resource-detail-panel", Panel)
-        assert panel.border_subtitle == ResourceRepresentation.OVERVIEW.value
+        assert panel.border_subtitle == "overview · raw"
         assert ResourceRepresentation.OVERVIEW.value not in str(panel.border_title)
 
-        app.query_one("#resource-action-authored", Button).focus()
-        await pilot.press("2")
+        await pilot.press("s")
         await _wait_until(
             pilot,
             lambda: (
@@ -1185,30 +1319,37 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
         assert authored.authored.value.contains_unmasked_values is False
         assert authored.authored.value.coordinate == request.summary.coordinate
         panel = app.query_one("#resource-detail-panel", Panel)
-        assert panel.border_subtitle == ResourceRepresentation.AUTHORED.value
+        assert panel.border_subtitle == "source"
         assert ResourceRepresentation.AUTHORED.value not in str(panel.border_title)
 
-        await pilot.click("#resource-action-effective")
+        await pilot.press("o")
+        await pilot.press("r")
         await _wait_until(
             pilot,
             lambda: (
                 (detail := app.query_one(ResourceDetailOverview).detail) is not None
-                and detail.effective.phase is InspectionPhase.READY
+                and detail.resolved.phase is not InspectionPhase.LOADING
             ),
         )
-        effective = app.query_one(ResourceDetailOverview).detail
-        assert effective is not None
-        assert effective.effective.value is not None
-        assert effective.representation is ResourceRepresentation.EFFECTIVE
-        assert effective.effective.value.coordinate == request.summary.coordinate
-
-        await pilot.click("#resource-action-resolved")
         resolved = app.query_one(ResourceDetailOverview).detail
         assert resolved is not None
-        assert resolved.representation is ResourceRepresentation.RESOLVED
-        assert resolved.resolved.phase is InspectionPhase.UNAVAILABLE
+        assert resolved.representation is ResourceRepresentation.OVERVIEW
+        assert resolved.overview_mode is ResourceOverviewMode.RESOLVED
+        assert resolved.resolved.phase is InspectionPhase.READY
+        assert resolved.resolved.value is not None
+        assert resolved.resolved.value.environment == app.state.execution_environment
+        assert app.query_one("#resource-detail-panel", Panel).border_subtitle == (
+            "overview · resolved"
+        )
+        resolved_lines = {
+            str(item.content)
+            for item in app.query_one(RequestResourceDetails).query(Static)
+            if item.has_class("resource-setting-detail")
+        }
+        assert any("region  eu" in line for line in resolved_lines)
+        assert any("0  ▦ Matrix/audiences" in line for line in resolved_lines)
 
-        await pilot.click("#resource-action-overview")
-        await pilot.click("#resource-action-use-in-compare")
+        app.query_one(ExplorerResourceTree).focus()
+        await pilot.press("u")
         assert app.state.active_screen is ComparoScreen.LAUNCH
         assert app.state.compare_subject == request.summary.coordinate

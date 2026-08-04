@@ -36,6 +36,7 @@ class ComparoApp(App[None]):
     CSS_PATH: ClassVar[str | PurePath | list[str | PurePath] | None] = [
         "styles/main.tcss",
         "styles/environment.tcss",
+        "styles/request.tcss",
     ]
     BINDINGS: ClassVar[list[BindingType]] = application_bindings()
     state: reactive[AppState] = reactive(default_app_state, init=False)

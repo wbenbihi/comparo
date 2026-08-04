@@ -20,6 +20,7 @@ from comparo.tui4.models.explorer import ProjectEnvironmentFact
 from comparo.tui4.models.resource import InspectionPhase
 from comparo.tui4.models.resource import ResolvedResourceField
 from comparo.tui4.models.resource import ResourceOverviewMode
+from comparo.tui4.models.resource import ResourcePresentation
 from comparo.tui4.models.resource_presenters import ProjectOverview
 from comparo.tui4.models.resource_presenters import compiled_exact_fields
 from comparo.tui4.models.resource_presenters import project_overview
@@ -83,6 +84,10 @@ class ProjectResourceDetails(BaseKindResourceDetails):
     """Complete safe Project manifest overview with explicit semantic sections."""
 
     KINDS: ClassVar[frozenset[str]] = frozenset({"Project"})
+    PRESENTATION: ClassVar[ResourcePresentation] = ResourcePresentation(
+        common_representation_hints=True,
+        visible_actions=frozenset(),
+    )
 
     @override
     def compose(self) -> ComposeResult:

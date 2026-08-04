@@ -1,14 +1,15 @@
 """Explicit resource-kind to widget registry."""
 
 from comparo.tui4.models.resource import ResourceDetail
+from comparo.tui4.models.resource import ResourcePresentation
 
 from .base import BaseKindResourceDetails
 from .environment import EnvironmentResourceDetails
 from .matrix import MatrixResourceDetails
 from .project import ProjectResourceDetails
+from .request import RequestResourceDetails
 from .standard import GenericResourceDetails
 from .standard import ProfileResourceDetails
-from .standard import RequestResourceDetails
 from .standard import ScenarioResourceDetails
 from .standard import SchemaResourceDetails
 from .standard import ValueResourceDetails
@@ -44,3 +45,9 @@ def resource_widget(detail: ResourceDetail) -> BaseKindResourceDetails:
     kind = detail.entry.summary.coordinate.kind
     widget = RESOURCE_WIDGETS.get(kind, GenericResourceDetails)
     return widget(detail)
+
+
+def resource_presentation(kind: str) -> ResourcePresentation:
+    """Return the kind-owned host policy or the generic fallback policy."""
+    widget = RESOURCE_WIDGETS.get(kind, GenericResourceDetails)
+    return widget.PRESENTATION

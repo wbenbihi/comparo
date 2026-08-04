@@ -6,6 +6,7 @@ from typing import override
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal
+from textual.content import Content
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Button
@@ -54,7 +55,7 @@ class ResourceActionBar(Horizontal):
         for action in self.actions:
             key = RESOURCE_ACTION_KEYS[action.id.value]
             yield Button(
-                f"[{key}] {action.label}",
+                Content(f"[{key}] {action.label}"),
                 id=f"{_BUTTON_PREFIX}{action.id.value}",
                 disabled=not action.enabled,
                 tooltip=action.disabled_reason,

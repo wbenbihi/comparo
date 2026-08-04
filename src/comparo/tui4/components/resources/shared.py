@@ -180,7 +180,7 @@ def resolution_status(resource: ResourceDetail, context: str) -> Static:
     if resolved.diagnostics:
         suffixes.append(f"{len(resolved.diagnostics)} unavailable")
     if resolved.incomplete:
-        suffixes.append("first page")
+        suffixes.append("bounded partial view")
     suffix = "" if not suffixes else f" · {' · '.join(suffixes)}"
     return Caption(
         f"Resolved for {context} · execution {resolved.execution_ordinal} · "

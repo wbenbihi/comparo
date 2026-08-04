@@ -59,18 +59,18 @@ SHUTDOWN_TIMEOUT = Duration.from_seconds(Decimal("5"))
 MAXIMUM_OUTSTANDING_PREPARATIONS = 2
 MAXIMUM_INSPECTIONS_PER_PREPARATION = 2
 MAXIMUM_REGISTERED_RUNS = 8
-MAXIMUM_RESOLVED_FIELDS = 8
-RESOLVED_PROJECTION_NODES = 128
+MAXIMUM_RESOLVED_FIELDS = 16
+RESOLVED_PROJECTION_NODES = 64
 
 RESOLVED_PROJECTION_LIMITS = ResolvedValueProjectionLimits(
     maximum_page_nodes=PositiveCount(value=RESOLVED_PROJECTION_NODES),
-    maximum_scalar_bytes=ByteCount(value=16 * 1024),
+    maximum_scalar_bytes=ByteCount(value=4 * 1024),
     maximum_path_segments=PositiveCount(value=32),
     maximum_path_segment_bytes=ByteCount(value=512),
-    maximum_traversal_nodes=PositiveCount(value=4096),
-    maximum_traversal_bytes=ByteCount(value=4 * 1024 * 1024),
-    maximum_taint_origins=PositiveCount(value=32),
-    maximum_taint_origin_bytes=ByteCount(value=512),
+    maximum_traversal_nodes=PositiveCount(value=1024),
+    maximum_traversal_bytes=ByteCount(value=256 * 1024),
+    maximum_taint_origins=PositiveCount(value=16),
+    maximum_taint_origin_bytes=ByteCount(value=256),
 )
 
 
@@ -81,6 +81,7 @@ class ResolvedFieldBatch:
     occurrence: PlanOccurrenceInspection | None = None
     values: ResolvedValueInspectionBatchResult | None = None
     diagnostics: tuple[str, ...] = ()
+    selection_incomplete: bool = False
 
     def __post_init__(self) -> None:
         """Keep success and value-free failure structurally disjoint."""
@@ -89,6 +90,8 @@ class ResolvedFieldBatch:
         successful = self.occurrence is not None and self.values is not None
         if successful == bool(self.diagnostics):
             raise ValueError("resolved field batch requires success or diagnostics")
+        if self.selection_incomplete and not successful:
+            raise ValueError("only a successful resolved batch may be incomplete")
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +108,23 @@ class HealthCheckBatch:
         if successful or rejected:
             return
         raise ValueError("health-check batch requires exactly result or diagnostics")
+
+
+def _resolved_field_selection(
+    field_paths: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[tuple[str, ...], ...], bool] | None:
+    """Validate one bounded field page without traversing an unbounded tail."""
+    if not field_paths:
+        return None
+    selected = field_paths[:MAXIMUM_RESOLVED_FIELDS]
+    if any(
+        type(path) is not tuple
+        or not path
+        or any(type(segment) is not str or not segment for segment in path)
+        for path in selected
+    ):
+        return None
+    return selected, len(field_paths) > MAXIMUM_RESOLVED_FIELDS
 
 
 def _health_revisions_match(
@@ -221,15 +241,15 @@ class TuiBackend:
         environment: ResourceCoordinate,
         field_paths: tuple[tuple[str, ...], ...],
     ) -> ResolvedFieldBatch:
-        """Resolve a bounded field batch through an ephemeral masked Compare plan."""
-        if resource.kind not in {"Project", "Environment"} or environment.kind != "Environment":
-            return ResolvedFieldBatch(diagnostics=("resolution.context.invalid",))
-        if (
-            not field_paths
-            or len(field_paths) > MAXIMUM_RESOLVED_FIELDS
-            or any(not path or any(not segment for segment in path) for path in field_paths)
+        """Resolve the bounded first field page through an ephemeral masked Compare plan."""
+        if resource.kind not in {"Project", "Environment", "Request"} or (
+            environment.kind != "Environment"
         ):
+            return ResolvedFieldBatch(diagnostics=("resolution.context.invalid",))
+        selection = _resolved_field_selection(field_paths)
+        if selection is None:
             return ResolvedFieldBatch(diagnostics=("resolution.selection.invalid",))
+        selected_paths, selection_incomplete = selection
         async with self._preparation_lock:
             if self._closed:
                 return ResolvedFieldBatch(diagnostics=("resolution.service.closed",))
@@ -238,6 +258,7 @@ class TuiBackend:
                     asyncio.to_thread(
                         self._prepare_resolved_context,
                         environment.resource_id,
+                        resource.resource_id if resource.kind == "Request" else None,
                     )
                 )
             )
@@ -258,6 +279,8 @@ class TuiBackend:
                 occurrence = occurrences.occurrences[0]
                 if occurrence.environment != environment:
                     return ResolvedFieldBatch(diagnostics=("resolution.environment.mismatch",))
+                if resource.kind == "Request" and occurrence.subject != resource:
+                    return ResolvedFieldBatch(diagnostics=("resolution.subject.mismatch",))
                 targets = tuple(
                     ResolvedValueInspectionTarget(
                         resource=resource,
@@ -268,7 +291,7 @@ class TuiBackend:
                         start_node=0,
                         maximum_nodes=RESOLVED_PROJECTION_NODES,
                     )
-                    for path in field_paths
+                    for path in selected_paths
                 )
                 values = await self.compare.inspect_resolved_values(
                     handle,
@@ -278,7 +301,11 @@ class TuiBackend:
                         maximum_targets=MAXIMUM_RESOLVED_FIELDS,
                     ),
                 )
-                return ResolvedFieldBatch(occurrence=occurrence, values=values)
+                return ResolvedFieldBatch(
+                    occurrence=occurrence,
+                    values=values,
+                    selection_incomplete=selection_incomplete,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - adapter exposes closed codes only
@@ -375,6 +402,7 @@ class TuiBackend:
     def _prepare_resolved_context(
         self,
         environment_id: str,
+        request_id: str | None,
     ) -> tuple[ComparePreparationResult, CompareExecutionControls]:
         """Prepare a single-Environment assertion plan without runtime effects."""
         controls = CompareExecutionControls(
@@ -390,7 +418,10 @@ class TuiBackend:
                     config=self._workspace_request.config,
                     additional_sources=self._workspace_request.additional_sources,
                     policy=None,
-                    options=PlanningOptions(environments=(environment_id,)),
+                    options=PlanningOptions(
+                        subjects=() if request_id is None else (request_id,),
+                        environments=(environment_id,),
+                    ),
                     invocation_id=uuid4(),
                     run_id=uuid4(),
                     load_limits=self._workspace_request.load_limits,

@@ -2,6 +2,12 @@
 
 from .base import BaseKindResourceDetails as BaseKindResourceDetails
 from .registry import RESOURCE_WIDGETS as RESOURCE_WIDGETS
+from .registry import resource_presentation as resource_presentation
 from .registry import resource_widget as resource_widget
 
-__all__ = ["RESOURCE_WIDGETS", "BaseKindResourceDetails", "resource_widget"]
+__all__ = [
+    "RESOURCE_WIDGETS",
+    "BaseKindResourceDetails",
+    "resource_presentation",
+    "resource_widget",
+]

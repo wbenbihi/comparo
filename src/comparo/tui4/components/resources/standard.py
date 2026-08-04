@@ -7,23 +7,11 @@ from comparo.tui4.components.list import Field
 from comparo.tui4.models.explorer import PROFILE_KINDS
 from comparo.tui4.models.resource_presenters import generic_fields
 from comparo.tui4.models.resource_presenters import profile_fields
-from comparo.tui4.models.resource_presenters import request_fields
 from comparo.tui4.models.resource_presenters import schema_fields
 from comparo.tui4.models.resource_presenters import value_fields
 
 from .base import BaseKindResourceDetails
-
-
-class RequestResourceDetails(BaseKindResourceDetails):
-    """Request method and structural dependencies."""
-
-    KINDS: ClassVar[frozenset[str]] = frozenset({"Request"})
-
-    @property
-    @override
-    def fields(self) -> tuple[Field, ...]:
-        """Return Request-specific overview rows."""
-        return request_fields(self.entry)
+from .request import RequestResourceDetails as RequestResourceDetails
 
 
 class SchemaResourceDetails(BaseKindResourceDetails):

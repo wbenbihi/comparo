@@ -131,6 +131,17 @@ changing the selected view. Environment resolution is bound to the Environment b
 the shared execution context remains the default for other resource kinds. Project reload also
 preserves the active view while rebinding it to the latest catalog and source revision.
 
+Request Overview has an HTTP-specific hierarchy rather than a generic field list: routing,
+parameters, inputs, payload, transport behavior, Matrix expansion, validation/comparison, and
+safety/output. Optional empty sections are suppressed, while every authored capability remains
+available when present. `r` prepares only that Request in the selected execution Environment, validates the
+returned exact revisions, and overlays independently masked field projections onto the same
+layout. Authentication and cookies can therefore remain masked while unrelated public Request
+fields stay inspectable. The inspection surface is aggregate-bounded and reports a partial view
+instead of failing when more field roots exist than the display budget permits. `u` opens Compare
+with the exact selected Request revision whether focus is in the tree or detail panel; the visible
+button is the mouse-equivalent action.
+
 Environment `healthChecks` are ordered, unique references to Request resources. `h` prepares and runs
 those requests against the selected Environment through the normal assertion, safety, artifact,
 and reporting pipeline. The latest safe health summary remains inline and completion is announced

@@ -90,8 +90,10 @@ separate key/value block. The active representation is the panel's secondary bor
 
 ### Common inspection contract
 
-Project and Environment inspection deliberately have no numbered action bar. Their views are
-workspace bindings, enabled and rendered in the footer only while a resource is selected:
+Project, Environment, and Request inspection deliberately have no numbered representation bar.
+Their views are workspace bindings, enabled and rendered in the footer only while a resource is
+selected. Request keeps only its workflow actions (`u` Use in Compare and the currently disabled
+composition action) as Textual buttons, so mouse users retain the same capabilities:
 
 | Key | View | Contract |
 | --- | --- | --- |
@@ -112,12 +114,20 @@ document changed.
 
 `r` does not resolve values in the Explorer process. Raw mode uses the safe resource outline;
 entering resolved mode asks `TuiBackend` for an ephemeral single-Environment assertion
-preparation, selects its first exact occurrence, and calls the application-owned masked batch
-inspection. The handle is always discarded after success, failure, or cancellation. The returned
-view includes the Environment revision, execution ordinal, cell/trial identities, exact field
-paths, safe node previews, and an explicit incomplete marker when the frontend-owned first-page
-limit is reached. `ProjectResourceDetails` overlays those exact paths onto the same cards, sections,
-ordering, and setting rows used by raw mode; resolved mode is not a separate diagnostic layout.
+preparation and calls the application-owned masked batch inspection. For a Request, that
+preparation explicitly selects only the highlighted Request ID, and the backend verifies both the
+exact Request revision and Environment revision on the returned occurrence before inspecting any
+field. Project and Environment inspection use the Project's default subject only as the execution
+context required by the resolver. The handle is always discarded after success, failure, or
+cancellation. The returned view includes the Environment revision, execution ordinal, cell/trial
+identities, exact field paths, safe node previews, and an explicit incomplete marker when the
+frontend-owned inspection budget is reached. Explorer inspects at most 16 field roots per request,
+64 projected nodes per root, 4 KiB per scalar preview, and an aggregate 4 MiB traversal budget.
+Additional roots produce a safe partial view rather than failing the entire resolved screen. These
+are display/inspection budgets only; they do not constrain execution or artifact capture. Kind
+widgets overlay those exact paths onto the same
+cards, sections, ordering, and setting rows used by raw mode; resolved mode is not a separate
+diagnostic layout.
 Public runtime expressions and inert exact compiled values are substituted in place, while
 sensitive values remain `<masked>`. Runtime expressions come from the application-owned masked
 resolver. Inert literals come from `ProjectOutlineField.exact_value`; linked identities additionally
@@ -156,7 +166,9 @@ revision-pinned reads and must not be presented as filenames.
 
 `BaseKindResourceDetails` supplies immutable `resource` and `entry` accessors plus the shared
 field renderer. Its `entries` accessor is retained as a compatibility alias; new code uses
-`entry`.
+`entry`. Each subclass also owns a `ResourcePresentation` declaration for host chrome: whether
+common representation hints apply and which semantic actions are visible. The generic host asks
+the registry for that declaration; it contains no Project, Environment, or Request kind switch.
 
 The explicit registry maps stable application kind strings to widget classes. It contains current
 resource kinds and uses `GenericResourceDetails` for future or plugin-defined kinds. Registration
@@ -195,6 +207,20 @@ configuration. Resolution is always bound to the Environment being inspected, ir
 the shared execution context badge. In resolved mode, typed public values and masked secrets use
 semantic theme tokens; reference kind glyphs appear only when the overlay proves the resolved
 target metadata.
+
+The Request widget likewise retains one layout across raw and resolved modes: method/routing,
+parameters, query/headers/cookies/authentication, payload/body type, stream/timeouts/retry/redirect
+behavior, Matrix expansion, Schema/assertion/diff evaluation, and safety/redaction/artifact
+attachments. Empty optional sections are omitted so a minimal Request remains compact; every
+authored section appears as soon as the corresponding capability exists. The compact top strip
+consumes only the immutable entry and pure Request projection and communicates method,
+relative-versus-absolute routing,
+streaming, and Matrix count. Resolved inspection selects visible Request fields independently;
+this is security-significant because a sensitive cookie or authentication object collapses to
+`<masked>` without unnecessarily collapsing unrelated public method, endpoint, query, or header
+values. Exact linked Matrix, Schema, and profile identities gain their kind glyph only in resolved
+mode. `u` forwards the exact Request coordinate to Compare; the disabled composition action does
+not imply a locally synthesized effective request.
 
 An Environment may declare ordered `healthChecks` references to `Request` resources. The
 contextual `h` binding is available only when at least one probe is declared and no probe run is

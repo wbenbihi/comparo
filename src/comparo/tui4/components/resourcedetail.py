@@ -21,6 +21,7 @@ from comparo.tui4.components.list import KeyValueList
 from comparo.tui4.components.panel import Panel
 from comparo.tui4.components.resourceactions import ResourceActionBar
 from comparo.tui4.components.resources import BaseKindResourceDetails
+from comparo.tui4.components.resources import resource_presentation
 from comparo.tui4.components.resources import resource_widget
 from comparo.tui4.components.resources.shared import ResourceDependencyGraph
 from comparo.tui4.components.separator import Separator
@@ -34,12 +35,22 @@ from comparo.tui4.models.diff import build_source_document
 from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.fields import Field
 from comparo.tui4.models.resource import InspectionPhase
+from comparo.tui4.models.resource import ResourceAction
 from comparo.tui4.models.resource import ResourceActionId
 from comparo.tui4.models.resource import ResourceDetail
 from comparo.tui4.models.resource import ResourceOverviewMode
 from comparo.tui4.models.resource import ResourceRepresentation
 from comparo.tui4.theme import kind_glyph
 from comparo.tui4.theme import style
+
+
+def _visible_actions(detail: ResourceDetail) -> tuple[ResourceAction, ...]:
+    """Return actions that belong in this kind's contextual action strip."""
+    presentation = resource_presentation(detail.entry.summary.coordinate.kind)
+    visible = presentation.visible_actions
+    if visible is None:
+        return detail.actions
+    return tuple(action for action in detail.actions if action.id in visible)
 
 
 def _inspection_message(phase: InspectionPhase, message: str | None) -> str:
@@ -246,10 +257,11 @@ class ResourceDetailOverview(Widget):
             yield Panel(Hint("Select a resource."), title="Overview")
             return
         children: list[Widget] = []
-        if detail.entry.summary.coordinate.kind not in {"Project", "Environment"}:
+        actions = _visible_actions(detail)
+        if actions:
             children.extend(
                 (
-                    ResourceActionBar(detail.actions),
+                    ResourceActionBar(actions),
                     Separator(classes="tight"),
                 )
             )
@@ -276,7 +288,8 @@ class ResourceDetailOverview(Widget):
     @staticmethod
     def _hint(detail: ResourceDetail) -> str:
         """Return the compact representation hint for the panel border."""
-        if detail.entry.summary.coordinate.kind not in {"Project", "Environment"}:
+        presentation = resource_presentation(detail.entry.summary.coordinate.kind)
+        if not presentation.common_representation_hints:
             return detail.representation.value
         if detail.representation is ResourceRepresentation.AUTHORED:
             return "source"
@@ -304,8 +317,12 @@ class ResourceDetailOverview(Widget):
             action = ResourceActionId(action_id)
         except ValueError:
             return
-        bar = self.query_one(ResourceActionBar)
-        bar.request(action)
+        detail = self.detail
+        if detail is None:
+            return
+        selected = next((item for item in _visible_actions(detail) if item.id is action), None)
+        if selected is not None and selected.enabled:
+            self.post_message(self.ActionRequested(self, action))
 
     def on_resource_action_bar_action_requested(
         self, event: ResourceActionBar.ActionRequested

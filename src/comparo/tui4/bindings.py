@@ -86,6 +86,18 @@ def explorer_bindings() -> list[BindingType]:
             "Health check",
             key_display=HEALTH_CHECK_KEY,
         ),
+        Binding(
+            RESOURCE_ACTION_KEYS["use-in-compare"],
+            'resource_workflow("use-in-compare")',
+            "Use in Compare",
+            key_display=RESOURCE_ACTION_KEYS["use-in-compare"],
+        ),
+        Binding(
+            RESOURCE_ACTION_KEYS["inspect-composition"],
+            'resource_workflow("inspect-composition")',
+            "Composition",
+            key_display=RESOURCE_ACTION_KEYS["inspect-composition"],
+        ),
         Binding(RELOAD_KEY, "reload", "Reload", key_display="^r"),
     ]
 

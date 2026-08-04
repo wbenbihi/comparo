@@ -11,6 +11,7 @@ from comparo.tui4.components.list import KeyValueList
 from comparo.tui4.components.typography import Hint
 from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.resource import ResourceDetail
+from comparo.tui4.models.resource import ResourcePresentation
 from comparo.tui4.models.resource_presenters import generic_fields
 
 
@@ -22,6 +23,7 @@ class BaseKindResourceDetails(Vertical):
     """
 
     KINDS: ClassVar[frozenset[str]] = frozenset()
+    PRESENTATION: ClassVar[ResourcePresentation] = ResourcePresentation()
 
     def __init__(self, resource: ResourceDetail) -> None:
         """Initialize the widget from immutable resource state."""
