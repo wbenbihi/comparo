@@ -12,6 +12,8 @@ from pathlib import Path
 import msgspec
 import pytest
 from rich.text import Text
+from textual.app import App
+from textual.app import ComposeResult
 from textual.pilot import Pilot
 from textual.widgets import Static
 from textual.widgets import Tab
@@ -57,6 +59,7 @@ from comparo.tui4.components.resources.request import RequestContextStrip
 from comparo.tui4.components.resources.request import RequestResourceDetails
 from comparo.tui4.components.resources.request import RequestTabBody
 from comparo.tui4.components.resources.request import RequestTargetPill
+from comparo.tui4.components.resources.request import RequestTargetState
 from comparo.tui4.components.resources.shared import ResourceSettingList
 from comparo.tui4.components.typography import Caption
 from comparo.tui4.models.explorer import ExplorerCatalog
@@ -71,6 +74,7 @@ from comparo.tui4.models.resource import ResourceInspection
 from comparo.tui4.models.resource import ResourceOverviewMode
 from comparo.tui4.models.resource import ResourceRepresentation
 from comparo.tui4.models.resource import initial_detail
+from comparo.tui4.models.resource import loading_resolved
 from comparo.tui4.models.resource_presenters import environment_health_check_ids
 from comparo.tui4.models.resource_presenters import environment_health_check_targets
 from comparo.tui4.models.resource_presenters import environment_overview
@@ -145,10 +149,49 @@ def test_badges_share_one_terminal_native_contract_for_inline_and_widget_use() -
 
 def test_request_target_tooltip_treats_authored_markup_as_literal_text() -> None:
     target = "/customers/[red]literal[/red]"
-    pill = RequestTargetPill("GET", target, resolved=False)
+    pill = RequestTargetPill("GET", target, state=RequestTargetState.RAW)
 
     assert isinstance(pill.tooltip, Text)
     assert pill.tooltip.plain == target
+
+
+def test_request_target_distinguishes_an_unavailable_resolved_url() -> None:
+    pill = RequestTargetPill(
+        "GET",
+        "resolved URL unavailable",
+        state=RequestTargetState.UNAVAILABLE,
+    )
+
+    assert not pill.resolved
+    assert pill.unavailable
+    assert pill.tooltip.plain == ("The canonical URL is unavailable for this execution context.")
+
+    with pytest.raises(TypeError, match="typed lifecycle"):
+        RequestTargetPill("GET", "https://example.test", state="resolved")  # type: ignore[arg-type]
+
+
+def test_request_context_distinguishes_pending_and_failed_resolution() -> None:
+    catalog = _catalog()
+    request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "catalog"
+    )
+    overview = request_overview(request)
+
+    pending = RequestContextStrip(
+        request,
+        overview,
+        resolution_phase=InspectionPhase.LOADING,
+    )
+    failed = RequestContextStrip(
+        request,
+        overview,
+        resolution_phase=InspectionPhase.FAILED,
+    )
+
+    assert pending.target_state is RequestTargetState.RESOLVING
+    assert failed.target_state is RequestTargetState.FAILED
 
 
 def test_explorer_tree_centrally_formats_sections_and_resource_rows() -> None:
@@ -471,6 +514,34 @@ async def test_backend_preserves_an_absolute_request_url_in_resolved_context() -
     assert batch.diagnostics == ()
     assert batch.request_target is not None
     assert batch.request_target.url == "http://127.0.0.1:18080/baseline/health"
+
+
+@_run_async
+async def test_backend_preserves_public_url_around_secret_auth_composition() -> None:
+    catalog = _catalog()
+    request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "ordered-occurrences"
+    )
+    environment = next(
+        entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+    )
+    backend = TuiBackend(PROJECT)
+    try:
+        batch = await backend.inspect_resolved_fields(
+            request.summary.coordinate,
+            environment.summary.coordinate,
+            resource_resolution_paths(request),
+        )
+    finally:
+        await backend.shutdown()
+
+    assert batch.diagnostics == ()
+    assert batch.request_target is not None
+    assert batch.request_target.url == (
+        "http://127.0.0.1:18080/baseline/whoami?filter=active&filter=recent&preview"
+    )
 
 
 @_run_async
@@ -1472,3 +1543,30 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
             ),
         )
         assert app.query_one("#request-tabs", TabbedContent).active == "request-headers"
+
+
+@_run_async
+async def test_request_target_remains_pending_while_resolution_is_loading() -> None:
+    catalog = _catalog()
+    request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "catalog"
+    )
+    environment = next(
+        entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+    )
+    detail = loading_resolved(
+        initial_detail(request, execution_environment=environment.summary.coordinate)
+    )
+
+    class PendingRequestApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield RequestResourceDetails(detail)
+
+    app = PendingRequestApp()
+    async with app.run_test(size=(180, 55)):
+        pending = app.query_one(RequestTargetPill)
+        assert pending.state is RequestTargetState.RESOLVING
+        assert pending.target == "resolving URL…"
+        assert "could not" not in pending.tooltip.plain

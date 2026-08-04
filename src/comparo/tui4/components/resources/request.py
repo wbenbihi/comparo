@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import ClassVar
 from typing import override
 
@@ -58,11 +59,46 @@ _REQUEST_TABS = frozenset(
 )
 
 
+class RequestTargetState(StrEnum):
+    """Truthful lifecycle states for the authored or context-bound Request target."""
+
+    RAW = "raw"
+    RESOLVING = "resolving"
+    RESOLVED = "resolved"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+
+
+_TARGET_STYLE = {
+    RequestTargetState.RAW: "request.target.raw",
+    RequestTargetState.RESOLVING: "muted",
+    RequestTargetState.RESOLVED: "request.target.resolved",
+    RequestTargetState.UNAVAILABLE: "warn",
+    RequestTargetState.FAILED: "err",
+}
+
+_TARGET_TOOLTIP = {
+    RequestTargetState.RESOLVING: "Resolving the canonical URL for this execution context.",
+    RequestTargetState.UNAVAILABLE: (
+        "The canonical URL is unavailable for this execution context."
+    ),
+    RequestTargetState.FAILED: "Canonical URL resolution failed for this execution context.",
+}
+
+
 class RequestTargetPill(Static):
     """One method-and-target unit with a canonical resolved URL when available."""
 
-    def __init__(self, method: str, target: str, *, resolved: bool) -> None:
+    def __init__(
+        self,
+        method: str,
+        target: str,
+        *,
+        state: RequestTargetState,
+    ) -> None:
         """Render a method badge and route without imposing badge-length limits on URLs."""
+        if type(state) is not RequestTargetState:
+            raise TypeError("a Request target requires a typed lifecycle state")
         content = Text()
         content.append_text(
             badge_text(
@@ -71,13 +107,14 @@ class RequestTargetPill(Static):
                 emphasis=BadgeEmphasis.SOLID,
             )
         )
-        target_style = "request.target.resolved" if resolved else "request.target.raw"
-        content.append(f" {target} ", style(target_style))
+        content.append(f" {target} ", style(_TARGET_STYLE[state]))
         super().__init__(content, classes="request-target-pill")
         self.method = method
         self.target = target
-        self.resolved = resolved
-        self.tooltip = Text(target)
+        self.state = state
+        self.resolved = state is RequestTargetState.RESOLVED
+        self.unavailable = state is RequestTargetState.UNAVAILABLE
+        self.tooltip = Text(_TARGET_TOOLTIP.get(state, target))
 
 
 class RequestContextStrip(Horizontal):
@@ -88,26 +125,38 @@ class RequestContextStrip(Horizontal):
         entry: ResourceEntry,
         overview: RequestOverview,
         resolved_target: ResolvedRequestTarget | None = None,
+        *,
+        resolution_phase: InspectionPhase | None = None,
     ) -> None:
         """Build badges from the same safe projection used by the detail sections."""
         method = (
             resolved_target.method if resolved_target is not None else entry.facts.method or "HTTP"
         )
-        target = (
-            resolved_target.url
-            if resolved_target is not None
-            else entry.facts.route
-            or (
+        if resolved_target is not None:
+            target = resolved_target.url
+            target_state = RequestTargetState.RESOLVED
+        elif resolution_phase in {InspectionPhase.IDLE, InspectionPhase.LOADING}:
+            target = "resolving URL…"
+            target_state = RequestTargetState.RESOLVING
+        elif resolution_phase is InspectionPhase.FAILED:
+            target = "resolved URL failed"
+            target_state = RequestTargetState.FAILED
+        elif resolution_phase is not None:
+            target = "resolved URL unavailable"
+            target_state = RequestTargetState.UNAVAILABLE
+        else:
+            target = entry.facts.route or (
                 "absolute URL"
                 if any(item.name == "url" for item in overview.routing)
                 else "endpoint"
             )
-        )
+            target_state = RequestTargetState.RAW
+        self.target_state = target_state
         children: list[Static] = [
             RequestTargetPill(
                 method,
                 target,
-                resolved=resolved_target is not None,
+                state=target_state,
             ),
         ]
         if any(item.name == "stream" for item in overview.behavior):
@@ -190,7 +239,16 @@ class RequestResourceDetails(BaseKindResourceDetails):
         ):
             resolved_target = self.resource.resolved.value.request_target
 
-        yield RequestContextStrip(self.entry, overview, resolved_target)
+        yield RequestContextStrip(
+            self.entry,
+            overview,
+            resolved_target,
+            resolution_phase=(
+                self.resource.resolved.phase
+                if self.resource.overview_mode is ResourceOverviewMode.RESOLVED
+                else None
+            ),
+        )
         if self.resource.overview_mode is ResourceOverviewMode.RESOLVED:
             yield resolution_status(
                 self.resource,
@@ -307,4 +365,5 @@ __all__ = [
     "RequestResourceDetails",
     "RequestTabBody",
     "RequestTargetPill",
+    "RequestTargetState",
 ]
