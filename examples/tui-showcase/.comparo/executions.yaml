@@ -42,3 +42,33 @@ spec:
     - $use: Request/release
   environments:
     - $use: candidate
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: streaming-chunks
+  name: Streaming chunk comparison
+  description: Compares equivalent SSE content emitted with different Environment chunk counts.
+  tags: [comparison, stream, sse]
+spec:
+  subjects:
+    - $use: Request/streaming-events
+  baseline:
+    $use: baseline
+  candidates:
+    - $use: candidate
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: read-routing
+  name: Routing and contracts
+  description: Groups relative, absolute, inline-Schema, and stable read-only Requests.
+  tags: [assertions, routing, schema]
+spec:
+  subjects:
+    - $use: Request/health
+    - $use: Request/absolute-health
+    - $use: Request/inline-contract
+  environments:
+    - $use: baseline

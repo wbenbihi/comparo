@@ -2,9 +2,9 @@ apiVersion: comparo/v1alpha1
 kind: AssertionProfile
 metadata:
   id: usable-response
-  name: Usable response
-  description: Require HTTP 200 and a non-null JSON body.
-  tags: [assertion, blocking, json]
+  name: Successful response
+  description: Require HTTP 200 across regular and streaming response shapes.
+  tags: [assertion, blocking, transport]
 spec:
   rules:
     - id: status-is-200
@@ -12,14 +12,6 @@ spec:
       operator:
         name: equals
         expected: 200
-      severity: blocking
-      quantifier: one
-      completeness: complete
-    - id: body-is-present
-      selector: response.body
-      operator:
-        name: notEquals
-        expected: null
       severity: blocking
       quantifier: one
       completeness: complete
@@ -64,3 +56,26 @@ metadata:
   description: Reduce blocking evaluation facts into a release verdict.
   tags: [gate, release]
 spec: {}
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: equivalent-stream-content
+  name: Equivalent stream content
+  description: Projects JSON-bearing SSE data to text and compares concatenated semantic content.
+  tags: [diff, stream, sse, semantic]
+spec:
+  rules:
+    - id: concatenated-text-is-stable
+      selector: stream.events.data-json
+      transforms:
+        - name: streamProject
+          source: sse-json-data
+          path: /text
+      reducer:
+        name: concatenate
+        separator: ""
+      comparator:
+        name: exact
+      severity: blocking
+      completeness: complete

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 _LOGGER: Final = logging.getLogger("comparo.examples.demo-server")
 _ENVIRONMENTS: Final = frozenset({"baseline", "candidate", "development"})
+_MAXIMUM_REQUEST_BYTES: Final = 1_000_000
 
 
 class DemoRequestHandler(BaseHTTPRequestHandler):
@@ -35,9 +36,48 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
             )
             return
         environment, endpoint = segments
+        if endpoint == "events":
+            self._send_sse(environment)
+            return
         query = parse_qs(parsed.query, keep_blank_values=True)
         status, payload = _response(environment, endpoint, query, self.headers)
         self._send_json(status, payload)
+
+    def do_POST(self) -> None:
+        """Echo bounded request-body metadata for body-lowering examples."""
+        parsed = urlsplit(self.path)
+        segments = tuple(segment for segment in parsed.path.split("/") if segment)
+        if len(segments) != 2 or segments[0] not in _ENVIRONMENTS or segments[1] != "echo":
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown demo mutation route"})
+            return
+        raw_length = self.headers.get("Content-Length", "0")
+        try:
+            length = int(raw_length)
+        except ValueError:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid content length"})
+            return
+        if not 0 <= length <= _MAXIMUM_REQUEST_BYTES:
+            self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body too large"})
+            return
+        body = self.rfile.read(length)
+        media_type = self.headers.get("Content-Type", "application/octet-stream")
+        payload: object | None = None
+        if media_type.startswith("application/json"):
+            try:
+                payload = json.loads(body)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON body"})
+                return
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "environment": segments[0],
+                "method": "POST",
+                "contentType": media_type,
+                "bodyBytes": len(body),
+                "json": payload,
+            },
+        )
 
     @override
     def log_message(self, message: str, *args: object) -> None:
@@ -53,6 +93,28 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_sse(self, environment: str) -> None:
+        """Write deterministic JSON-bearing SSE with Environment-specific chunking."""
+        tokens = {
+            "baseline": ("hello", " world"),
+            "candidate": ("hel", "lo", " world"),
+            "development": ("hello world",),
+        }[environment]
+        records = b"".join(
+            (
+                f"id: {index}\nevent: delta\ndata: "
+                + json.dumps({"index": index, "text": token}, separators=(",", ":"))
+                + "\n\n"
+            ).encode()
+            for index, token in enumerate(tokens)
+        )
+        self.send_response(HTTPStatus.OK.value)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(records)))
+        self.end_headers()
+        self.wfile.write(records)
 
 
 def _response(

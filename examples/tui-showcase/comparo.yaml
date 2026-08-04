@@ -9,7 +9,36 @@ spec:
   data: .comparo
   variables:
     client: comparo-tui
+    releaseChannel: preview
+    sampleCount: 3
+    featureEnabled: true
+  secrets:
+    demoToken: not-a-real-credential
   defaults:
+    parameters:
+      label: request-parameter
+      orderId: 42
+      expedited: true
+      message: hello
+      dotenvLabel:
+        $env: SHOWCASE_LABEL
+      convertedPort:
+        $env:
+          name: SHOWCASE_PORT
+          as: integer
+      fileLabel:
+        $file:
+          path: fixtures/client-name.txt
+          as: string
+          trim: both
+          maxBytes: 128
+      fallbackLabel:
+        $from:
+          - $env: SHOWCASE_MISSING
+          - fallback-label
+      optionalLabel:
+        $optional:
+          $env: SHOWCASE_OPTIONAL
     subjects:
       - $use: Request/catalog
     baseline:
@@ -26,5 +55,5 @@ spec:
       $use: RedactionProfile/demo-redaction
     artifacts:
       $use: ArtifactProfile/demo-artifacts
-    maximumAttempts: 1
+    maximumAttempts: 3
     failFast: false

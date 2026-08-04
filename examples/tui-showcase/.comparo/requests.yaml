@@ -34,8 +34,6 @@ spec:
     endpoint: /health
     headers:
       $use: common-headers
-  assertions:
-    - $use: usable-response
 ---
 apiVersion: comparo/v1alpha1
 kind: Request
@@ -52,3 +50,339 @@ spec:
       $use: common-headers
   diffs:
     - $use: exact-body
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: all-inputs
+  name: Complete HTTP inputs
+  description: Shows ordered headers, query values, sensitive cookies, bearer auth, and wire policies.
+  tags: [get, inputs, auth, policies]
+spec:
+  parameters:
+    label: request-parameter
+  request:
+    method: GET
+    endpoint: /whoami
+    query:
+      environment:
+        $var: environment
+      verbose: "true"
+    headers:
+      - name: Accept
+        value: application/json
+      - name: X-Demo-Label
+        value:
+          $param: label
+      - name: X-Demo-Client
+        value:
+          $var: client
+    cookies:
+      session:
+        $secret: demoToken
+    auth:
+      type: bearer
+      token:
+        $secret: demoToken
+    timeout:
+      connect: 1s
+      responseHeaders: 2s
+      attemptTotal: 4s
+      executionTotal: 5s
+    retries:
+      maxAttempts: 3
+      conditions: [connect-failure, status-5xx]
+      backoff:
+        type: exponential
+        initial: 10ms
+        multiplier:
+          numerator: 2
+          denominator: 1
+        maximum: 1s
+      jitter:
+        numerator: 1
+        denominator: 10
+    redirects:
+      maxHops: 0
+      stripSensitiveCredentials: true
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: request-local-policies
+  name: Request-local policies
+  description: Shows schema-supported Request-level safety, redaction, and artifact attachments.
+  tags: [get, policies, unsupported-runtime, unbound]
+spec:
+  request:
+    method: GET
+    endpoint: /health
+  safety:
+    $use: SafetyProfile/local-read-only
+  redaction:
+    $use: RedactionProfile/demo-redaction
+  artifacts:
+    $use: ArtifactProfile/demo-artifacts
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: json-payload
+  name: JSON payload
+  description: Resolves typed Request parameters inside a structured JSON mutation body.
+  tags: [post, body, json, parameters]
+spec:
+  parameters:
+    orderId: 42
+    expedited: true
+  request:
+    method: POST
+    endpoint: /echo
+    headers:
+      Content-Type: application/json
+    body:
+      orderId:
+        $param: orderId
+      expedited:
+        $param: expedited
+      source:
+        $var: client
+    bodyType: json
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: text-payload
+  name: Text payload
+  description: Uses explicit text body lowering and interpolation without inferred conversion.
+  tags: [post, body, text, interpolation]
+spec:
+  parameters:
+    message: hello
+  request:
+    method: POST
+    endpoint: /echo
+    body: "message=${parameters.message}; client=${variables.client}"
+    bodyType: text
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: form-payload
+  name: Form payload
+  description: Exercises application/x-www-form-urlencoded body lowering.
+  tags: [post, body, form]
+spec:
+  request:
+    method: POST
+    endpoint: /echo
+    body:
+      name: Comparo
+      channel:
+        $var: releaseChannel
+    bodyType: form
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: multipart-payload
+  name: Multipart payload
+  description: Combines an ordinary field and an explicitly encoded file part.
+  tags: [post, body, multipart, file]
+spec:
+  request:
+    method: POST
+    endpoint: /echo
+    body:
+      parts:
+        - type: text
+          name: purpose
+          value: showcase
+        - type: file
+          name: document
+          filename: example.txt
+          mediaType: text/plain
+          encoding: base64
+          value: aGVsbG8gY29tcGFybw==
+    bodyType: multipart
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: streaming-events
+  name: Streaming events
+  description: Enables protocol auto-detection for an SSE response whose data fields contain JSON.
+  tags: [get, stream, sse, json]
+spec:
+  request:
+    method: GET
+    endpoint: /events
+    headers:
+      Accept: text/event-stream
+    stream:
+      protocol: auto
+    timeout:
+      idle: 2s
+      attemptTotal: 8s
+      executionTotal: 10s
+  diffs:
+    - $use: equivalent-stream-content
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: absolute-health
+  name: Absolute URL health
+  description: Deliberately bypasses Environment base URL routing to expose absolute URL semantics.
+  tags: [get, absolute-url, routing]
+spec:
+  request:
+    method: GET
+    url: http://127.0.0.1:18080/baseline/health
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: directive-inputs
+  name: Directive inputs
+  description: Covers dotenv, conversion, file, fallback, optional, and interpolation resolution.
+  tags: [get, directives, dotenv, file]
+spec:
+  parameters:
+    dotenvLabel:
+      $env: SHOWCASE_LABEL
+    convertedPort:
+      $env:
+        name: SHOWCASE_PORT
+        as: integer
+    fileLabel:
+      $file:
+        path: fixtures/client-name.txt
+        as: string
+        trim: both
+        maxBytes: 128
+    fallbackLabel:
+      $from:
+        - $env: SHOWCASE_MISSING
+        - fallback-label
+    optionalLabel:
+      $optional:
+        $env: SHOWCASE_OPTIONAL
+    interpolatedLabel: "label-${parameters.fileLabel}"
+  request:
+    method: GET
+    endpoint: /whoami
+    headers:
+      X-Demo-Label:
+        $param: fileLabel
+    query:
+      environment:
+        $param: dotenvLabel
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: inline-contract
+  name: Inline response contract
+  description: Keeps a response Schema and assertion rules local to one Request.
+  tags: [get, inline, schema, assertion]
+spec:
+  request:
+    method: GET
+    endpoint: /health
+  responseSchema:
+    type: object
+    required: [status, contractVersion]
+    properties:
+      status:
+        type: string
+      contractVersion:
+        type: integer
+  assertions:
+    - rules:
+        - id: inline-status
+          selector: response.status
+          operator:
+            name: equals
+            expected: 200
+          severity: blocking
+          quantifier: one
+          completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: remote-schema
+  name: Remote response schema
+  description: Demonstrates a public JSON Schema reference; it is not selected by an execution profile.
+  tags: [get, schema, remote, opt-in]
+spec:
+  request:
+    method: GET
+    endpoint: /health
+  responseSchema:
+    $use: https://json.schemastore.org/package.json
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: bytes-payload
+  name: File-backed bytes payload
+  description: Reads a bounded project file as bytes and opts into bytes body lowering explicitly.
+  tags: [post, body, bytes, file]
+spec:
+  request:
+    method: POST
+    endpoint: /echo
+    body:
+      $file:
+        path: fixtures/client-name.txt
+        as: bytes
+        maxBytes: 128
+    bodyType: bytes
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: ordered-occurrences
+  name: Ordered field occurrences
+  description: Preserves duplicate query and header names plus a bare query value and API-key auth.
+  tags: [get, ordered, duplicates, api-key]
+spec:
+  request:
+    method: GET
+    endpoint: /whoami
+    query:
+      - name: filter
+        value: active
+      - name: filter
+        value: recent
+      - name: preview
+        value: null
+    headers:
+      - name: X-Demo-Label
+        value: first
+      - name: X-Demo-Label
+        value: second
+    auth:
+      type: apiKey
+      in: header
+      name: X-Demo-Key
+      value:
+        $secret: demoToken
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata:
+  id: unavailable-credential
+  name: Unavailable credential
+  description: Intentionally fails masked resolution because its required ambient symbol is absent.
+  tags: [get, auth, unavailable, error-state]
+spec:
+  request:
+    method: GET
+    endpoint: /health
+    auth:
+      type: bearer
+      token:
+        $env: SHOWCASE_REQUIRED_TOKEN
