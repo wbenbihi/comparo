@@ -219,6 +219,12 @@ Health execution identities come from the ordered, revision-bearing
 compiler rejects repeated target identities (including qualified/unqualified spellings), while the
 backend repeats that uniqueness check at its trust boundary instead of silently changing a run.
 
+Scenario execution remains deferred. The current planner override surface lowers runtime subject
+choices to resource IDs; if a project deliberately defines both `Request/foo` and `Scenario/foo`,
+the health preparation fails closed with `planning.subject.not-found-or-ambiguous` before a handle,
+run, or network effect exists. Scenario implementation must carry kind-qualified subject identity
+through planning rather than adding a Request-first inference rule.
+
 ## Adding a kind
 
 1. Confirm that `inspect_project_workspace` exposes enough secret-safe structure. Add an
