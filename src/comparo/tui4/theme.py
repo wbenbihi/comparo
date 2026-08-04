@@ -28,6 +28,7 @@ BADGE_GREEN_BG = "#11291B"
 BADGE_RED_BG = "#2B0F16"
 BADGE_AMBER_BG = "#2B2109"
 BADGE_TEAL_BG = "#0D2B29"
+BADGE_ACTIVE_BG = "#102A4C"
 BADGE_SLATE_BG = "#1C2434"
 BADGE_BASELINE_BG = "#0E2A31"
 BADGE_CANDIDATE_BG = "#241B33"
@@ -79,11 +80,19 @@ _STYLES: dict[str, str] = {
     "warn": WARN,
     "err": ERR,
     "error-op": ERROR_OP,
+    "value.null": f"italic {MUTED}",
+    "value.boolean": CANDIDATE,
+    "value.integer": AMBER,
+    "value.number": AMBER,
+    "value.text": TEAL,
+    "value.reference": BLUE,
+    "value.masked": f"bold {WARN}",
     "badge.solid.neutral": f"bold {LABEL} on {BADGE_SLATE_BG}",
     "badge.solid.info": f"bold {TEAL} on {BADGE_TEAL_BG}",
     "badge.solid.success": f"bold {OK} on {BADGE_GREEN_BG}",
     "badge.solid.warning": f"bold {WARN} on {BADGE_AMBER_BG}",
     "badge.solid.danger": f"bold {ERR} on {BADGE_RED_BG}",
+    "badge.solid.active": f"bold {BLUE} on {BADGE_ACTIVE_BG}",
     "badge.solid.baseline": f"bold {BASELINE} on {BADGE_BASELINE_BG}",
     "badge.solid.candidate": f"bold {CANDIDATE} on {BADGE_CANDIDATE_BG}",
     "badge.quiet.frame": DIM,
@@ -92,6 +101,7 @@ _STYLES: dict[str, str] = {
     "badge.quiet.success": OK,
     "badge.quiet.warning": WARN,
     "badge.quiet.danger": ERR,
+    "badge.quiet.active": BLUE,
     "badge.quiet.baseline": BASELINE,
     "badge.quiet.candidate": CANDIDATE,
     "badge.status.label": LABEL,

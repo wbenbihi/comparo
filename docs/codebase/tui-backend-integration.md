@@ -233,11 +233,17 @@ Each `ProjectResourceSummary` provides:
 Group resources by `coordinate.kind`; show `name` with `resource_id` as the stable secondary label.
 Do not identify two resources only by `name`.
 
+The matching `ProjectSourceSummary` provides both `source_id`, the opaque identifier used for
+revision-pinned reads, and `filename`, the safe basename intended for user-facing provenance.
+Never render `source_id` as though it were a filesystem name and never reconstruct an absolute
+path from either projection.
+
 ### 6.2 Structural overview rows
 
-`ProjectOutlineField` contains `path`, `label`, `value`, `depth`, and `category`. Current categories
-include containers, references, inline definitions, directives, literals, sensitive values, and
-generic structure. The values are purposefully conservative:
+`ProjectOutlineField` contains `path`, `label`, `value`, `depth`, `category`, and the optional
+paired fields `exact_value` / `exact_kind`. Current categories include containers, references,
+inline definitions, directives, literals, sensitive values, and generic structure. The ordinary
+`value` is purposefully conservative:
 
 - sensitive values are `* REDACTED`;
 - most strings show their length rather than contents;
@@ -245,6 +251,14 @@ generic structure. The values are purposefully conservative:
 - `$use` and value directives show safe structural meaning;
 - remote schema URIs and `$file` paths are concealed; and
 - Request methods are an explicitly safe exact scalar.
+
+For Project resources only, `exact_value` can additionally carry a bounded terminal-safe display
+of inert compiled null/boolean/number/string leaves and linked-resource identities. Project value
+namespaces (`variables`, `secrets`, and their defaults equivalents) never receive this shortcut;
+they must use masked runtime resolution. Project data/source paths are reduced to safe basenames,
+oversized strings are omitted, and control/non-ASCII code points are escaped. This lets a Project
+overview combine exact inert configuration with masked runtime values without parsing authored
+YAML or exposing filesystem coordinates in the TUI.
 
 This is an overview/tree model, not a normalized YAML renderer and not a generic project editor.
 

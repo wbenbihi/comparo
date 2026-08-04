@@ -125,6 +125,10 @@ def test_workspace_projects_only_safe_resource_metadata_and_source_membership(
         "credentials",
     )
     assert tuple(source.entry for source in outcome.sources) == (True, False)
+    assert tuple(source.filename for source in outcome.sources) == (
+        "comparo.yaml",
+        "resources.yaml",
+    )
     assert outcome.sources[0].resources == (snapshot.project.coordinate,)
     assert set(outcome.sources[1].resources) == {
         resource.coordinate for resource in snapshot.resources
@@ -288,6 +292,8 @@ def test_consumer_projection_ignores_relationships_outside_the_snapshot() -> Non
     [
         ({"source_id": 1}, TypeError, "ID"),
         ({"source_id": ""}, ValueError, "ID"),
+        ({"filename": "nested/source.yaml"}, ValueError, "filename"),
+        ({"filename": ""}, ValueError, "filename"),
         ({"entry": 1}, TypeError, "entry"),
         ({"resources": []}, TypeError, "resources"),
         ({"resources": (object(),)}, TypeError, "resources"),

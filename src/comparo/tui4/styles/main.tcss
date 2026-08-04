@@ -311,6 +311,7 @@ ResourceActionBar Button:disabled { color: $text-disabled; }
 .project-setting-row { padding: 0 0 0 1; margin-bottom: 1; }
 .project-setting-heading, .project-setting-detail { width: 100%; height: auto; }
 .project-default-group-title { margin-top: 1; }
+.project-dependency-view, .project-dependency-graph { width: 100%; height: 1fr; }
 .overview-table { height: 10; }
 #overview-source { height: 18; }
 #explorer-overview, #explorer-structure, #explorer-effective { height: auto; }

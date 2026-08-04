@@ -7,8 +7,8 @@ from dataclasses import replace
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from comparo.application.plan_inspection_identity import ResourceCoordinate
 from comparo.tui4.models.explorer import ResourceEntry
-from comparo.tui4.models.fields import Field
 
 if TYPE_CHECKING:
     from comparo.application import AuthoredResourceWindow
@@ -21,6 +21,14 @@ class ResourceRepresentation(StrEnum):
     OVERVIEW = "overview"
     AUTHORED = "authored"
     EFFECTIVE = "effective"
+    RESOLVED = "resolved"
+    DEPENDENCIES = "dependencies"
+
+
+class ResourceOverviewMode(StrEnum):
+    """Value layer displayed inside the resource Overview representation."""
+
+    RAW = "raw"
     RESOLVED = "resolved"
 
 
@@ -56,10 +64,26 @@ class ResourceInspection[T]:
 
 
 @dataclass(frozen=True)
-class ResolvedResourceView:
-    """Frontend projection reserved for a context-bound resolved value tree."""
+class ResolvedResourceField:
+    """One exact field-path value safe to overlay on an authored structure."""
 
-    fields: tuple[Field, ...]
+    path: tuple[str, ...]
+    value: str
+    tone: str | None = None
+    reference_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedResourceView:
+    """Frontend projection for one context-bound masked value overlay."""
+
+    environment: ResourceCoordinate
+    execution_ordinal: int
+    cell_id: str
+    trial_id: str
+    fields: tuple[ResolvedResourceField, ...]
+    diagnostics: tuple[str, ...] = ()
+    incomplete: bool = False
 
 
 class ResourceActionId(StrEnum):
@@ -96,6 +120,8 @@ class ResourceDetail:
     key: str
     entry: ResourceEntry
     representation: ResourceRepresentation
+    overview_mode: ResourceOverviewMode
+    execution_environment: ResourceCoordinate | None
     authored: ResourceInspection[AuthoredResourceWindow]
     effective: ResourceInspection[EffectiveResourceWindow]
     resolved: ResourceInspection[ResolvedResourceView]
@@ -135,19 +161,49 @@ def _resource_actions(entry: ResourceEntry) -> tuple[ResourceAction, ...]:
     return tuple(actions)
 
 
-def initial_detail(entry: ResourceEntry) -> ResourceDetail:
+def initial_detail(
+    entry: ResourceEntry,
+    execution_environment: ResourceCoordinate | None = None,
+) -> ResourceDetail:
     """Build the selected resource's immutable detail projection."""
     return ResourceDetail(
         key=entry.key,
         entry=entry,
         representation=ResourceRepresentation.OVERVIEW,
+        overview_mode=ResourceOverviewMode.RAW,
+        execution_environment=execution_environment,
         authored=ResourceInspection(),
         effective=ResourceInspection(),
         resolved=ResourceInspection(
             phase=InspectionPhase.UNAVAILABLE,
-            message="Choose an execution context in Compare first.",
+            message=(
+                "No execution Environment is available."
+                if execution_environment is None
+                else "Masked resolved values have not been inspected for this context."
+            ),
         ),
         actions=_resource_actions(entry),
+    )
+
+
+def bind_execution_environment(
+    detail: ResourceDetail,
+    environment: ResourceCoordinate | None,
+) -> ResourceDetail:
+    """Rebind contextual inspection state without retaining stale resolved values."""
+    if detail.execution_environment == environment:
+        return detail
+    return replace(
+        detail,
+        execution_environment=environment,
+        resolved=ResourceInspection(
+            phase=InspectionPhase.UNAVAILABLE,
+            message=(
+                "No execution Environment is available."
+                if environment is None
+                else "Masked resolved values have not been inspected for this context."
+            ),
+        ),
     )
 
 
@@ -156,6 +212,20 @@ def select_representation(
 ) -> ResourceDetail:
     """Return resource state focused on one representation."""
     return replace(detail, representation=representation)
+
+
+def toggle_overview_mode(detail: ResourceDetail) -> ResourceDetail:
+    """Toggle raw/resolved Overview content and return to Overview."""
+    mode = (
+        ResourceOverviewMode.RESOLVED
+        if detail.overview_mode is ResourceOverviewMode.RAW
+        else ResourceOverviewMode.RAW
+    )
+    return replace(
+        detail,
+        representation=ResourceRepresentation.OVERVIEW,
+        overview_mode=mode,
+    )
 
 
 def loading_authored(detail: ResourceDetail) -> ResourceDetail:
@@ -180,6 +250,44 @@ def failed_authored(detail: ResourceDetail, message: str) -> ResourceDetail:
     return replace(
         detail,
         authored=ResourceInspection(phase=InspectionPhase.FAILED, message=message),
+    )
+
+
+def loading_resolved(detail: ResourceDetail) -> ResourceDetail:
+    """Select resolved Overview mode and start a context-bound inspection."""
+    return replace(
+        detail,
+        representation=ResourceRepresentation.OVERVIEW,
+        overview_mode=ResourceOverviewMode.RESOLVED,
+        resolved=ResourceInspection(phase=InspectionPhase.LOADING),
+    )
+
+
+def loaded_resolved(detail: ResourceDetail, value: ResolvedResourceView) -> ResourceDetail:
+    """Attach one masked resolved projection for the current execution context."""
+    if detail.execution_environment != value.environment:
+        raise ValueError("resolved view Environment differs from resource context")
+    return replace(
+        detail,
+        resolved=ResourceInspection(phase=InspectionPhase.READY, value=value),
+    )
+
+
+def failed_resolved(detail: ResourceDetail, message: str) -> ResourceDetail:
+    """Attach a value-free resolved inspection failure code."""
+    return replace(
+        detail,
+        resolved=ResourceInspection(phase=InspectionPhase.FAILED, message=message),
+    )
+
+
+def unavailable_resolved(detail: ResourceDetail, message: str) -> ResourceDetail:
+    """Select resolved Overview mode with an honest unavailable explanation."""
+    return replace(
+        detail,
+        representation=ResourceRepresentation.OVERVIEW,
+        overview_mode=ResourceOverviewMode.RESOLVED,
+        resolved=ResourceInspection(phase=InspectionPhase.UNAVAILABLE, message=message),
     )
 
 

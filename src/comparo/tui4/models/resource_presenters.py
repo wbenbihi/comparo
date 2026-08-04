@@ -7,10 +7,13 @@ from typing import TYPE_CHECKING
 
 from textual.content import Content
 
+from comparo.application import ResolvedInspectionState
+from comparo.application import ResolvedValueInspectionBatchResult
 from comparo.tui4.models.explorer import PROFILE_KINDS
 from comparo.tui4.models.explorer import ProjectEnvironmentFact
 from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.fields import Field
+from comparo.tui4.models.resource import ResolvedResourceField
 
 if TYPE_CHECKING:
     from comparo.application import ProjectResourceSummary
@@ -85,6 +88,26 @@ class ProjectOverview:
     additional: tuple[ProjectSetting, ...]
 
 
+@dataclass(frozen=True)
+class ProjectDependency:
+    """One directed edge in the Project's safe dependency graph."""
+
+    direction: str
+    path: tuple[str, ...]
+    target_kind: str
+    target_id: str
+    origin: str
+
+
+@dataclass(frozen=True)
+class ProjectResolvedFields:
+    """Masked, frontend-safe Project field rows from one resolved batch."""
+
+    fields: tuple[ResolvedResourceField, ...]
+    diagnostics: tuple[str, ...] = ()
+    incomplete: bool = False
+
+
 _PROJECT_SOURCE_FIELDS = frozenset({"data", "sources"})
 _DEFAULT_GROUPS: tuple[tuple[str, frozenset[str]], ...] = (
     (
@@ -104,6 +127,21 @@ _DEFAULT_GROUPS: tuple[tuple[str, frozenset[str]], ...] = (
         frozenset({"assertions", "diffs", "gate", "safety", "redaction", "artifacts"}),
     ),
 )
+_RESOLVED_VALUE_TONES = {
+    "null": "value.null",
+    "boolean": "value.boolean",
+    "integer": "value.integer",
+    "number": "value.number",
+    "string": "value.text",
+    "bytes": "value.number",
+    "duration": "value.number",
+    "size": "value.number",
+    "instant": "value.number",
+    "count": "value.integer",
+    "ratio": "value.number",
+    "media-type": "value.text",
+    "http-field-value": "value.text",
+}
 
 
 def _project_settings(
@@ -182,6 +220,118 @@ def project_overview(entry: ResourceEntry) -> ProjectOverview:
         secrets=secrets,
         default_groups=tuple(default_groups),
         additional=additional,
+    )
+
+
+def project_dependencies(entry: ResourceEntry) -> tuple[ProjectDependency, ...]:
+    """Return every outbound and inverse edge from the Project safe outline."""
+    outline = entry.summary.outline
+    if outline is None:
+        return ()
+    return tuple(
+        ProjectDependency(
+            direction="used-by" if relationship.origin == "used-by" else "uses",
+            path=relationship.path,
+            target_kind=relationship.target.kind,
+            target_id=relationship.target.resource_id,
+            origin=relationship.origin,
+        )
+        for relationship in outline.relationships
+    )
+
+
+def project_compiled_exact_fields(entry: ResourceEntry) -> tuple[ResolvedResourceField, ...]:
+    """Return safe exact inert/reference values supplied by the application outline."""
+    outline = entry.summary.outline
+    if outline is None:
+        return ()
+    reference_kinds = {
+        relationship.path: relationship.target.kind
+        for relationship in outline.relationships
+        if relationship.origin == "link"
+    }
+    return tuple(
+        ResolvedResourceField(
+            path=field.path,
+            value=field.exact_value,
+            tone=f"value.{field.exact_kind}",
+            reference_kind=reference_kinds.get(field.path),
+        )
+        for field in outline.fields
+        if field.exact_value is not None and field.exact_kind is not None
+    )
+
+
+def project_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
+    """Select the bounded Project expression roots displayed by Overview."""
+    overview = project_overview(entry)
+    paths: list[tuple[str, ...]] = []
+    if overview.variables:
+        paths.append(("variables",))
+    if overview.secrets:
+        paths.append(("secrets",))
+    outline = entry.summary.outline
+    if outline is not None:
+        available = {field.path for field in outline.fields}
+        paths.extend(
+            path
+            for path in (
+                ("defaults", "parameters"),
+                ("defaults", "variables"),
+                ("defaults", "secrets"),
+            )
+            if path in available
+        )
+    return tuple(dict.fromkeys(paths))
+
+
+def project_resolved_fields(
+    batch: ResolvedValueInspectionBatchResult,
+) -> ProjectResolvedFields:
+    """Flatten safe resolved-value nodes without reopening resolver state."""
+    fields: list[ResolvedResourceField] = []
+    diagnostics: list[str] = []
+    incomplete = False
+    for result in batch.results:
+        inspection = result.inspection
+        if inspection is None:
+            diagnostic = result.diagnostics[0].code
+            diagnostics.append(diagnostic)
+            continue
+        base = inspection.field_path
+        if inspection.state is not ResolvedInspectionState.PRESENT:
+            value = f"<{inspection.state.value}>"
+            if inspection.code is not None:
+                value = f"{value} · {inspection.code}"
+            fields.append(ResolvedResourceField(base, value, "warning"))
+            continue
+        for node in inspection.nodes:
+            path = (*base, *node.path)
+            if node.masked:
+                value = "<masked>"
+            elif node.preview is not None:
+                value = node.preview
+                if node.truncated:
+                    value = f"{value}…"
+            else:
+                value = f"{node.kind.value} · {node.child_count} member(s)"
+            fields.append(
+                ResolvedResourceField(
+                    path=path,
+                    value=value,
+                    tone=(
+                        "value.masked"
+                        if node.masked
+                        else _RESOLVED_VALUE_TONES.get(node.kind.value, "muted")
+                    ),
+                )
+            )
+        if inspection.next_node is not None:
+            incomplete = True
+    return ProjectResolvedFields(
+        fields=tuple(fields),
+        diagnostics=tuple(diagnostics),
+        incomplete=incomplete,
     )
 
 

@@ -22,6 +22,7 @@ from comparo.tui4.components.panel import Panel
 from comparo.tui4.components.resourceactions import ResourceActionBar
 from comparo.tui4.components.resources import BaseKindResourceDetails
 from comparo.tui4.components.resources import resource_widget
+from comparo.tui4.components.resources.project import ProjectDependencyGraph
 from comparo.tui4.components.separator import Separator
 from comparo.tui4.components.table import Column
 from comparo.tui4.components.table import Record
@@ -31,9 +32,11 @@ from comparo.tui4.components.typography import Hint
 from comparo.tui4.fragments import glyph
 from comparo.tui4.models.diff import build_source_document
 from comparo.tui4.models.explorer import ResourceEntry
+from comparo.tui4.models.fields import Field
 from comparo.tui4.models.resource import InspectionPhase
 from comparo.tui4.models.resource import ResourceActionId
 from comparo.tui4.models.resource import ResourceDetail
+from comparo.tui4.models.resource import ResourceOverviewMode
 from comparo.tui4.models.resource import ResourceRepresentation
 from comparo.tui4.theme import kind_glyph
 from comparo.tui4.theme import style
@@ -79,8 +82,9 @@ class ResourceSummary(Vertical):
         summary = self.entry.summary
         revision = f"{summary.coordinate.fingerprint[:12]}…"
         source = summary.source
+        filename = self.entry.source.filename or source.source
         tags = " ".join(f"#{tag}" for tag in summary.tags) or "untagged"
-        return f"rev {revision} | {source.source} · line {source.line} | {tags}"
+        return f"rev {revision} | {filename} · line {source.line} | {tags}"
 
 
 class OverviewRepresentation(VerticalScroll):
@@ -116,7 +120,8 @@ class AuthoredRepresentation(Vertical):
         disclosure = "masked"
         if window.redaction_count:
             disclosure = f"masked · {window.redaction_count} redaction(s)"
-        yield Caption(f"{window.source.source} · document {window.source.document} · {disclosure}")
+        filename = self._detail.entry.source.filename or window.source.source
+        yield Caption(f"{filename} · document {window.source.document} · {disclosure}")
         yield DiffView(
             build_source_document(
                 window.content,
@@ -206,7 +211,9 @@ class ResolvedRepresentation(VerticalScroll):
         if inspection.phase is not InspectionPhase.READY or value is None:
             yield Hint(_inspection_message(inspection.phase, inspection.message))
             return
-        yield KeyValueList(*value.fields)
+        yield KeyValueList(
+            *(Field(".".join(field.path), field.value, field.tone) for field in value.fields)
+        )
 
 
 class ResourceDetailOverview(Widget):
@@ -238,12 +245,19 @@ class ResourceDetailOverview(Widget):
         if detail is None:
             yield Panel(Hint("Select a resource."), title="Overview")
             return
+        children: list[Widget] = []
+        if detail.entry.summary.coordinate.kind != "Project":
+            children.extend(
+                (
+                    ResourceActionBar(detail.actions),
+                    Separator(classes="tight"),
+                )
+            )
+        children.append(self._representation(detail))
         yield Panel(
-            ResourceActionBar(detail.actions),
-            Separator(classes="tight"),
-            self._representation(detail),
+            *children,
             title=self._title(detail),
-            hint=detail.representation.value,
+            hint=self._hint(detail),
             id="resource-detail-panel",
         )
 
@@ -255,7 +269,23 @@ class ResourceDetailOverview(Widget):
             return EffectiveRepresentation(detail)
         if detail.representation is ResourceRepresentation.RESOLVED:
             return ResolvedRepresentation(detail)
+        if detail.representation is ResourceRepresentation.DEPENDENCIES:
+            return ProjectDependencyGraph(detail.entry)
         return OverviewRepresentation(detail)
+
+    @staticmethod
+    def _hint(detail: ResourceDetail) -> str:
+        """Return the compact representation hint for the panel border."""
+        if detail.entry.summary.coordinate.kind != "Project":
+            return detail.representation.value
+        if detail.representation is ResourceRepresentation.AUTHORED:
+            return "source"
+        if detail.representation is ResourceRepresentation.DEPENDENCIES:
+            return "dependency graph"
+        if detail.representation is ResourceRepresentation.OVERVIEW:
+            mode = "resolved" if detail.overview_mode is ResourceOverviewMode.RESOLVED else "raw"
+            return f"overview · {mode}"
+        return detail.representation.value
 
     @staticmethod
     def _title(detail: ResourceDetail) -> Text:

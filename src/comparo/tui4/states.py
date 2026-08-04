@@ -12,6 +12,7 @@ class AppState:
 
     active_screen: ComparoScreen = ComparoScreen.EXPLORE
     compare_subject: ResourceCoordinate | None = None
+    execution_environment: ResourceCoordinate | None = None
 
 
 def default_app_state() -> AppState:

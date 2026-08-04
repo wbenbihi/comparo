@@ -88,6 +88,59 @@ tags. Stable identity remains in `ResourceDetail` and the panel title instead of
 separate key/value block. The active representation is the panel's secondary border hint, keeping
 `overview`, `authored`, `effective`, or `resolved` out of the identity title.
 
+### Project inspection contract
+
+Project inspection deliberately has no numbered action bar. Its views are workspace bindings that
+are enabled and rendered in the footer only while a Project is selected:
+
+| Key | View | Contract |
+| --- | --- | --- |
+| `o` | Overview | Return to the explicit Project overview without changing its raw/resolved mode |
+| `s` | Source | Load the revision-pinned, masked authored document through the existing worker |
+| `g` | Dependency graph | Show every safe one-hop `uses` and `used-by` relationship in the Project outline |
+| `r` | Raw/resolved | Toggle the value layer inside Overview and return to Overview |
+
+`r` does not resolve values in the Explorer process. Raw mode uses the safe Project outline;
+entering resolved mode asks `TuiBackend` for an ephemeral single-Environment assertion
+preparation, selects its first exact occurrence, and calls the application-owned masked batch
+inspection. The handle is always discarded after success, failure, or cancellation. The returned
+view includes the Environment revision, execution ordinal, cell/trial identities, exact field
+paths, safe node previews, and an explicit incomplete marker when the frontend-owned first-page
+limit is reached. `ProjectResourceDetails` overlays those exact paths onto the same cards, sections,
+ordering, and setting rows used by raw mode; resolved mode is not a separate diagnostic layout.
+Public runtime expressions and inert exact compiled values are substituted in place, while
+sensitive values remain `<masked>`. Runtime expressions come from the application-owned masked
+resolver. Inert literals and linked identities come from `ProjectOutlineField.exact_value`, whose
+application contract excludes value namespaces, bounds and escapes strings, and reduces Project
+data/source paths to basenames. The TUI does not read authored YAML, expose filesystem coordinates,
+or invent an exact preview. Other non-value structure retains its compiled structural
+presentation.
+
+Exact and runtime values use shared semantic theme tokens for null, boolean, integer/number,
+text, reference, and masked values. A reference also carries its target kind into the TUI model;
+`ProjectSettingRow` renders the shared colored kind glyph before the target identity only when the
+resolved overlay is active. Raw mode remains a faithful structural `$use` presentation. Widgets
+must not parse `Kind/id` strings to rediscover that metadata.
+
+The execution context is shared application presentation state, not a property of one widget. On
+project load it rebinds an existing Environment identity to the new revision, otherwise defaults
+to the Project baseline (or the first Environment when no baseline exists). The active Environment
+has an `EXEC` badge in `ExplorerResourceTree`. Highlighting an Environment and pressing `e`, or
+committing it through the generic TreeMenu Enter/mouse selection, changes the context and
+invalidates any stale resolved inspection.
+The `EXEC` badge uses the shared semantic `active` badge tone, keeping its blue treatment distinct
+from baseline, candidate, locality, and live-danger badges and replaceable by future themes.
+
+The dependency graph is a presentation of application-owned relationship DTOs, not a second
+dependency resolver. `ProjectDependencyTree` inherits the generic `TreeMenu` mechanics and owns
+only the directional branches and row grammar.
+
+Explorer reload is `Ctrl+R`, leaving the unmodified `r` key to switch Project value layers.
+
+Resource provenance renders `ProjectSourceSummary.filename`, a safe basename projected by the
+application boundary. Logical IDs such as `entry-config` remain internal coordinates used for
+revision-pinned reads and must not be presented as filenames.
+
 ## Kind widgets
 
 `BaseKindResourceDetails` supplies immutable `resource` and `entry` accessors plus the shared

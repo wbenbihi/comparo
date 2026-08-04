@@ -7,7 +7,15 @@ from comparo.tui4.types import ComparoScreen
 
 FILTER_KEY = "/"
 LEGEND_KEY = "l"
-RELOAD_KEY = "r"
+RELOAD_KEY = "ctrl+r"
+
+PROJECT_VIEW_KEYS: dict[str, str] = {
+    "overview": "o",
+    "source": "s",
+    "dependencies": "g",
+}
+PROJECT_RESOLUTION_KEY = "r"
+EXECUTION_CONTEXT_KEY = "e"
 
 RESOURCE_ACTION_KEYS: dict[str, str] = {
     "overview": "1",
@@ -49,7 +57,28 @@ def explorer_bindings() -> list[BindingType]:
     return [
         Binding(FILTER_KEY, "focus_filter", "Filter", key_display=FILTER_KEY),
         Binding(LEGEND_KEY, "toggle_legend", "Legend", key_display=LEGEND_KEY),
-        Binding(RELOAD_KEY, "reload", "Reload"),
+        *(
+            Binding(
+                key,
+                f'project_view("{view}")',
+                view.replace("dependencies", "Graph").title(),
+                key_display=key,
+            )
+            for view, key in PROJECT_VIEW_KEYS.items()
+        ),
+        Binding(
+            PROJECT_RESOLUTION_KEY,
+            "toggle_project_resolution",
+            "Raw/resolved",
+            key_display=PROJECT_RESOLUTION_KEY,
+        ),
+        Binding(
+            EXECUTION_CONTEXT_KEY,
+            "set_execution_environment",
+            "Set context",
+            key_display=EXECUTION_CONTEXT_KEY,
+        ),
+        Binding(RELOAD_KEY, "reload", "Reload", key_display="^r"),
     ]
 
 

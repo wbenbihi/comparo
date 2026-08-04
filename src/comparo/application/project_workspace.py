@@ -76,6 +76,7 @@ class ProjectSourceSummary(msgspec.Struct, frozen=True, kw_only=True):
 
     source_id: str
     entry: bool
+    filename: str | None = None
     resources: tuple[ResourceCoordinate, ...] = ()
     sha256: str | None = None
     byte_count: int | None = None
@@ -86,6 +87,13 @@ class ProjectSourceSummary(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("project source summary ID must be text")
         if not self.source_id:
             raise ValueError("project source summary ID must be non-empty text")
+        if self.filename is not None and (
+            type(self.filename) is not str
+            or not self.filename
+            or len(self.filename) > 1024
+            or Path(self.filename).name != self.filename
+        ):
+            raise ValueError("project source summary filename must be a bounded basename")
         if type(self.entry) is not bool:
             raise TypeError("project source summary entry marker must be bool")
         if type(self.resources) is not tuple or any(
@@ -348,6 +356,7 @@ def _source_summaries(
         ProjectSourceSummary(
             source_id=item.source_id.value,
             entry=index == 0,
+            filename=item.path.name,
             resources=tuple(resources_by_source.get(item.source_id.value, ())),
             sha256=item.sha256,
             byte_count=item.byte_count,

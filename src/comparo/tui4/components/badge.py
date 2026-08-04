@@ -21,6 +21,7 @@ class BadgeTone(StrEnum):
     SUCCESS = "success"
     WARNING = "warning"
     DANGER = "danger"
+    ACTIVE = "active"
     BASELINE = "baseline"
     CANDIDATE = "candidate"
 

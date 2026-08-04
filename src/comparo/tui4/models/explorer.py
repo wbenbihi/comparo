@@ -270,6 +270,33 @@ def catalog_nodes(catalog: ExplorerCatalog, needle: str = "") -> tuple[MenuNode[
     return tuple(nodes)
 
 
+def select_execution_environment(
+    catalog: ExplorerCatalog,
+    preferred: ResourceCoordinate | None,
+) -> ResourceEntry | None:
+    """Rebind a preferred Environment revision or choose the Project baseline."""
+    environments = tuple(
+        entry
+        for section in catalog.sections
+        for entry in section.entries
+        if entry.summary.coordinate.kind == "Environment"
+    )
+    if preferred is not None:
+        matched = next(
+            (
+                entry
+                for entry in environments
+                if entry.summary.coordinate.namespace == preferred.namespace
+                and entry.summary.coordinate.resource_id == preferred.resource_id
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched
+    baseline = next((entry for entry in environments if entry.facts.role == "baseline"), None)
+    return baseline if baseline is not None else next(iter(environments), None)
+
+
 def legend_items(catalog: ExplorerCatalog) -> tuple[tuple[str, str, str], ...]:
     """Return one glyph/token/label legend item per kind in the project."""
     return tuple((*kind_glyph(kind), kind) for kind in catalog.kinds)

@@ -335,6 +335,56 @@ def test_outline_never_exposes_request_shaped_value_payloads() -> None:
     assert canary not in repr(projected)
 
 
+def test_project_outline_exposes_only_bounded_safe_exact_configuration_values() -> None:
+    canary = "project-variable-secret-canary"
+    owner = _identity(ResourceKind.PROJECT, "demo")
+    spec = CanonicalObject(
+        members=(
+            CanonicalMember(name="data", value=JsonString(value="/private/demo/.comparo")),
+            CanonicalMember(
+                name="defaults",
+                value=CanonicalObject(
+                    members=(
+                        CanonicalMember(name="maximumAttempts", value=JsonInteger(value=2)),
+                        CanonicalMember(name="failFast", value=JsonBoolean(value=False)),
+                    )
+                ),
+            ),
+            CanonicalMember(
+                name="variables",
+                value=ObjectExpr(
+                    members=(
+                        ObjectExpressionMember(
+                            name="privateValue",
+                            expression=_literal(
+                                JsonString(value=canary),
+                                ValueProvenance(
+                                    entries=(ProvenanceEntry(kind=ProvenanceKind.PROJECT),)
+                                ),
+                            ),
+                        ),
+                    ),
+                    provenance=ValueProvenance(
+                        entries=(ProvenanceEntry(kind=ProvenanceKind.PROJECT),)
+                    ),
+                ),
+            ),
+        )
+    )
+
+    projected = outline_resource(owner, spec)
+    exact = {field.path: field.exact_value for field in projected.fields}
+    exact_kinds = {field.path: field.exact_kind for field in projected.fields}
+    assert exact[("data",)] == ".comparo"
+    assert exact[("defaults", "maximumAttempts")] == "2"
+    assert exact[("defaults", "failFast")] == "false"
+    assert exact[("variables", "privateValue")] is None
+    assert exact_kinds[("data",)] == "text"
+    assert exact_kinds[("defaults", "maximumAttempts")] == "integer"
+    assert exact_kinds[("defaults", "failFast")] == "boolean"
+    assert canary not in repr(projected)
+
+
 def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
     coordinate = ResourceIdentityCoordinate(
         namespace="local",
@@ -355,6 +405,15 @@ def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
         ({"path": cast("tuple[str, ...]", ["request"])}, TypeError, "path"),
         ({"path": cast("tuple[str, ...]", (1,))}, TypeError, "path"),
         ({"label": cast("str", 1)}, TypeError, "labels"),
+        ({"exact_value": cast("str", 1)}, TypeError, "exact value"),
+        ({"exact_value": "one"}, ValueError, "present together"),
+        ({"exact_kind": "integer"}, ValueError, "present together"),
+        (
+            {"exact_value": "one", "exact_kind": cast("str", 1)},
+            TypeError,
+            "exact kind",
+        ),
+        ({"exact_value": "one", "exact_kind": "unsupported"}, ValueError, "supported"),
         ({"depth": cast("int", True)}, ValueError, "depth"),
         ({"depth": -1}, ValueError, "depth"),
     ):

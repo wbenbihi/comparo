@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from typing import ClassVar
 from typing import override
 
@@ -30,6 +31,9 @@ from comparo.tui4.models.navigation import MenuNode
 from comparo.tui4.theme import kind_glyph
 from comparo.tui4.theme import style
 
+if TYPE_CHECKING:
+    from comparo.application.plan_inspection_identity import ResourceCoordinate
+
 _ROLE_BADGES = {
     "baseline": ("base", BadgeTone.BASELINE),
     "candidate": ("cand", BadgeTone.CANDIDATE),
@@ -44,6 +48,7 @@ class ExplorerResourceTree(TreeMenu[str]):
     """Resource-aware tree that owns the Explorer's node projection."""
 
     catalog: reactive[ExplorerCatalog | None] = reactive(None, init=False)
+    execution_environment: reactive[ResourceCoordinate | None] = reactive(None, init=False)
     filter_text: reactive[str] = reactive("", init=False)
 
     def __init__(self, *, id: str | None = None, classes: str | None = None) -> None:
@@ -57,6 +62,11 @@ class ExplorerResourceTree(TreeMenu[str]):
     def watch_filter_text(self) -> None:
         """Rebuild semantic nodes when the local filter changes."""
         self._refresh_nodes()
+
+    def watch_execution_environment(self) -> None:
+        """Reformat rows when the active execution Environment changes."""
+        if self.is_mounted:
+            self._rebuild()
 
     def _refresh_nodes(self) -> None:
         """Project catalog state into the generic menu's immutable nodes."""
@@ -77,8 +87,7 @@ class ExplorerResourceTree(TreeMenu[str]):
             )
         return super().format_node(node)
 
-    @staticmethod
-    def _format_resource(entry: ResourceEntry) -> Text:
+    def _format_resource(self, entry: ResourceEntry) -> Text:
         """Format one resource identity and its safe catalog facts."""
         summary = entry.summary
         facts = entry.facts
@@ -88,6 +97,9 @@ class ExplorerResourceTree(TreeMenu[str]):
         if facts.method is not None:
             prefix.append(chip(facts.method, f"method.{facts.method}", width=7))
         badges: list[Text] = []
+        context = self.execution_environment
+        if context is not None and summary.coordinate == context:
+            badges.append(badge_text("exec", tone=BadgeTone.ACTIVE, emphasis=BadgeEmphasis.SOLID))
         if facts.role is not None:
             label, tone = _ROLE_BADGES[facts.role]
             badges.append(badge_text(label, tone=tone, emphasis=BadgeEmphasis.SOLID))
@@ -113,6 +125,7 @@ class ExplorerNavigator(Vertical):
     BINDINGS: ClassVar[list[BindingType]] = []
 
     catalog: reactive[ExplorerCatalog | None] = reactive(None, init=False)
+    execution_environment: reactive[ResourceCoordinate | None] = reactive(None, init=False)
     legend_visible: reactive[bool] = reactive(True, init=False)
 
     class ResourceHighlighted(Message):
@@ -130,6 +143,9 @@ class ExplorerNavigator(Vertical):
             """Return the navigator that emitted this event."""
             return self.navigator
 
+    class ResourceSelected(ResourceHighlighted):
+        """A concrete resource was committed with Enter or a mouse click."""
+
     @override
     def compose(self) -> ComposeResult:
         """Compose reusable controls behind an Explorer-specific interface."""
@@ -142,6 +158,10 @@ class ExplorerNavigator(Vertical):
         tree = self.query_one(ExplorerResourceTree)
         tree.catalog = self.catalog
         self.query_one(Legend).items = legend_items(self.catalog) if self.catalog else ()
+
+    def watch_execution_environment(self) -> None:
+        """Feed the shared execution context into the resource tree."""
+        self.query_one(ExplorerResourceTree).execution_environment = self.execution_environment
 
     def watch_legend_visible(self) -> None:
         """Hide the legend completely so the tree reclaims its rows."""
@@ -184,3 +204,14 @@ class ExplorerNavigator(Vertical):
         entry = catalog.entries.get(event.item) if catalog is not None else None
         if entry is not None:
             self.post_message(self.ResourceHighlighted(self, entry))
+
+    def on_tree_menu_selected(self, event: TreeMenu.Selected[str]) -> None:
+        """Translate a committed tree leaf without exposing TreeMenu internals."""
+        tree = self.query_one(ExplorerResourceTree)
+        if event.menu is not tree:
+            return
+        event.stop()
+        catalog = self.catalog
+        entry = catalog.entries.get(event.item) if catalog is not None else None
+        if entry is not None:
+            self.post_message(self.ResourceSelected(self, entry))

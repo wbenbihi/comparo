@@ -27,6 +27,7 @@ from .states import default_app_state
 from .theme import COMPARO_DARK
 from .types import ComparoScreen
 from .workspaces import WORKSPACES
+from .workspaces.explorer import ExplorerWorkspace
 
 
 class ComparoApp(App[None]):
@@ -75,6 +76,12 @@ class ComparoApp(App[None]):
             compare_subject=subject,
         )
 
+    def select_execution_environment(self, environment: ResourceCoordinate) -> None:
+        """Set the shared execution Environment used by contextual inspections."""
+        if environment.kind != "Environment":
+            raise ValueError("execution context must identify an Environment")
+        self.state = replace(self.state, execution_environment=environment)
+
     def on_nav_tab_selected(self, message: NavTab.Selected) -> None:
         """Switch workspace from the navbar."""
         self.action_workspace(message.tab.value)
@@ -82,3 +89,5 @@ class ComparoApp(App[None]):
     def watch_state(self) -> None:
         """Reflect state into the main switcher."""
         self.query_one("#main", ContentSwitcher).current = self.state.active_screen
+        for workspace in self.query(ExplorerWorkspace):
+            workspace.execution_environment = self.state.execution_environment

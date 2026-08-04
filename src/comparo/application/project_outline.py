@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import cast
 from typing import final
 
@@ -41,6 +43,7 @@ _SAFE_EXACT_SCALAR_PATHS = frozenset({("request", "method")})
 _SECRET_FIELD_PARTS = frozenset(
     {"authorization", "cookie", "credential", "key", "password", "secret", "token"}
 )
+_EXACT_KINDS = frozenset({"null", "boolean", "integer", "number", "text", "reference"})
 
 
 @final
@@ -52,6 +55,8 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
     value: str
     depth: int
     category: str
+    exact_value: str | None = None
+    exact_kind: str | None = None
 
     def __post_init__(self) -> None:
         """Require a fully typed, renderer-independent row."""
@@ -59,6 +64,15 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("project outline path must be an immutable text tuple")
         if any(type(value) is not str for value in (self.label, self.value, self.category)):
             raise TypeError("project outline labels must be text")
+        if self.exact_value is not None and type(self.exact_value) is not str:
+            raise TypeError("project outline exact value must be text or None")
+        if (self.exact_value is None) != (self.exact_kind is None):
+            raise ValueError("project outline exact value and kind must be present together")
+        if self.exact_kind is not None:
+            if type(self.exact_kind) is not str:
+                raise TypeError("project outline exact kind must be text or None")
+            if self.exact_kind not in _EXACT_KINDS:
+                raise ValueError("project outline exact kind must be supported")
         if type(self.depth) is not int or self.depth < 0:
             raise ValueError("project outline depth must be a non-negative integer")
 
@@ -194,6 +208,8 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
             path,
             f"$use {target.kind.value}/{target.resource_id.value}",
             "reference",
+            exact_value=f"{target.kind.value}/{target.resource_id.value}",
+            exact_kind="reference",
         )
         _relationship(path, node.target, relationships, "link")
         return
@@ -245,11 +261,28 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
                 )
         return
     if type(node) is LiteralExpr:
-        _field(fields, path, _exact_preview(node.value, path, owner), "literal")
+        exact_display = _safe_exact_display(node.value, path, owner)
+        _field(
+            fields,
+            path,
+            _exact_preview(node.value, path, owner),
+            "literal",
+            exact_value=None if exact_display is None else exact_display[0],
+            exact_kind=None if exact_display is None else exact_display[1],
+        )
         _provenance_relationships(node.provenance.entries, path, relationships, owner)
         return
     if type(node) in {JsonNull, JsonBoolean, JsonInteger, JsonDecimal, JsonString, BytesValue}:
-        _field(fields, path, _exact_preview(cast("ExactValue", node), path, owner), "literal")
+        exact = cast("ExactValue", node)
+        exact_display = _safe_exact_display(exact, path, owner)
+        _field(
+            fields,
+            path,
+            _exact_preview(exact, path, owner),
+            "literal",
+            exact_value=None if exact_display is None else exact_display[0],
+            exact_kind=None if exact_display is None else exact_display[1],
+        )
         return
     _field(fields, path, type(node).__name__, "structure")
 
@@ -277,6 +310,9 @@ def _field(
     path: tuple[str, ...],
     value: str,
     category: str,
+    *,
+    exact_value: str | None = None,
+    exact_kind: str | None = None,
 ) -> None:
     fields.append(
         ProjectOutlineField(
@@ -285,6 +321,8 @@ def _field(
             value=value,
             depth=len(path),
             category=category,
+            exact_value=exact_value,
+            exact_kind=exact_kind,
         )
     )
 
@@ -317,6 +355,37 @@ def _exact_preview(
 
 def _safe_exact_scalar_path(owner: ResourceIdentity, path: tuple[str, ...]) -> bool:
     return owner.kind is ResourceKind.REQUEST and path in _SAFE_EXACT_SCALAR_PATHS
+
+
+def _safe_exact_display(
+    value: ExactValue,
+    path: tuple[str, ...],
+    owner: ResourceIdentity,
+) -> tuple[str, str] | None:
+    """Return a bounded terminal-safe exact Project value when disclosure is inert."""
+    if owner.kind is not ResourceKind.PROJECT or _sensitive_path(path):
+        return None
+    if path[:1] in {("variables",), ("secrets",)} or path[:2] in {
+        ("defaults", "parameters"),
+        ("defaults", "variables"),
+        ("defaults", "secrets"),
+    }:
+        return None
+    if type(value) is JsonNull:
+        return "null", "null"
+    if type(value) is JsonBoolean:
+        return ("true" if value.value else "false"), "boolean"
+    if type(value) is JsonInteger:
+        return str(value.value), "integer"
+    if type(value) is JsonDecimal:
+        return str(value.value), "number"
+    if type(value) is not JsonString:
+        return None
+    text = value.value
+    if path[:1] in {("data",), ("sources",)}:
+        text = Path(text).name or "<project root>"
+    escaped = json.dumps(text, ensure_ascii=True)[1:-1]
+    return (escaped, "text") if len(escaped) <= 256 else None
 
 
 def _sensitive_path(path: tuple[str, ...]) -> bool:

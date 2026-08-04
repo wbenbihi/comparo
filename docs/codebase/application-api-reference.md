@@ -68,9 +68,12 @@ On success:
 - `snapshot.resources` contains every non-Project resource in deterministic source order;
 - summaries expose namespace/kind/ID/fingerprint, name, description, tags, source coordinate, and
   a secret-free outline;
+- Project outline fields may expose a separately typed, bounded `exact_value` for safe inert
+  configuration and linked identities; runtime value namespaces remain excluded and require the
+  masked resolver;
 - outlines expose both authored relationships and inverse `used-by` relationships;
-- `sources` exposes logical source IDs, entry membership, resource membership, and safe source
-  revision metadata without local paths.
+- `sources` exposes logical source IDs, safe basenames for display, entry membership, resource
+  membership, and safe source revision metadata without local paths.
 
 On failure, `snapshot` is absent and diagnostics are value-free. A partially discovered source
 catalog may still be present.
