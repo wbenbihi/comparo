@@ -514,9 +514,14 @@ class _Compiler:
             reference = _use_reference(item)
             if reference is None:
                 continue
-            first = first_spans.get(reference)
+            identity = (
+                f"{field.reference_kinds[0].value}/{reference}"
+                if "/" not in reference and len(field.reference_kinds) == 1
+                else reference
+            )
+            first = first_spans.get(identity)
             if first is None:
-                first_spans[reference] = item.span
+                first_spans[identity] = item.span
                 continue
             self.diagnostics.append(_issue(_REFERENCE_DUPLICATE, item.span, related=(first,)))
 

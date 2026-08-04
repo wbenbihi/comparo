@@ -138,7 +138,7 @@ def test_environment_health_checks_reject_duplicate_request_references() -> None
                     "Environment",
                     "local",
                     "{baseUrl: 'http://localhost', healthChecks: "
-                    "[{$use: Request/health}, {$use: Request/health}]}",
+                    "[{$use: health}, {$use: Request/health}]}",
                 ),
                 _document("Request", "health", "{request: {method: GET, endpoint: /health}}"),
             )

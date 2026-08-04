@@ -339,8 +339,8 @@ spec:
     - $use: Request/health
 ```
 
-There is deliberately no separate health-check request language. Each unique `healthChecks` entry
-links
+There is deliberately no separate health-check request language. Qualified and unqualified links
+to the same Request count as one identity. Each unique `healthChecks` entry links
 to a normal `Request`, so endpoint resolution, headers, auth, safety, assertions, redaction,
 artifact persistence, and Reports use the same contracts as every other execution. A frontend may
 run all declared references as one assertions-only run for that Environment. A transport failure,
