@@ -343,8 +343,8 @@ Explorer can offer a resolved facet by creating an ephemeral single-subject Comp
 letting the user choose the Environment/occurrence context, calling
 `CompareService.inspect_resolved_value`, and discarding the handle when the facet closes. It must
 display the selected Environment, cell/trial/execution coordinate, and freshness alongside the
-value. “Use in Compare” should transfer typed draft selections, not leak or reuse internal plans
-without showing their review.
+value. Explorer does not transfer a hidden draft or retained plan into Compare; Request selection
+and composition begin explicitly inside the Compare preparation journey.
 
 ## 7. Compare draft and invocation contract
 
@@ -915,7 +915,6 @@ restored bundle and rolls it back to trash if verification fails. Permanent purg
 | Effective | `EffectiveResourceWindow` | Compiled fields, links/composition, consumers |
 | Resolved | ephemeral Compare handle + `ResolvedValueInspection` | One field, Environment/occurrence context, safe value nodes, provenance, freshness |
 | Dependencies | `ProjectRelationship` | Inbound/outbound targets, paths, origins |
-| Use in Compare | new `PlanningOptions` draft | Resource identity transferred without hidden execution |
 
 ### 15.2 Compare · prepare
 

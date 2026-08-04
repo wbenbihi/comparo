@@ -3,45 +3,83 @@
 from typing import ClassVar
 from typing import override
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal
+from textual.widgets import Static
 
 from comparo.tui4.components.badge import Badge
 from comparo.tui4.components.badge import BadgeEmphasis
 from comparo.tui4.components.badge import BadgeTone
+from comparo.tui4.components.badge import badge_text
 from comparo.tui4.components.separator import Separator
 from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.resource import InspectionPhase
+from comparo.tui4.models.resource import ResolvedRequestTarget
 from comparo.tui4.models.resource import ResolvedResourceField
-from comparo.tui4.models.resource import ResourceActionId
 from comparo.tui4.models.resource import ResourceOverviewMode
 from comparo.tui4.models.resource import ResourcePresentation
 from comparo.tui4.models.resource_presenters import RequestOverview
 from comparo.tui4.models.resource_presenters import compiled_exact_fields
 from comparo.tui4.models.resource_presenters import request_overview
+from comparo.tui4.theme import style
 
 from .base import BaseKindResourceDetails
 from .shared import ResourceSettingList
 from .shared import resolution_status
 
 
-class RequestContextStrip(Horizontal):
-    """Compact method, routing, streaming, and expansion facts for a Request."""
+class RequestTargetPill(Static):
+    """One method-and-target unit with a canonical resolved URL when available."""
 
-    def __init__(self, entry: ResourceEntry, overview: RequestOverview) -> None:
-        """Build badges from the same safe projection used by the detail sections."""
-        method = entry.facts.method or "HTTP"
-        route = (
-            "absolute URL" if any(item.name == "url" for item in overview.routing) else "endpoint"
-        )
-        children = [
-            Badge(
+    def __init__(self, method: str, target: str, *, resolved: bool) -> None:
+        """Render a method badge and route without imposing badge-length limits on URLs."""
+        content = Text()
+        content.append_text(
+            badge_text(
                 method,
                 tone=_method_tone(method),
                 emphasis=BadgeEmphasis.SOLID,
-                classes="request-context-badge",
+            )
+        )
+        target_style = "request.target.resolved" if resolved else "request.target.raw"
+        content.append(f" {target} ", style(target_style))
+        super().__init__(content, classes="request-target-pill")
+        self.method = method
+        self.target = target
+        self.resolved = resolved
+        self.tooltip = Text(target)
+
+
+class RequestContextStrip(Horizontal):
+    """Compact request target, streaming, and expansion facts for a Request."""
+
+    def __init__(
+        self,
+        entry: ResourceEntry,
+        overview: RequestOverview,
+        resolved_target: ResolvedRequestTarget | None = None,
+    ) -> None:
+        """Build badges from the same safe projection used by the detail sections."""
+        method = (
+            resolved_target.method if resolved_target is not None else entry.facts.method or "HTTP"
+        )
+        target = (
+            resolved_target.url
+            if resolved_target is not None
+            else entry.facts.route
+            or (
+                "absolute URL"
+                if any(item.name == "url" for item in overview.routing)
+                else "endpoint"
+            )
+        )
+        children: list[Static] = [
+            RequestTargetPill(
+                method,
+                target,
+                resolved=resolved_target is not None,
             ),
-            Badge(route, tone=BadgeTone.INFO, classes="request-context-badge"),
         ]
         if any(item.name == "stream" for item in overview.behavior):
             children.append(
@@ -72,12 +110,7 @@ class RequestResourceDetails(BaseKindResourceDetails):
     KINDS: ClassVar[frozenset[str]] = frozenset({"Request"})
     PRESENTATION: ClassVar[ResourcePresentation] = ResourcePresentation(
         common_representation_hints=True,
-        visible_actions=frozenset(
-            {
-                ResourceActionId.USE_IN_COMPARE,
-                ResourceActionId.INSPECT_COMPOSITION,
-            }
-        ),
+        visible_actions=frozenset(),
     )
 
     @override
@@ -85,8 +118,15 @@ class RequestResourceDetails(BaseKindResourceDetails):
         """Render every Request field in the same hierarchy for raw and resolved modes."""
         overview = request_overview(self.entry)
         resolved = self._resolved_fields()
+        resolved_target = None
+        if (
+            self.resource.overview_mode is ResourceOverviewMode.RESOLVED
+            and self.resource.resolved.phase is InspectionPhase.READY
+            and self.resource.resolved.value is not None
+        ):
+            resolved_target = self.resource.resolved.value.request_target
 
-        yield RequestContextStrip(self.entry, overview)
+        yield RequestContextStrip(self.entry, overview, resolved_target)
         if self.resource.overview_mode is ResourceOverviewMode.RESOLVED:
             yield resolution_status(
                 self.resource,
@@ -132,4 +172,4 @@ class RequestResourceDetails(BaseKindResourceDetails):
         return fields
 
 
-__all__ = ["RequestContextStrip", "RequestResourceDetails"]
+__all__ = ["RequestContextStrip", "RequestResourceDetails", "RequestTargetPill"]

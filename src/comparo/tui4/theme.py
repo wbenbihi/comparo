@@ -105,6 +105,8 @@ _STYLES: dict[str, str] = {
     "badge.quiet.baseline": BASELINE,
     "badge.quiet.candidate": CANDIDATE,
     "badge.status.label": LABEL,
+    "request.target.raw": f"{FG} on {BADGE_SLATE_BG}",
+    "request.target.resolved": f"{TEAL} on {BADGE_TEAL_BG}",
     "chip.active": f"bold {'#08222B'} on {BASELINE}",
     "kind.project": CANDIDATE,
     "kind.environment": OK,

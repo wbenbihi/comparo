@@ -90,10 +90,9 @@ separate key/value block. The active representation is the panel's secondary bor
 
 ### Common inspection contract
 
-Project, Environment, and Request inspection deliberately have no numbered representation bar.
-Their views are workspace bindings, enabled and rendered in the footer only while a resource is
-selected. Request keeps only its workflow actions (`u` Use in Compare and the currently disabled
-composition action) as Textual buttons, so mouse users retain the same capabilities:
+Project, Environment, and Request inspection deliberately have no numbered representation bar or
+resource workflow action strip. Their views are workspace bindings, enabled and rendered in the
+footer only while a resource is selected:
 
 | Key | View | Contract |
 | --- | --- | --- |
@@ -213,14 +212,20 @@ parameters, query/headers/cookies/authentication, payload/body type, stream/time
 behavior, Matrix expansion, Schema/assertion/diff evaluation, and safety/redaction/artifact
 attachments. Empty optional sections are omitted so a minimal Request remains compact; every
 authored section appears as soon as the corresponding capability exists. The compact top strip
-consumes only the immutable entry and pure Request projection and communicates method,
-relative-versus-absolute routing,
-streaming, and Matrix count. Resolved inspection selects visible Request fields independently;
+renders the method and target as one terminal-native unit. Raw mode uses the application outline's
+bounded authored route preview: it may show an endpoint path or absolute URL, but conceals query
+values and URL user information and never reads YAML in the widget. Resolved mode replaces that
+route with the application renderer's canonical sanitized prepared URL for the exact occurrence.
+Consequently Environment `baseUrl`, its path prefix, the endpoint, and effective query parameters
+follow the same joining and redaction semantics as execution rather than being concatenated by
+TUI code. If rendering is unavailable, the strip fails closed to the authored safe preview.
+Streaming and Matrix count remain adjacent context badges. Resolved field inspection selects
+visible Request fields independently;
 this is security-significant because a sensitive cookie or authentication object collapses to
 `<masked>` without unnecessarily collapsing unrelated public method, endpoint, query, or header
 values. Exact linked Matrix, Schema, and profile identities gain their kind glyph only in resolved
-mode. `u` forwards the exact Request coordinate to Compare; the disabled composition action does
-not imply a locally synthesized effective request.
+mode. Compare owns Request selection and composition within its execution workflow; Explorer does
+not expose a cross-workspace shortcut or imply a locally synthesized effective request.
 
 An Environment may declare ordered `healthChecks` references to `Request` resources. The
 contextual `h` binding is available only when at least one probe is declared and no probe run is

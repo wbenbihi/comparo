@@ -56,11 +56,13 @@ def coordinate_key(coordinate: ResourceCoordinate) -> str:
 class ResourceFacts:
     """Safe display facts derived from one resource summary.
 
-    Method comes from the outline's explicitly safe scalar, Matrix use from
-    relationship targets, and locality/streaming from authored tag conventions.
+    Method and the authored route preview come from explicitly safe outline
+    products, Matrix use from relationship targets, and locality/streaming from
+    authored tag conventions.
     """
 
     method: str | None = None
+    route: str | None = None
     uses_matrix: bool = False
     streaming: bool = False
     role: EnvironmentRole | None = None
@@ -138,6 +140,18 @@ def _request_method(summary: ProjectResourceSummary) -> str | None:
     return None
 
 
+def _request_route(summary: ProjectResourceSummary) -> str | None:
+    """Return the application-sanitized authored URL or endpoint preview."""
+    if summary.outline is None:
+        return None
+    by_path = {field.path: field for field in summary.outline.fields}
+    for path in (("request", "url"), ("request", "endpoint")):
+        field = by_path.get(path)
+        if field is not None:
+            return field.safe_preview or field.value
+    return None
+
+
 def _facts(summary: ProjectResourceSummary, roles: dict[str, EnvironmentRole]) -> ResourceFacts:
     """Derive safe display facts for one resource."""
     tags = set(summary.tags)
@@ -151,6 +165,7 @@ def _facts(summary: ProjectResourceSummary, roles: dict[str, EnvironmentRole]) -
     )
     return ResourceFacts(
         method=_request_method(summary),
+        route=_request_route(summary),
         uses_matrix=uses_matrix,
         streaming=bool(tags & STREAM_TAGS),
         role=roles.get(summary.coordinate.resource_id),

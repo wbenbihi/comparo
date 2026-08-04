@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import cast
 from typing import final
+from urllib.parse import urlsplit
 
 import msgspec
 
@@ -41,6 +42,7 @@ from comparo.core.domain.values import JsonObject
 from comparo.core.domain.values import JsonString
 
 _SAFE_EXACT_SCALAR_PATHS = frozenset({("request", "method")})
+_REQUEST_ROUTE_PATHS = frozenset({("request", "endpoint"), ("request", "url")})
 _SECRET_FIELD_PARTS = frozenset(
     {"authorization", "cookie", "credential", "key", "password", "secret", "token"}
 )
@@ -73,6 +75,7 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
     value: str
     depth: int
     category: str
+    safe_preview: str | None = None
     exact_value: str | None = None
     exact_kind: str | None = None
     reference: ResourceCoordinate | None = None
@@ -83,6 +86,7 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("project outline path must be an immutable text tuple")
         if any(type(value) is not str for value in (self.label, self.value, self.category)):
             raise TypeError("project outline labels must be text")
+        _require_safe_preview(self.safe_preview)
         if self.exact_value is not None and type(self.exact_value) is not str:
             raise TypeError("project outline exact value must be text or None")
         if (self.exact_value is None) != (self.exact_kind is None):
@@ -95,6 +99,14 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
         _require_reference_shape(self.exact_kind, self.reference)
         if type(self.depth) is not int or self.depth < 0:
             raise ValueError("project outline depth must be a non-negative integer")
+
+
+def _require_safe_preview(value: str | None) -> None:
+    """Require a bounded terminal-safe optional display projection."""
+    if value is not None and type(value) is not str:
+        raise TypeError("project outline safe preview must be text or None")
+    if value is not None and (not value or len(value) > 2048 or not value.isprintable()):
+        raise ValueError("project outline safe preview must be bounded printable text")
 
 
 def _require_reference_shape(
@@ -288,6 +300,7 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
             path,
             _exact_preview(node.value, path, owner),
             "literal",
+            safe_preview=_safe_route_preview(node.value, path, owner),
             exact_value=None if exact_display is None else exact_display[0],
             exact_kind=None if exact_display is None else exact_display[1],
         )
@@ -301,6 +314,7 @@ def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression 
             path,
             _exact_preview(exact, path, owner),
             "literal",
+            safe_preview=_safe_route_preview(exact, path, owner),
             exact_value=None if exact_display is None else exact_display[0],
             exact_kind=None if exact_display is None else exact_display[1],
         )
@@ -332,6 +346,7 @@ def _field(
     value: str,
     category: str,
     *,
+    safe_preview: str | None = None,
     exact_value: str | None = None,
     exact_kind: str | None = None,
     reference: ResourceCoordinate | None = None,
@@ -343,6 +358,7 @@ def _field(
             value=value,
             depth=len(path),
             category=category,
+            safe_preview=safe_preview,
             exact_value=exact_value,
             exact_kind=exact_kind,
             reference=reference,
@@ -378,6 +394,48 @@ def _exact_preview(
 
 def _safe_exact_scalar_path(owner: ResourceIdentity, path: tuple[str, ...]) -> bool:
     return owner.kind is ResourceKind.REQUEST and path in _SAFE_EXACT_SCALAR_PATHS
+
+
+def _safe_route_preview(
+    value: ExactValue,
+    path: tuple[str, ...],
+    owner: ResourceIdentity,
+) -> str | None:
+    """Return a bounded authored route while concealing query values and user information."""
+    if (
+        owner.kind is not ResourceKind.REQUEST
+        or path not in _REQUEST_ROUTE_PATHS
+        or type(value) is not JsonString
+    ):
+        return None
+    raw = value.value
+    try:
+        parsed = urlsplit(raw)
+        if path == ("request", "url"):
+            if (
+                parsed.scheme not in {"http", "https"}
+                or parsed.hostname is None
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                return "<absolute URL>"
+            host = parsed.hostname
+            authority = f"[{host}]" if ":" in host else host
+            if parsed.port is not None:
+                authority = f"{authority}:{parsed.port}"
+            route = f"{parsed.scheme}://{authority}{parsed.path or '/'}"
+        else:
+            route = parsed.path or "/"
+        if parsed.query:
+            route = f"{route}?…"
+        if parsed.fragment:
+            route = f"{route}#…"
+    except ValueError:
+        return "<route unavailable>"
+    escaped = json.dumps(route, ensure_ascii=False)[1:-1]
+    if not escaped.isprintable():
+        escaped = json.dumps(route, ensure_ascii=True)[1:-1]
+    return escaped if len(escaped) <= 2048 else f"<route · {len(raw)} chars>"
 
 
 def _safe_exact_display(

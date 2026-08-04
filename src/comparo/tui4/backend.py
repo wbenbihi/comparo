@@ -47,6 +47,7 @@ from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
 from comparo.tui4.models.resource import EnvironmentHealthCheckResult
+from comparo.tui4.models.resource import ResolvedRequestTarget
 
 SOURCE_LIMITS = SourceInspectionLimits(
     maximum_source_bytes=4_000_000,
@@ -82,6 +83,7 @@ class ResolvedFieldBatch:
     values: ResolvedValueInspectionBatchResult | None = None
     diagnostics: tuple[str, ...] = ()
     selection_incomplete: bool = False
+    request_target: ResolvedRequestTarget | None = None
 
     def __post_init__(self) -> None:
         """Keep success and value-free failure structurally disjoint."""
@@ -92,6 +94,8 @@ class ResolvedFieldBatch:
             raise ValueError("resolved field batch requires success or diagnostics")
         if self.selection_incomplete and not successful:
             raise ValueError("only a successful resolved batch may be incomplete")
+        if self.request_target is not None and not successful:
+            raise ValueError("only a successful Request batch may carry a rendered target")
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +285,17 @@ class TuiBackend:
                     return ResolvedFieldBatch(diagnostics=("resolution.environment.mismatch",))
                 if resource.kind == "Request" and occurrence.subject != resource:
                     return ResolvedFieldBatch(diagnostics=("resolution.subject.mismatch",))
+                request_target = (
+                    await self._preview_request_target(
+                        handle,
+                        controls,
+                        occurrence,
+                        resource,
+                        environment,
+                    )
+                    if resource.kind == "Request"
+                    else None
+                )
                 targets = tuple(
                     ResolvedValueInspectionTarget(
                         resource=resource,
@@ -305,6 +320,7 @@ class TuiBackend:
                     occurrence=occurrence,
                     values=values,
                     selection_incomplete=selection_incomplete,
+                    request_target=request_target,
                 )
             except asyncio.CancelledError:
                 raise
@@ -313,6 +329,32 @@ class TuiBackend:
             finally:
                 with suppress(Exception):
                     self.compare.discard(handle)
+
+    async def _preview_request_target(
+        self,
+        handle: ComparePreparationHandle,
+        controls: CompareExecutionControls,
+        occurrence: PlanOccurrenceInspection,
+        resource: ResourceCoordinate,
+        environment: ResourceCoordinate,
+    ) -> ResolvedRequestTarget | None:
+        """Return one exact sanitized rendered target or fail closed to no target."""
+        preview = await self.compare.preview_requests(
+            handle,
+            controls,
+            start_ordinal=occurrence.ordinal,
+            maximum_previews=1,
+        )
+        if len(preview.previews) != 1:
+            return None
+        rendered = preview.previews[0]
+        if (
+            rendered.ordinal != occurrence.ordinal
+            or rendered.subject != resource
+            or rendered.environment != environment
+        ):
+            return None
+        return ResolvedRequestTarget(method=rendered.method, url=rendered.url)
 
     async def run_environment_health_checks(
         self,

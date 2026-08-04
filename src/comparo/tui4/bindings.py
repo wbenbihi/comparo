@@ -23,8 +23,6 @@ RESOURCE_ACTION_KEYS: dict[str, str] = {
     "authored": "2",
     "effective": "3",
     "resolved": "4",
-    "use-in-compare": "u",
-    "inspect-composition": "c",
     "plan-matrix-cells": "m",
 }
 
@@ -85,18 +83,6 @@ def explorer_bindings() -> list[BindingType]:
             "run_health_check",
             "Health check",
             key_display=HEALTH_CHECK_KEY,
-        ),
-        Binding(
-            RESOURCE_ACTION_KEYS["use-in-compare"],
-            'resource_workflow("use-in-compare")',
-            "Use in Compare",
-            key_display=RESOURCE_ACTION_KEYS["use-in-compare"],
-        ),
-        Binding(
-            RESOURCE_ACTION_KEYS["inspect-composition"],
-            'resource_workflow("inspect-composition")',
-            "Composition",
-            key_display=RESOURCE_ACTION_KEYS["inspect-composition"],
         ),
         Binding(RELOAD_KEY, "reload", "Reload", key_display="^r"),
     ]

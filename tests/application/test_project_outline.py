@@ -323,6 +323,83 @@ def test_outline_never_treats_arbitrary_payload_leaf_names_or_scalars_as_safe() 
     assert "1234" not in repr(projected)
 
 
+def test_outline_exposes_only_sanitized_authored_request_routes() -> None:
+    endpoint_canary = "endpoint-query-secret"
+    userinfo_canary = "userinfo-secret"
+    owner = _identity(ResourceKind.REQUEST, "route-preview")
+    endpoint = CanonicalObject(
+        members=(
+            CanonicalMember(
+                name="request",
+                value=CanonicalObject(
+                    members=(
+                        CanonicalMember(
+                            name="endpoint",
+                            value=JsonString(value=f"/customers?token={endpoint_canary}"),
+                        ),
+                    )
+                ),
+            ),
+        )
+    )
+    absolute = CanonicalObject(
+        members=(
+            CanonicalMember(
+                name="request",
+                value=CanonicalObject(
+                    members=(
+                        CanonicalMember(
+                            name="url",
+                            value=JsonString(
+                                value=f"https://user:{userinfo_canary}@example.test/status"
+                            ),
+                        ),
+                    )
+                ),
+            ),
+        )
+    )
+
+    endpoint_projection = outline_resource(owner, endpoint)
+    endpoint_field = next(
+        field for field in endpoint_projection.fields if field.path == ("request", "endpoint")
+    )
+    absolute_projection = outline_resource(owner, absolute)
+    absolute_field = next(
+        field for field in absolute_projection.fields if field.path == ("request", "url")
+    )
+
+    assert endpoint_field.safe_preview == "/customers?…"
+    assert endpoint_field.exact_value is None
+    assert endpoint_canary not in repr(endpoint_projection)
+    assert absolute_field.safe_preview == "<absolute URL>"
+    assert userinfo_canary not in repr(absolute_projection)
+
+    terminal_projection = outline_resource(
+        owner,
+        CanonicalObject(
+            members=(
+                CanonicalMember(
+                    name="request",
+                    value=CanonicalObject(
+                        members=(
+                            CanonicalMember(
+                                name="endpoint",
+                                value=JsonString(value="/customers/\u202ehidden"),
+                            ),
+                        )
+                    ),
+                ),
+            )
+        ),
+    )
+    terminal_field = next(
+        field for field in terminal_projection.fields if field.path == ("request", "endpoint")
+    )
+    assert terminal_field.safe_preview == "/customers/\\u202ehidden"
+    assert terminal_field.safe_preview.isprintable()
+
+
 def test_outline_never_exposes_request_shaped_value_payloads() -> None:
     canary = "value-method-secret-canary"
     owner = _identity(ResourceKind.VALUE, "request-shaped-secret")
@@ -426,6 +503,10 @@ def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:
         ({"path": cast("tuple[str, ...]", ["request"])}, TypeError, "path"),
         ({"path": cast("tuple[str, ...]", (1,))}, TypeError, "path"),
         ({"label": cast("str", 1)}, TypeError, "labels"),
+        ({"safe_preview": cast("str", 1)}, TypeError, "safe preview"),
+        ({"safe_preview": ""}, ValueError, "safe preview"),
+        ({"safe_preview": "line\nbreak"}, ValueError, "safe preview"),
+        ({"safe_preview": "x" * 2049}, ValueError, "safe preview"),
         ({"exact_value": cast("str", 1)}, TypeError, "exact value"),
         ({"exact_value": "one"}, ValueError, "present together"),
         ({"exact_kind": "integer"}, ValueError, "present together"),

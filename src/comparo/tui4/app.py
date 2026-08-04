@@ -72,14 +72,6 @@ class ComparoApp(App[None]):
         if ws in ComparoScreen:
             self.state = replace(self.state, active_screen=ComparoScreen(ws))
 
-    def use_in_compare(self, subject: ResourceCoordinate) -> None:
-        """Retain an exact Request revision and open the Compare workspace."""
-        self.state = replace(
-            self.state,
-            active_screen=ComparoScreen.LAUNCH,
-            compare_subject=subject,
-        )
-
     def select_execution_environment(self, environment: ResourceCoordinate) -> None:
         """Set the shared execution Environment used by contextual inspections."""
         if environment.kind != "Environment":

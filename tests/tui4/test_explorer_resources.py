@@ -12,9 +12,7 @@ from pathlib import Path
 import msgspec
 import pytest
 from rich.text import Text
-from textual.content import Content
 from textual.pilot import Pilot
-from textual.widgets import Button
 from textual.widgets import Static
 
 from comparo.application import AuthoredResourceWindow
@@ -53,6 +51,7 @@ from comparo.tui4.components.resources.project import ProjectEnvironmentRow
 from comparo.tui4.components.resources.project import ProjectResourceDetails
 from comparo.tui4.components.resources.request import RequestContextStrip
 from comparo.tui4.components.resources.request import RequestResourceDetails
+from comparo.tui4.components.resources.request import RequestTargetPill
 from comparo.tui4.components.resources.shared import ResourceSettingList
 from comparo.tui4.components.typography import Caption
 from comparo.tui4.models.explorer import ExplorerCatalog
@@ -77,7 +76,6 @@ from comparo.tui4.models.resource_presenters import request_overview
 from comparo.tui4.models.resource_presenters import resolved_fields
 from comparo.tui4.models.resource_presenters import resource_resolution_paths
 from comparo.tui4.theme import style
-from comparo.tui4.types import ComparoScreen
 from comparo.tui4.workspaces.explorer import ExplorerWorkspace
 
 PROJECT = Path(__file__).parents[2] / "examples" / "tui-showcase"
@@ -138,6 +136,14 @@ def test_badges_share_one_terminal_native_contract_for_inline_and_widget_use() -
         BadgeSpec(" invalid ")
     with pytest.raises(ValueError, match="printable"):
         BadgeSpec("invalid\nlabel")
+
+
+def test_request_target_tooltip_treats_authored_markup_as_literal_text() -> None:
+    target = "/customers/[red]literal[/red]"
+    pill = RequestTargetPill("GET", target, resolved=False)
+
+    assert isinstance(pill.tooltip, Text)
+    assert pill.tooltip.plain == target
 
 
 def test_explorer_tree_centrally_formats_sections_and_resource_rows() -> None:
@@ -325,6 +331,10 @@ def test_request_overview_groups_every_authored_field_without_losing_structure()
     )
     overview = request_overview(complete)
 
+    assert complete.facts.method == "GET"
+    assert complete.facts.route == "/whoami"
+    assert style("request.target.raw")
+    assert style("request.target.resolved")
     assert [setting.name for setting in overview.routing] == ["method", "endpoint"]
     assert [setting.name for setting in overview.parameters] == ["label"]
     assert [setting.name for setting in overview.inputs] == [
@@ -368,6 +378,13 @@ def test_request_overview_groups_every_authored_field_without_losing_structure()
         "diffs",
     ]
 
+    absolute_request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "absolute-health"
+    )
+    assert absolute_request.facts.route == "http://127.0.0.1:18080/baseline/health"
+
     local_policies = next(
         entry
         for entry in catalog.entries.values()
@@ -406,11 +423,42 @@ async def test_backend_resolves_the_exact_request_revision_and_masks_credentials
     assert batch.values is not None
     assert batch.occurrence.subject == request.summary.coordinate
     assert batch.occurrence.environment == environment.summary.coordinate
+    assert batch.request_target is not None
+    assert batch.request_target.method == "GET"
+    assert batch.request_target.url == (
+        "http://127.0.0.1:18080/baseline/whoami?environment=baseline&verbose=true"
+    )
     fields = {field.path: field for field in resolved_fields(batch.values).fields}
     assert fields[("parameters", "label")].value == "request-parameter"
     assert fields[("request", "method")].value == "GET"
     assert fields[("request", "auth")].value == "<masked>"
     assert fields[("request", "cookies")].value == "<masked>"
+
+
+@_run_async
+async def test_backend_preserves_an_absolute_request_url_in_resolved_context() -> None:
+    catalog = _catalog()
+    request = next(
+        entry
+        for entry in catalog.entries.values()
+        if entry.summary.coordinate.resource_id == "absolute-health"
+    )
+    environment = next(
+        entry for entry in catalog.entries.values() if entry.facts.role == "candidate"
+    )
+    backend = TuiBackend(PROJECT)
+    try:
+        batch = await backend.inspect_resolved_fields(
+            request.summary.coordinate,
+            environment.summary.coordinate,
+            resource_resolution_paths(request),
+        )
+    finally:
+        await backend.shutdown()
+
+    assert batch.diagnostics == ()
+    assert batch.request_target is not None
+    assert batch.request_target.url == "http://127.0.0.1:18080/baseline/health"
 
 
 @_run_async
@@ -436,6 +484,7 @@ async def test_unavailable_resolved_request_field_uses_a_registered_warning_tone
 
     assert batch.diagnostics == ()
     assert batch.values is not None
+    assert batch.request_target is None
     fields = {field.path: field for field in resolved_fields(batch.values).fields}
     unavailable = fields[("request", "auth")]
     assert unavailable.value == "<unavailable> · not-defined"
@@ -478,7 +527,7 @@ async def test_backend_returns_a_bounded_partial_request_projection() -> None:
     )
 
 
-def test_kind_projections_keep_matrix_planning_and_request_composition_context_bound() -> None:
+def test_kind_projections_keep_matrix_planning_context_bound() -> None:
     catalog = _catalog()
     matrix = next(
         entry
@@ -508,15 +557,9 @@ def test_kind_projections_keep_matrix_planning_and_request_composition_context_b
         for action in matrix_detail.actions
         if action.id is ResourceActionId.PLAN_MATRIX_CELLS
     )
-    composition = next(
-        action
-        for action in request_detail.actions
-        if action.id is ResourceActionId.INSPECT_COMPOSITION
-    )
     assert not matrix_cells.enabled
     assert matrix_cells.disabled_reason
-    assert not composition.enabled
-    assert composition.disabled_reason
+    assert len(request_detail.actions) == 4
 
 
 def test_resource_inspection_rejects_contradictory_lifecycle_state() -> None:
@@ -1278,7 +1321,7 @@ async def test_catalog_reload_rehydrates_the_active_view_from_the_new_source_rev
 
 
 @_run_async
-async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
+async def test_resource_host_loads_views_and_request_targets() -> None:
     app = ComparoApp(PROJECT)
 
     async with app.run_test(size=(180, 55)) as pilot:
@@ -1301,11 +1344,7 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
                 and detail.key == request.key
             ),
         )
-        await _wait_until(
-            pilot,
-            lambda: len(app.query("#resource-action-use-in-compare")) == 1,
-        )
-
+        await _wait_until(pilot, lambda: len(app.query(ResourceSummary)) == 1)
         summary = app.query_one(ResourceSummary)
         description = summary.query_one(".resource-description", Static)
         provenance = summary.query_one(".resource-provenance", Caption)
@@ -1317,20 +1356,17 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
         )
         assert not any(isinstance(child, KeyValueList) for child in summary.children)
         assert len(app.query(RequestContextStrip)) == 1
+        raw_target = app.query_one(RequestTargetPill)
+        assert raw_target.method == "GET"
+        assert raw_target.target == "/catalog"
+        assert not raw_target.resolved
         assert len(app.query(RequestResourceDetails)) == 1
         assert len(app.query(ResourceSettingList)) == 4
         assert not list(app.query("#resource-action-overview"))
         assert not list(app.query("#resource-action-authored"))
         assert not list(app.query("#resource-action-effective"))
         assert not list(app.query("#resource-action-resolved"))
-        assert len(app.query("#resource-action-inspect-composition")) == 1
-        use_button = app.query_one("#resource-action-use-in-compare", Button)
-        composition_button = app.query_one("#resource-action-inspect-composition", Button)
-        assert isinstance(use_button.label, Content)
-        assert isinstance(composition_button.label, Content)
-        assert use_button.label.plain == "[u] Use in Compare"
-        assert composition_button.label.plain == "[c] Composition"
-        assert composition_button.disabled
+        assert not list(app.query(ResourceActionBar))
         panel = app.query_one("#resource-detail-panel", Panel)
         assert panel.border_subtitle == "overview · raw"
         assert ResourceRepresentation.OVERVIEW.value not in str(panel.border_title)
@@ -1369,6 +1405,10 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
         assert resolved.resolved.phase is InspectionPhase.READY
         assert resolved.resolved.value is not None
         assert resolved.resolved.value.environment == app.state.execution_environment
+        resolved_target = app.query_one(RequestTargetPill)
+        assert resolved_target.method == "GET"
+        assert resolved_target.target.startswith("http://127.0.0.1:18080/baseline/catalog?")
+        assert resolved_target.resolved
         assert app.query_one("#resource-detail-panel", Panel).border_subtitle == (
             "overview · resolved"
         )
@@ -1379,8 +1419,3 @@ async def test_resource_host_loads_views_and_forwards_compare_subject() -> None:
         }
         assert any("region  eu" in line for line in resolved_lines)
         assert any("0  ▦ Matrix/audiences" in line for line in resolved_lines)
-
-        app.query_one(ExplorerResourceTree).focus()
-        await pilot.press("u")
-        assert app.state.active_screen is ComparoScreen.LAUNCH
-        assert app.state.compare_subject == request.summary.coordinate

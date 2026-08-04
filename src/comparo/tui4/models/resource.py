@@ -74,6 +74,31 @@ class ResolvedResourceField:
 
 
 @dataclass(frozen=True)
+class ResolvedRequestTarget:
+    """Canonical sanitized method and URL for one prepared Request occurrence."""
+
+    method: str
+    url: str
+
+    def __post_init__(self) -> None:
+        """Require bounded printable values already sanitized by the application boundary."""
+        if (
+            not self.method
+            or len(self.method) > 32
+            or not self.method.isprintable()
+            or self.method != self.method.strip()
+        ):
+            raise ValueError("resolved Request method must be bounded printable text")
+        if (
+            not self.url
+            or len(self.url) > 8192
+            or not self.url.isprintable()
+            or self.url != self.url.strip()
+        ):
+            raise ValueError("resolved Request URL must be bounded printable text")
+
+
+@dataclass(frozen=True)
 class ResolvedResourceView:
     """Frontend projection for one context-bound masked value overlay."""
 
@@ -82,6 +107,7 @@ class ResolvedResourceView:
     cell_id: str
     trial_id: str
     fields: tuple[ResolvedResourceField, ...]
+    request_target: ResolvedRequestTarget | None = None
     diagnostics: tuple[str, ...] = ()
     incomplete: bool = False
 
@@ -125,8 +151,6 @@ class ResourceActionId(StrEnum):
     AUTHORED = "authored"
     EFFECTIVE = "effective"
     RESOLVED = "resolved"
-    USE_IN_COMPARE = "use-in-compare"
-    INSPECT_COMPOSITION = "inspect-composition"
     PLAN_MATRIX_CELLS = "plan-matrix-cells"
 
 
@@ -185,18 +209,6 @@ def _resource_actions(entry: ResourceEntry) -> tuple[ResourceAction, ...]:
         ResourceAction(ResourceActionId.EFFECTIVE, "Effective"),
         ResourceAction(ResourceActionId.RESOLVED, "Resolved"),
     ]
-    if kind == "Request":
-        actions.extend(
-            (
-                ResourceAction(ResourceActionId.USE_IN_COMPARE, "Use in Compare"),
-                ResourceAction(
-                    ResourceActionId.INSPECT_COMPOSITION,
-                    "Composition",
-                    enabled=False,
-                    disabled_reason="Prepare this request in Compare first.",
-                ),
-            )
-        )
     if kind == "Matrix":
         actions.append(
             ResourceAction(

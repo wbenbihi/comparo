@@ -63,11 +63,8 @@ if TYPE_CHECKING:
     from comparo.application import ResourceCoordinate
 
 
-class _CompareOwner(Protocol):
-    """Minimal app contract required by Explorer's cross-workspace action."""
-
-    def use_in_compare(self, subject: ResourceCoordinate) -> None:
-        """Retain a subject and activate Compare."""
+class _ExecutionContextOwner(Protocol):
+    """Minimal app contract required by Explorer's shared execution context."""
 
     def select_execution_environment(self, environment: ResourceCoordinate) -> None:
         """Set the shared Environment context for contextual inspections."""
@@ -145,7 +142,7 @@ class ExplorerWorkspace(Workspace):
         self.catalog = catalog
         environment = select_execution_environment(catalog, self.execution_environment)
         if environment is not None:
-            cast(_CompareOwner, self.app).select_execution_environment(
+            cast(_ExecutionContextOwner, self.app).select_execution_environment(
                 environment.summary.coordinate
             )
 
@@ -331,8 +328,6 @@ class ExplorerWorkspace(Workspace):
         if action is ResourceActionId.RESOLVED:
             self.detail = select_representation(detail, ResourceRepresentation.RESOLVED)
             return
-        if action is ResourceActionId.USE_IN_COMPARE:
-            cast(_CompareOwner, self.app).use_in_compare(detail.entry.summary.coordinate)
 
     @work(thread=True)
     def _load_authored(
@@ -449,30 +444,7 @@ class ExplorerWorkspace(Workspace):
                 and detail.health.phase is not InspectionPhase.LOADING
                 and bool(environment_health_check_targets(detail.entry))
             )
-        if action == "resource_workflow":
-            detail = self.detail
-            if detail is None or len(parameters) != 1 or type(parameters[0]) is not str:
-                return False
-            try:
-                requested = ResourceActionId(parameters[0])
-            except ValueError:
-                return False
-            selected = next((item for item in detail.actions if item.id is requested), None)
-            return selected is not None and selected.enabled
         return super().check_action(action, parameters)
-
-    def action_resource_workflow(self, action_id: str) -> None:
-        """Apply a selected resource workflow independently of current child focus."""
-        try:
-            action = ResourceActionId(action_id)
-        except ValueError:
-            return
-        detail = self.detail
-        if detail is None:
-            return
-        selected = next((item for item in detail.actions if item.id is action), None)
-        if selected is not None and selected.enabled:
-            self._apply_resource_action(action)
 
     def action_set_execution_environment(self) -> None:
         """Make the highlighted Environment the shared context on explicit Space."""
@@ -482,7 +454,9 @@ class ExplorerWorkspace(Workspace):
 
     def _set_execution_environment(self, entry: ResourceEntry) -> None:
         """Commit one exact Environment revision through the app-owned state."""
-        cast(_CompareOwner, self.app).select_execution_environment(entry.summary.coordinate)
+        cast(_ExecutionContextOwner, self.app).select_execution_environment(
+            entry.summary.coordinate
+        )
 
     def action_resource_view(self, view: str) -> None:
         """Select a common resource representation without moving tree focus."""
@@ -575,6 +549,7 @@ class ExplorerWorkspace(Workspace):
                 cell_id=occurrence.cell_id,
                 trial_id=occurrence.trial_id,
                 fields=projected.fields,
+                request_target=result.request_target,
                 diagnostics=projected.diagnostics,
                 incomplete=projected.incomplete or result.selection_incomplete,
             ),
