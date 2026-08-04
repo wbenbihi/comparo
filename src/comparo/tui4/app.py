@@ -33,7 +33,10 @@ from .workspaces.explorer import ExplorerWorkspace
 class ComparoApp(App[None]):
     """Own the terminal application's backend and active workspace."""
 
-    CSS_PATH: ClassVar[str | PurePath | list[str | PurePath] | None] = "styles/main.tcss"
+    CSS_PATH: ClassVar[str | PurePath | list[str | PurePath] | None] = [
+        "styles/main.tcss",
+        "styles/environment.tcss",
+    ]
     BINDINGS: ClassVar[list[BindingType]] = application_bindings()
     state: reactive[AppState] = reactive(default_app_state, init=False)
 

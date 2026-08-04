@@ -5,7 +5,6 @@ from typing import override
 
 from comparo.tui4.components.list import Field
 from comparo.tui4.models.explorer import PROFILE_KINDS
-from comparo.tui4.models.resource_presenters import environment_fields
 from comparo.tui4.models.resource_presenters import generic_fields
 from comparo.tui4.models.resource_presenters import profile_fields
 from comparo.tui4.models.resource_presenters import request_fields
@@ -13,18 +12,6 @@ from comparo.tui4.models.resource_presenters import schema_fields
 from comparo.tui4.models.resource_presenters import value_fields
 
 from .base import BaseKindResourceDetails
-
-
-class EnvironmentResourceDetails(BaseKindResourceDetails):
-    """Environment role, locality, and safety configuration."""
-
-    KINDS: ClassVar[frozenset[str]] = frozenset({"Environment"})
-
-    @property
-    @override
-    def fields(self) -> tuple[Field, ...]:
-        """Return Environment-specific overview rows."""
-        return environment_fields(self.entry)
 
 
 class RequestResourceDetails(BaseKindResourceDetails):

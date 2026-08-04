@@ -86,6 +86,38 @@ class ResolvedResourceView:
     incomplete: bool = False
 
 
+@dataclass(frozen=True)
+class EnvironmentHealthCheckResult:
+    """Sanitized terminal outcome of an Environment health-check run."""
+
+    run_id: str
+    request_count: int
+    completion: str
+    gate: str
+    adverse_facts: int
+    healthy: bool
+
+    def __post_init__(self) -> None:
+        """Require a bounded, internally coherent value-safe summary."""
+        if type(self.run_id) is not str or not self.run_id or len(self.run_id) > 128:
+            raise ValueError("health-check run ID must be bounded non-empty text")
+        if type(self.request_count) is not int or self.request_count < 1:
+            raise ValueError("health-check request count must be positive")
+        if type(self.completion) is not str or not self.completion or len(self.completion) > 64:
+            raise ValueError("health-check completion must be bounded non-empty text")
+        if type(self.gate) is not str or not self.gate or len(self.gate) > 64:
+            raise ValueError("health-check gate must be bounded non-empty text")
+        if type(self.adverse_facts) is not int or self.adverse_facts < 0:
+            raise ValueError("health-check adverse count must be non-negative")
+        if type(self.healthy) is not bool:
+            raise TypeError("health-check healthy state must be bool")
+        expected = (
+            self.completion == "complete" and self.gate != "failed" and self.adverse_facts == 0
+        )
+        if self.healthy != expected:
+            raise ValueError("health-check state contradicts its terminal facts")
+
+
 class ResourceActionId(StrEnum):
     """Semantic resource actions understood by the Explorer coordinator."""
 
@@ -125,7 +157,15 @@ class ResourceDetail:
     authored: ResourceInspection[AuthoredResourceWindow]
     effective: ResourceInspection[EffectiveResourceWindow]
     resolved: ResourceInspection[ResolvedResourceView]
+    health: ResourceInspection[EnvironmentHealthCheckResult]
     actions: tuple[ResourceAction, ...]
+
+
+def resolution_environment(detail: ResourceDetail) -> ResourceCoordinate | None:
+    """Return the Environment that owns resolution for this resource."""
+    if detail.entry.summary.coordinate.kind == "Environment":
+        return detail.entry.summary.coordinate
+    return detail.execution_environment
 
 
 def _resource_actions(entry: ResourceEntry) -> tuple[ResourceAction, ...]:
@@ -178,10 +218,11 @@ def initial_detail(
             phase=InspectionPhase.UNAVAILABLE,
             message=(
                 "No execution Environment is available."
-                if execution_environment is None
+                if execution_environment is None and entry.summary.coordinate.kind != "Environment"
                 else "Masked resolved values have not been inspected for this context."
             ),
         ),
+        health=ResourceInspection(),
         actions=_resource_actions(entry),
     )
 
@@ -193,9 +234,12 @@ def bind_execution_environment(
     """Rebind contextual inspection state without retaining stale resolved values."""
     if detail.execution_environment == environment:
         return detail
+    previous_resolution_environment = resolution_environment(detail)
+    rebound = replace(detail, execution_environment=environment)
+    if previous_resolution_environment == resolution_environment(rebound):
+        return rebound
     return replace(
-        detail,
-        execution_environment=environment,
+        rebound,
         resolved=ResourceInspection(
             phase=InspectionPhase.UNAVAILABLE,
             message=(
@@ -265,7 +309,7 @@ def loading_resolved(detail: ResourceDetail) -> ResourceDetail:
 
 def loaded_resolved(detail: ResourceDetail, value: ResolvedResourceView) -> ResourceDetail:
     """Attach one masked resolved projection for the current execution context."""
-    if detail.execution_environment != value.environment:
+    if resolution_environment(detail) != value.environment:
         raise ValueError("resolved view Environment differs from resource context")
     return replace(
         detail,
@@ -314,3 +358,11 @@ def failed_effective(detail: ResourceDetail, message: str) -> ResourceDetail:
         detail,
         effective=ResourceInspection(phase=InspectionPhase.FAILED, message=message),
     )
+
+
+def with_health_check(
+    detail: ResourceDetail,
+    inspection: ResourceInspection[EnvironmentHealthCheckResult],
+) -> ResourceDetail:
+    """Attach workspace-owned health state to a selected Environment detail."""
+    return replace(detail, health=inspection)

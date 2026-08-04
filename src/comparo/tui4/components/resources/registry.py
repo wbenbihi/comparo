@@ -3,9 +3,9 @@
 from comparo.tui4.models.resource import ResourceDetail
 
 from .base import BaseKindResourceDetails
+from .environment import EnvironmentResourceDetails
 from .matrix import MatrixResourceDetails
 from .project import ProjectResourceDetails
-from .standard import EnvironmentResourceDetails
 from .standard import GenericResourceDetails
 from .standard import ProfileResourceDetails
 from .standard import RequestResourceDetails

@@ -9,13 +9,14 @@ FILTER_KEY = "/"
 LEGEND_KEY = "l"
 RELOAD_KEY = "ctrl+r"
 
-PROJECT_VIEW_KEYS: dict[str, str] = {
+RESOURCE_VIEW_KEYS: dict[str, str] = {
     "overview": "o",
     "source": "s",
     "dependencies": "g",
 }
-PROJECT_RESOLUTION_KEY = "r"
+RESOURCE_RESOLUTION_KEY = "r"
 EXECUTION_CONTEXT_KEY = "space"
+HEALTH_CHECK_KEY = "h"
 
 RESOURCE_ACTION_KEYS: dict[str, str] = {
     "overview": "1",
@@ -60,17 +61,17 @@ def explorer_bindings() -> list[BindingType]:
         *(
             Binding(
                 key,
-                f'project_view("{view}")',
+                f'resource_view("{view}")',
                 view.replace("dependencies", "Graph").title(),
                 key_display=key,
             )
-            for view, key in PROJECT_VIEW_KEYS.items()
+            for view, key in RESOURCE_VIEW_KEYS.items()
         ),
         Binding(
-            PROJECT_RESOLUTION_KEY,
-            "toggle_project_resolution",
+            RESOURCE_RESOLUTION_KEY,
+            "toggle_resource_resolution",
             "Raw/resolved",
-            key_display=PROJECT_RESOLUTION_KEY,
+            key_display=RESOURCE_RESOLUTION_KEY,
         ),
         Binding(
             EXECUTION_CONTEXT_KEY,
@@ -79,8 +80,19 @@ def explorer_bindings() -> list[BindingType]:
             key_display="Space",
             priority=True,
         ),
+        Binding(
+            HEALTH_CHECK_KEY,
+            "run_health_check",
+            "Health check",
+            key_display=HEALTH_CHECK_KEY,
+        ),
         Binding(RELOAD_KEY, "reload", "Reload", key_display="^r"),
     ]
+
+
+# Compatibility aliases for callers that imported the original Project-only names.
+PROJECT_VIEW_KEYS = RESOURCE_VIEW_KEYS
+PROJECT_RESOLUTION_KEY = RESOURCE_RESOLUTION_KEY
 
 
 def resource_detail_bindings() -> list[BindingType]:

@@ -41,6 +41,7 @@ The remaining product gaps are deliberate scope decisions, not hidden presentati
 | Raw/effective side by side | Supported | source + effective inspection services | Use source/resource fingerprints to label the two representations honestly |
 | Show runtime-resolved Request values | Supported | `render_prepared_request_window` | Sanitized finalized request previews, including body/auth-bearing occurrences, one caller-bounded ordinal window at a time |
 | Show arbitrary generic resolved values | Supported | `CompareService.inspect_resolved_value` / `ResolvedValueInspectionTarget` | Exact retained plan, execution ordinal, Environment, Matrix cell, and effective Request overrides; sensitive values are irreversibly masked and public values are fingerprinted, paged, and bounded |
+| Run Environment health checks | Supported | `Environment.spec.healthChecks` / `TuiBackend.run_environment_health_checks` | Ordered, unique, revision-pinned Request references execute as a normal single-Environment assertion run; safety and artifact/report contracts remain authoritative |
 | Explain planning precedence | Supported | plan provenance inspections + `CompareService.inspect_request_composition` | Field-by-field method, URL, headers, query, cookies, auth, body, stream, transport, and policy contributions retain origin and winning strategy |
 
 “Raw,” “effective,” and “resolved” are distinct. Raw is authored source; effective is linked and

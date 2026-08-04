@@ -88,19 +88,29 @@ tags. Stable identity remains in `ResourceDetail` and the panel title instead of
 separate key/value block. The active representation is the panel's secondary border hint, keeping
 `overview`, `authored`, `effective`, or `resolved` out of the identity title.
 
-### Project inspection contract
+### Common inspection contract
 
-Project inspection deliberately has no numbered action bar. Its views are workspace bindings that
-are enabled and rendered in the footer only while a Project is selected:
+Project and Environment inspection deliberately have no numbered action bar. Their views are
+workspace bindings, enabled and rendered in the footer only while a resource is selected:
 
 | Key | View | Contract |
 | --- | --- | --- |
-| `o` | Overview | Return to the explicit Project overview without changing its raw/resolved mode |
+| `o` | Overview | Return to the kind-specific overview without changing its raw/resolved mode |
 | `s` | Source | Load the revision-pinned, masked authored document through the existing worker |
-| `g` | Dependency graph | Show every safe one-hop `uses` and `used-by` relationship in the Project outline |
+| `g` | Dependency graph | Show every safe one-hop `uses` and `used-by` relationship in the resource outline |
 | `r` | Raw/resolved | Toggle the value layer inside Overview and return to Overview |
 
-`r` does not resolve values in the Explorer process. Raw mode uses the safe Project outline;
+The selected representation and raw/resolved Overview mode belong to the Explorer workspace, not
+to an individual tree row. Selecting another resource retains that view. Source and resolved
+views load the newly selected resource's exact revision/context, Graph projects the new
+resource's relationships, and stale worker output is rejected by the selection generation.
+Changing the execution Environment while resolved mode is active likewise reloads context-bound
+data without returning the user to raw Overview. A successful catalog reload follows the same
+rule: the selected logical resource is rebound to its new exact revision, the active view is
+rebuilt, and Source is re-read against the new whole-file digest even when only a sibling YAML
+document changed.
+
+`r` does not resolve values in the Explorer process. Raw mode uses the safe resource outline;
 entering resolved mode asks `TuiBackend` for an ephemeral single-Environment assertion
 preparation, selects its first exact occurrence, and calls the application-owned masked batch
 inspection. The handle is always discarded after success, failure, or cancellation. The returned
@@ -110,15 +120,15 @@ limit is reached. `ProjectResourceDetails` overlays those exact paths onto the s
 ordering, and setting rows used by raw mode; resolved mode is not a separate diagnostic layout.
 Public runtime expressions and inert exact compiled values are substituted in place, while
 sensitive values remain `<masked>`. Runtime expressions come from the application-owned masked
-resolver. Inert literals and linked identities come from `ProjectOutlineField.exact_value`, whose
-application contract excludes value namespaces, bounds and escapes strings, and reduces Project
-data/source paths to basenames. The TUI does not read authored YAML, expose filesystem coordinates,
-or invent an exact preview. Other non-value structure retains its compiled structural
-presentation.
+resolver. Inert literals come from `ProjectOutlineField.exact_value`; linked identities additionally
+use the field's typed `reference`. The application contract excludes value namespaces, bounds and
+escapes strings, and reduces Project data/source paths to basenames. The TUI does not parse
+reference display text, read authored YAML, expose filesystem coordinates, or invent an exact
+preview. Other non-value structure retains its compiled structural presentation.
 
 Exact and runtime values use shared semantic theme tokens for null, boolean, integer/number,
 text, reference, and masked values. A reference also carries its target kind into the TUI model;
-`ProjectSettingRow` renders the shared colored kind glyph before the target identity only when the
+`ResourceSettingRow` renders the shared colored kind glyph before the target identity only when the
 resolved overlay is active. Raw mode remains a faithful structural `$use` presentation. Widgets
 must not parse `Kind/id` strings to rediscover that metadata.
 
@@ -133,10 +143,10 @@ The `EXEC` badge uses the shared semantic `active` badge tone, keeping its blue 
 from baseline, candidate, locality, and live-danger badges and replaceable by future themes.
 
 The dependency graph is a presentation of application-owned relationship DTOs, not a second
-dependency resolver. `ProjectDependencyTree` inherits the generic `TreeMenu` mechanics and owns
+dependency resolver. `ResourceDependencyTree` inherits the generic `TreeMenu` mechanics and owns
 only the directional branches and row grammar.
 
-Explorer reload is `Ctrl+R`, leaving the unmodified `r` key to switch Project value layers.
+Explorer reload is `Ctrl+R`, leaving the unmodified `r` key to switch resource value layers.
 
 Resource provenance renders `ProjectSourceSummary.filename`, a safe basename projected by the
 application boundary. Logical IDs such as `entry-config` remain internal coordinates used for
@@ -178,6 +188,36 @@ Environment catalog entries. Dedicated source, variable, secret, and semantic de
 then enumerate every field available in the Project's safe structural outline, including nested
 definitions. Literal secrets remain redacted and other literals retain the outline contract's
 safe previews; the widget never reparses `comparo.yaml` or resolves a value itself.
+
+The Environment widget uses one stable raw/resolved layout: execution-context/role/locality,
+connection, runtime inputs, request defaults, policies, health checks, and additional
+configuration. Resolution is always bound to the Environment being inspected, irrespective of
+the shared execution context badge. In resolved mode, typed public values and masked secrets use
+semantic theme tokens; reference kind glyphs appear only when the overlay proves the resolved
+target metadata.
+
+An Environment may declare ordered `healthChecks` references to `Request` resources. The
+contextual `h` binding is available only when at least one probe is declared and no probe run is
+already active. The backend selects those requests and that Environment in a normal assertion
+plan, keeps safety policy authoritative, persists the sanitized run for Report, and derives health
+from terminal completion, gate verdict, and adverse assertion/diff facts. Operational health state
+belongs to the Explorer workspace and exact Environment revision, not the selected detail row.
+Tree selection and execution-context changes therefore neither cancel nor detach a probe; returning
+to the Environment shows the same loading/result state and cannot launch a duplicate. Completion
+additionally uses `App.notify` rather than constructing Textual Toast widgets directly; toast text
+is bounded, value-free, and rendered with Rich markup disabled.
+
+Threaded Compare preparation is serialized by the backend. Cancellation keeps that ownership until
+the worker thread has actually returned, then discards any late preparation handle before
+propagating cancellation. Shutdown therefore cannot close `CompareService` underneath an orphaned
+preparation. Health state is retained only while both the Environment coordinate and its ordered
+Request coordinates still match the latest catalog; a reload that changes a probe revision drops
+the old status.
+
+Health execution identities come from the ordered, revision-bearing
+`ProjectOutlineField.reference` projection, not the one-hop dependency graph. The configuration
+compiler rejects repeated target identities (including qualified/unqualified spellings), while the
+backend repeats that uniqueness check at its trust boundary instead of silently changing a run.
 
 ## Adding a kind
 

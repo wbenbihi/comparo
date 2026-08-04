@@ -1,0 +1,48 @@
+/* Shared resource configuration rows and dependency graph. */
+.resource-setting-list,
+.resource-setting-row {
+    width: 100%;
+    height: auto;
+}
+.resource-setting-row {
+    padding: 0 0 0 1;
+    margin-bottom: 1;
+}
+.resource-setting-heading,
+.resource-setting-detail {
+    width: 100%;
+    height: auto;
+}
+.resource-dependency-view,
+.resource-dependency-graph {
+    width: 100%;
+    height: 1fr;
+}
+
+/* Environment-specific overview hierarchy. */
+.environment-context-strip {
+    width: 100%;
+    height: 1;
+    margin-bottom: 1;
+}
+.environment-context-badge {
+    margin-right: 1;
+}
+.environment-context-hint {
+    width: 1fr;
+    height: 1;
+    text-align: right;
+}
+.environment-health-status {
+    width: 100%;
+    height: auto;
+    padding: 0 0 0 1;
+}
+.environment-health-check,
+.environment-health-result {
+    width: 100%;
+    height: auto;
+}
+.environment-health-result {
+    margin-top: 1;
+}

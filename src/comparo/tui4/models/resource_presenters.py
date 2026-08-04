@@ -17,6 +17,7 @@ from comparo.tui4.models.resource import ResolvedResourceField
 
 if TYPE_CHECKING:
     from comparo.application import ProjectResourceSummary
+    from comparo.application import ResourceCoordinate
     from comparo.application.project_outline import ProjectOutlineField
 
 
@@ -48,8 +49,8 @@ def _targets(
 
 
 @dataclass(frozen=True)
-class ProjectSettingDetail:
-    """One nested, value-safe Project configuration field."""
+class ResourceSettingDetail:
+    """One nested, value-safe resource configuration field."""
 
     path: tuple[str, ...]
     value: str
@@ -57,22 +58,22 @@ class ProjectSettingDetail:
 
 
 @dataclass(frozen=True)
-class ProjectSetting:
-    """One named Project setting with its complete nested safe outline."""
+class ResourceSetting:
+    """One named setting with its complete nested safe outline."""
 
     path: tuple[str, ...]
     name: str
     value: str
     category: str
-    details: tuple[ProjectSettingDetail, ...] = ()
+    details: tuple[ResourceSettingDetail, ...] = ()
 
 
 @dataclass(frozen=True)
-class ProjectSettingGroup:
-    """A semantic group of Project settings rendered as one explicit section."""
+class ResourceSettingGroup:
+    """A semantic group of settings rendered as one explicit section."""
 
     title: str
-    settings: tuple[ProjectSetting, ...]
+    settings: tuple[ResourceSetting, ...]
 
 
 @dataclass(frozen=True)
@@ -81,16 +82,28 @@ class ProjectOverview:
 
     baseline: ProjectEnvironmentFact | None
     candidates: tuple[ProjectEnvironmentFact, ...]
-    sources: tuple[ProjectSetting, ...]
-    variables: tuple[ProjectSetting, ...]
-    secrets: tuple[ProjectSetting, ...]
-    default_groups: tuple[ProjectSettingGroup, ...]
-    additional: tuple[ProjectSetting, ...]
+    sources: tuple[ResourceSetting, ...]
+    variables: tuple[ResourceSetting, ...]
+    secrets: tuple[ResourceSetting, ...]
+    default_groups: tuple[ResourceSettingGroup, ...]
+    additional: tuple[ResourceSetting, ...]
 
 
 @dataclass(frozen=True)
-class ProjectDependency:
-    """One directed edge in the Project's safe dependency graph."""
+class EnvironmentOverview:
+    """Complete value-safe projection for an Environment overview widget."""
+
+    connection: tuple[ResourceSetting, ...]
+    runtime_inputs: tuple[ResourceSetting, ...]
+    request_defaults: tuple[ResourceSetting, ...]
+    policies: tuple[ResourceSetting, ...]
+    health_checks: tuple[ResourceCoordinate, ...]
+    additional: tuple[ResourceSetting, ...]
+
+
+@dataclass(frozen=True)
+class ResourceDependency:
+    """One directed edge in a resource's safe dependency graph."""
 
     direction: str
     path: tuple[str, ...]
@@ -100,8 +113,8 @@ class ProjectDependency:
 
 
 @dataclass(frozen=True)
-class ProjectResolvedFields:
-    """Masked, frontend-safe Project field rows from one resolved batch."""
+class ResourceResolvedFields:
+    """Masked, frontend-safe resource fields from one resolved batch."""
 
     fields: tuple[ResolvedResourceField, ...]
     diagnostics: tuple[str, ...] = ()
@@ -144,12 +157,12 @@ _RESOLVED_VALUE_TONES = {
 }
 
 
-def _project_settings(
+def _resource_settings(
     entry: ResourceEntry,
     prefix: tuple[str, ...],
     names: frozenset[str] | None = None,
-) -> tuple[ProjectSetting, ...]:
-    """Group every safe outline field below a Project configuration namespace."""
+) -> tuple[ResourceSetting, ...]:
+    """Group every safe outline field below one configuration namespace."""
     outline = entry.summary.outline
     if outline is None:
         return ()
@@ -162,7 +175,7 @@ def _project_settings(
             continue
         grouped.setdefault(name, []).append(field)
 
-    settings: list[ProjectSetting] = []
+    settings: list[ResourceSetting] = []
     for name, untyped_fields in grouped.items():
         fields = tuple(untyped_fields)
         root_path = (*prefix, name)
@@ -170,7 +183,7 @@ def _project_settings(
         if root is None:
             continue
         details = tuple(
-            ProjectSettingDetail(
+            ResourceSettingDetail(
                 path=field.path[len(root_path) :],
                 value=field.value,
                 category=field.category,
@@ -179,7 +192,7 @@ def _project_settings(
             if field.path != root_path
         )
         settings.append(
-            ProjectSetting(
+            ResourceSetting(
                 path=root_path,
                 name=name,
                 value=root.value,
@@ -192,24 +205,24 @@ def _project_settings(
 
 def project_overview(entry: ResourceEntry) -> ProjectOverview:
     """Return every Project spec field available through the safe outline contract."""
-    sources = _project_settings(entry, (), _PROJECT_SOURCE_FIELDS)
-    variables = _project_settings(entry, ("variables",))
-    secrets = _project_settings(entry, ("secrets",))
-    defaults = _project_settings(entry, ("defaults",))
+    sources = _resource_settings(entry, (), _PROJECT_SOURCE_FIELDS)
+    variables = _resource_settings(entry, ("variables",))
+    secrets = _resource_settings(entry, ("secrets",))
+    defaults = _resource_settings(entry, ("defaults",))
     grouped_names: set[str] = set()
-    default_groups: list[ProjectSettingGroup] = []
+    default_groups: list[ResourceSettingGroup] = []
     for title, names in _DEFAULT_GROUPS:
         settings = tuple(setting for setting in defaults if setting.name in names)
         grouped_names.update(setting.name for setting in settings)
         if settings:
-            default_groups.append(ProjectSettingGroup(title, settings))
+            default_groups.append(ResourceSettingGroup(title, settings))
     remaining_defaults = tuple(setting for setting in defaults if setting.name not in grouped_names)
     if remaining_defaults:
-        default_groups.append(ProjectSettingGroup("Additional defaults", remaining_defaults))
+        default_groups.append(ResourceSettingGroup("Additional defaults", remaining_defaults))
 
     reserved = _PROJECT_SOURCE_FIELDS | frozenset({"variables", "secrets", "defaults"})
     additional = tuple(
-        setting for setting in _project_settings(entry, ()) if setting.name not in reserved
+        setting for setting in _resource_settings(entry, ()) if setting.name not in reserved
     )
     environment_defaults = entry.project_environments
     return ProjectOverview(
@@ -223,13 +236,74 @@ def project_overview(entry: ResourceEntry) -> ProjectOverview:
     )
 
 
-def project_dependencies(entry: ResourceEntry) -> tuple[ProjectDependency, ...]:
-    """Return every outbound and inverse edge from the Project safe outline."""
+_ENVIRONMENT_CONNECTION_FIELDS = frozenset({"baseUrl", "timeout", "tls", "proxy"})
+_ENVIRONMENT_RUNTIME_FIELDS = frozenset({"env", "variables", "secrets"})
+_ENVIRONMENT_REQUEST_FIELDS = frozenset({"headers", "cookies", "auth"})
+_ENVIRONMENT_POLICY_FIELDS = frozenset({"safety", "redaction", "artifacts"})
+_ENVIRONMENT_RESERVED_FIELDS = (
+    _ENVIRONMENT_CONNECTION_FIELDS
+    | _ENVIRONMENT_RUNTIME_FIELDS
+    | _ENVIRONMENT_REQUEST_FIELDS
+    | _ENVIRONMENT_POLICY_FIELDS
+    | frozenset({"healthChecks"})
+)
+
+
+def environment_overview(entry: ResourceEntry) -> EnvironmentOverview:
+    """Return every Environment spec field in explicit semantic groups."""
+    settings = _resource_settings(entry, ())
+    outline = entry.summary.outline
+    health_checks = (
+        ()
+        if outline is None
+        else tuple(
+            field.reference
+            for field in outline.fields
+            if len(field.path) == 2
+            and field.path[0] == "healthChecks"
+            and field.reference is not None
+            and field.reference.kind == "Request"
+        )
+    )
+    return EnvironmentOverview(
+        connection=tuple(
+            setting for setting in settings if setting.name in _ENVIRONMENT_CONNECTION_FIELDS
+        ),
+        runtime_inputs=tuple(
+            setting for setting in settings if setting.name in _ENVIRONMENT_RUNTIME_FIELDS
+        ),
+        request_defaults=tuple(
+            setting for setting in settings if setting.name in _ENVIRONMENT_REQUEST_FIELDS
+        ),
+        policies=tuple(
+            setting for setting in settings if setting.name in _ENVIRONMENT_POLICY_FIELDS
+        ),
+        health_checks=health_checks,
+        additional=tuple(
+            setting for setting in settings if setting.name not in _ENVIRONMENT_RESERVED_FIELDS
+        ),
+    )
+
+
+def environment_health_check_targets(
+    entry: ResourceEntry,
+) -> tuple[ResourceCoordinate, ...]:
+    """Return exact declared health Request identities in authored order."""
+    return environment_overview(entry).health_checks
+
+
+def environment_health_check_ids(entry: ResourceEntry) -> tuple[str, ...]:
+    """Compatibility projection of ordered health Request identities to IDs."""
+    return tuple(check.resource_id for check in environment_health_check_targets(entry))
+
+
+def resource_dependencies(entry: ResourceEntry) -> tuple[ResourceDependency, ...]:
+    """Return every outbound and inverse edge from a resource's safe outline."""
     outline = entry.summary.outline
     if outline is None:
         return ()
     return tuple(
-        ProjectDependency(
+        ResourceDependency(
             direction="used-by" if relationship.origin == "used-by" else "uses",
             path=relationship.path,
             target_kind=relationship.target.kind,
@@ -240,30 +314,47 @@ def project_dependencies(entry: ResourceEntry) -> tuple[ProjectDependency, ...]:
     )
 
 
-def project_compiled_exact_fields(entry: ResourceEntry) -> tuple[ResolvedResourceField, ...]:
+def compiled_exact_fields(entry: ResourceEntry) -> tuple[ResolvedResourceField, ...]:
     """Return safe exact inert/reference values supplied by the application outline."""
     outline = entry.summary.outline
     if outline is None:
         return ()
-    reference_kinds = {
-        relationship.path: relationship.target.kind
-        for relationship in outline.relationships
-        if relationship.origin == "link"
-    }
     return tuple(
         ResolvedResourceField(
             path=field.path,
             value=field.exact_value,
             tone=f"value.{field.exact_kind}",
-            reference_kind=reference_kinds.get(field.path),
+            reference_kind=None if field.reference is None else field.reference.kind,
         )
         for field in outline.fields
         if field.exact_value is not None and field.exact_kind is not None
     )
 
 
-def project_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
-    """Select the bounded Project expression roots displayed by Overview."""
+def resource_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
+    """Select bounded expression roots that the kind-specific Overview displays."""
+    kind = entry.summary.coordinate.kind
+    if kind == "Environment":
+        outline = entry.summary.outline
+        if outline is None:
+            return ()
+        available = {field.path for field in outline.fields}
+        return tuple(
+            (name,)
+            for name in (
+                "baseUrl",
+                "variables",
+                "secrets",
+                "headers",
+                "cookies",
+                "auth",
+                "timeout",
+                "proxy",
+            )
+            if (name,) in available
+        )
+    if kind != "Project":
+        return ()
     overview = project_overview(entry)
     paths: list[tuple[str, ...]] = []
     if overview.variables:
@@ -285,9 +376,9 @@ def project_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...
     return tuple(dict.fromkeys(paths))
 
 
-def project_resolved_fields(
+def resolved_fields(
     batch: ResolvedValueInspectionBatchResult,
-) -> ProjectResolvedFields:
+) -> ResourceResolvedFields:
     """Flatten safe resolved-value nodes without reopening resolver state."""
     fields: list[ResolvedResourceField] = []
     diagnostics: list[str] = []
@@ -328,11 +419,20 @@ def project_resolved_fields(
             )
         if inspection.next_node is not None:
             incomplete = True
-    return ProjectResolvedFields(
+    return ResourceResolvedFields(
         fields=tuple(fields),
         diagnostics=tuple(diagnostics),
         incomplete=incomplete,
     )
+
+
+# Transitional aliases for downstream code that imported the original Project-only names.
+ProjectDependency = ResourceDependency
+ProjectResolvedFields = ResourceResolvedFields
+project_dependencies = resource_dependencies
+project_compiled_exact_fields = compiled_exact_fields
+project_resolution_paths = resource_resolution_paths
+project_resolved_fields = resolved_fields
 
 
 def environment_fields(entry: ResourceEntry) -> tuple[Field, ...]:

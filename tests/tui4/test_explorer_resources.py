@@ -1,6 +1,8 @@
 """Resource-aware Explorer presentation and interaction tests."""
 
 import asyncio
+import shutil
+import threading
 from collections.abc import Callable
 from collections.abc import Coroutine
 from dataclasses import replace
@@ -14,12 +16,16 @@ from textual.pilot import Pilot
 from textual.widgets import Button
 from textual.widgets import Static
 
+from comparo.application import AuthoredResourceWindow
 from comparo.application import ProjectWorkspaceRequest
+from comparo.application import ResourceCoordinate
 from comparo.application import inspect_project_workspace
 from comparo.application.project_outline import ProjectOutlineField
 from comparo.application.project_outline import ProjectResourceOutline
 from comparo.core.domain.identity import ResourceKind
 from comparo.tui4.app import ComparoApp
+from comparo.tui4.backend import HealthCheckBatch
+from comparo.tui4.backend import TuiBackend
 from comparo.tui4.components.badge import Badge
 from comparo.tui4.components.badge import BadgeEmphasis
 from comparo.tui4.components.badge import BadgeSpec
@@ -35,6 +41,9 @@ from comparo.tui4.components.resourcedetail import ResourceDetailOverview
 from comparo.tui4.components.resourcedetail import ResourceSummary
 from comparo.tui4.components.resources import RESOURCE_WIDGETS
 from comparo.tui4.components.resources import resource_widget
+from comparo.tui4.components.resources.environment import EnvironmentContextStrip
+from comparo.tui4.components.resources.environment import EnvironmentHealthStatus
+from comparo.tui4.components.resources.environment import EnvironmentResourceDetails
 from comparo.tui4.components.resources.matrix import MatrixResourceDetails
 from comparo.tui4.components.resources.project import ProjectDependencyGraph
 from comparo.tui4.components.resources.project import ProjectDependencyTree
@@ -48,12 +57,16 @@ from comparo.tui4.models.explorer import build_catalog
 from comparo.tui4.models.explorer import catalog_nodes
 from comparo.tui4.models.explorer import select_execution_environment
 from comparo.tui4.models.navigation import MenuNode
+from comparo.tui4.models.resource import EnvironmentHealthCheckResult
 from comparo.tui4.models.resource import InspectionPhase
 from comparo.tui4.models.resource import ResourceActionId
 from comparo.tui4.models.resource import ResourceInspection
 from comparo.tui4.models.resource import ResourceOverviewMode
 from comparo.tui4.models.resource import ResourceRepresentation
 from comparo.tui4.models.resource import initial_detail
+from comparo.tui4.models.resource_presenters import environment_health_check_ids
+from comparo.tui4.models.resource_presenters import environment_health_check_targets
+from comparo.tui4.models.resource_presenters import environment_overview
 from comparo.tui4.models.resource_presenters import matrix_dimensions
 from comparo.tui4.models.resource_presenters import project_compiled_exact_fields
 from comparo.tui4.models.resource_presenters import project_overview
@@ -270,6 +283,51 @@ def test_project_overview_retains_topology_and_every_safe_project_setting() -> N
     ] == [("apiToken", "$env.API_TOKEN", "directive")]
 
 
+def test_environment_overview_groups_every_field_and_declared_health_request() -> None:
+    catalog = _catalog()
+    environment = next(
+        entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+    )
+    overview = environment_overview(environment)
+
+    assert [setting.name for setting in overview.connection] == ["baseUrl"]
+    assert [setting.name for setting in overview.runtime_inputs] == ["variables"]
+    assert overview.request_defaults == ()
+    assert [setting.name for setting in overview.policies] == ["safety"]
+    assert [check.resource_id for check in overview.health_checks] == ["health"]
+    assert environment_health_check_ids(environment) == ("health",)
+    assert environment_health_check_targets(environment) == overview.health_checks
+    assert overview.additional == ()
+
+    projected_roots = {
+        setting.name
+        for setting in (
+            *overview.connection,
+            *overview.runtime_inputs,
+            *overview.request_defaults,
+            *overview.policies,
+            *overview.additional,
+        )
+    } | ({"healthChecks"} if overview.health_checks else set())
+    outline = environment.summary.outline
+    assert outline is not None
+    assert projected_roots == {field.path[0] for field in outline.fields if field.path}
+
+    health_field = next(field for field in outline.fields if field.path == ("healthChecks", "0"))
+    duplicate_outline = msgspec.structs.replace(
+        outline,
+        fields=(
+            *outline.fields,
+            msgspec.structs.replace(health_field, path=("healthChecks", "1")),
+        ),
+    )
+    duplicate_entry = replace(
+        environment,
+        summary=msgspec.structs.replace(environment.summary, outline=duplicate_outline),
+    )
+    assert environment_health_check_ids(duplicate_entry) == ("health", "health")
+
+
 def test_kind_projections_keep_matrix_planning_and_request_composition_context_bound() -> None:
     catalog = _catalog()
     matrix = next(
@@ -320,6 +378,28 @@ def test_resource_inspection_rejects_contradictory_lifecycle_state() -> None:
         ResourceInspection[str](phase=InspectionPhase.FAILED)
     with pytest.raises(ValueError, match="only failed"):
         ResourceInspection[str](message="unexpected")
+
+
+def test_health_check_summary_and_batch_reject_contradictory_state() -> None:
+    healthy = EnvironmentHealthCheckResult(
+        run_id="health-run",
+        request_count=1,
+        completion="complete",
+        gate="passed",
+        adverse_facts=0,
+        healthy=True,
+    )
+
+    assert HealthCheckBatch(value=healthy).value is healthy
+    assert HealthCheckBatch(diagnostics=("health-check.failed",)).value is None
+    with pytest.raises(ValueError, match="exactly result or diagnostics"):
+        HealthCheckBatch()
+    with pytest.raises(ValueError, match="exactly result or diagnostics"):
+        HealthCheckBatch(value=healthy, diagnostics=("health-check.failed",))
+    with pytest.raises(ValueError, match="request count"):
+        replace(healthy, request_count=0)
+    with pytest.raises(ValueError, match="contradicts"):
+        replace(healthy, adverse_facts=1)
 
 
 @_run_async
@@ -413,7 +493,7 @@ async def test_project_resource_uses_two_environment_cards_and_explicit_sections
         authored_headings = {
             str(item.content)
             for item in app.query_one(ProjectResourceDetails).query(Static)
-            if item.has_class("project-setting-heading")
+            if item.has_class("resource-setting-heading")
         }
         assert any(
             "baseline  $use Environment/baseline" in item and "◉" not in item
@@ -443,7 +523,7 @@ async def test_project_resource_uses_two_environment_cards_and_explicit_sections
         resolved_headings = {
             str(item.content)
             for item in resolved_project.query(Static)
-            if item.has_class("project-setting-heading")
+            if item.has_class("resource-setting-heading")
         }
         assert any("client  comparo-tui" in item for item in resolved_headings)
         assert any("data  .comparo" in item for item in resolved_headings)
@@ -463,7 +543,7 @@ async def test_project_resource_uses_two_environment_cards_and_explicit_sections
         raw_headings = {
             str(item.content)
             for item in app.query_one(ProjectResourceDetails).query(Static)
-            if item.has_class("project-setting-heading")
+            if item.has_class("resource-setting-heading")
         }
         assert any("client  <string · 11 chars>" in item for item in raw_headings)
         assert any("data  <string · 8 chars>" in item for item in raw_headings)
@@ -482,7 +562,7 @@ async def test_project_resource_uses_two_environment_cards_and_explicit_sections
         cached_headings = {
             str(item.content)
             for item in app.query_one(ProjectResourceDetails).query(Static)
-            if item.has_class("project-setting-heading")
+            if item.has_class("resource-setting-heading")
         }
         assert any("client  comparo-tui" in item for item in cached_headings)
         assert any("data  .comparo" in item for item in cached_headings)
@@ -573,7 +653,478 @@ async def test_environment_commit_and_context_binding_switch_the_shared_default(
         )
         assert workspace.detail is not None
         assert workspace.detail.execution_environment == baseline.summary.coordinate
-        assert workspace.detail.resolved.phase is InspectionPhase.UNAVAILABLE
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.resolved.phase is InspectionPhase.READY
+            ),
+        )
+        assert workspace.detail.resolved.value is not None
+        assert workspace.detail.resolved.value.environment == baseline.summary.coordinate
+
+
+@_run_async
+async def test_environment_overview_resolves_its_own_context_and_runs_declared_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def healthy(
+        _backend: TuiBackend,
+        environment: ResourceCoordinate,
+        requests: tuple[ResourceCoordinate, ...],
+    ) -> HealthCheckBatch:
+        assert environment.resource_id == "candidate"
+        assert tuple(request.resource_id for request in requests) == ("health",)
+        return HealthCheckBatch(
+            value=EnvironmentHealthCheckResult(
+                run_id="health-run-0001",
+                request_count=1,
+                completion="complete",
+                gate="not-requested",
+                adverse_facts=0,
+                healthy=True,
+            )
+        )
+
+    monkeypatch.setattr(TuiBackend, "run_environment_health_checks", healthy)
+    app = ComparoApp(PROJECT)
+    notifications: list[tuple[str, str, str, float | None, bool]] = []
+
+    def notify(
+        message: str,
+        *,
+        title: str = "",
+        severity: str = "information",
+        timeout: float | None = None,
+        markup: bool = True,
+    ) -> None:
+        notifications.append((message, title, severity, timeout, markup))
+
+    monkeypatch.setattr(app, "notify", notify)
+
+    async with app.run_test(size=(180, 70)) as pilot:
+        navigator = app.query_one(ExplorerNavigator)
+        await _wait_until(pilot, lambda: navigator.catalog is not None)
+        catalog = navigator.catalog
+        assert catalog is not None
+        workspace = app.query_one(ExplorerWorkspace)
+        candidate = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "candidate"
+        )
+        baseline = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+        )
+        assert app.state.execution_environment == baseline.summary.coordinate
+
+        workspace.selected = candidate.key
+        await _wait_until(
+            pilot,
+            lambda: len(app.query(EnvironmentResourceDetails)) == 1,
+        )
+        assert not list(app.query(ResourceActionBar))
+        strip = app.query_one(EnvironmentContextStrip)
+        assert [badge.spec.label for badge in strip.query(Badge)] == ["candidate", "local"]
+        assert len(strip.query(".environment-context-hint")) == 1
+        assert app.query_one("#resource-detail-panel", Panel).border_subtitle == "overview · raw"
+        raw_checks = {
+            str(item.content) for item in app.query_one(EnvironmentHealthStatus).query(Static)
+        }
+        assert any("$use Request/health" in item and "⇄" not in item for item in raw_checks)
+
+        app.refresh_bindings()
+        await pilot.pause()
+        assert app.screen.active_bindings["h"].enabled
+        assert app.screen.active_bindings["r"].enabled
+        await pilot.press("r")
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.resolved.phase is InspectionPhase.READY
+            ),
+        )
+        detail = workspace.detail
+        assert detail is not None
+        assert detail.resolved.value is not None
+        assert detail.resolved.value.environment == candidate.summary.coordinate
+        resolved_headings = {
+            str(item.content)
+            for item in app.query_one(EnvironmentResourceDetails).query(Static)
+            if item.has_class("resource-setting-heading")
+        }
+        assert any(
+            "baseUrl  http://127.0.0.1:18080/candidate" in item for item in resolved_headings
+        )
+        assert any("safety  ⊘ SafetyProfile/local-read-only" in item for item in resolved_headings)
+        resolved_checks = {
+            str(item.content) for item in app.query_one(EnvironmentHealthStatus).query(Static)
+        }
+        assert any("⇄ Request/health" in item for item in resolved_checks)
+
+        await pilot.press("h")
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.health.phase is InspectionPhase.READY
+            ),
+        )
+        detail = workspace.detail
+        assert detail is not None
+        assert detail.health.value is not None
+        assert detail.health.value.healthy
+        health_lines = {
+            str(item.content) for item in app.query_one(EnvironmentHealthStatus).query(Static)
+        }
+        assert any("healthy" in item and "health-r" in item for item in health_lines)
+        assert notifications == [
+            (
+                "1 request(s) · complete · gate not-requested · run health-r…",
+                "Staging candidate is healthy",
+                "information",
+                5,
+                False,
+            )
+        ]
+
+
+@_run_async
+async def test_health_run_survives_tree_selection_and_prevents_duplicate_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_health(
+        _backend: TuiBackend,
+        _environment: ResourceCoordinate,
+        _requests: tuple[ResourceCoordinate, ...],
+    ) -> HealthCheckBatch:
+        started.set()
+        await release.wait()
+        return HealthCheckBatch(
+            value=EnvironmentHealthCheckResult(
+                run_id="detached-health-run",
+                request_count=1,
+                completion="complete",
+                gate="passed",
+                adverse_facts=0,
+                healthy=True,
+            )
+        )
+
+    monkeypatch.setattr(TuiBackend, "run_environment_health_checks", slow_health)
+    app = ComparoApp(PROJECT)
+    notifications: list[str] = []
+
+    def notify(message: str, **_options: object) -> None:
+        notifications.append(message)
+
+    monkeypatch.setattr(app, "notify", notify)
+
+    async with app.run_test(size=(180, 70)) as pilot:
+        navigator = app.query_one(ExplorerNavigator)
+        await _wait_until(pilot, lambda: navigator.catalog is not None)
+        catalog = navigator.catalog
+        assert catalog is not None
+        workspace = app.query_one(ExplorerWorkspace)
+        candidate = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "candidate"
+        )
+        baseline = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+        )
+
+        workspace.selected = candidate.key
+        await _wait_until(pilot, lambda: workspace.detail is not None)
+        await pilot.press("h")
+        await _wait_until(pilot, started.is_set)
+        assert workspace.detail is not None
+        assert workspace.detail.health.phase is InspectionPhase.LOADING
+
+        workspace.selected = baseline.key
+        await _wait_until(
+            pilot,
+            lambda: workspace.detail is not None and workspace.detail.key == baseline.key,
+        )
+        workspace.selected = candidate.key
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.key == candidate.key
+                and workspace.detail.health.phase is InspectionPhase.LOADING
+            ),
+        )
+        app.refresh_bindings()
+        await pilot.pause()
+        assert "h" not in app.screen.active_bindings
+
+        workspace.selected = baseline.key
+        await _wait_until(
+            pilot,
+            lambda: workspace.detail is not None and workspace.detail.key == baseline.key,
+        )
+        release.set()
+        await _wait_until(pilot, lambda: bool(notifications))
+        workspace.selected = candidate.key
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.key == candidate.key
+                and workspace.detail.health.phase is InspectionPhase.READY
+            ),
+        )
+        assert workspace.detail is not None
+        assert workspace.detail.health.value is not None
+        assert workspace.detail.health.value.run_id == "detached-health-run"
+
+
+@_run_async
+async def test_catalog_reload_drops_health_state_when_a_probe_revision_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def healthy(
+        backend: TuiBackend,
+        environment: ResourceCoordinate,
+        requests: tuple[ResourceCoordinate, ...],
+    ) -> HealthCheckBatch:
+        return HealthCheckBatch(
+            value=EnvironmentHealthCheckResult(
+                run_id="revision-bound-health",
+                request_count=len(requests),
+                completion="complete",
+                gate="not-requested",
+                adverse_facts=0,
+                healthy=True,
+            )
+        )
+
+    monkeypatch.setattr(TuiBackend, "run_environment_health_checks", healthy)
+    project = tmp_path / "project"
+    shutil.copytree(PROJECT, project, ignore=shutil.ignore_patterns("artifacts"))
+    app = ComparoApp(project)
+
+    async with app.run_test(size=(180, 70)) as pilot:
+        navigator = app.query_one(ExplorerNavigator)
+        await _wait_until(pilot, lambda: navigator.catalog is not None)
+        catalog = navigator.catalog
+        assert catalog is not None
+        workspace = app.query_one(ExplorerWorkspace)
+        baseline = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+        )
+        workspace.selected = baseline.key
+        await _wait_until(pilot, lambda: workspace.detail is not None)
+        await pilot.press("h")
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.health.phase is InspectionPhase.READY
+            ),
+        )
+        previous_targets = environment_health_check_targets(baseline)
+        source = project / ".comparo" / "requests.yaml"
+        source.write_text(
+            source.read_text(encoding="utf-8").replace(
+                "Stable health Request useful for assertion-only runs.",
+                "Updated health Request useful for assertion-only runs.",
+            ),
+            encoding="utf-8",
+        )
+
+        workspace.action_reload()
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and environment_health_check_targets(workspace.detail.entry) != previous_targets
+                and workspace.detail.health.phase is InspectionPhase.IDLE
+            ),
+        )
+
+
+@_run_async
+async def test_context_change_does_not_invalidate_loading_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    original = TuiBackend.inspect_authored
+
+    def slow_source(
+        backend: TuiBackend,
+        coordinate: ResourceCoordinate,
+        expected_sha256: str | None,
+    ) -> AuthoredResourceWindow:
+        started.set()
+        assert release.wait(timeout=3)
+        return original(backend, coordinate, expected_sha256)
+
+    monkeypatch.setattr(TuiBackend, "inspect_authored", slow_source)
+    app = ComparoApp(PROJECT)
+
+    async with app.run_test(size=(180, 70)) as pilot:
+        navigator = app.query_one(ExplorerNavigator)
+        await _wait_until(pilot, lambda: navigator.catalog is not None)
+        catalog = navigator.catalog
+        assert catalog is not None
+        workspace = app.query_one(ExplorerWorkspace)
+        candidate = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "candidate"
+        )
+
+        workspace.selected = candidate.key
+        await _wait_until(pilot, lambda: workspace.detail is not None)
+        await pilot.press("s")
+        await _wait_until(pilot, started.is_set)
+        await pilot.press("space")
+        assert app.state.execution_environment == candidate.summary.coordinate
+        release.set()
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.key == candidate.key
+                and workspace.detail.authored.phase is InspectionPhase.READY
+            ),
+        )
+
+
+@_run_async
+async def test_explorer_keeps_the_active_view_across_tree_selection_changes() -> None:
+    app = ComparoApp(PROJECT)
+
+    async with app.run_test(size=(180, 70)) as pilot:
+        navigator = app.query_one(ExplorerNavigator)
+        await _wait_until(pilot, lambda: navigator.catalog is not None)
+        catalog = navigator.catalog
+        assert catalog is not None
+        workspace = app.query_one(ExplorerWorkspace)
+        baseline = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "baseline"
+        )
+        candidate = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "candidate"
+        )
+
+        workspace.selected = catalog.project.key
+        await _wait_until(pilot, lambda: workspace.detail is not None)
+        await pilot.press("g")
+        workspace.selected = baseline.key
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.key == baseline.key
+                and workspace.detail.representation is ResourceRepresentation.DEPENDENCIES
+            ),
+        )
+
+        await pilot.press("s")
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.authored.phase is InspectionPhase.READY
+            ),
+        )
+        workspace.selected = candidate.key
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.key == candidate.key
+                and workspace.detail.representation is ResourceRepresentation.AUTHORED
+                and workspace.detail.authored.phase is InspectionPhase.READY
+            ),
+        )
+        assert workspace.detail is not None
+        assert workspace.detail.authored.value is not None
+        assert workspace.detail.authored.value.coordinate == candidate.summary.coordinate
+
+        await pilot.press("o", "r")
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.overview_mode is ResourceOverviewMode.RESOLVED
+                and workspace.detail.resolved.phase is InspectionPhase.READY
+            ),
+        )
+        workspace.selected = baseline.key
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.key == baseline.key
+                and workspace.detail.representation is ResourceRepresentation.OVERVIEW
+                and workspace.detail.overview_mode is ResourceOverviewMode.RESOLVED
+                and workspace.detail.resolved.phase is InspectionPhase.READY
+            ),
+        )
+        assert workspace.detail is not None
+        assert workspace.detail.resolved.value is not None
+        assert workspace.detail.resolved.value.environment == baseline.summary.coordinate
+
+
+@_run_async
+async def test_catalog_reload_rehydrates_the_active_view_from_the_new_source_revision(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    shutil.copytree(PROJECT, project, ignore=shutil.ignore_patterns("artifacts"))
+    app = ComparoApp(project)
+
+    async with app.run_test(size=(180, 70)) as pilot:
+        navigator = app.query_one(ExplorerNavigator)
+        await _wait_until(pilot, lambda: navigator.catalog is not None)
+        catalog = navigator.catalog
+        assert catalog is not None
+        workspace = app.query_one(ExplorerWorkspace)
+        candidate = next(
+            entry for entry in catalog.entries.values() if entry.facts.role == "candidate"
+        )
+        workspace.selected = candidate.key
+        await _wait_until(pilot, lambda: workspace.detail is not None)
+        await pilot.press("s")
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.authored.phase is InspectionPhase.READY
+            ),
+        )
+        assert workspace.detail is not None
+        original_source_revision = workspace.detail.entry.source.sha256
+        original_resource_revision = workspace.detail.entry.summary.coordinate.fingerprint
+        source = project / ".comparo" / "environments.yaml"
+        source.write_text(
+            source.read_text(encoding="utf-8").replace(
+                "Stable reference behavior served from the loopback demo service.",
+                "Stable reference behavior from a locally managed demo service.",
+            ),
+            encoding="utf-8",
+        )
+
+        workspace.action_reload()
+        await _wait_until(
+            pilot,
+            lambda: (
+                workspace.detail is not None
+                and workspace.detail.entry.source.sha256 != original_source_revision
+                and workspace.detail.representation is ResourceRepresentation.AUTHORED
+                and workspace.detail.authored.phase is InspectionPhase.READY
+            ),
+        )
+
+        assert workspace.detail is not None
+        assert workspace.detail.entry.summary.coordinate.fingerprint == original_resource_revision
+        assert workspace.detail.authored.value is not None
+        assert workspace.detail.authored.value.source_sha256 == workspace.detail.entry.source.sha256
 
 
 @_run_async

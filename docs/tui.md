@@ -109,8 +109,34 @@ The default catalog contains only value-safe structural outlines. Separate appli
 provide revision-pinned masked or explicitly exact authored source, bounded effective structure,
 dependency edges, and plan-scoped masked resolved-field inspection. Environment-file contents and
 live secret containers never cross the frontend boundary. A failed compilation produces
-structured, value-free diagnostics instead of an exception or raw source dump. `r` reloads the
-project.
+structured, value-free diagnostics instead of an exception or raw source dump.
+
+Explorer's contextual commands are:
+
+| Key | Command |
+| --- | --- |
+| `o` | Show the selected resource's kind-specific Overview |
+| `s` | Load its revision-pinned masked source |
+| `g` | Show its dependency graph |
+| `r` | Toggle raw/resolved values inside Overview |
+| `Space` | Make the selected Environment the shared execution context |
+| `h` | Run a selected Environment's declared health requests, when available |
+| `l` | Toggle the resource-kind legend |
+| `Ctrl+R` | Reload the project catalog |
+
+Overview/source/graph and raw/resolved mode persist when selection moves in the tree. Explorer
+loads the corresponding view for the newly selected resource instead of resetting to Overview.
+Changing execution context while resolved mode is active refreshes context-bound values without
+changing the selected view. Environment resolution is bound to the Environment being inspected;
+the shared execution context remains the default for other resource kinds. Project reload also
+preserves the active view while rebinding it to the latest catalog and source revision.
+
+Environment `healthChecks` are ordered, unique references to Request resources. `h` prepares and runs
+those requests against the selected Environment through the normal assertion, safety, artifact,
+and reporting pipeline. The latest safe health summary remains inline and completion is announced
+as a contextual toast; neither surface contains response bodies, exception text, or secrets. A
+probe remains owned by its exact Environment revision when tree selection changes, so returning to
+that row restores its loading/result state and cannot start a duplicate while it is active.
 
 ## Compare
 

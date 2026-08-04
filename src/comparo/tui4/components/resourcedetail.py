@@ -22,7 +22,7 @@ from comparo.tui4.components.panel import Panel
 from comparo.tui4.components.resourceactions import ResourceActionBar
 from comparo.tui4.components.resources import BaseKindResourceDetails
 from comparo.tui4.components.resources import resource_widget
-from comparo.tui4.components.resources.project import ProjectDependencyGraph
+from comparo.tui4.components.resources.shared import ResourceDependencyGraph
 from comparo.tui4.components.separator import Separator
 from comparo.tui4.components.table import Column
 from comparo.tui4.components.table import Record
@@ -246,7 +246,7 @@ class ResourceDetailOverview(Widget):
             yield Panel(Hint("Select a resource."), title="Overview")
             return
         children: list[Widget] = []
-        if detail.entry.summary.coordinate.kind != "Project":
+        if detail.entry.summary.coordinate.kind not in {"Project", "Environment"}:
             children.extend(
                 (
                     ResourceActionBar(detail.actions),
@@ -270,13 +270,13 @@ class ResourceDetailOverview(Widget):
         if detail.representation is ResourceRepresentation.RESOLVED:
             return ResolvedRepresentation(detail)
         if detail.representation is ResourceRepresentation.DEPENDENCIES:
-            return ProjectDependencyGraph(detail.entry)
+            return ResourceDependencyGraph(detail.entry)
         return OverviewRepresentation(detail)
 
     @staticmethod
     def _hint(detail: ResourceDetail) -> str:
         """Return the compact representation hint for the panel border."""
-        if detail.entry.summary.coordinate.kind != "Project":
+        if detail.entry.summary.coordinate.kind not in {"Project", "Environment"}:
             return detail.representation.value
         if detail.representation is ResourceRepresentation.AUTHORED:
             return "source"

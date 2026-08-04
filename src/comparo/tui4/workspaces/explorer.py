@@ -15,6 +15,7 @@ from textual.containers import Horizontal
 from textual.reactive import reactive
 
 from comparo.application import SourceInspectionError
+from comparo.tui4.backend import HealthCheckBatch
 from comparo.tui4.backend import ResolvedFieldBatch
 from comparo.tui4.bindings import explorer_bindings
 from comparo.tui4.components.explorernavigator import ExplorerNavigator
@@ -24,9 +25,12 @@ from comparo.tui4.models.explorer import ExplorerCatalog
 from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.explorer import build_catalog
 from comparo.tui4.models.explorer import select_execution_environment
+from comparo.tui4.models.resource import EnvironmentHealthCheckResult
+from comparo.tui4.models.resource import InspectionPhase
 from comparo.tui4.models.resource import ResolvedResourceView
 from comparo.tui4.models.resource import ResourceActionId
 from comparo.tui4.models.resource import ResourceDetail
+from comparo.tui4.models.resource import ResourceInspection
 from comparo.tui4.models.resource import ResourceOverviewMode
 from comparo.tui4.models.resource import ResourceRepresentation
 from comparo.tui4.models.resource import bind_execution_environment
@@ -40,11 +44,14 @@ from comparo.tui4.models.resource import loaded_resolved
 from comparo.tui4.models.resource import loading_authored
 from comparo.tui4.models.resource import loading_effective
 from comparo.tui4.models.resource import loading_resolved
+from comparo.tui4.models.resource import resolution_environment
 from comparo.tui4.models.resource import select_representation
 from comparo.tui4.models.resource import toggle_overview_mode
 from comparo.tui4.models.resource import unavailable_resolved
-from comparo.tui4.models.resource_presenters import project_resolution_paths
-from comparo.tui4.models.resource_presenters import project_resolved_fields
+from comparo.tui4.models.resource import with_health_check
+from comparo.tui4.models.resource_presenters import environment_health_check_targets
+from comparo.tui4.models.resource_presenters import resolved_fields
+from comparo.tui4.models.resource_presenters import resource_resolution_paths
 from comparo.tui4.types import ComparoScreen
 
 from .base import Workspace
@@ -53,7 +60,7 @@ if TYPE_CHECKING:
     from comparo.application import AuthoredResourceWindow
     from comparo.application import EffectiveResourceWindow
     from comparo.application import ProjectWorkspaceResult
-    from comparo.application.plan_inspection_identity import ResourceCoordinate
+    from comparo.application import ResourceCoordinate
 
 
 class _CompareOwner(Protocol):
@@ -77,6 +84,13 @@ class ExplorerWorkspace(Workspace):
     selected: reactive[str | None] = reactive(None, init=False)
     detail: reactive[ResourceDetail | None] = reactive(None, init=False)
     execution_environment: reactive[ResourceCoordinate | None] = reactive(None, init=False)
+    _health: dict[
+        str,
+        tuple[
+            tuple[ResourceCoordinate, ...],
+            ResourceInspection[EnvironmentHealthCheckResult],
+        ],
+    ]
 
     # ------------------------------------------------------------------ layout
 
@@ -102,6 +116,8 @@ class ExplorerWorkspace(Workspace):
         """Load the project catalog."""
         self._load_generation = 0
         self._resource_generation = 0
+        self._resolution_generation = 0
+        self._health = {}
         self.action_reload()
 
     def action_reload(self) -> None:
@@ -136,27 +152,75 @@ class ExplorerWorkspace(Workspace):
     # ------------------------------------------------------------------- state
 
     def watch_catalog(self) -> None:
-        """Feed the navigator and drop vanished selections."""
+        """Feed navigation and rehydrate an active view from the new catalog revision."""
         catalog = self.catalog
+        selection_rebound = False
+        if catalog is not None:
+            self._health = {
+                key: record
+                for key, record in self._health.items()
+                if key in catalog.entries
+                and environment_health_check_targets(catalog.entries[key]) == record[0]
+            }
         if (
             self.selected is not None
             and catalog is not None
             and self.selected not in catalog.entries
         ):
-            self.selected = None
-            self.detail = None
+            previous = None if self.detail is None else self.detail.entry.summary.coordinate
+            replacement = next(
+                (
+                    entry
+                    for entry in catalog.entries.values()
+                    if previous is not None
+                    and entry.summary.coordinate.namespace == previous.namespace
+                    and entry.summary.coordinate.kind == previous.kind
+                    and entry.summary.coordinate.resource_id == previous.resource_id
+                ),
+                None,
+            )
+            if replacement is None:
+                self.selected = None
+                self.detail = None
+            else:
+                self.selected = replacement.key
+                selection_rebound = True
         self.query_one(ExplorerNavigator).catalog = catalog
+        if (
+            not selection_rebound
+            and catalog is not None
+            and self.selected is not None
+            and self.selected in catalog.entries
+            and self.detail is not None
+        ):
+            representation = self.detail.representation
+            overview_mode = self.detail.overview_mode
+            self._resource_generation += 1
+            self._resolution_generation += 1
+            self._select_entry(catalog.entries[self.selected], representation, overview_mode)
 
     def watch_detail(self) -> None:
         """Feed the overview."""
         self.query_one(ResourceDetailOverview).detail = self.detail
 
     def watch_execution_environment(self) -> None:
-        """Reflect the shared context in the tree and invalidate contextual values."""
-        self._resource_generation += 1
+        """Reflect the shared context while preserving the active resource view."""
         self.query_one(ExplorerNavigator).execution_environment = self.execution_environment
-        if self.detail is not None:
-            self.detail = bind_execution_environment(self.detail, self.execution_environment)
+        detail = self.detail
+        if detail is None:
+            return
+        previous_environment = resolution_environment(detail)
+        rebound = bind_execution_environment(detail, self.execution_environment)
+        self.detail = rebound
+        current_environment = resolution_environment(rebound)
+        if previous_environment != current_environment:
+            self._resolution_generation += 1
+        if (
+            rebound.overview_mode is ResourceOverviewMode.RESOLVED
+            and current_environment is not None
+            and previous_environment != current_environment
+        ):
+            self._load_resolved_overview(rebound)
 
     # --------------------------------------------------------------- selection
 
@@ -167,8 +231,14 @@ class ExplorerWorkspace(Workspace):
         self.selected = event.entry.key
 
     def watch_selected(self) -> None:
-        """Project the selected catalog entry into the detail column."""
+        """Project the selection while retaining the Explorer's active view."""
+        previous = self.detail
+        representation = (
+            ResourceRepresentation.OVERVIEW if previous is None else previous.representation
+        )
+        overview_mode = ResourceOverviewMode.RAW if previous is None else previous.overview_mode
         self._resource_generation += 1
+        self._resolution_generation += 1
         if self.catalog is None or self.selected is None:
             self.detail = None
             self.app.refresh_bindings()
@@ -178,8 +248,46 @@ class ExplorerWorkspace(Workspace):
             self.detail = None
             self.app.refresh_bindings()
             return
-        self.detail = initial_detail(entry, self.execution_environment)
+        self._select_entry(entry, representation, overview_mode)
         self.app.refresh_bindings()
+
+    def _select_entry(
+        self,
+        entry: ResourceEntry,
+        representation: ResourceRepresentation,
+        overview_mode: ResourceOverviewMode,
+    ) -> None:
+        """Build one exact detail row and restore the workspace-owned view."""
+        detail = initial_detail(entry, self.execution_environment)
+        record = self._health.get(entry.key)
+        if record is not None and record[0] == environment_health_check_targets(entry):
+            detail = with_health_check(detail, record[1])
+        self.detail = detail
+        self._restore_resource_view(representation, overview_mode)
+
+    def _restore_resource_view(
+        self,
+        representation: ResourceRepresentation,
+        overview_mode: ResourceOverviewMode,
+    ) -> None:
+        """Apply the prior workspace view to a newly selected resource."""
+        detail = self.detail
+        if detail is None:
+            return
+        if representation is ResourceRepresentation.AUTHORED:
+            self._apply_resource_action(ResourceActionId.AUTHORED)
+            return
+        if representation is ResourceRepresentation.EFFECTIVE:
+            self._apply_resource_action(ResourceActionId.EFFECTIVE)
+            return
+        if representation is ResourceRepresentation.DEPENDENCIES:
+            self.detail = select_representation(detail, ResourceRepresentation.DEPENDENCIES)
+            return
+        if representation is ResourceRepresentation.RESOLVED:
+            self.detail = select_representation(detail, ResourceRepresentation.RESOLVED)
+            return
+        if overview_mode is ResourceOverviewMode.RESOLVED:
+            self._load_resolved_overview(detail)
 
     # --------------------------------------------------------- resource views
 
@@ -300,6 +408,14 @@ class ExplorerWorkspace(Workspace):
             and self.detail.key == key
         )
 
+    def _is_current_resolution(self, generation: int, key: str) -> bool:
+        """Check the latest selection/context generation for resolved output."""
+        return (
+            generation == self._resolution_generation
+            and self.detail is not None
+            and self.detail.key == key
+        )
+
     # ------------------------------------------------------------------ filter
 
     def action_focus_filter(self) -> None:
@@ -312,13 +428,27 @@ class ExplorerWorkspace(Workspace):
 
     @override
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Expose Project-only view bindings only for a selected Project."""
-        if action in {"project_view", "toggle_project_resolution"}:
+        """Expose contextual resource commands only when their capability exists."""
+        if action == "resource_view":
+            return self.detail is not None
+        if action == "toggle_resource_resolution":
             detail = self.detail
-            return detail is not None and detail.entry.summary.coordinate.kind == "Project"
+            return (
+                detail is not None
+                and resolution_environment(detail) is not None
+                and bool(resource_resolution_paths(detail.entry))
+            )
         if action == "set_execution_environment":
             detail = self.detail
             return detail is not None and detail.entry.summary.coordinate.kind == "Environment"
+        if action == "run_health_check":
+            detail = self.detail
+            return (
+                detail is not None
+                and detail.entry.summary.coordinate.kind == "Environment"
+                and detail.health.phase is not InspectionPhase.LOADING
+                and bool(environment_health_check_targets(detail.entry))
+            )
         return super().check_action(action, parameters)
 
     def action_set_execution_environment(self) -> None:
@@ -331,10 +461,10 @@ class ExplorerWorkspace(Workspace):
         """Commit one exact Environment revision through the app-owned state."""
         cast(_CompareOwner, self.app).select_execution_environment(entry.summary.coordinate)
 
-    def action_project_view(self, view: str) -> None:
-        """Select a Project representation without moving focus out of the tree."""
+    def action_resource_view(self, view: str) -> None:
+        """Select a common resource representation without moving tree focus."""
         detail = self.detail
-        if detail is None or detail.entry.summary.coordinate.kind != "Project":
+        if detail is None:
             return
         if view == "overview":
             self.detail = select_representation(detail, ResourceRepresentation.OVERVIEW)
@@ -343,10 +473,10 @@ class ExplorerWorkspace(Workspace):
         elif view == "dependencies":
             self.detail = select_representation(detail, ResourceRepresentation.DEPENDENCIES)
 
-    def action_toggle_project_resolution(self) -> None:
-        """Toggle raw/resolved content inside the Project Overview."""
+    def action_toggle_resource_resolution(self) -> None:
+        """Toggle raw/resolved content inside a kind-specific Overview."""
         detail = self.detail
-        if detail is None or detail.entry.summary.coordinate.kind != "Project":
+        if detail is None:
             return
         if detail.overview_mode is ResourceOverviewMode.RESOLVED:
             self.detail = toggle_overview_mode(detail)
@@ -354,28 +484,32 @@ class ExplorerWorkspace(Workspace):
         if detail.resolved.value is not None:
             self.detail = toggle_overview_mode(detail)
             return
-        environment = detail.execution_environment
+        self._load_resolved_overview(detail)
+
+    def _load_resolved_overview(self, detail: ResourceDetail) -> None:
+        """Load the selected resource's masked overlay in its proper context."""
+        environment = resolution_environment(detail)
         if environment is None:
             self.detail = toggle_overview_mode(detail)
             return
-        paths = project_resolution_paths(detail.entry)
+        paths = resource_resolution_paths(detail.entry)
         if not paths:
             self.detail = unavailable_resolved(
                 detail,
-                "No project-level variables or secrets require resolution.",
+                "This resource has no fields that require resolution.",
             )
             return
         self.detail = loading_resolved(detail)
-        self._load_project_resolved(
-            self._resource_generation,
+        self._load_resource_resolved(
+            self._resolution_generation,
             detail.key,
             detail.entry.summary.coordinate,
             environment,
             paths,
         )
 
-    @work(exclusive=True, group="project-resolution")
-    async def _load_project_resolved(
+    @work(exclusive=True, group="resource-resolution")
+    async def _load_resource_resolved(
         self,
         generation: int,
         key: str,
@@ -383,7 +517,7 @@ class ExplorerWorkspace(Workspace):
         environment: ResourceCoordinate,
         paths: tuple[tuple[str, ...], ...],
     ) -> None:
-        """Load one masked Project field batch without blocking the event loop."""
+        """Load one masked field batch without blocking the event loop."""
         try:
             result = await self.backend.inspect_resolved_fields(resource, environment, paths)
         except Exception:  # noqa: BLE001 - never expose source-bearing adapter details
@@ -399,16 +533,16 @@ class ExplorerWorkspace(Workspace):
         result: ResolvedFieldBatch,
     ) -> None:
         """Apply a resolved batch only to its exact selection and context."""
-        if not self._is_current_resource(generation, key):
+        if not self._is_current_resolution(generation, key):
             return
         detail = self.detail
-        if detail is None or detail.execution_environment != environment:
+        if detail is None or resolution_environment(detail) != environment:
             return
         if result.values is None or result.occurrence is None:
             code = result.diagnostics[0] if result.diagnostics else "internal"
             self.detail = failed_resolved(detail, code)
             return
-        projected = project_resolved_fields(result.values)
+        projected = resolved_fields(result.values)
         occurrence = result.occurrence
         self.detail = loaded_resolved(
             detail,
@@ -431,8 +565,91 @@ class ExplorerWorkspace(Workspace):
         code: str,
     ) -> None:
         """Apply only a closed resolved-inspection failure code."""
-        if not self._is_current_resource(generation, key):
+        if not self._is_current_resolution(generation, key):
             return
         detail = self.detail
-        if detail is not None and detail.execution_environment == environment:
+        if detail is not None and resolution_environment(detail) == environment:
             self.detail = failed_resolved(detail, code)
+
+    def action_run_health_check(self) -> None:
+        """Run the selected Environment's declared probes through normal execution."""
+        detail = self.detail
+        if detail is None or detail.entry.summary.coordinate.kind != "Environment":
+            return
+        requests = environment_health_check_targets(detail.entry)
+        if not requests or detail.health.phase is InspectionPhase.LOADING:
+            return
+        loading = ResourceInspection[EnvironmentHealthCheckResult](phase=InspectionPhase.LOADING)
+        self._health[detail.key] = (requests, loading)
+        self.detail = with_health_check(detail, loading)
+        self.app.refresh_bindings()
+        self._run_health_check(
+            detail.key,
+            detail.entry.summary.coordinate,
+            detail.entry.summary.name or detail.entry.summary.coordinate.resource_id,
+            requests,
+        )
+
+    @work(group="environment-health-check")
+    async def _run_health_check(
+        self,
+        key: str,
+        environment: ResourceCoordinate,
+        environment_name: str,
+        requests: tuple[ResourceCoordinate, ...],
+    ) -> None:
+        """Execute probes without blocking the Textual event loop."""
+        try:
+            result = await self.backend.run_environment_health_checks(environment, requests)
+        except Exception:  # noqa: BLE001 - never expose source-bearing adapter details
+            result = HealthCheckBatch(diagnostics=("health-check.internal",))
+        self._apply_health_check(key, environment_name, requests, result)
+
+    def _apply_health_check(
+        self,
+        key: str,
+        environment_name: str,
+        requests: tuple[ResourceCoordinate, ...],
+        result: HealthCheckBatch,
+    ) -> None:
+        """Retain a terminal probe result independently of tree selection."""
+        if result.value is None:
+            code = result.diagnostics[0] if result.diagnostics else "health-check.internal"
+            inspection = ResourceInspection[EnvironmentHealthCheckResult](
+                phase=InspectionPhase.FAILED,
+                message=code,
+            )
+            self.app.notify(
+                f"The declared health check could not run · {code}",
+                title=f"{environment_name} health check",
+                severity="error",
+                timeout=8,
+                markup=False,
+            )
+        else:
+            value = result.value
+            inspection = ResourceInspection(phase=InspectionPhase.READY, value=value)
+            self.app.notify(
+                (
+                    f"{value.request_count} request(s) · {value.completion} · "
+                    f"gate {value.gate} · run {value.run_id[:8]}…"
+                ),
+                title=f"{environment_name} is {'healthy' if value.healthy else 'unhealthy'}",
+                severity="information" if value.healthy else "error",
+                timeout=5 if value.healthy else 8,
+                markup=False,
+            )
+        current_entry = None if self.catalog is None else self.catalog.entries.get(key)
+        if (
+            current_entry is not None
+            and environment_health_check_targets(current_entry) == requests
+        ):
+            self._health[key] = (requests, inspection)
+        detail = self.detail
+        if (
+            detail is not None
+            and detail.key == key
+            and environment_health_check_targets(detail.entry) == requests
+        ):
+            self.detail = with_health_check(detail, inspection)
+        self.app.refresh_bindings()
