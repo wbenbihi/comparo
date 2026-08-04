@@ -128,6 +128,26 @@ def test_compiler_links_all_reference_shapes_and_normalizes_directives() -> None
     assert "literal-secret" not in repr(project.project)
 
 
+def test_environment_health_checks_reject_duplicate_request_references() -> None:
+    """One declared probe must map to exactly one planned health subject."""
+    result = _compile(
+        "---\n".join(
+            (
+                _valid_project(),
+                _document(
+                    "Environment",
+                    "local",
+                    "{baseUrl: 'http://localhost', healthChecks: "
+                    "[{$use: Request/health}, {$use: Request/health}]}",
+                ),
+                _document("Request", "health", "{request: {method: GET, endpoint: /health}}"),
+            )
+        )
+    )
+
+    assert _codes(result).count("configuration.reference.duplicate") == 1
+
+
 def test_compiler_supports_remote_and_inline_schemas_without_fetching() -> None:
     remote = _compile(
         "---\n".join(

@@ -167,7 +167,8 @@
               "items": {
                 "$ref": "#/$defs/resourceUse"
               },
-              "type": "array"
+              "type": "array",
+              "uniqueItems": true
             },
             "proxy": {
               "$ref": "#/$defs/resolvableValue"

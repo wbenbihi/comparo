@@ -47,6 +47,18 @@ def test_generated_schema_covers_every_supported_kind_and_strict_envelope() -> N
     assert checked_in.read_text(encoding="utf-8") == render_v1alpha1_schema()
 
 
+def test_environment_health_check_schema_rejects_duplicate_requests() -> None:
+    """Keep the generated editor contract aligned with compiler selection semantics."""
+    definitions = cast("dict[str, object]", generate_v1alpha1_schema()["$defs"])
+    environment = cast("dict[str, object]", definitions[ResourceKind.ENVIRONMENT.value])
+    properties = cast("dict[str, object]", environment["properties"])
+    spec = cast("dict[str, object]", properties["spec"])
+    spec_properties = cast("dict[str, object]", spec["properties"])
+    health_checks = cast("dict[str, object]", spec_properties["healthChecks"])
+
+    assert health_checks["uniqueItems"] is True
+
+
 @pytest.mark.parametrize(
     ("mode", "inline"),
     [
@@ -106,6 +118,15 @@ def test_structured_field_schema_rejects_incoherent_members() -> None:
             mode=FieldMode.STATIC,
             fields=(FieldSchema(name="nested", mode=FieldMode.STATIC),),
         )
+    with pytest.raises(TypeError, match="flags"):
+        FieldSchema(
+            name="field",
+            mode=FieldMode.REFERENCE_LIST,
+            reference_kinds=(ResourceKind.VALUE,),
+            unique_items=cast("bool", 1),
+        )
+    with pytest.raises(ValueError, match="reference-list"):
+        FieldSchema(name="field", mode=FieldMode.STATIC, unique_items=True)
 
 
 def test_migration_is_identity_for_v1alpha1_and_explicitly_refuses_prototype() -> None:

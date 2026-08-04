@@ -75,6 +75,7 @@ _REFERENCE_SHAPE = DiagnosticCode(value="configuration.reference.shape")
 _REFERENCE_MISSING = DiagnosticCode(value="configuration.reference.missing")
 _REFERENCE_KIND = DiagnosticCode(value="configuration.reference.kind")
 _REFERENCE_QUALIFICATION = DiagnosticCode(value="configuration.reference.qualification")
+_REFERENCE_DUPLICATE = DiagnosticCode(value="configuration.reference.duplicate")
 _REFERENCE_CYCLE = DiagnosticCode(value="configuration.reference.cycle")
 _INLINE_FORBIDDEN = DiagnosticCode(value="configuration.reference.inline-forbidden")
 
@@ -495,9 +496,29 @@ class _Compiler:
         if type(node) is not SequenceNode:
             self.diagnostics.append(_issue(_REFERENCE_SHAPE, node.span))
             return CanonicalArray(items=())
+        self._validate_reference_list_uniqueness(field, node)
         return CanonicalArray(
             items=tuple(self._compile_binding(field, item, owner=owner) for item in node.items)
         )
+
+    def _validate_reference_list_uniqueness(
+        self,
+        field: FieldSchema,
+        node: SequenceNode,
+    ) -> None:
+        """Report each repeated linked identity against its first declaration."""
+        if not field.unique_items:
+            return
+        first_spans: dict[str, SourceSpan] = {}
+        for item in node.items:
+            reference = _use_reference(item)
+            if reference is None:
+                continue
+            first = first_spans.get(reference)
+            if first is None:
+                first_spans[reference] = item.span
+                continue
+            self.diagnostics.append(_issue(_REFERENCE_DUPLICATE, item.span, related=(first,)))
 
     def _compile_structured(
         self,

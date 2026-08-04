@@ -111,7 +111,8 @@ Project `defaults` uses the same typed field catalog as `ExecutionProfile`. Envi
 Matrices, and profile attachments are therefore linked and validated rather than hidden inside an
 untyped defaults mapping.
 
-`Environment.spec.healthChecks` is an ordered list of links to `Request` resources. The compiler
+`Environment.spec.healthChecks` is an ordered, duplicate-free list of links to `Request`
+resources. The compiler
 validates those identities and records normal dependency edges; it does not compile an ad-hoc
 probe shape or execute anything. Frontends execute the selected Requests through the same planner,
 safety admission, runtime, assertions, artifact, and report pipeline as any assertions-only run.

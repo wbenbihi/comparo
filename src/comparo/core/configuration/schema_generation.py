@@ -60,7 +60,10 @@ def _field_schema(field: FieldSchema) -> JsonSchema:
             ]
         }
     if field.mode in {FieldMode.REFERENCE_LIST, FieldMode.REFERENCE_UNION_LIST}:
-        return {"type": "array", "items": binding}
+        result: JsonSchema = {"type": "array", "items": binding}
+        if field.unique_items:
+            result["uniqueItems"] = True
+        return result
     return binding
 
 

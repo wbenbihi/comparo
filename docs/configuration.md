@@ -312,7 +312,7 @@ A target the requests run against.
 | `timeout` | resolvable value | no | Default timeout policy, replaceable by a Request. |
 | `tls` | static value | no | Environment-only TLS policy. |
 | `proxy` | resolvable value | no | Environment-only proxy policy. |
-| `healthChecks` | list of Request references | no | Normal Requests executed as one Environment health run. |
+| `healthChecks` | unique list of Request references | no | Normal Requests executed as one Environment health run. |
 | `safety` | SafetyProfile reference or inline profile | no | Environment-specific safety restrictions. |
 | `redaction` | RedactionProfile reference or inline profile | no | Environment-specific redaction attachment. |
 | `artifacts` | ArtifactProfile reference or inline profile | no | Environment-specific artifact attachment. |
@@ -339,7 +339,8 @@ spec:
     - $use: Request/health
 ```
 
-There is deliberately no separate health-check request language. Each `healthChecks` entry links
+There is deliberately no separate health-check request language. Each unique `healthChecks` entry
+links
 to a normal `Request`, so endpoint resolution, headers, auth, safety, assertions, redaction,
 artifact persistence, and Reports use the same contracts as every other execution. A frontend may
 run all declared references as one assertions-only run for that Environment. A transport failure,

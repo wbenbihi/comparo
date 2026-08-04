@@ -224,3 +224,4 @@ def test_environment_health_checks_are_typed_request_references() -> None:
     assert health_checks.mode is FieldMode.REFERENCE_LIST
     assert health_checks.reference_kinds == (ResourceKind.REQUEST,)
     assert not health_checks.inline
+    assert health_checks.unique_items

@@ -33,6 +33,7 @@ class FieldSchema(msgspec.Struct, frozen=True, kw_only=True):
     required: bool = False
     reference_kinds: tuple[ResourceKind, ...] = ()
     inline: bool = False
+    unique_items: bool = False
     fields: tuple[FieldSchema, ...] = ()
 
     def __post_init__(self) -> None:
@@ -41,7 +42,7 @@ class FieldSchema(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("field schema name must be non-empty text")
         if type(self.mode) is not FieldMode:
             raise TypeError("field schema mode must be a FieldMode")
-        if type(self.required) is not bool or type(self.inline) is not bool:
+        if any(type(flag) is not bool for flag in (self.required, self.inline, self.unique_items)):
             raise TypeError("field schema flags must be booleans")
         if type(self.reference_kinds) is not tuple or any(
             type(kind) is not ResourceKind for kind in self.reference_kinds
@@ -61,6 +62,11 @@ class FieldSchema(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("reference field modes and kinds must be declared together")
         if self.inline and len(self.reference_kinds) != 1:
             raise ValueError("inline reference fields must declare exactly one resource kind")
+        if self.unique_items and self.mode not in {
+            FieldMode.REFERENCE_LIST,
+            FieldMode.REFERENCE_UNION_LIST,
+        }:
+            raise ValueError("unique items are only valid for reference-list fields")
         if (self.mode is FieldMode.STRUCTURED) != bool(self.fields):
             raise ValueError("structured field modes and member fields must be declared together")
 
@@ -97,6 +103,7 @@ def _field(
     required: bool = False,
     kinds: tuple[ResourceKind, ...] = (),
     inline: bool = False,
+    unique_items: bool = False,
     fields: tuple[FieldSchema, ...] = (),
 ) -> FieldSchema:
     return FieldSchema(
@@ -105,6 +112,7 @@ def _field(
         required=required,
         reference_kinds=kinds,
         inline=inline,
+        unique_items=unique_items,
         fields=fields,
     )
 
@@ -184,6 +192,7 @@ RESOURCE_SCHEMAS: tuple[ResourceSchema, ...] = (
                 "healthChecks",
                 FieldMode.REFERENCE_LIST,
                 kinds=(ResourceKind.REQUEST,),
+                unique_items=True,
             ),
             _field(
                 "safety", FieldMode.REFERENCE, kinds=(ResourceKind.SAFETY_PROFILE,), inline=True
