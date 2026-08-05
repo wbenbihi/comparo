@@ -18,12 +18,22 @@ from comparo.application import inspect_project_workspace
 from comparo.tui4.app import ComparoApp
 from comparo.tui4.backend import TuiBackend
 from comparo.tui4.components.resources import resource_widget
+from comparo.tui4.components.resources.matrix import MatrixCasesBody
 from comparo.tui4.components.resources.matrix import MatrixContextStrip
+from comparo.tui4.components.resources.matrix import MatrixDefinitionBody
+from comparo.tui4.components.resources.matrix import MatrixPlanBody
 from comparo.tui4.components.resources.matrix import MatrixResourceDetails
+from comparo.tui4.components.resources.matrix import MatrixUsageBody
+from comparo.tui4.components.resources.schema import SchemaCompositionBody
 from comparo.tui4.components.resources.schema import SchemaContextStrip
+from comparo.tui4.components.resources.schema import SchemaPropertiesBody
 from comparo.tui4.components.resources.schema import SchemaResourceDetails
+from comparo.tui4.components.resources.schema import SchemaUsageBody
 from comparo.tui4.components.resources.value import ValueContextStrip
+from comparo.tui4.components.resources.value import ValueExpressionBody
+from comparo.tui4.components.resources.value import ValueInputsBody
 from comparo.tui4.components.resources.value import ValueResourceDetails
+from comparo.tui4.components.resources.value import ValueUsageBody
 from comparo.tui4.components.table import Table
 from comparo.tui4.components.typography import Hint
 from comparo.tui4.models.explorer import ExplorerCatalog
@@ -235,7 +245,7 @@ def test_backend_reuses_compare_planning_and_masked_resolution_for_resource_kind
     asyncio.run(inspect())
 
 
-def test_dedicated_kind_widgets_use_native_tabs_and_restore_sections() -> None:
+def test_dedicated_kind_widgets_render_all_resource_sections_without_tabs() -> None:
     catalog = _catalog()
     matrix_entry = _entry(catalog, "Matrix", "audiences")
     schema_entry = _entry(catalog, "Schema", "catalog-response")
@@ -263,9 +273,9 @@ def test_dedicated_kind_widgets_use_native_tabs_and_restore_sections() -> None:
     class ResourceKindsApp(App[None]):
         @override
         def compose(self) -> ComposeResult:
-            yield resource_widget(matrix_detail, section="matrix-cases")
-            yield resource_widget(schema_detail, section="schema-composition")
-            yield resource_widget(value_detail, section="value-inputs")
+            yield resource_widget(matrix_detail)
+            yield resource_widget(schema_detail)
+            yield resource_widget(value_detail)
 
     async def inspect() -> None:
         app = ResourceKindsApp()
@@ -276,9 +286,17 @@ def test_dedicated_kind_widgets_use_native_tabs_and_restore_sections() -> None:
             assert len(app.query(MatrixContextStrip)) == 1
             assert len(app.query(SchemaContextStrip)) == 1
             assert len(app.query(ValueContextStrip)) == 1
-            assert app.query_one("#matrix-tabs", TabbedContent).active == "matrix-cases"
-            assert app.query_one("#schema-tabs", TabbedContent).active == "schema-composition"
-            assert app.query_one("#value-tabs", TabbedContent).active == "value-inputs"
+            assert len(app.query(MatrixDefinitionBody)) == 1
+            assert len(app.query(MatrixCasesBody)) == 1
+            assert len(app.query(MatrixPlanBody)) == 1
+            assert len(app.query(MatrixUsageBody)) == 1
+            assert len(app.query(SchemaPropertiesBody)) == 1
+            assert len(app.query(SchemaCompositionBody)) == 1
+            assert len(app.query(SchemaUsageBody)) == 1
+            assert len(app.query(ValueExpressionBody)) == 1
+            assert len(app.query(ValueInputsBody)) == 1
+            assert len(app.query(ValueUsageBody)) == 1
+            assert len(app.query(TabbedContent)) == 0
 
     asyncio.run(inspect())
 
@@ -292,7 +310,7 @@ def test_dotted_display_paths_never_become_datatable_identity(tmp_path: Path) ->
         @override
         def compose(self) -> ComposeResult:
             yield resource_widget(schema)
-            yield resource_widget(value, section="value-inputs")
+            yield resource_widget(value)
 
     async def inspect() -> None:
         app = CollisionApp()
@@ -345,7 +363,7 @@ def test_matrix_plan_copy_tracks_resolution_lifecycle() -> None:
     class LoadingMatrixApp(App[None]):
         @override
         def compose(self) -> ComposeResult:
-            yield resource_widget(loading, section="matrix-plan")
+            yield resource_widget(loading)
 
     async def inspect() -> None:
         app = LoadingMatrixApp()

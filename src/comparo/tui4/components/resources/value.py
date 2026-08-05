@@ -5,16 +5,14 @@ from typing import ClassVar
 from typing import override
 
 from rich.text import Text
-from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.content import Content
-from textual.widgets import TabbedContent
-from textual.widgets import TabPane
 
 from comparo.tui4.components.badge import Badge
 from comparo.tui4.components.badge import BadgeTone
+from comparo.tui4.components.separator import Separator
 from comparo.tui4.components.table import Column
 from comparo.tui4.components.table import Record
 from comparo.tui4.components.table import Table
@@ -31,11 +29,6 @@ from comparo.tui4.theme import style
 from .base import BaseKindResourceDetails
 from .shared import ResourceSettingList
 from .shared import resolution_status
-
-_VALUE_TAB_VALUE = "value-expression"
-_VALUE_TAB_INPUTS = "value-inputs"
-_VALUE_TAB_USAGE = "value-usage"
-_VALUE_TABS = frozenset({_VALUE_TAB_VALUE, _VALUE_TAB_INPUTS, _VALUE_TAB_USAGE})
 
 
 class ValueContextStrip(Horizontal):
@@ -76,7 +69,7 @@ class ValueExpressionBody(Vertical):
         resolved: Mapping[tuple[str, ...], ResolvedResourceField],
     ) -> None:
         """Initialize from the pure Value projection and optional exact overlay."""
-        super().__init__(classes="value-tab-body")
+        super().__init__(classes="value-section-body")
         self._overview = overview
         self._resolved = resolved
 
@@ -98,7 +91,7 @@ class ValueInputsBody(Vertical):
 
     def __init__(self, overview: ValueOverview) -> None:
         """Initialize from immutable Value topology."""
-        super().__init__(classes="value-tab-body")
+        super().__init__(classes="value-section-body")
         self._overview = overview
 
     @override
@@ -128,7 +121,7 @@ class ValueUsageBody(Vertical):
 
     def __init__(self, overview: ValueOverview) -> None:
         """Initialize from immutable Value topology."""
-        super().__init__(classes="value-tab-body")
+        super().__init__(classes="value-section-body")
         self._overview = overview
 
     @override
@@ -171,7 +164,7 @@ class ValueResourceDetails(BaseKindResourceDetails):
 
     @override
     def compose(self) -> ComposeResult:
-        """Render one stable native-tab layout in both raw and resolved modes."""
+        """Render one continuous Value document in raw and resolved modes."""
         overview = value_overview(self.entry)
         yield ValueContextStrip(overview)
         if self.resource.overview_mode is ResourceOverviewMode.RESOLVED:
@@ -179,27 +172,16 @@ class ValueResourceDetails(BaseKindResourceDetails):
                 self.resource,
                 self.entry.summary.name or self.entry.summary.coordinate.resource_id,
             )
-        with TabbedContent(initial=self._active_tab(), id="value-tabs"):
-            yield TabPane(
-                "Value",
-                ValueExpressionBody(overview, self._resolved_fields()),
-                id=_VALUE_TAB_VALUE,
-            )
-            yield TabPane("Inputs", ValueInputsBody(overview), id=_VALUE_TAB_INPUTS)
-            yield TabPane("Usage", ValueUsageBody(overview), id=_VALUE_TAB_USAGE)
-
-    def _active_tab(self) -> str:
-        """Restore only a known Value section."""
-        section = self.initial_section
-        return section if section in _VALUE_TABS else _VALUE_TAB_VALUE
-
-    @on(TabbedContent.TabActivated, "#value-tabs")
-    def on_value_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """Publish native tab selection for cross-recomposition retention."""
-        event.stop()
-        section = event.pane.id
-        if section is not None and section in _VALUE_TABS:
-            self.select_section(section)
+        yield Separator(label="Value", align="left", classes="resource-section-heading")
+        yield ValueExpressionBody(overview, self._resolved_fields())
+        yield Separator(label="Runtime inputs", align="left", classes="resource-section-heading")
+        yield ValueInputsBody(overview)
+        yield Separator(
+            label="Dependencies & usage",
+            align="left",
+            classes="resource-section-heading",
+        )
+        yield ValueUsageBody(overview)
 
     def _resolved_fields(self) -> dict[tuple[str, ...], ResolvedResourceField]:
         """Index exact references and masked resolver fields for the stable layout."""

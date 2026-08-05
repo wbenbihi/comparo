@@ -4,13 +4,10 @@ from typing import ClassVar
 from typing import override
 
 from rich.text import Text
-from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.content import Content
-from textual.widgets import TabbedContent
-from textual.widgets import TabPane
 
 from comparo.tui4.components.badge import Badge
 from comparo.tui4.components.badge import BadgeTone
@@ -26,11 +23,6 @@ from comparo.tui4.theme import style
 
 from .base import BaseKindResourceDetails
 from .shared import ResourceSettingList
-
-_SCHEMA_TAB_PROPERTIES = "schema-properties"
-_SCHEMA_TAB_COMPOSITION = "schema-composition"
-_SCHEMA_TAB_USAGE = "schema-usage"
-_SCHEMA_TABS = frozenset({_SCHEMA_TAB_PROPERTIES, _SCHEMA_TAB_COMPOSITION, _SCHEMA_TAB_USAGE})
 
 
 class SchemaContextStrip(Horizontal):
@@ -66,7 +58,7 @@ class SchemaPropertiesBody(Vertical):
 
     def __init__(self, overview: SchemaOverview) -> None:
         """Initialize from immutable structural metadata."""
-        super().__init__(classes="schema-tab-body")
+        super().__init__(classes="schema-section-body")
         self._overview = overview
 
     @override
@@ -110,7 +102,7 @@ class SchemaCompositionBody(Vertical):
 
     def __init__(self, overview: SchemaOverview) -> None:
         """Initialize from immutable structural metadata."""
-        super().__init__(classes="schema-tab-body")
+        super().__init__(classes="schema-section-body")
         self._overview = overview
 
     @override
@@ -139,7 +131,7 @@ class SchemaUsageBody(Vertical):
 
     def __init__(self, overview: SchemaOverview) -> None:
         """Initialize from immutable dependency metadata."""
-        super().__init__(classes="schema-tab-body")
+        super().__init__(classes="schema-section-body")
         self._overview = overview
 
     @override
@@ -173,34 +165,19 @@ class SchemaResourceDetails(BaseKindResourceDetails):
 
     @override
     def compose(self) -> ComposeResult:
-        """Render Schema anatomy through stable native tabs."""
+        """Render Schema anatomy as one continuous validation document."""
         overview = schema_overview(self.entry)
         yield SchemaContextStrip(overview)
-        with TabbedContent(initial=self._active_tab(), id="schema-tabs"):
-            yield TabPane(
-                "Properties",
-                SchemaPropertiesBody(overview),
-                id=_SCHEMA_TAB_PROPERTIES,
-            )
-            yield TabPane(
-                "Composition",
-                SchemaCompositionBody(overview),
-                id=_SCHEMA_TAB_COMPOSITION,
-            )
-            yield TabPane("Usage", SchemaUsageBody(overview), id=_SCHEMA_TAB_USAGE)
-
-    def _active_tab(self) -> str:
-        """Restore only a known Schema section."""
-        section = self.initial_section
-        return section if section in _SCHEMA_TABS else _SCHEMA_TAB_PROPERTIES
-
-    @on(TabbedContent.TabActivated, "#schema-tabs")
-    def on_schema_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """Publish native tab selection for cross-recomposition retention."""
-        event.stop()
-        section = event.pane.id
-        if section is not None and section in _SCHEMA_TABS:
-            self.select_section(section)
+        yield Separator(label="Properties", align="left", classes="resource-section-heading")
+        yield SchemaPropertiesBody(overview)
+        yield Separator(
+            label="Composition & constraints",
+            align="left",
+            classes="resource-section-heading",
+        )
+        yield SchemaCompositionBody(overview)
+        yield Separator(label="Usage", align="left", classes="resource-section-heading")
+        yield SchemaUsageBody(overview)
 
 
 __all__ = [

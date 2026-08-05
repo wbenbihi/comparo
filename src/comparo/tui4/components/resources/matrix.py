@@ -5,13 +5,10 @@ from typing import ClassVar
 from typing import override
 
 from rich.text import Text
-from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.widgets import Static
-from textual.widgets import TabbedContent
-from textual.widgets import TabPane
 
 from comparo.tui4.components.badge import Badge
 from comparo.tui4.components.badge import BadgeTone
@@ -32,14 +29,6 @@ from comparo.tui4.theme import style
 from .base import BaseKindResourceDetails
 from .shared import ResourceSettingList
 from .shared import resolution_status
-
-_MATRIX_TAB_DEFINITION = "matrix-definition"
-_MATRIX_TAB_CASES = "matrix-cases"
-_MATRIX_TAB_PLAN = "matrix-plan"
-_MATRIX_TAB_USAGE = "matrix-usage"
-_MATRIX_TABS = frozenset(
-    {_MATRIX_TAB_DEFINITION, _MATRIX_TAB_CASES, _MATRIX_TAB_PLAN, _MATRIX_TAB_USAGE}
-)
 
 
 class MatrixContextStrip(Horizontal):
@@ -80,7 +69,7 @@ class MatrixDefinitionBody(Vertical):
         resolved: Mapping[tuple[str, ...], ResolvedResourceField],
     ) -> None:
         """Initialize from the pure Matrix projection."""
-        super().__init__(classes="matrix-tab-body")
+        super().__init__(classes="matrix-section-body")
         self._overview = overview
         self._resolved = resolved
 
@@ -113,7 +102,7 @@ class MatrixCasesBody(Vertical):
         resolved: Mapping[tuple[str, ...], ResolvedResourceField],
     ) -> None:
         """Initialize from the pure Matrix projection."""
-        super().__init__(classes="matrix-tab-body")
+        super().__init__(classes="matrix-section-body")
         self._overview = overview
         self._resolved = resolved
 
@@ -147,7 +136,7 @@ class MatrixPlanBody(Vertical):
 
     def __init__(self, resource: BaseKindResourceDetails) -> None:
         """Retain only the common immutable detail state."""
-        super().__init__(classes="matrix-tab-body")
+        super().__init__(classes="matrix-section-body")
         self._resource = resource.resource
 
     @override
@@ -199,7 +188,7 @@ class MatrixUsageBody(Vertical):
 
     def __init__(self, overview: MatrixOverview) -> None:
         """Initialize from the pure Matrix projection."""
-        super().__init__(classes="matrix-tab-body")
+        super().__init__(classes="matrix-section-body")
         self._overview = overview
 
     @override
@@ -233,7 +222,7 @@ class MatrixResourceDetails(BaseKindResourceDetails):
 
     @override
     def compose(self) -> ComposeResult:
-        """Render one stable native-tab layout in both raw and resolved modes."""
+        """Render one continuous Matrix document in raw and resolved modes."""
         overview = matrix_overview(self.entry)
         resolved = self._resolved_fields()
         plan = (
@@ -249,32 +238,14 @@ class MatrixResourceDetails(BaseKindResourceDetails):
                 self.resource,
                 self.entry.summary.name or self.entry.summary.coordinate.resource_id,
             )
-        with TabbedContent(initial=self._active_tab(), id="matrix-tabs"):
-            yield TabPane(
-                "Definition",
-                MatrixDefinitionBody(overview, resolved),
-                id=_MATRIX_TAB_DEFINITION,
-            )
-            yield TabPane(
-                "Cases",
-                MatrixCasesBody(overview, resolved),
-                id=_MATRIX_TAB_CASES,
-            )
-            yield TabPane("Plan", MatrixPlanBody(self), id=_MATRIX_TAB_PLAN)
-            yield TabPane("Usage", MatrixUsageBody(overview), id=_MATRIX_TAB_USAGE)
-
-    def _active_tab(self) -> str:
-        """Restore only a known Matrix section."""
-        section = self.initial_section
-        return section if section in _MATRIX_TABS else _MATRIX_TAB_DEFINITION
-
-    @on(TabbedContent.TabActivated, "#matrix-tabs")
-    def on_matrix_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """Publish native tab selection for cross-recomposition retention."""
-        event.stop()
-        section = event.pane.id
-        if section is not None and section in _MATRIX_TABS:
-            self.select_section(section)
+        yield Separator(label="Definition", align="left", classes="resource-section-heading")
+        yield MatrixDefinitionBody(overview, resolved)
+        yield Separator(label="Cases", align="left", classes="resource-section-heading")
+        yield MatrixCasesBody(overview, resolved)
+        yield Separator(label="Execution plan", align="left", classes="resource-section-heading")
+        yield MatrixPlanBody(self)
+        yield Separator(label="Usage", align="left", classes="resource-section-heading")
+        yield MatrixUsageBody(overview)
 
     def _resolved_fields(self) -> dict[tuple[str, ...], ResolvedResourceField]:
         """Index exact structural values and masked resolution overlays."""
