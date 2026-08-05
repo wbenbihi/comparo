@@ -15,6 +15,34 @@ spec:
       type: array
 ---
 apiVersion: comparo/v1alpha1
+kind: Matrix
+metadata:
+  id: workflow-regions
+  name: Workflow regions
+  description: Future Scenario-only Matrix used to demonstrate multiple attachments.
+  tags: [matrix, scenario, future]
+spec:
+  cases:
+    - id: europe
+      values: {region: eu}
+    - id: americas
+      values: {region: us}
+---
+apiVersion: comparo/v1alpha1
+kind: Matrix
+metadata:
+  id: workflow-tiers
+  name: Workflow tiers
+  description: Second future Scenario-only Matrix for attachment-count presentation.
+  tags: [matrix, scenario, future]
+spec:
+  cases:
+    - id: free
+      values: {tier: free}
+    - id: pro
+      values: {tier: pro}
+---
+apiVersion: comparo/v1alpha1
 kind: Scenario
 metadata:
   id: catalog-workflow
@@ -22,6 +50,11 @@ metadata:
   description: Future stateful journey visible in Explorer but intentionally not executable yet.
   tags: [scenario, future, unbound]
 spec:
+  parameters:
+    catalogMode: preview
+  matrices:
+    - $use: Matrix/workflow-regions
+    - $use: Matrix/workflow-tiers
   steps:
     - id: check-health
       request: health
@@ -39,6 +72,11 @@ metadata:
 spec:
   classification:
     responseBody: public
+    responseHeaders: [x-private]
+  schemas:
+    allowAny: false
+    sources:
+      - https://schemas.example.test/catalog.json
 ---
 apiVersion: comparo/v1alpha1
 kind: RedactionProfile
@@ -47,7 +85,12 @@ metadata:
   name: Demo redaction
   description: Active project-level sanitization profile for future sensitive response headers.
   tags: [redaction, active, sanitization]
-spec: {}
+spec:
+  rules:
+    - id: private-response-header
+      selector: response.headers:x-private
+      action: remove
+  backstop: true
 ---
 apiVersion: comparo/v1alpha1
 kind: ArtifactProfile
@@ -58,4 +101,11 @@ metadata:
   tags: [artifact, active, capture]
 spec:
   capture:
+    requests: true
+    responses: true
     bodies: true
+    evidence: false
+  storage:
+    persist: always
+    unsafeSource: reject-artifact
+  retention: {}

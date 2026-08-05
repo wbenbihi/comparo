@@ -258,6 +258,8 @@ def _resource_settings(
     entry: ResourceEntry,
     prefix: tuple[str, ...],
     names: frozenset[str] | None = None,
+    *,
+    structural_exact: bool = False,
 ) -> tuple[ResourceSetting, ...]:
     """Group every safe outline field below one configuration namespace."""
     outline = entry.summary.outline
@@ -282,7 +284,7 @@ def _resource_settings(
         details = tuple(
             ResourceSettingDetail(
                 path=field.path[len(root_path) :],
-                value=field.value,
+                value=_field_display(field) if structural_exact else field.value,
                 category=field.category,
             )
             for field in fields
@@ -292,12 +294,28 @@ def _resource_settings(
             ResourceSetting(
                 path=root_path,
                 name=name,
-                value=root.value,
+                value=_field_display(root) if structural_exact else root.value,
                 category=root.category,
                 details=details,
             )
         )
     return tuple(settings)
+
+
+def resource_settings(
+    entry: ResourceEntry,
+    prefix: tuple[str, ...] = (),
+    names: frozenset[str] | None = None,
+    *,
+    structural_exact: bool = False,
+) -> tuple[ResourceSetting, ...]:
+    """Expose grouped safe settings for independent kind-specific presenters."""
+    return _resource_settings(
+        entry,
+        prefix,
+        names,
+        structural_exact=structural_exact,
+    )
 
 
 def project_overview(entry: ResourceEntry) -> ProjectOverview:
@@ -488,16 +506,30 @@ def compiled_exact_fields(entry: ResourceEntry) -> tuple[ResolvedResourceField, 
 def resource_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
     """Select bounded expression roots that the kind-specific Overview displays."""
     kind = entry.summary.coordinate.kind
-    if kind == "Environment":
-        return _environment_resolution_paths(entry)
-    if kind == "Request":
-        return _request_resolution_paths(entry)
-    if kind == "Matrix":
-        return _matrix_resolution_paths(entry)
+    dedicated = {
+        "Environment": _environment_resolution_paths,
+        "Request": _request_resolution_paths,
+        "Matrix": _matrix_resolution_paths,
+    }.get(kind)
+    if dedicated is not None:
+        return dedicated(entry)
     if kind == "Value":
         return (("value",),) if _field_at(entry, ("value",)) is not None else ()
-    if kind != "Project":
-        return ()
+    roots = {
+        # Scenario steps remain an open generic grammar. Resolving their root could disclose
+        # arbitrary payload fields, so only the closed parameter namespace is inspectable.
+        "Scenario": ("parameters",),
+        "ExecutionProfile": ("parameters", "variables", "secrets"),
+        "AssertionProfile": ("parameters",),
+        "DiffProfile": ("parameters",),
+    }.get(kind)
+    if roots is not None:
+        return _available_resolution_roots(entry, roots)
+    return _project_resolution_paths(entry) if kind == "Project" else ()
+
+
+def _project_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
+    """Select Project namespaces that participate in execution-context resolution."""
     overview = project_overview(entry)
     paths: list[tuple[str, ...]] = []
     if overview.variables:
@@ -517,6 +549,20 @@ def resource_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ..
             if path in available
         )
     return tuple(dict.fromkeys(paths))
+
+
+def _available_resolution_roots(
+    entry: ResourceEntry,
+    names: tuple[str, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """Return declared expression roots in one stable schema-owned order."""
+    available = {field.path for field in _outline_fields(entry)}
+    return tuple((name,) for name in names if (name,) in available)
+
+
+def resource_overview_supports_resolution(entry: ResourceEntry) -> bool:
+    """Return whether resolved Overview can add a masked value or typed structural overlay."""
+    return bool(resource_resolution_paths(entry) or compiled_exact_fields(entry))
 
 
 def _environment_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
@@ -583,9 +629,22 @@ def resource_resolution_subject_id(entry: ResourceEntry) -> str | None:
 
 def resource_resolution_subject_ids(entry: ResourceEntry) -> tuple[str, ...]:
     """Return unique executable consumer IDs in declared relationship order."""
+    kind = entry.summary.coordinate.kind
+    if kind in {"Request", "Scenario"}:
+        return (entry.summary.coordinate.resource_id,)
     outline = entry.summary.outline
     if outline is None:
         return ()
+    if kind == "ExecutionProfile":
+        return tuple(
+            dict.fromkeys(
+                relationship.target.resource_id
+                for relationship in outline.relationships
+                if relationship.origin == "link"
+                and relationship.path[:1] == ("subjects",)
+                and relationship.target.kind in {"Request", "Scenario"}
+            )
+        )
     return tuple(
         dict.fromkeys(
             relationship.target.resource_id
@@ -740,6 +799,22 @@ def _setting_at(
         value=_field_display(root) if structural_exact else root.value,
         category=root.category,
         details=details,
+    )
+
+
+def resource_setting(
+    entry: ResourceEntry,
+    path: tuple[str, ...],
+    *,
+    name: str | None = None,
+    structural_exact: bool = False,
+) -> ResourceSetting | None:
+    """Expose one exact safe setting subtree to a dedicated presenter."""
+    return _setting_at(
+        entry,
+        path,
+        name=name,
+        structural_exact=structural_exact,
     )
 
 

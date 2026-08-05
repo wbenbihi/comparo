@@ -22,6 +22,7 @@ from comparo.application import EffectiveResourceInspectionRequest
 from comparo.application import EffectiveResourceWindow
 from comparo.application import PlanningOptions
 from comparo.application import PlanOccurrenceInspection
+from comparo.application import ProfileSelectionOverrides
 from comparo.application import ProjectPlanRequest
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ProjectWorkspaceResult
@@ -147,13 +148,31 @@ def _resolved_context_diagnostic(
     execution_ordinal: int,
 ) -> str | None:
     """Validate the complete caller-owned resolved inspection context."""
-    if resource.kind not in {"Project", "Environment", "Request", "Matrix", "Value"} or (
-        environment.kind != "Environment"
-    ):
+    if resource.kind not in {
+        "Project",
+        "Environment",
+        "Request",
+        "Scenario",
+        "Matrix",
+        "Value",
+        "ExecutionProfile",
+        "AssertionProfile",
+        "DiffProfile",
+    } or (environment.kind != "Environment"):
         return "resolution.context.invalid"
     if type(execution_ordinal) is not int or execution_ordinal < 0:
         return "resolution.execution.invalid"
-    if resource.kind in {"Matrix", "Value"} and subject_id is None:
+    if (
+        resource.kind
+        in {
+            "Matrix",
+            "Value",
+            "ExecutionProfile",
+            "AssertionProfile",
+            "DiffProfile",
+        }
+        and subject_id is None
+    ):
         return "resolution.subject.required"
     if subject_id is not None and (
         type(subject_id) is not str
@@ -316,7 +335,9 @@ class TuiBackend:
                     asyncio.to_thread(
                         self._prepare_resolved_context,
                         environment.resource_id,
-                        resource.resource_id if resource.kind == "Request" else subject_id,
+                        resource.kind,
+                        resource.resource_id,
+                        subject_id,
                     )
                 )
             )
@@ -531,9 +552,16 @@ class TuiBackend:
     def _prepare_resolved_context(
         self,
         environment_id: str,
-        request_id: str | None,
+        resource_kind: str,
+        resource_id: str,
+        subject_id: str | None,
     ) -> tuple[ComparePreparationResult, CompareExecutionControls]:
-        """Prepare a single-Environment assertion plan without runtime effects."""
+        """Prepare the exact profile/subject precedence needed by masked inspection."""
+        selected_subject = resource_id if resource_kind in {"Request", "Scenario"} else subject_id
+        profiles = ProfileSelectionOverrides(
+            assertions=(resource_id,) if resource_kind == "AssertionProfile" else None,
+            diffs=(resource_id,) if resource_kind == "DiffProfile" else None,
+        )
         controls = CompareExecutionControls(
             settings=self.execution_settings,
             artifact_root=None,
@@ -542,14 +570,22 @@ class TuiBackend:
         )
         prepared = self.compare.prepare(
             ComparePrepareRequest(
-                intent=CompareIntent.ASSERTION,
+                intent=(
+                    CompareIntent.EXECUTION_PROFILE
+                    if resource_kind == "ExecutionProfile"
+                    else CompareIntent.ASSERTION
+                ),
                 project=ProjectPlanRequest(
                     config=self._workspace_request.config,
                     additional_sources=self._workspace_request.additional_sources,
                     policy=None,
                     options=PlanningOptions(
-                        subjects=() if request_id is None else (request_id,),
+                        execution_profile=(
+                            resource_id if resource_kind == "ExecutionProfile" else None
+                        ),
+                        subjects=() if selected_subject is None else (selected_subject,),
                         environments=(environment_id,),
+                        profiles=profiles,
                     ),
                     invocation_id=uuid4(),
                     run_id=uuid4(),

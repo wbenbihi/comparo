@@ -1,7 +1,7 @@
 # TUI showcase
 
 This deliberately dense local project exercises the current TUI and its awkward states, not only
-the happy path. It contains 40 non-Project resources (41 Explorer entries including the Project),
+the happy path. It contains 44 non-Project resources (45 Explorer entries including the Project),
 17 Requests, all five implemented request-body lowering modes, two independently attached
 Matrices, local/inline/remote Schemas, reusable values, dotenv and file inputs, profiles, an
 intentionally unavailable credential, and one future Scenario.
@@ -24,6 +24,16 @@ Overview uses stable URL, Query, Headers, Cookies, Auth, Body, Runtime, and Cont
 left/right or the mouse to move between them. The active tab survives `r` and selection changes.
 Request selection and composition begin in Compare rather than through Explorer actions.
 
+All other kinds use continuous documents rather than Request-style tabs. Explore the Scenario,
+ExecutionProfile, AssertionProfile, DiffProfile, GateProfile, SafetyProfile, RedactionProfile, and
+ArtifactProfile entries to inspect workflow topology, run selection, rule pipelines, gate
+thresholds, implemented safety restrictions, unsupported/reserved profile fields, sanitization,
+and artifact persistence in one scroll. `structured-response` demonstrates an object selector and
+rule metadata; `asymmetric-migration` keeps baseline and candidate pipelines distinct. Scenario is
+visibly marked as a future non-executable capability and attaches two Scenario-only Matrices so
+its count is meaningful. ExecutionPolicy is deliberately absent because it is operator-owned and
+loaded outside project discovery.
+
 The Request catalog is intentionally broad:
 
 | Request | Explorer case |
@@ -45,8 +55,8 @@ The Request catalog is intentionally broad:
 | `request-local-policies` | schema-supported Request-local safety/redaction/artifact attachments; currently tagged `unsupported-runtime` |
 | `unavailable-credential` | intentional required `$env` failure for the resolved error state |
 
-The fake `demoToken` is committed only to exercise secret masking; it is not a credential. Resolved
-inspection must display it as `<masked>`. The three `.values` files demonstrate isolated declared
+The fake `demoToken` and `releaseToken` values are committed only to exercise secret masking; they
+are not credentials. Resolved inspection must display them as `<masked>`. The three `.values` files demonstrate isolated declared
 dotenv namespaces and contain public fixtures only. The remote Schema remains unbound because
 network acquisition requires an explicit safety decision.
 

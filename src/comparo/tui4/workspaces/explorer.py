@@ -52,6 +52,7 @@ from comparo.tui4.models.resource import unavailable_resolved
 from comparo.tui4.models.resource import with_health_check
 from comparo.tui4.models.resource_presenters import environment_health_check_targets
 from comparo.tui4.models.resource_presenters import resolved_fields
+from comparo.tui4.models.resource_presenters import resource_overview_supports_resolution
 from comparo.tui4.models.resource_presenters import resource_resolution_paths
 from comparo.tui4.models.resource_presenters import resource_resolution_subject_id
 from comparo.tui4.models.resource_presenters import resource_resolution_subject_ids
@@ -434,7 +435,7 @@ class ExplorerWorkspace(Workspace):
             return (
                 detail is not None
                 and resolution_environment(detail) is not None
-                and bool(resource_resolution_paths(detail.entry))
+                and resource_overview_supports_resolution(detail.entry)
             )
         if action == "set_execution_environment":
             detail = self.detail
@@ -499,7 +500,13 @@ class ExplorerWorkspace(Workspace):
                 "This resource has no fields that require resolution.",
             )
             return
-        if detail.entry.summary.coordinate.kind in {"Matrix", "Value"}:
+        if detail.entry.summary.coordinate.kind in {
+            "Matrix",
+            "Value",
+            "ExecutionProfile",
+            "AssertionProfile",
+            "DiffProfile",
+        }:
             subjects = resource_resolution_subject_ids(detail.entry)
             if len(subjects) != 1:
                 message = (

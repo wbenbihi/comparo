@@ -47,7 +47,7 @@ def _demo_request_handler() -> type[BaseHTTPRequestHandler]:
     [
         ("quickstart", 8, 1, 2, 1),
         ("environment-drift", 15, 4, 8, 4),
-        ("tui-showcase", 40, 8, 16, 8),
+        ("tui-showcase", 44, 8, 16, 8),
     ],
 )
 def test_example_projects_compile_plan_and_target_supported_runtime_capabilities(

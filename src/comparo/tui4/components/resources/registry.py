@@ -4,25 +4,39 @@ from comparo.tui4.models.resource import ResourceDetail
 from comparo.tui4.models.resource import ResourcePresentation
 
 from .base import BaseKindResourceDetails
+from .data_profiles import ArtifactProfileResourceDetails
+from .data_profiles import RedactionProfileResourceDetails
+from .data_profiles import SafetyProfileResourceDetails
 from .environment import EnvironmentResourceDetails
+from .evaluation_profiles import AssertionProfileResourceDetails
+from .evaluation_profiles import DiffProfileResourceDetails
+from .evaluation_profiles import GateProfileResourceDetails
+from .execution_policy import ExecutionPolicyResourceDetails
+from .execution_profile import ExecutionProfileResourceDetails
 from .matrix import MatrixResourceDetails
 from .project import ProjectResourceDetails
 from .request import RequestResourceDetails
+from .scenario import ScenarioResourceDetails
 from .schema import SchemaResourceDetails
 from .standard import GenericResourceDetails
-from .standard import ProfileResourceDetails
-from .standard import ScenarioResourceDetails
 from .value import ValueResourceDetails
 
 _REGISTERED_WIDGETS: tuple[type[BaseKindResourceDetails], ...] = (
     ProjectResourceDetails,
     EnvironmentResourceDetails,
     RequestResourceDetails,
+    ScenarioResourceDetails,
     MatrixResourceDetails,
     SchemaResourceDetails,
     ValueResourceDetails,
-    ProfileResourceDetails,
-    ScenarioResourceDetails,
+    ExecutionProfileResourceDetails,
+    AssertionProfileResourceDetails,
+    DiffProfileResourceDetails,
+    GateProfileResourceDetails,
+    SafetyProfileResourceDetails,
+    RedactionProfileResourceDetails,
+    ArtifactProfileResourceDetails,
+    ExecutionPolicyResourceDetails,
 )
 
 

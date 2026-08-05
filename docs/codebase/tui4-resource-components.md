@@ -19,7 +19,8 @@ ExplorerCatalog / ResourceEntry       models/explorer.py
 ResourceDetail lifecycle state        models/resource.py
         │
         ├──► pure kind projections     models/resource_presenters.py
-        │       └── secret-safe fields / Matrix structure
+        │                              models/remaining_resource_presenters.py
+        │       └── secret-safe fields / kind-specific documents
         │
         ▼
 explicit kind widget registry         components/resources/registry.py
@@ -90,9 +91,9 @@ separate key/value block. The active representation is the panel's secondary bor
 
 ### Common inspection contract
 
-Project, Environment, and Request inspection deliberately have no numbered representation bar or
-resource workflow action strip. Their views are workspace bindings, enabled and rendered in the
-footer only while a resource is selected:
+Resource inspection deliberately has no numbered representation bar or resource workflow action
+strip. Common views are workspace bindings, enabled and rendered in the footer only when the
+selected resource can honor them:
 
 | Key | View | Contract |
 | --- | --- | --- |
@@ -112,16 +113,23 @@ rebuilt, and Source is re-read against the new whole-file digest even when only 
 document changed.
 
 `r` does not resolve values in the Explorer process. Raw mode uses the safe resource outline;
-entering resolved mode asks `TuiBackend` for an ephemeral single-Environment assertion
-preparation and calls the application-owned masked batch inspection. For a Request, that
+entering resolved mode asks `TuiBackend` for an ephemeral single-Environment preparation and
+calls the application-owned masked batch inspection. For a Request, that
 preparation explicitly selects only the highlighted Request ID, and the backend verifies both the
 exact Request revision and Environment revision on the returned occurrence before inspecting any
-field. Project and Environment inspection use the Project's default subject only as the execution
-context required by the resolver. The handle is always discarded after success, failure, or
-cancellation. The returned view includes the Environment revision, execution ordinal, cell/trial
-identities, exact field paths, safe node previews, and an explicit incomplete marker when the
-frontend-owned inspection budget is reached. Explorer inspects at most 16 field roots per request,
-64 projected nodes per root, 4 KiB per scalar preview, and an aggregate 4 MiB traversal budget.
+field. ExecutionProfile inspection uses `CompareIntent.EXECUTION_PROFILE`, selects that exact
+profile, and preserves its own parameter/input precedence while constraining the preview to the
+chosen Environment and one unambiguous subject. AssertionProfile and DiffProfile parameter
+inspection similarly installs the exact profile as an invocation override for one explicit
+consumer. Ambiguous consumers produce an unavailable state instead of silently using a Project
+default. Project and Environment inspection use the Project's default subject only as the
+execution context required by the resolver. Scenario execution is unsupported; only its closed
+parameter namespace is eligible for resolution, while generic step payloads never enter a
+resolved batch. The handle is always discarded after success, failure, or cancellation. The
+returned view includes the Environment revision, execution ordinal, cell/trial identities, exact
+field paths, safe node previews, and an explicit incomplete marker when the frontend-owned
+inspection budget is reached. Explorer inspects at most 16 field roots per request, 64 projected
+nodes per root, 4 KiB per scalar preview, and an aggregate 4 MiB traversal budget.
 Additional roots produce a safe partial view rather than failing the entire resolved screen. These
 are display/inspection budgets only; they do not constrain execution or artifact capture. Kind
 widgets overlay those exact paths onto the same
@@ -184,14 +192,22 @@ Current widget families are:
 | `MatrixResourceDetails` | `Matrix` |
 | `SchemaResourceDetails` | `Schema` |
 | `ValueResourceDetails` | `Value` |
-| `ProfileResourceDetails` | Assertion/Diff/Gate/Safety/Redaction/Artifact/Execution profiles and `ExecutionPolicy` |
 | `ScenarioResourceDetails` | `Scenario` |
+| `ExecutionProfileResourceDetails` | `ExecutionProfile` |
+| `AssertionProfileResourceDetails` | `AssertionProfile` |
+| `DiffProfileResourceDetails` | `DiffProfile` |
+| `GateProfileResourceDetails` | `GateProfile` |
+| `SafetyProfileResourceDetails` | `SafetyProfile` |
+| `RedactionProfileResourceDetails` | `RedactionProfile` |
+| `ArtifactProfileResourceDetails` | `ArtifactProfile` |
+| `ExecutionPolicyResourceDetails` | External `ExecutionPolicy` authority catalogs only |
 | `GenericResourceDetails` | Unknown/future kinds |
 
-Kind widgets consume pure projections from `models/resource_presenters.py`; they do not traverse
-compiler objects. Matrix presentation lists declared axes and case collections from the safe
-outline. Expanded execution cells are deliberately a Compare-plan action because multiple Matrix
-attachments, filters, includes/excludes, and invocation overrides affect the real cell set.
+Kind widgets consume pure projections from `models/resource_presenters.py` or
+`models/remaining_resource_presenters.py`; they do not traverse compiler objects. Matrix
+presentation lists declared axes and case collections from the safe outline. Its resolved
+execution-plan section reuses the application planner for one explicit Environment, consumer, and
+occurrence context; it never expands cases in the widget.
 
 The Project widget is intentionally more explicit than the generic field-based widgets. Its two
 comparison cards obtain baseline/candidate names and `local`/`live` locality from the related
@@ -231,6 +247,67 @@ their kind glyph only in resolved mode. Compare owns Request selection and compo
 execution workflow; Explorer does not expose a cross-workspace shortcut or imply a locally
 synthesized effective request.
 
+Request is the only resource inspector that uses tabs. Its tabs correspond to mutually exclusive
+HTTP request parts and benefit from keyboard/mouse switching. Matrix, Schema, Value, Scenario, and
+every profile or policy inspector are continuous documents: all semantic sections remain mounted
+in one scroll, empty sections explain version defaults or missing declarations, and no internal
+tab selection state can hide related configuration.
+
+Scenario is a first-class Explorer section even while execution remains deferred. Its overview
+shows parameters and exact Matrix attachment count, ordered step/request/`after` topology,
+complete safe step structure, evaluation attachments, and usage. The visible warning states that
+this is an authored contract rather than an executable workflow; neither the widget nor the
+planner infers a Request-first implementation. Arbitrary step payload fields remain structural in
+both raw and resolved Overview until the Scenario grammar and runtime are typed.
+
+ExecutionProfile presents its authored selection fragments, execution controls, runtime inputs,
+evaluation/output attachments, and usage. Its context strip labels direct authored subject and
+Environment reference counts and shows an authored trial count only when a positive integer was
+declared. Missing fields are explicitly “inherited at execution”; the presenter never invents an
+effective topology from Project defaults or future CLI/TUI overrides. Resolved parameters,
+variables, and secrets use the exact ExecutionProfile precedence context, with secrets masked.
+
+AssertionProfile and DiffProfile have separate registered widgets over a shared rule-profile
+component. Assertion rows show stable rule ID, structured/shorthand selector summary, operator,
+authored quantifier state, severity, and completeness. Diff rows preserve both baseline and
+candidate selectors and their independent transform/reducer pipelines, then show the shared
+pairing/comparator stage; missing required comparators are labeled missing, not defaulted. Rule
+name/description presence and validated tags are represented without disclosing arbitrary prose.
+Selector path expressions and operation operands remain concealed. Includes, edits, executable
+parameters, and direct consumers remain separate sections. GateProfile presents selected
+severities/roles, fail-closed coverage requirements, and per-severity adverse-fact thresholds
+rather than treating a gate as another rule list.
+
+SafetyProfile separates active inheritance, remote-schema restrictions, response classification,
+planning budget ceilings, and consumers. Network, filesystem, and ambient-environment fields are
+shown only in an `unsupported` section and selected execution fails closed when they are declared.
+It explicitly states that project safety can only restrict the external ExecutionPolicy ceiling.
+RedactionProfile marks selector rules active, patterns unsupported, and backstop reserved/validated
+but not yet represented in runtime policy; exact pattern text is never disclosed. ArtifactProfile
+marks sanitized capture and persistence active while retention remains a reserved empty
+placeholder whose non-empty form fails closed.
+
+These statuses come from `application.profile_capabilities`, the same catalog that supplies
+profile binder allowlists. Tests require that active, reserved, and unsupported groups exactly
+cover every field in each current data-profile schema. A newly admitted field therefore cannot
+silently disappear from the inspector or be described as enforced without an application-contract
+change.
+
+ExecutionPolicy has a dedicated forward-compatible inspector for an operator-authority catalog,
+grouped into planning, HTTP, value sources, and artifact persistence. It is intentionally absent
+from `inspect_project_workspace`: project discovery rejects this operator-owned kind, so the
+ordinary Explorer cannot present a project-controlled policy as authority.
+
+The application outline exposes bounded exact values only through per-kind, per-path grammars.
+Validated rule IDs, literal-free selector summaries, operation identities, positive authored
+execution counts, closed gate fields, classification/schema-source restrictions, redaction
+actions, and implemented artifact controls may be shown. Generic static subtrees are never exact.
+Assertion/diff operands and selector paths, execution parameters/variables/secrets, redaction
+patterns/replacements, unknown nested keys, sensitive-path fields, huge numbers, and long or
+non-printable strings remain concealed. ExecutionPolicy stays shape-only until an external typed
+catalog DTO exists. Encoded-output tests carry canaries through every profile family, asymmetric
+diff stages, generic Scenario steps, and malformed/huge controls.
+
 An Environment may declare ordered `healthChecks` references to `Request` resources. The
 contextual `h` binding is available only when at least one probe is declared and no probe run is
 already active. The backend selects those requests and that Environment in a normal assertion
@@ -265,8 +342,9 @@ through planning rather than adding a Request-first inference rule.
 1. Confirm that `inspect_project_workspace` exposes enough secret-safe structure. Add an
    application inspection DTO if the required information is unavailable; do not import core
    compiler objects into TUI code.
-2. Add a pure presenter in `models/resource_presenters.py`. It accepts `ResourceEntry` and returns
-   immutable fields or a focused immutable projection.
+2. Add a pure presenter in `models/resource_presenters.py` or the focused
+   `models/remaining_resource_presenters.py`. It accepts `ResourceEntry` and returns immutable
+   fields or a focused immutable projection.
 3. Add a widget under `components/resources/`. Keep shared mechanics in the base or reusable
    components and kind semantics in the subclass.
 4. Add the stable kind string to the widget's `KINDS` and the widget class to

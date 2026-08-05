@@ -17,6 +17,31 @@ spec:
       completeness: complete
 ---
 apiVersion: comparo/v1alpha1
+kind: AssertionProfile
+metadata:
+  id: structured-response
+  name: Structured response checks
+  description: Demonstrates object selectors and presentation metadata without exposing operands.
+  tags: [assertion, structured, metadata]
+spec:
+  rules:
+    - id: request-id-present
+      name: Request ID header
+      description: Require at least one request identifier header value.
+      tags: [headers, contract]
+      selector:
+        source: response.headers
+        field:
+          name: x-request-id
+          occurrence: 0
+      operator:
+        name: cardinality
+        minimum: 1
+      quantifier: one
+      severity: warning
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
 kind: DiffProfile
 metadata:
   id: stable-status
@@ -29,6 +54,38 @@ spec:
       selector: response.status
       comparator:
         name: exact
+      severity: blocking
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: asymmetric-migration
+  name: Asymmetric migration
+  description: Compares differently shaped legacy and current response locations.
+  tags: [diff, migration, asymmetric]
+spec:
+  rules:
+    - id: legacy-to-current
+      name: Migrated payload
+      description: Normalize legacy text before comparing it with the current field.
+      tags: [migration, normalization]
+      transforms:
+        - name: normalizeText
+          trim: both
+      baseline:
+        selector:
+          source: response.body
+          view: json
+          path: /legacy
+      candidate:
+        selector:
+          source: response.body
+          view: json
+          path: /current
+        transforms: []
+      pairing: singular
+      comparator: exact
       severity: blocking
       completeness: complete
 ---
@@ -55,7 +112,20 @@ metadata:
   name: Strict gate
   description: Reduce blocking evaluation facts into a release verdict.
   tags: [gate, release]
-spec: {}
+spec:
+  severities: [blocking]
+  environmentRoles: [baseline, candidate, other]
+  requireCompleteRun: true
+  requireAssertionCoverage: true
+  requireDiffCoverage: false
+  thresholds:
+    - severity: blocking
+      violatedRules: 0
+      driftedRules: 0
+      unavailableRules: 0
+      incomparableRules: 0
+      incompleteRules: 0
+      errorRules: 0
 ---
 apiVersion: comparo/v1alpha1
 kind: DiffProfile

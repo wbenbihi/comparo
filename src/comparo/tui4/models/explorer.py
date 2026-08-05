@@ -33,6 +33,7 @@ PROFILE_KINDS = frozenset(
 SECTIONS: tuple[tuple[str, frozenset[str]], ...] = (
     ("Environments", frozenset({"Environment"})),
     ("Requests", frozenset({"Request"})),
+    ("Scenarios", frozenset({"Scenario"})),
     ("Matrices", frozenset({"Matrix"})),
     ("Schemas", frozenset({"Schema"})),
     ("Values", frozenset({"Value"})),

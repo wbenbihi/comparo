@@ -28,6 +28,16 @@ spec:
   candidates:
     - $use: candidate
   trials: 2
+  maximumAttempts: 2
+  failFast: false
+  parameters:
+    releaseLabel: preview
+  secrets:
+    releaseToken: demo-secret-never-use
+  diffs:
+    - $use: stable-status
+  gate:
+    $use: strict
 ---
 apiVersion: comparo/v1alpha1
 kind: ExecutionProfile

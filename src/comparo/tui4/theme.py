@@ -163,6 +163,7 @@ KIND_GLYPHS: dict[str, tuple[str, str]] = {
     "RedactionProfile": (GLYPH_REDACTION, "kind.redaction"),
     "ArtifactProfile": (GLYPH_ARTIFACT, "kind.artifact"),
     "ExecutionProfile": (GLYPH_EXECUTION, "kind.execution"),
+    "ExecutionPolicy": (GLYPH_SAFETY, "kind.safety"),
 }
 _DEFAULT_GLYPH = (GLYPH_UNKNOWN, "muted")
 
