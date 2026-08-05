@@ -166,6 +166,13 @@ from comparo.application.profile_binding import (
 from comparo.application.profile_binding import ProfileBindingResult as ProfileBindingResult
 from comparo.application.profile_binding import RemoteSchemaRestriction as RemoteSchemaRestriction
 from comparo.application.profile_binding import bind_execution_profiles as bind_execution_profiles
+from comparo.application.profile_capabilities import ProfileFieldSupport as ProfileFieldSupport
+from comparo.application.profile_capabilities import (
+    ProfileResourceCapabilities as ProfileResourceCapabilities,
+)
+from comparo.application.profile_capabilities import (
+    profile_resource_capabilities as profile_resource_capabilities,
+)
 from comparo.application.project_outline import (
     ResourceIdentityCoordinate as ResourceIdentityCoordinate,
 )
@@ -478,6 +485,8 @@ __all__ = (
     "ProductionRunAnnotations",
     "ProductionVcsProvenance",
     "ProfileBindingResult",
+    "ProfileFieldSupport",
+    "ProfileResourceCapabilities",
     "ProfileSelectionOverrides",
     "ProjectLoadLimits",
     "ProjectPlanRequest",
@@ -637,6 +646,7 @@ __all__ = (
     "prepare_project_plan",
     "present_diagnostic",
     "production_execution_defaults_v1",
+    "profile_resource_capabilities",
     "project_fields",
     "project_issues",
     "project_requests",

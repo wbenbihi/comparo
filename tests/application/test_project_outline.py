@@ -17,6 +17,7 @@ from comparo.application.project_outline import outline_resource
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalMember
 from comparo.core.configuration.canonical import CanonicalObject
+from comparo.core.configuration.canonical import CanonicalValue
 from comparo.core.configuration.canonical import InlineResource
 from comparo.core.configuration.canonical import LinkedResource
 from comparo.core.configuration.canonical import RemoteSchema
@@ -540,6 +541,354 @@ def test_project_outline_exposes_only_bounded_safe_exact_configuration_values() 
     assert exact_kinds[("defaults", "maximumAttempts")] == "integer"
     assert exact_kinds[("defaults", "failFast")] == "boolean"
     assert canary not in repr(projected)
+
+
+def test_outline_exposes_profile_controls_but_conceals_rule_operands_and_patterns() -> None:
+    assertion = outline_resource(
+        _identity(ResourceKind.ASSERTION_PROFILE, "checks"),
+        CanonicalObject(
+            members=(
+                CanonicalMember(
+                    name="rules",
+                    value=CanonicalArray(
+                        items=(
+                            CanonicalObject(
+                                members=(
+                                    CanonicalMember(name="id", value=JsonString(value="status-ok")),
+                                    CanonicalMember(
+                                        name="selector",
+                                        value=JsonString(value="response.status"),
+                                    ),
+                                    CanonicalMember(
+                                        name="operator",
+                                        value=CanonicalObject(
+                                            members=(
+                                                CanonicalMember(
+                                                    name="name",
+                                                    value=JsonString(value="equals"),
+                                                ),
+                                                CanonicalMember(
+                                                    name="expected",
+                                                    value=JsonString(value="operand-canary"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                )
+                            ),
+                        )
+                    ),
+                ),
+            )
+        ),
+    )
+    redaction = outline_resource(
+        _identity(ResourceKind.REDACTION_PROFILE, "safe"),
+        CanonicalObject(
+            members=(
+                CanonicalMember(
+                    name="patterns",
+                    value=CanonicalArray(items=(JsonString(value="pattern-canary"),)),
+                ),
+                CanonicalMember(
+                    name="backstop",
+                    value=JsonBoolean(value=True),
+                ),
+            )
+        ),
+    )
+
+    exact = {field.path: field.exact_value for field in assertion.fields}
+    assert exact[("rules", "0", "id")] == "status-ok"
+    assert exact[("rules", "0", "selector")] == "response.status"
+    assert exact[("rules", "0", "operator", "name")] == "equals"
+    assert exact[("rules", "0", "operator", "expected")] is None
+    assert (
+        next(field for field in redaction.fields if field.path == ("patterns", "0")).exact_value
+        is None
+    )
+    assert (
+        next(field for field in redaction.fields if field.path == ("backstop",)).exact_value
+        == "true"
+    )
+    encoded = msgspec.json.encode((assertion, redaction))
+    assert b"operand-canary" not in encoded
+    assert b"pattern-canary" not in encoded
+
+
+def test_outline_profile_whitelists_never_serialize_payload_canaries() -> None:
+    """Every profile family admits exact typed controls without reopening static payloads."""
+
+    def object_value(*members: tuple[str, CanonicalValue]) -> CanonicalObject:
+        return CanonicalObject(
+            members=tuple(CanonicalMember(name=name, value=value) for name, value in members)
+        )
+
+    huge = int("9" * 400)
+    canaries = (
+        "selector-literal-canary",
+        "min-operand-canary",
+        "max-operand-canary",
+        "exact-operand-canary",
+        "baseline-path-canary",
+        "candidate-path-canary",
+        "transform-operand-canary",
+        "reducer-operand-canary",
+        "pairing-operand-canary",
+        "gate-payload-canary",
+        "classification-payload-canary",
+        "backstop-replacement-canary",
+        "storage-payload-canary",
+        "scenario-request-payload-canary",
+        "policy-payload-canary",
+    )
+    resources = (
+        outline_resource(
+            _identity(ResourceKind.ASSERTION_PROFILE, "assertions"),
+            object_value(
+                (
+                    "rules",
+                    CanonicalArray(
+                        items=(
+                            object_value(
+                                ("id", JsonString(value="safe-rule")),
+                                (
+                                    "selector",
+                                    JsonString(
+                                        value=(
+                                            "response.body[?(@.token == 'selector-literal-canary')]"
+                                        )
+                                    ),
+                                ),
+                                (
+                                    "operator",
+                                    object_value(
+                                        ("name", JsonString(value="between")),
+                                        ("min", JsonString(value="min-operand-canary")),
+                                        ("max", JsonString(value="max-operand-canary")),
+                                        ("exact", JsonString(value="exact-operand-canary")),
+                                    ),
+                                ),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.DIFF_PROFILE, "diffs"),
+            object_value(
+                (
+                    "rules",
+                    CanonicalArray(
+                        items=(
+                            object_value(
+                                ("id", JsonString(value="migration")),
+                                (
+                                    "baseline",
+                                    object_value(
+                                        (
+                                            "selector",
+                                            object_value(
+                                                (
+                                                    "source",
+                                                    JsonString(value="response.body"),
+                                                ),
+                                                ("view", JsonString(value="json")),
+                                                (
+                                                    "path",
+                                                    JsonString(value="/baseline-path-canary"),
+                                                ),
+                                            ),
+                                        ),
+                                        (
+                                            "transforms",
+                                            CanonicalArray(
+                                                items=(
+                                                    object_value(
+                                                        (
+                                                            "name",
+                                                            JsonString(value="normalizeText"),
+                                                        ),
+                                                        (
+                                                            "replacement",
+                                                            JsonString(
+                                                                value="transform-operand-canary"
+                                                            ),
+                                                        ),
+                                                    ),
+                                                )
+                                            ),
+                                        ),
+                                        (
+                                            "reducer",
+                                            object_value(
+                                                ("name", JsonString(value="groupBy")),
+                                                (
+                                                    "path",
+                                                    JsonString(value="/reducer-operand-canary"),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                                (
+                                    "candidate",
+                                    object_value(
+                                        (
+                                            "selector",
+                                            object_value(
+                                                (
+                                                    "source",
+                                                    JsonString(value="response.body"),
+                                                ),
+                                                ("view", JsonString(value="json")),
+                                                (
+                                                    "path",
+                                                    JsonString(value="/candidate-path-canary"),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                                (
+                                    "pairing",
+                                    object_value(
+                                        ("name", JsonString(value="keyed")),
+                                        (
+                                            "baselinePath",
+                                            JsonString(value="/pairing-operand-canary"),
+                                        ),
+                                    ),
+                                ),
+                                ("comparator", JsonString(value="exact")),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.GATE_PROFILE, "gate"),
+            object_value(
+                (
+                    "thresholds",
+                    CanonicalArray(
+                        items=(
+                            object_value(
+                                ("severity", JsonString(value="blocking")),
+                                ("violatedRules", JsonInteger(value=huge)),
+                                ("payload", JsonString(value="gate-payload-canary")),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.SAFETY_PROFILE, "safety"),
+            object_value(
+                (
+                    "classification",
+                    object_value(
+                        ("responseBody", JsonString(value="public")),
+                        (
+                            "payload",
+                            JsonString(value="classification-payload-canary"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.REDACTION_PROFILE, "redaction"),
+            object_value(
+                (
+                    "backstop",
+                    object_value(
+                        (
+                            "replacement",
+                            JsonString(value="backstop-replacement-canary"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.ARTIFACT_PROFILE, "artifacts"),
+            object_value(
+                (
+                    "storage",
+                    object_value(
+                        ("persist", JsonString(value="always")),
+                        ("payload", JsonString(value="storage-payload-canary")),
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.SCENARIO, "workflow"),
+            object_value(
+                (
+                    "steps",
+                    CanonicalArray(
+                        items=(
+                            object_value(
+                                ("id", JsonString(value="safe-step")),
+                                (
+                                    "request",
+                                    JsonString(value="scenario-request-payload-canary /secret"),
+                                ),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.EXECUTION_POLICY, "authority"),
+            object_value(
+                (
+                    "http",
+                    object_value(
+                        ("payload", JsonString(value="policy-payload-canary")),
+                    ),
+                ),
+            ),
+        ),
+        outline_resource(
+            _identity(ResourceKind.EXECUTION_PROFILE, "huge-count"),
+            object_value(("trials", JsonInteger(value=huge))),
+        ),
+        outline_resource(
+            _identity(ResourceKind.PROJECT, "huge-project-count"),
+            object_value(
+                (
+                    "defaults",
+                    object_value(("maximumAttempts", JsonInteger(value=huge))),
+                ),
+            ),
+        ),
+    )
+
+    encoded = msgspec.json.encode(resources)
+    for canary in canaries:
+        assert canary.encode() not in encoded
+    assert str(huge).encode() not in encoded
+    diff_exact = {field.path: field.exact_value for field in resources[1].fields}
+    gate_exact = {field.path: field.exact_value for field in resources[2].fields}
+    safety_exact = {field.path: field.exact_value for field in resources[3].fields}
+    artifact_exact = {field.path: field.exact_value for field in resources[5].fields}
+    assert diff_exact[("rules", "0", "baseline", "selector", "source")] == "response.body"
+    assert diff_exact[("rules", "0", "baseline", "selector", "path")] is None
+    assert diff_exact[("rules", "0", "baseline", "transforms", "0", "name")] == ("normalizeText")
+    assert diff_exact[("rules", "0", "baseline", "reducer", "name")] == "groupBy"
+    assert diff_exact[("rules", "0", "pairing", "name")] == "keyed"
+    assert diff_exact[("rules", "0", "comparator")] == "exact"
+    assert gate_exact[("thresholds", "0", "severity")] == "blocking"
+    assert gate_exact[("thresholds", "0", "violatedRules")] is None
+    assert safety_exact[("classification", "responseBody")] == "public"
+    assert artifact_exact[("storage", "persist")] == "always"
 
 
 def test_outline_projection_boundaries_reject_untyped_mutable_data() -> None:

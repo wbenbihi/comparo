@@ -12,6 +12,9 @@ import msgspec
 from comparo.adapters.http import ResponseClassification
 from comparo.application.evaluation_selectors import InvalidSelectorError
 from comparo.application.evaluation_selectors import compile_selector
+from comparo.application.profile_capabilities import ARTIFACT_PROFILE_ADMITTED_FIELDS
+from comparo.application.profile_capabilities import REDACTION_PROFILE_ADMITTED_FIELDS
+from comparo.application.profile_capabilities import SAFETY_PROFILE_ADMITTED_FIELDS
 from comparo.core.artifacts.policy import ArtifactCapturePolicy
 from comparo.core.artifacts.policy import ArtifactPersistMode
 from comparo.core.artifacts.policy import ArtifactPolicy
@@ -63,9 +66,6 @@ _PROFILE_SHAPE = DiagnosticCode(value="runtime.profile.shape-invalid")
 _PROFILE_FIELD = DiagnosticCode(value="runtime.profile.field-unsupported")
 _PROFILE_SELECTOR = DiagnosticCode(value="runtime.profile.selector-invalid")
 
-_SAFETY_FIELDS = frozenset({"include", "extends", "budgets", "classification", "schemas"})
-_REDACTION_FIELDS = frozenset({"rules", "backstop"})
-_ARTIFACT_FIELDS = frozenset({"capture", "storage", "retention"})
 _STATIC_PROFILE_PROVENANCE = ValueProvenance(
     entries=(ProvenanceEntry(kind=ProvenanceKind.PROFILE),)
 )
@@ -246,11 +246,11 @@ def _selected_profile_resources(
         if (resource := _profile(prepared.project, handle, problems)) is not None
     )
     for _handle, profile in safety:
-        _supported_fields(profile, _SAFETY_FIELDS, problems)
+        _supported_fields(profile, SAFETY_PROFILE_ADMITTED_FIELDS, problems)
     for profile in redaction:
-        _supported_fields(profile, _REDACTION_FIELDS, problems)
+        _supported_fields(profile, REDACTION_PROFILE_ADMITTED_FIELDS, problems)
     for profile in artifact:
-        _supported_fields(profile, _ARTIFACT_FIELDS, problems)
+        _supported_fields(profile, ARTIFACT_PROFILE_ADMITTED_FIELDS, problems)
     return _SelectedProfiles(safety=safety, redaction=redaction, artifact=artifact)
 
 

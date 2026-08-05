@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import cast
 from typing import final
@@ -11,11 +12,20 @@ from urllib.parse import urlsplit
 import msgspec
 
 from comparo.application.plan_inspection_identity import ResourceCoordinate
+from comparo.core.artifacts.policy import ArtifactPersistMode
+from comparo.core.artifacts.policy import RedactionAction
+from comparo.core.artifacts.policy import UnsafeSourceBehavior
 from comparo.core.configuration.canonical import CanonicalArray
 from comparo.core.configuration.canonical import CanonicalObject
 from comparo.core.configuration.canonical import InlineResource
 from comparo.core.configuration.canonical import LinkedResource
 from comparo.core.configuration.canonical import RemoteSchema
+from comparo.core.domain.assertions.rules import CompletenessRequirement
+from comparo.core.domain.assertions.rules import Quantifier
+from comparo.core.domain.assertions.rules import Severity
+from comparo.core.domain.diffs.rules import DiffCompletenessRequirement
+from comparo.core.domain.diffs.rules import DiffSeverity
+from comparo.core.domain.enums import DomainStrEnum
 from comparo.core.domain.expressions import ArrayExpr
 from comparo.core.domain.expressions import ConvertExpr
 from comparo.core.domain.expressions import ExpressionSegment
@@ -27,10 +37,20 @@ from comparo.core.domain.expressions import LookupExpr
 from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import SensitiveLiteralExpr
+from comparo.core.domain.gates.types import EnvironmentRole
+from comparo.core.domain.gates.types import GateSeverity
+from comparo.core.domain.http.fields import HeaderName
 from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import ResourceId
 from comparo.core.domain.identity import ResourceIdentity
 from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.identity import RuleId
+from comparo.core.domain.metadata import Metadata
 from comparo.core.domain.provenance import ProvenanceEntry
+from comparo.core.domain.selectors.http_fields import HttpFieldProjection
+from comparo.core.domain.selectors.sources import BodyViewKind
+from comparo.core.domain.selectors.sources import SelectorSource
+from comparo.core.domain.sensitivity import Sensitivity
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import ExactValue
 from comparo.core.domain.values import JsonArray
@@ -47,6 +67,31 @@ _SECRET_FIELD_PARTS = frozenset(
     {"authorization", "cookie", "credential", "key", "password", "secret", "token"}
 )
 _EXACT_KINDS = frozenset({"null", "boolean", "integer", "number", "text", "reference"})
+_PROFILE_CONTROL_KINDS = frozenset(
+    {
+        ResourceKind.ASSERTION_PROFILE,
+        ResourceKind.DIFF_PROFILE,
+        ResourceKind.GATE_PROFILE,
+        ResourceKind.SAFETY_PROFILE,
+        ResourceKind.REDACTION_PROFILE,
+        ResourceKind.ARTIFACT_PROFILE,
+    }
+)
+_STRUCTURAL_SELECTOR = re.compile(r"[A-Za-z][A-Za-z0-9_-]*(?:[.:/][A-Za-z0-9_$*\[\]-]+)*")
+_OPERATION_IDENTITY = re.compile(
+    r"(?:[A-Za-z][A-Za-z0-9.-]{0,62}|"
+    r"[a-z][a-z0-9.-]*/[A-Za-z][A-Za-z0-9.-]{0,62}@[1-9][0-9]{0,5})"
+)
+_GATE_COUNT_FIELDS = frozenset(
+    {
+        "violatedRules",
+        "driftedRules",
+        "unavailableRules",
+        "incomparableRules",
+        "incompleteRules",
+        "errorRules",
+    }
+)
 
 
 @final
@@ -450,9 +495,371 @@ def _safe_exact_display(
         return _safe_matrix_exact_display(value, path)
     if owner.kind is ResourceKind.SCHEMA:
         return _safe_schema_exact_display(value, path)
+    if owner.kind in _PROFILE_CONTROL_KINDS or owner.kind in {
+        ResourceKind.EXECUTION_PROFILE,
+        ResourceKind.EXECUTION_POLICY,
+        ResourceKind.SCENARIO,
+    }:
+        return _safe_resource_control_exact_display(value, path, owner.kind)
     if owner.kind is not ResourceKind.PROJECT:
         return None
     return _safe_project_exact_display(value, path)
+
+
+def _safe_resource_control_exact_display(
+    value: ExactValue,
+    path: tuple[str, ...],
+    kind: ResourceKind,
+) -> tuple[str, str] | None:
+    """Expose only validated fields from closed, kind-specific structural grammars."""
+    if not path:
+        return None
+    if kind is ResourceKind.EXECUTION_PROFILE:
+        return _safe_execution_profile_control(value, path)
+    if kind is ResourceKind.SCENARIO:
+        return _safe_scenario_control(value, path)
+    if kind in {ResourceKind.ASSERTION_PROFILE, ResourceKind.DIFF_PROFILE}:
+        return _safe_rule_profile_control(value, path, kind)
+    if kind is ResourceKind.GATE_PROFILE:
+        return _safe_gate_profile_control(value, path)
+    if kind is ResourceKind.SAFETY_PROFILE:
+        return _safe_safety_profile_control(value, path)
+    if kind is ResourceKind.REDACTION_PROFILE:
+        return _safe_redaction_profile_control(value, path)
+    if kind is ResourceKind.ARTIFACT_PROFILE:
+        return _safe_artifact_profile_control(value, path)
+    # ExecutionPolicy is an external authority document. Until its catalog DTO is typed,
+    # the project outline may describe shape but must not disclose arbitrary policy scalars.
+    return None
+
+
+def _safe_execution_profile_control(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose validated authored controls, never effective or value-bearing inputs."""
+    if path in {("trials",), ("maximumAttempts",)}:
+        return _positive_integer(value)
+    if path == ("failFast",) and type(value) is JsonBoolean:
+        return _bounded_exact_scalar(value)
+    return None
+
+
+def _safe_scenario_control(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose only validated step topology; step payload fields stay concealed."""
+    if len(path) != 3 or path[0] != "steps" or not path[1].isdigit():
+        return None
+    field = path[2]
+    if type(value) is not JsonString:
+        return None
+    try:
+        if field == "id" or field == "after":
+            RuleId(value=value.value)
+        elif field == "request":
+            ResourceId(value=value.value)
+        else:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return _bounded_exact_text(value.value)
+
+
+def _safe_rule_profile_control(
+    value: ExactValue,
+    path: tuple[str, ...],
+    kind: ResourceKind,
+) -> tuple[str, str] | None:
+    """Expose validated rule identity and operation names, never operands or predicates."""
+    if len(path) < 3 or path[0] != "rules" or not path[1].isdigit():
+        return None
+    tail = path[2:]
+    common = _safe_rule_common_control(value, tail, kind)
+    if common is not None:
+        return common
+    operation = _safe_rule_operation(value, tail, kind)
+    if operation is not None:
+        return operation
+    selector_tail = _rule_selector_tail(tail)
+    return (
+        None if selector_tail is None else _safe_structured_selector_control(value, selector_tail)
+    )
+
+
+def _safe_rule_common_control(
+    value: ExactValue,
+    tail: tuple[str, ...],
+    kind: ResourceKind,
+) -> tuple[str, str] | None:
+    """Expose common validated rule identifiers and closed semantics."""
+    if tail == ("id",):
+        return _validated_slug(value, RuleId)
+    if tail == ("selector",):
+        return _validated_selector(value)
+    if kind is ResourceKind.DIFF_PROFILE and tail in {
+        ("baseline", "selector"),
+        ("candidate", "selector"),
+    }:
+        return _validated_selector(value)
+    if tail == ("severity",):
+        enum_type = Severity if kind is ResourceKind.ASSERTION_PROFILE else DiffSeverity
+        return _validated_enum(value, enum_type)
+    if tail == ("quantifier",) and kind is ResourceKind.ASSERTION_PROFILE:
+        return _validated_enum(value, Quantifier)
+    if tail == ("completeness",):
+        completeness_type = (
+            CompletenessRequirement
+            if kind is ResourceKind.ASSERTION_PROFILE
+            else DiffCompletenessRequirement
+        )
+        return _validated_enum(value, completeness_type)
+    if len(tail) == 2 and tail[0] == "tags" and tail[1].isdigit():
+        if type(value) is not JsonString:
+            return None
+        try:
+            Metadata(tags=(value.value,))
+        except (TypeError, ValueError):
+            return None
+        return _bounded_exact_text(value.value)
+    return None
+
+
+def _safe_rule_operation(
+    value: ExactValue,
+    tail: tuple[str, ...],
+    kind: ResourceKind,
+) -> tuple[str, str] | None:
+    """Expose version-neutral operation identities at exact schema-owned paths."""
+    if tail in {("operator",), ("operator", "name")}:
+        return _validated_operation(value) if kind is ResourceKind.ASSERTION_PROFILE else None
+    if kind is ResourceKind.DIFF_PROFILE:
+        for name in ("reducer", "pairing", "comparator"):
+            if tail in {(name,), (name, "name")}:
+                return _validated_operation(value)
+    if kind is not ResourceKind.DIFF_PROFILE:
+        return None
+    for prefix in ((), ("baseline",), ("candidate",)):
+        relative = tail[len(prefix) :] if tail[: len(prefix)] == prefix else ()
+        if (
+            len(relative) in {2, 3}
+            and relative[0] == "transforms"
+            and relative[1].isdigit()
+            and (len(relative) == 2 or relative[2] == "name")
+        ):
+            return _validated_operation(value)
+        if relative in {
+            ("reducer",),
+            ("reducer", "name"),
+        }:
+            return _validated_operation(value)
+    return None
+
+
+def _rule_selector_tail(tail: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Return a structured selector-relative path for shared or asymmetric rule sides."""
+    if tail[:1] == ("selector",):
+        return tail[1:]
+    if tail[:2] in {("baseline", "selector"), ("candidate", "selector")}:
+        return tail[2:]
+    return None
+
+
+def _safe_structured_selector_control(
+    value: ExactValue,
+    tail: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose selector vocabulary and HTTP field identity while concealing path expressions."""
+    if tail == ("source",):
+        return _validated_enum(value, SelectorSource)
+    if tail == ("view",):
+        return _validated_enum(value, BodyViewKind)
+    if tail == ("occurrence",) and type(value) is JsonString:
+        if value.value in {"terminal", "allAttempts", "allExchanges"}:
+            return _bounded_exact_text(value.value)
+        return None
+    if tail in {("field",), ("field", "name")} and type(value) is JsonString:
+        try:
+            HeaderName(value=value.value)
+        except (TypeError, ValueError):
+            return None
+        return _bounded_exact_text(value.value)
+    if tail == ("field", "projection"):
+        return _validated_enum(value, HttpFieldProjection)
+    if tail == ("field", "occurrence") and type(value) is JsonInteger and value.value >= 0:
+        return _bounded_exact_scalar(value)
+    # `path` is intentionally shape-only: JSON Pointer/JSONPath segments may contain payload-like
+    # literals even though source/view metadata remains safe to summarize.
+    return None
+
+
+def _safe_gate_profile_control(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose only the closed GateProfile schema and validated typed values."""
+    if len(path) == 2 and path[1].isdigit():
+        if path[0] == "severities":
+            return _validated_enum(value, GateSeverity)
+        if path[0] == "environmentRoles":
+            return _validated_enum(value, EnvironmentRole)
+    if (
+        path
+        in {
+            ("requireCompleteRun",),
+            ("requireAssertionCoverage",),
+            ("requireDiffCoverage",),
+        }
+        and type(value) is JsonBoolean
+    ):
+        return _bounded_exact_scalar(value)
+    if len(path) == 3 and path[0] == "thresholds" and path[1].isdigit():
+        if path[2] == "severity":
+            return _validated_enum(value, GateSeverity)
+        if path[2] in _GATE_COUNT_FIELDS and type(value) is JsonInteger and value.value >= 0:
+            return _bounded_exact_scalar(value)
+    return None
+
+
+def _safe_safety_profile_control(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose only validated classification and remote-schema restriction fields."""
+    if path == ("classification", "responseBody"):
+        return _validated_enum(value, Sensitivity)
+    if (
+        len(path) == 3
+        and path[:2] == ("classification", "responseHeaders")
+        and path[2].isdigit()
+        and type(value) is JsonString
+    ):
+        try:
+            HeaderName(value=value.value)
+        except (TypeError, ValueError):
+            return None
+        return _bounded_exact_text(value.value)
+    if path == ("schemas", "allowAny") and type(value) is JsonBoolean:
+        return _bounded_exact_scalar(value)
+    if (
+        len(path) == 3
+        and path[:2] == ("schemas", "sources")
+        and path[2].isdigit()
+        and type(value) is JsonString
+        and _safe_schema_source(value.value)
+    ):
+        return _bounded_exact_text(value.value)
+    return None
+
+
+def _safe_redaction_profile_control(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose validated redaction topology, never patterns or replacement payloads."""
+    if path == ("backstop",) and type(value) is JsonBoolean:
+        return _bounded_exact_scalar(value)
+    if len(path) != 3 or path[0] != "rules" or not path[1].isdigit():
+        return None
+    if path[2] == "id":
+        return _validated_slug(value, RuleId)
+    if path[2] == "selector":
+        return _validated_selector(value)
+    if path[2] == "action":
+        return _validated_enum(value, RedactionAction)
+    return None
+
+
+def _safe_artifact_profile_control(
+    value: ExactValue,
+    path: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Expose only implemented capture and persistence controls."""
+    if (
+        len(path) == 2
+        and path[0] == "capture"
+        and path[1] in {"requests", "responses", "bodies", "evidence"}
+        and type(value) is JsonBoolean
+    ):
+        return _bounded_exact_scalar(value)
+    if path == ("storage", "persist"):
+        return _validated_enum(value, ArtifactPersistMode)
+    if path == ("storage", "unsafeSource"):
+        return _validated_enum(value, UnsafeSourceBehavior)
+    return None
+
+
+def _positive_integer(value: ExactValue) -> tuple[str, str] | None:
+    """Return one valid positive authored count without integer truthiness."""
+    if type(value) is not JsonInteger or value.value < 1:
+        return None
+    return _bounded_exact_scalar(value)
+
+
+def _validated_slug(
+    value: ExactValue,
+    identifier_type: type[RuleId] | type[ResourceId],
+) -> tuple[str, str] | None:
+    """Return text only after a domain identifier validates it as structural."""
+    if type(value) is not JsonString:
+        return None
+    try:
+        identifier_type(value=value.value)
+    except (TypeError, ValueError):
+        return None
+    return _bounded_exact_text(value.value)
+
+
+def _validated_selector(value: ExactValue) -> tuple[str, str] | None:
+    """Admit only literal-free structural selector notation for Overview display."""
+    if (
+        type(value) is not JsonString
+        or len(value.value) > 256
+        or _STRUCTURAL_SELECTOR.fullmatch(value.value) is None
+    ):
+        return None
+    return _bounded_exact_text(value.value)
+
+
+def _validated_enum[EnumT: DomainStrEnum](
+    value: ExactValue,
+    enum_type: type[EnumT],
+) -> tuple[str, str] | None:
+    """Return a scalar only when a closed domain vocabulary accepts it."""
+    if type(value) is not JsonString:
+        return None
+    try:
+        enum_type(value.value)
+    except ValueError:
+        return None
+    return _bounded_exact_text(value.value)
+
+
+def _validated_operation(
+    value: ExactValue,
+) -> tuple[str, str] | None:
+    """Return a version-neutral, payload-free operation identity grammar."""
+    if type(value) is not JsonString or _OPERATION_IDENTITY.fullmatch(value.value) is None:
+        return None
+    return _bounded_exact_text(value.value)
+
+
+def _safe_schema_source(value: str) -> bool:
+    """Accept a non-credentialed HTTP(S) schema source without query or fragment data."""
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
 
 
 def _safe_project_exact_display(
@@ -466,14 +873,8 @@ def _safe_project_exact_display(
         ("defaults", "secrets"),
     }:
         return None
-    if type(value) is JsonNull:
-        return "null", "null"
-    if type(value) is JsonBoolean:
-        return ("true" if value.value else "false"), "boolean"
-    if type(value) is JsonInteger:
-        return str(value.value), "integer"
-    if type(value) is JsonDecimal:
-        return str(value.value), "number"
+    if type(value) in {JsonNull, JsonBoolean, JsonInteger, JsonDecimal}:
+        return _bounded_exact_scalar(value)
     if type(value) is not JsonString:
         return None
     text = value.value
@@ -539,9 +940,11 @@ def _bounded_exact_scalar(value: ExactValue) -> tuple[str, str] | None:
     if type(value) is JsonBoolean:
         return ("true" if value.value else "false"), "boolean"
     if type(value) is JsonInteger:
-        return str(value.value), "integer"
+        text = str(value.value)
+        return (text, "integer") if len(text) <= 256 else None
     if type(value) is JsonDecimal:
-        return str(value.value), "number"
+        text = str(value.value)
+        return (text, "number") if len(text) <= 256 else None
     if type(value) is JsonString:
         return _bounded_exact_text(value.value)
     return None
