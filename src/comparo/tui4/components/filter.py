@@ -77,6 +77,10 @@ class FilterInput(Horizontal):
         """Current filter text."""
         return self.query_one(Input).value
 
+    @value.setter
+    def value(self, value: str) -> None:
+        self.query_one(Input).value = value
+
     @override
     def focus(self, scroll_visible: bool = True) -> "FilterInput":
         """Forward focus to the inner field."""

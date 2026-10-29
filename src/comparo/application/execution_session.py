@@ -85,6 +85,8 @@ class LiveOccurrenceProgress(msgspec.Struct, frozen=True, kw_only=True):
     queued_at_nanoseconds: int | None = None
     started_at_nanoseconds: int | None = None
     finished_at_nanoseconds: int | None = None
+    http_status: int | None = None
+    transport_failed: bool | None = None
     execution: PlanOccurrenceInspection | None = None
     comparison: PlanComparisonInspection | None = None
 
@@ -101,6 +103,17 @@ class LiveOccurrenceProgress(msgspec.Struct, frozen=True, kw_only=True):
         for value in (self.failure_stage, self.failure_code):
             if value is not None and (type(value) is not str or not value):
                 raise ValueError("live occurrence failure coordinates must be non-empty text")
+        if self.http_status is not None and (
+            type(self.http_status) is not int or not 100 <= self.http_status <= 599
+        ):
+            raise ValueError("live HTTP status must be a valid integer code")
+        if self.transport_failed is not None and type(self.transport_failed) is not bool:
+            raise TypeError("live transport failure must be boolean or absent")
+        if (self.http_status is not None or self.transport_failed is not None) and (
+            self.kind is not LiveOccurrenceKind.EXECUTION
+            or self.state is not LiveOccurrenceState.FINISHED
+        ):
+            raise ValueError("live HTTP progress requires a finished execution")
         timestamps = tuple(
             value
             for value in (
@@ -618,6 +631,8 @@ class _ProgressMailbox:
                 failure_stage=(None if event.failure_stage is None else event.failure_stage.value),
                 failure_code=(None if event.failure_code is None else event.failure_code.value),
                 finished_at_nanoseconds=observed_at,
+                http_status=event.http_status,
+                transport_failed=event.transport_failed,
             )
 
     def _execution_coordinate(

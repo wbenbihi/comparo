@@ -9,6 +9,9 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
+from comparo.application import ArtifactBodyReference
+from comparo.application import ArtifactBodyWindow
+from comparo.application import ArtifactReadLimits
 from comparo.application import AuthoredResourceInspectionRequest
 from comparo.application import AuthoredResourceWindow
 from comparo.application import CompareCloseResult
@@ -26,12 +29,15 @@ from comparo.application import ProfileSelectionOverrides
 from comparo.application import ProjectPlanRequest
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ProjectWorkspaceResult
+from comparo.application import RenderPreviewWindowResult
 from comparo.application import ResolvedValueInspectionBatch
 from comparo.application import ResolvedValueInspectionBatchResult
 from comparo.application import ResolvedValueInspectionTarget
 from comparo.application import ResolvedValueProjectionLimits
 from comparo.application import ResourceCoordinate
+from comparo.application import ResultProjection
 from comparo.application import RunHandle
+from comparo.application import RunInspection
 from comparo.application import RunService
 from comparo.application import SourceInspectionLimits
 from comparo.application import SourceInspectionRequest
@@ -43,6 +49,8 @@ from comparo.application import inspect_effective_resource
 from comparo.application import inspect_project_source
 from comparo.application import inspect_project_workspace
 from comparo.application import persisted_production_execution_defaults_v1
+from comparo.application import project_results
+from comparo.application import read_artifact_body_window
 from comparo.application import resolve_project_root
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Duration
@@ -255,6 +263,7 @@ class TuiBackend:
         self.execution_settings = persisted_production_execution_defaults_v1()
         self._artifact_root: Path | None = None
         self._handle: ComparePreparationHandle | None = None
+        self._launch_controls: CompareExecutionControls | None = None
         self._preparation_lock = asyncio.Lock()
         self._closed = False
 
@@ -678,6 +687,144 @@ class TuiBackend:
 
     # ---------------------------------------------------- draft handle slot
 
+    async def preview_launch(
+        self, intent: CompareIntent, options: PlanningOptions, *, approve_mutations: bool
+    ) -> ComparePreparationResult:
+        """Inspect a temporary plan without replacing the explicit admission checkpoint."""
+        async with self._preparation_lock:
+            if self._closed:
+                raise RuntimeError("launch service closed")
+            prepared, _ = await self._join_preparation(
+                asyncio.create_task(
+                    asyncio.to_thread(self._prepare_launch, intent, options, approve_mutations)
+                )
+            )
+            if prepared.handle is not None:
+                self.compare.discard(prepared.handle)
+            return prepared
+
+    async def launch_destinations(self) -> RenderPreviewWindowResult:
+        """Read a bounded sanitized destination sample from the retained checkpoint."""
+        if self._handle is None or self._launch_controls is None:
+            raise RuntimeError("launch requires preparation")
+        return await self.compare.preview_requests(
+            self._handle,
+            self._launch_controls,
+            start_ordinal=0,
+            maximum_previews=64,
+        )
+
+    def release_launch(self, run: RunHandle) -> None:
+        """Release terminal result memory when returning to configuration."""
+        self.runs.discard(run)
+
+    async def prepare_launch(
+        self, intent: CompareIntent, options: PlanningOptions, *, approve_mutations: bool
+    ) -> ComparePreparationResult:
+        """Serialize preparation with Explorer and retain the exact reviewed controls."""
+        async with self._preparation_lock:
+            if self._closed:
+                raise RuntimeError("launch service closed")
+            self.discard_handle()
+            prepared, controls = await self._join_preparation(
+                asyncio.create_task(
+                    asyncio.to_thread(self._prepare_launch, intent, options, approve_mutations)
+                )
+            )
+            if prepared.handle is not None:
+                self.adopt_handle(prepared.handle)
+                self._launch_controls = controls
+            return prepared
+
+    def _prepare_launch(
+        self, intent: CompareIntent, options: PlanningOptions, approve_mutations: bool
+    ) -> tuple[ComparePreparationResult, CompareExecutionControls]:
+        """Compile and admit a draft off the UI thread, without executing requests."""
+        controls = CompareExecutionControls(
+            settings=self.execution_settings,
+            artifact_root=self.ensure_artifact_root(),
+            approve_mutations=approve_mutations,
+            tool_version="tui4",
+        )
+        result = self.compare.prepare(
+            ComparePrepareRequest(
+                intent=intent,
+                project=ProjectPlanRequest(
+                    config=self._workspace_request.config,
+                    additional_sources=self._workspace_request.additional_sources,
+                    policy=None,
+                    options=options,
+                    invocation_id=uuid4(),
+                    run_id=uuid4(),
+                    load_limits=self._workspace_request.load_limits,
+                ),
+                controls=controls,
+            )
+        )
+        return result, controls
+
+    def start_launch(self) -> RunHandle:
+        """Consume the one-shot reviewed plan with its unchanged execution controls."""
+        if self._handle is None or self._launch_controls is None:
+            raise RuntimeError("launch requires preparation")
+        run = self.runs.start(self.compare, self._handle, self._launch_controls)
+        self._handle = None
+        self._launch_controls = None
+        return run
+
+    def inspect_launch(self, run: RunHandle) -> RunInspection:
+        """Read coalesced, value-safe progress without exposing the running task."""
+        return self.runs.inspect(run)
+
+    def cancel_launch(self, run: RunHandle) -> bool:
+        """Request cancellation while the backend continues draining the run."""
+        return self.runs.cancel(run)
+
+    async def launch_outcome(self, run: RunHandle) -> tuple[str, ...]:
+        """Expose terminal persistence and failure codes without artifact internals."""
+        access = await self.runs.result(run)
+        if access.result is None:
+            return tuple(item.code for item in access.diagnostics)
+        result = access.result
+        if result.diagnostics:
+            return tuple(item.code for item in result.diagnostics)
+        if result.persistence is None:
+            return ("Report not persisted.",)
+        outcome = result.persistence
+        status = f"Report: {outcome.status.value}."
+        return (status,) if outcome.failure is None else (status, outcome.failure.code.value)
+
+    async def launch_results(self, run: RunHandle) -> ResultProjection | None:
+        """Project only the sanitized terminal artifact into the shared results surface."""
+        access = await self.runs.result(run)
+        if access.result is None or access.result.artifact is None:
+            return None
+        return await asyncio.to_thread(project_results, access.result.artifact)
+
+    async def read_result_body(self, reference: ArtifactBodyReference) -> ArtifactBodyWindow:
+        """Authenticate one bounded capture window using its exact manifest coordinate."""
+        if self._artifact_root is None:
+            raise RuntimeError("report storage is unavailable")
+        limits = ArtifactReadLimits(
+            maximum_blobs=4096,
+            maximum_blob_bytes=64 * 1024 * 1024,
+            maximum_total_blob_bytes=512 * 1024 * 1024,
+            maximum_manifest_bytes=64 * 1024 * 1024,
+            maximum_report_bytes=64 * 1024 * 1024,
+            maximum_redaction_patterns=4096,
+            maximum_redaction_pattern_bytes=1024 * 1024,
+            maximum_redaction_value_bytes=256 * 1024,
+            maximum_redaction_value_nodes=4096,
+        )
+        return await read_artifact_body_window(
+            self._artifact_root,
+            reference.artifact_id,
+            reference,
+            limits,
+            offset=0,
+            maximum_output_bytes=64 * 1024,
+        )
+
     @property
     def handle(self) -> ComparePreparationHandle | None:
         """The current draft preparation handle, if any."""
@@ -690,6 +837,7 @@ class TuiBackend:
 
     def discard_handle(self) -> None:
         """Release the current draft handle, if any."""
+        self._launch_controls = None
         if self._handle is not None:
             self.compare.discard(self._handle)
             self._handle = None

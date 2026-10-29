@@ -105,6 +105,8 @@ class _EventEmitter:
         outcome: RuntimeOccurrenceOutcome | None = None,
         failure_stage: DiagnosticStage | None = None,
         failure_code: DiagnosticCode | None = None,
+        http_status: int | None = None,
+        transport_failed: bool | None = None,
     ) -> None:
         """Allocate and deliver one event atomically relative to other emitters."""
         async with self._lock:
@@ -116,6 +118,8 @@ class _EventEmitter:
                 outcome=outcome,
                 failure_stage=failure_stage,
                 failure_code=failure_code,
+                http_status=http_status,
+                transport_failed=transport_failed,
             )
             self._sequence += 1
             await self._sink.emit(event)
@@ -322,12 +326,17 @@ async def _consume(
             if fail_fast and type(outcome) is not CancelledExecution and _execution_failed(outcome):
                 cancellation.cancel(CancellationSource.EXECUTION_POLICY)
             failure_stage, failure_code = _event_failure(outcome)
+            http_status = _event_http_status(outcome)
             await emitter.emit(
                 RuntimeEventKind.EXECUTION_FINISHED,
                 execution_id=work.scope.execution_id,
                 outcome=_event_outcome(outcome),
                 failure_stage=failure_stage,
                 failure_code=failure_code,
+                http_status=http_status,
+                transport_failed=(
+                    None if type(outcome) is CancelledExecution else _execution_failed(outcome)
+                ),
             )
         finally:
             ledger.finished()
@@ -682,3 +691,14 @@ def _event_failure(
     if type(outcome) is BlockedExecution:
         return outcome.stage, outcome.code
     return None, None
+
+
+def _event_http_status(outcome: ExecutionOutcome) -> int | None:
+    """Project only the final observed HTTP status, never request or response values."""
+    if type(outcome) is not ObservedExecution:
+        return None
+    terminal = outcome.observation.attempts[-1]
+    if terminal.pre_send is not None:
+        return None
+    response = terminal.exchanges[-1].response
+    return None if response is None else response.status.value

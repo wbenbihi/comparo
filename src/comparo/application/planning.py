@@ -360,6 +360,7 @@ class PlanningOptions(msgspec.Struct, frozen=True, kw_only=True):
     baseline: str | None = None
     candidates: tuple[str, ...] = ()
     matrices: tuple[MatrixOverride, ...] = ()
+    matrix_filters: tuple[MatrixOverride, ...] = ()
     trials: int | None = None
     maximum_attempts: int | None = None
     fail_fast: bool | None = None
@@ -374,6 +375,9 @@ class PlanningOptions(msgspec.Struct, frozen=True, kw_only=True):
         """Reject ambiguous primitive collections before constructing domain values."""
         _validate_selections(self.subjects, self.environments, self.candidates)
         _validate_matrices(self.matrices)
+        _validate_matrices(self.matrix_filters)
+        if any(not item.cases for item in self.matrix_filters):
+            raise InvocationBuildError(InvocationBuildErrorCode.INVALID_LIMIT)
         _validate_budgets(self.budgets)
         _validate_value_resources(self.value_resources)
         _validate_inline_values(self.inline_values)
@@ -436,6 +440,14 @@ def build_invocation(
             subjects=_resource_selection(options.subjects),
             topology=_topology(options),
             matrices=_matrix_selection(options.matrices),
+            matrix_filters=tuple(
+                MatrixSelection(
+                    binding=MatrixBindingId(value=item.binding),
+                    matrix=ResourceId(value=item.matrix),
+                    cases=tuple(MatrixCaseId(value=case) for case in item.cases),
+                )
+                for item in options.matrix_filters
+            ),
             trials=_positive_override(options.trials),
             maximum_attempts=_positive_override(options.maximum_attempts),
             fail_fast=Inherit() if options.fail_fast is None else SetValue(value=options.fail_fast),

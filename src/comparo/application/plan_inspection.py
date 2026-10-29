@@ -181,6 +181,9 @@ def _inspect_slice(
         method=method,
         unsafe_method=_unsafe_method(method),
         profiles=_profiles(subject.profiles),
+        response_schema=resource is not None
+        and type(resource.spec) is CanonicalObject
+        and any(member.name == "responseSchema" for member in resource.spec.members),
     )
 
 

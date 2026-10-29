@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Self
 from typing import override
 
+from rich.text import Text
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import OptionList
@@ -102,12 +103,17 @@ class Menu(OptionList):
         current = prefer if prefer is not None else self.highlighted_id
         self.clear_options()
         self.add_options(
-            Option(item.prompt, id=item.id, disabled=item.disabled) for item in self.items
+            Option(self.format_item(item), id=item.id, disabled=item.disabled)
+            for item in self.items
         )
         ids = [item.id for item in self.items if not item.disabled]
         target = current if current in ids else (ids[0] if ids else None)
         if target is not None:
             self.highlighted = self.get_option_index(target)
+
+    def format_item(self, item: MenuItem) -> Text:
+        """Render literal item text; subclasses may add semantic selection decoration."""
+        return Text(item.prompt)
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         """Translate the inner message."""

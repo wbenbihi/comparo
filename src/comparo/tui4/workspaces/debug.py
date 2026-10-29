@@ -14,11 +14,15 @@ from textual.widgets import ContentSwitcher
 from textual.widgets import Static
 
 from comparo.tui4.bindings import debug_bindings
+from comparo.tui4.components.actionbar import Action
+from comparo.tui4.components.actionbar import ActionBar
+from comparo.tui4.components.choicemenu import ChoiceMenu
 from comparo.tui4.components.diffview import DiffView
 from comparo.tui4.components.filter import FilterInput
 from comparo.tui4.components.list import Field
 from comparo.tui4.components.list import KeyValueList
 from comparo.tui4.components.menu import Menu
+from comparo.tui4.components.menu import MenuItem
 from comparo.tui4.components.panel import Panel
 from comparo.tui4.components.separator import Separator
 from comparo.tui4.components.table import Column
@@ -29,6 +33,7 @@ from comparo.tui4.components.treemenu import TreeMenu
 from comparo.tui4.components.typography import Caption
 from comparo.tui4.components.typography import Hint
 from comparo.tui4.components.typography import SectionTitle
+from comparo.tui4.components.valueinput import ValueInput
 from comparo.tui4.models.diff import build_diff_document
 from comparo.tui4.models.diff import build_source_document
 from comparo.tui4.models.diff import document_label
@@ -265,6 +270,25 @@ class ComponentsDebugPanel(Panel):
                 title="Filter Input",
             )
 
+            yield Panel(
+                ChoiceMenu(
+                    MenuItem("first", "First choice"),
+                    MenuItem("second", "Second choice"),
+                    selected=("first",),
+                    multiple=True,
+                    classes="height-auto",
+                ),
+                ValueInput("Value", placeholder="Inherited"),
+                ActionBar(
+                    (
+                        Action("sample", "Example action", "x", primary=True),
+                        Action("disabled", "Unavailable action", enabled=False),
+                    )
+                ),
+                Hint("ChoiceMenu keeps navigation separate from committed selection."),
+                title="Selection & actions",
+            )
+
             # Separator
             yield Panel(
                 Caption("above"),
@@ -374,6 +398,8 @@ class DebugWorkspace(Workspace):
 
     def on_menu_highlighted(self, event: Menu.Highlighted) -> None:
         """On menu item highlighted."""
+        if event.menu is not self.query_one("#debug-menu-panel Menu", Menu):
+            return
         self.section = DebugSection(event.item)
 
     @override

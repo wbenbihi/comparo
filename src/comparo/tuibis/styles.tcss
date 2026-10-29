@@ -1,0 +1,119 @@
+/* comparo tuibis — the only stylesheet. Tokens live here and in theme.py. */
+
+Screen {
+    background: $background;
+    color: $foreground;
+}
+
+/* ---- chrome bars ---- */
+.top-bar {
+    height: 1;
+    background: $background;
+}
+.workspace-tabs {
+    height: 2;
+    border-bottom: solid $comparo-border;
+}
+.tabs-line { width: 1fr; }
+.footer-bar {
+    dock: bottom;
+    height: 1;
+    background: $background;
+}
+.bar-left { width: 1fr; }
+.bar-right { width: auto; }
+
+#workspace-body { height: 1fr; }
+
+/* ---- panels ---- */
+Panel { height: auto; }
+.line-block { height: auto; }
+#project-panel, #inspector-panel { height: 1fr; }
+#scope-left > Panel { height: 1fr; }
+.analyse-list { height: 1fr; }
+.analyse-inspect { height: 1fr; }
+.analyse-inspect .line-block { height: 1fr; }
+#reports-archive, #reports-preview { height: 1fr; }
+#settings-nav, #settings-detail { height: 1fr; }
+.right-col > Panel { height: auto; }
+.dive-panel { height: 1fr; }
+Panel {
+    border: round $comparo-border;
+    border-title-color: $comparo-muted;
+    border-subtitle-color: $comparo-muted;
+    padding: 0 1;
+}
+Panel:focus-within {
+    border: round $primary;
+    border-title-color: $foreground;
+    border-title-style: bold;
+}
+Panel.tone-danger { border: round $error; }
+Panel.tone-warning { border: round $warning; }
+
+#explore-workspace { height: 1fr; }
+#project-panel { width: 46; }
+#inspector-panel { width: 1fr; }
+
+/* ---- components ---- */
+.filter-bar { height: auto; }
+.section-rule {
+    height: 1;
+    hatch: horizontal $comparo-border;
+    margin: 0 0;
+}
+.kv-columns { height: auto; }
+.kv-block { width: 1fr; height: auto; }
+.kv-block.-narrow { width: 44; }
+.inspector-host { height: 1fr; }
+.split-row { height: 1; }
+
+ProjectTree {
+    background: $background;
+    padding: 0;
+}
+ProjectTree > .tree--cursor {
+    background: #16283C;
+    text-style: bold;
+}
+ProjectTree > .tree--guides { color: $comparo-border; }
+ProjectTree:focus > .tree--cursor { background: #16283C; }
+
+RequestInspector, EnvironmentInspector {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+TextRow { height: 1; }
+
+/* ---- workspace host & launch/analyse layout ---- */
+.workspace-host { height: 1fr; }
+#launch-workspace, #analyse-view, #reports-workspace, #settings-workspace {
+    height: 1fr;
+}
+.stage-breadcrumb { height: 1; }
+.run-strip { height: 1; }
+.index-strip { height: 1; }
+.stack { height: 1fr; }
+.stack-auto { height: auto; }
+.right-col { width: 1fr; height: 1fr; }
+#scope-left { width: 62; }
+.analyse-list { width: 48; }
+.analyse-detail { height: auto; }
+.analyse-right { width: 1fr; height: 1fr; }
+#reports-archive { width: 96; }
+#reports-preview { width: 1fr; }
+#settings-nav { width: 34; }
+#settings-detail { width: 1fr; }
+
+/* ---- interactive lists & filter ---- */
+CursorList { height: 1fr; scrollbar-size-vertical: 1; }
+CursorList:focus .row-cursor { background: #1B3048; }
+.row-cursor { background: #16283C; }
+FilterBar { height: auto; }
+FilterBar Input {
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: $background;
+}
+FilterBar Input:focus { background: #10161F; }

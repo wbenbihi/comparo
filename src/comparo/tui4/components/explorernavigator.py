@@ -14,34 +14,19 @@ from textual.message import Message
 from textual.reactive import reactive
 
 from comparo.tui4.bindings import FILTER_KEY
-from comparo.tui4.components.badge import BadgeEmphasis
-from comparo.tui4.components.badge import BadgeTone
-from comparo.tui4.components.badge import badge_text
 from comparo.tui4.components.filter import FilterInput
 from comparo.tui4.components.legend import Legend
+from comparo.tui4.components.resourcelabel import resource_label
 from comparo.tui4.components.treemenu import TreeMenu
-from comparo.tui4.fragments import chip
-from comparo.tui4.fragments import entity_label
-from comparo.tui4.fragments import glyph
 from comparo.tui4.models.explorer import ExplorerCatalog
 from comparo.tui4.models.explorer import ResourceEntry
 from comparo.tui4.models.explorer import catalog_nodes
 from comparo.tui4.models.explorer import legend_items
 from comparo.tui4.models.navigation import MenuNode
-from comparo.tui4.theme import kind_glyph
 from comparo.tui4.theme import style
 
 if TYPE_CHECKING:
     from comparo.application.plan_inspection_identity import ResourceCoordinate
-
-_ROLE_BADGES = {
-    "baseline": ("base", BadgeTone.BASELINE),
-    "candidate": ("cand", BadgeTone.CANDIDATE),
-}
-_LOCALITY_BADGES = {
-    "local": ("local", BadgeTone.SUCCESS, BadgeEmphasis.QUIET),
-    "live": ("live", BadgeTone.DANGER, BadgeEmphasis.SOLID),
-}
 
 
 class ExplorerResourceTree(TreeMenu[str]):
@@ -89,34 +74,7 @@ class ExplorerResourceTree(TreeMenu[str]):
 
     def _format_resource(self, entry: ResourceEntry) -> Text:
         """Format one resource identity and its safe catalog facts."""
-        summary = entry.summary
-        facts = entry.facts
-        display_name = summary.name or f"Unnamed {summary.coordinate.kind}"
-        character, token = kind_glyph(summary.coordinate.kind)
-        prefix: list[Text] = [glyph(character, token)]
-        if facts.method is not None:
-            prefix.append(chip(facts.method, f"method.{facts.method}", width=7))
-        badges: list[Text] = []
-        context = self.execution_environment
-        if context is not None and summary.coordinate == context:
-            badges.append(badge_text("exec", tone=BadgeTone.ACTIVE, emphasis=BadgeEmphasis.SOLID))
-        if facts.role is not None:
-            label, tone = _ROLE_BADGES[facts.role]
-            badges.append(badge_text(label, tone=tone, emphasis=BadgeEmphasis.SOLID))
-        if facts.locality is not None:
-            label, tone, emphasis = _LOCALITY_BADGES[facts.locality]
-            badges.append(badge_text(label, tone=tone, emphasis=emphasis))
-        if facts.uses_matrix:
-            badges.append(badge_text("matrix", tone=BadgeTone.WARNING))
-        if facts.streaming:
-            badges.append(badge_text("sse", tone=BadgeTone.INFO))
-        return entity_label(
-            display_name,
-            summary.coordinate.resource_id,
-            prefix=tuple(prefix),
-            badges=tuple(badges),
-            include_id=False,
-        )
+        return resource_label(entry, self.execution_environment)
 
 
 class ExplorerNavigator(Vertical):

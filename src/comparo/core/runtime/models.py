@@ -365,6 +365,8 @@ class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
     outcome: RuntimeOccurrenceOutcome | None = None
     failure_stage: DiagnosticStage | None = None
     failure_code: DiagnosticCode | None = None
+    http_status: int | None = None
+    transport_failed: bool | None = None
     facts: tuple[RuntimeFactSummary, ...] = ()
     fact_evaluation_complete: bool | None = None
 
@@ -405,6 +407,16 @@ class RuntimeEvent(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("runtime event failure code must be typed")
         if self.failure_code is not None and self.kind is not RuntimeEventKind.EXECUTION_FINISHED:
             raise ValueError("runtime event failure is valid only for a finished execution")
+        if self.http_status is not None and (
+            type(self.http_status) is not int or not 100 <= self.http_status <= 599
+        ):
+            raise ValueError("runtime HTTP status must be a valid integer code")
+        if self.transport_failed is not None and type(self.transport_failed) is not bool:
+            raise TypeError("runtime transport failure must be boolean or absent")
+        if (self.http_status is not None or self.transport_failed is not None) and (
+            self.kind is not RuntimeEventKind.EXECUTION_FINISHED
+        ):
+            raise ValueError("runtime HTTP progress requires a finished execution")
         if type(self.facts) is not tuple or any(
             type(item) is not RuntimeFactSummary for item in self.facts
         ):

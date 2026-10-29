@@ -8,6 +8,7 @@ from collections.abc import Coroutine
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
+from typing import override
 
 import msgspec
 import pytest
@@ -164,6 +165,7 @@ def test_request_target_distinguishes_an_unavailable_resolved_url() -> None:
 
     assert not pill.resolved
     assert pill.unavailable
+    assert isinstance(pill.tooltip, Text)
     assert pill.tooltip.plain == ("The canonical URL is unavailable for this execution context.")
 
     with pytest.raises(TypeError, match="typed lifecycle"):
@@ -1561,6 +1563,7 @@ async def test_request_target_remains_pending_while_resolution_is_loading() -> N
     )
 
     class PendingRequestApp(App[None]):
+        @override
         def compose(self) -> ComposeResult:
             yield RequestResourceDetails(detail)
 
@@ -1569,4 +1572,5 @@ async def test_request_target_remains_pending_while_resolution_is_loading() -> N
         pending = app.query_one(RequestTargetPill)
         assert pending.state is RequestTargetState.RESOLVING
         assert pending.target == "resolving URL…"
+        assert isinstance(pending.tooltip, Text)
         assert "could not" not in pending.tooltip.plain

@@ -109,3 +109,24 @@ def resource_detail_bindings() -> list[BindingType]:
 def debug_bindings() -> list[BindingType]:
     """Build bindings for the component gallery."""
     return [Binding(FILTER_KEY, "focus_filter", "Filter", key_display=FILTER_KEY)]
+
+
+def launch_bindings() -> list[BindingType]:
+    """Keep launch actions explicit so Enter in a selector never executes a run."""
+    return [
+        Binding("tab", "target_next", "Next area", priority=True),
+        Binding("shift+tab", "target_previous", "Previous area", show=False, priority=True),
+        Binding("escape", "target_back", "Sections", priority=True),
+        *(
+            Binding(
+                f"alt+{index + 1}", f"target_section({index})", "Section", show=False, priority=True
+            )
+            for index in range(5)
+        ),
+        Binding("ctrl+r", "prepare", "Prepare plan"),
+        Binding("ctrl+x", "run", "Run"),
+        Binding("ctrl+e", "edit", "Edit configuration"),
+        Binding("ctrl+k", "cancel", "Cancel run"),
+        Binding("o", "options", "Run options"),
+        Binding("/", "focus_filter", "Filter"),
+    ]

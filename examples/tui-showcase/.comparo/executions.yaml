@@ -82,3 +82,21 @@ spec:
     - $use: Request/inline-contract
   environments:
     - $use: baseline
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: launch-review
+  name: Launch review
+  description: Compare matrix variants, stable health, release drift, and an inline contract.
+  tags: [comparison, showcase]
+spec:
+  subjects:
+    - $use: Request/catalog
+    - $use: Request/health
+    - $use: Request/release
+    - $use: Request/inline-contract
+  baseline:
+    $use: baseline
+  candidates:
+    - $use: candidate

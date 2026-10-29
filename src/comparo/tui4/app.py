@@ -39,6 +39,7 @@ class ComparoApp(App[None]):
         "styles/request.tcss",
         "styles/resource_types.tcss",
         "styles/profile_resources.tcss",
+        "styles/launch.tcss",
     ]
     BINDINGS: ClassVar[list[BindingType]] = application_bindings()
     state: reactive[AppState] = reactive(default_app_state, init=False)

@@ -608,3 +608,69 @@ def test_planning_types_reject_invalid_direct_construction() -> None:
             invocation_id=_INVOCATION_ID,
             run_id=_RUN_ID,
         )
+
+
+@pytest.mark.parametrize(
+    ("matrix", "cases", "error"),
+    [
+        ("regions", ("us",), None),
+        ("regions", ("missing",), "planning.matrix.case-not-found"),
+        ("unknown", ("us",), "planning.matrix.filter-not-found"),
+    ],
+)
+def test_case_filters_narrow_existing_request_matrices_without_adding_bindings(
+    matrix: str, cases: tuple[str, ...], error: str | None
+) -> None:
+    project = compile_project(
+        document(
+            "Project",
+            "demo",
+            "{defaults: {subjects: [{$use: Request/check}, {$use: Request/plain}], "
+            "environments: [{$use: dev}]}}",
+        ),
+        document("Environment", "dev", "{baseUrl: 'https://dev.example'}"),
+        document(
+            "Matrix",
+            "regions",
+            "{cases: [{id: eu, values: {region: eu}}, {id: us, values: {region: us}}]}",
+        ),
+        document(
+            "Request", "check", "{request: {method: GET, endpoint: /}, matrices: [{$use: regions}]}"
+        ),
+        document("Request", "plain", "{request: {method: GET, endpoint: /}}"),
+    )
+    result = plan_project(
+        project,
+        authority(),
+        PlanningOptions(
+            matrix_filters=(MatrixOverride(binding="regions", matrix=matrix, cases=cases),)
+        ),
+        invocation_id=_INVOCATION_ID,
+        run_id=_RUN_ID,
+    )
+    if error is not None:
+        assert result.prepared is None
+        assert result.diagnostics[0].code.value == error
+        return
+    assert result.prepared is not None
+    subjects = result.prepared.effective.subjects
+    assert tuple(case.case_id.value for case in subjects[0].matrices[0].cases) == ("us",)
+    assert subjects[1].matrices == ()
+    assert result.prepared.project == project
+    assert any(
+        source.kind is ProvenanceKind.INVOCATION
+        for entry in result.prepared.effective.provenance
+        if entry.field == "matrices"
+        for source in entry.sources
+    )
+
+
+def test_case_filters_require_a_nonempty_unique_typed_selection() -> None:
+    with pytest.raises(InvocationBuildError):
+        PlanningOptions(matrix_filters=(MatrixOverride(binding="r", matrix="r"),))
+    with pytest.raises(TypeError):
+        PlanningOptions(matrix_filters=cast("tuple[MatrixOverride, ...]", []))
+    with pytest.raises(InvocationBuildError):
+        PlanningOptions(
+            matrix_filters=(MatrixOverride(binding="r", matrix="r", cases=("one",)),) * 2
+        )

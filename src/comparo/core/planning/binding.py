@@ -152,6 +152,7 @@ def bind_execution(
                 project,
                 subject,
                 matrix_selections,
+                filters=invocation.matrix_filters,
                 maximum_cells=matrix_limit,
             ),
             profiles=profiles,
@@ -159,6 +160,9 @@ def bind_execution(
         )
         for subject, profiles in profile_pairs
     )
+    _validate_filter_targets(effective_subjects, invocation.matrix_filters)
+    if invocation.matrix_filters:
+        matrix_sources = (*matrix_sources, _invocation_source(invocation))
     value_layers = _value_layers(
         project,
         project_spec,
@@ -570,6 +574,7 @@ def _subject_matrices(
     subject: CompiledResource,
     common: tuple[MatrixSelection, ...],
     *,
+    filters: tuple[MatrixSelection, ...] = (),
     maximum_cells: int,
 ) -> tuple[EffectiveMatrix, ...]:
     request_value = object_member(resource_spec(subject), "matrices")
@@ -608,11 +613,26 @@ def _subject_matrices(
         remaining = maximum_cells // cell_count
         matrix = compile_matrix(resource, selection.binding, maximum_cases=remaining)
         matrix = _filter_matrix_cases(matrix, selection.cases, subject)
+        for case_filter in filters:
+            if (case_filter.binding, case_filter.matrix) == (selection.binding, selection.matrix):
+                matrix = _filter_matrix_cases(matrix, case_filter.cases, subject)
         cell_count *= len(matrix.cases)
         matrices.append(matrix)
     result = tuple(matrices)
     validate_unqualified_fields(result, owner=subject)
     return result
+
+
+def _validate_filter_targets(
+    subjects: tuple[EffectiveSubject, ...], filters: tuple[MatrixSelection, ...]
+) -> None:
+    available = {
+        (matrix.binding, matrix.definition.identity.resource_id)
+        for subject in subjects
+        for matrix in subject.matrices
+    }
+    if any((item.binding, item.matrix) not in available for item in filters):
+        raise PlanningProblem("planning.matrix.filter-not-found")
 
 
 def _filter_matrix_cases(

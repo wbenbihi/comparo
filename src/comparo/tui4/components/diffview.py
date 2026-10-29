@@ -16,6 +16,7 @@ from rich.text import Text
 from textual.app import App
 from textual.binding import BindingType
 from textual.geometry import Size
+from textual.message import Message
 from textual.reactive import reactive
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
@@ -47,6 +48,9 @@ class DiffView(ScrollView, can_focus=True):
         "diffview--fold",
         "diffview--cursor",
     }
+
+    class ViewChanged(Message):
+        """The unified/split presentation changed; owners can label the visible sides."""
 
     BINDINGS: ClassVar[list[BindingType]] = diff_view_bindings()
 
@@ -83,8 +87,10 @@ class DiffView(ScrollView, can_focus=True):
             self._ingest()
 
     def watch_view_mode(self) -> None:
-        """Repaint on projection change."""
+        """Repaint on projection change and keep owning evidence labels synchronized."""
         self.refresh()
+        if self.is_mounted:
+            self.post_message(self.ViewChanged())
 
     def watch_cursor(self) -> None:
         """Keep the cursor visible."""
@@ -142,6 +148,20 @@ class DiffView(ScrollView, can_focus=True):
         self._reproject()
 
     # -------------------------------------------------------------- actions
+
+    def focus_first_change(self) -> None:
+        """Position a comparison preview on its first changed line without taking focus."""
+        if self.document is None or not self.document.sided:
+            return
+        self.cursor = next(
+            (
+                position
+                for position, (kind, index) in enumerate(self._entries)
+                if kind == "row" and self.document.rows[index].kind != "context"
+            ),
+            0,
+        )
+        self.scroll_to(y=max(0, self.cursor - 2), animate=False)
 
     def action_cursor_up(self) -> None:
         """Move the cursor line up."""

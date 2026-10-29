@@ -99,9 +99,12 @@ class PlanSliceInspection(msgspec.Struct, frozen=True, kw_only=True):
     method: str | None = None
     unsafe_method: bool | None = None
     profiles: PlanProfilesInspection = PlanProfilesInspection()
+    response_schema: bool = False
 
     def __post_init__(self) -> None:
         """Require the compact slice and every projected cardinality to agree."""
+        if type(self.response_schema) is not bool:
+            raise TypeError("response schema marker must be a bool")
         _validate_plan_slice_shape(self)
         _validate_plan_slice_cardinality(self)
         _validate_plan_slice_topology(self)
@@ -339,8 +342,12 @@ def _validate_rule_attachments(value: PlanInspection) -> None:
     validation = value.validation
     if validation is None:
         return
-    if validation.assertion_rules and not any(item.profiles.assertions for item in value.slices):
-        raise ValueError("compiled assertion rules require an attached AssertionProfile")
+    if validation.assertion_rules and not any(
+        item.profiles.assertions or item.response_schema for item in value.slices
+    ):
+        raise ValueError(
+            "compiled assertion rules require an attached AssertionProfile or response Schema"
+        )
     if validation.diff_rules and not any(item.profiles.diffs for item in value.slices):
         raise ValueError("compiled diff rules require an attached DiffProfile")
 

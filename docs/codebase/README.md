@@ -37,6 +37,8 @@ appropriate application projection exists. Domain support by itself is not a pro
 - [TUI4 resource component contract](tui4-resource-components.md) documents the implemented
   Explorer navigation boundary, representation state, kind-widget registry, action flow, and the
   procedure for adding resource kinds without coupling widgets to backend effects.
+- [TUI4 Launch](tui4-launch.md) documents configuration, plan review, execution, controls,
+  shared components, and the remaining result-inspection work.
 - [Application API reference](application-api-reference.md) is the frontend-neutral golden contract
   for project, preparation, current run, terminal result, archive, and body access. Use it before
   adding any presentation adapter.

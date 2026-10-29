@@ -144,7 +144,7 @@ TreeMenu > .tree--guides-selected {
     width: 100%;
     layout: grid;
     grid-size: 2;
-    grid-columns: 1fr 5fr;
+    grid-columns: 2fr 5fr;
 }
 /* showcase exhibits live inside a VerticalScroll (auto context) — fixed heights */
 #debug-diff, #debug-source, #debug-source-html { height: 16; }
@@ -252,7 +252,7 @@ Legend { height: auto; color: $comparo-muted; }
     width: 100%;
     layout: grid;
     grid-size: 2;
-    grid-columns: 1fr 5fr;
+    grid-columns: 2fr 5fr;
 }
 #explorer-tree-panel { height: 100%; }
 ExplorerNavigator { height: 1fr; }

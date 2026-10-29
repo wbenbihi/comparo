@@ -248,6 +248,7 @@ class RunInvocation(msgspec.Struct, frozen=True, kw_only=True):
     subjects: CollectionOverridePlan[ResourceId, ResourceId] = _default_resource_edit()
     topology: TopologyOverride = InheritTopology()
     matrices: CollectionOverridePlan[MatrixBindingId, MatrixSelection] = _default_matrix_edit()
+    matrix_filters: tuple[MatrixSelection, ...] = ()
     trials: ScalarOverride[PositiveCount] = Inherit()
     maximum_attempts: ScalarOverride[PositiveCount] = Inherit()
     fail_fast: ScalarOverride[bool] = Inherit()
@@ -274,6 +275,7 @@ class RunInvocation(msgspec.Struct, frozen=True, kw_only=True):
         }:
             raise TypeError("run invocation topology must be a typed topology override")
         _validate_matrix_edit(self.matrices)
+        _validate_matrix_filters(self.matrix_filters)
         _validate_count_overrides(self.trials, self.maximum_attempts)
         _validate_bool_override(self.fail_fast)
         _validate_invocation_budgets(self.budgets)
@@ -421,3 +423,11 @@ def _validate_allowlist(
     )
     if any(identity.kind not in allowed for identity in identities):
         raise ValueError("planning authority allowlist contains an invalid resource kind")
+
+
+def _validate_matrix_filters(values: tuple[MatrixSelection, ...]) -> None:
+    if type(values) is not tuple or any(type(item) is not MatrixSelection for item in values):
+        raise TypeError("matrix filters must be an immutable typed tuple")
+    identities = tuple((item.binding, item.matrix) for item in values)
+    if len(set(identities)) != len(identities) or any(not item.cases for item in values):
+        raise ValueError("matrix filters require unique identities and non-empty cases")
