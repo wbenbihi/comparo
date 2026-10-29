@@ -137,10 +137,15 @@ command restores the previous lens and selection. Both automatic previews and fu
 baseline/candidate labels synchronized with unified or split rendering.
 Use `g` for groups, `o` for occurrences, and `e` for evidence; on compact terminals `e` gives
 the detail the available height while keeping request/environment context visible.
-Use **Alt+1–5** for Issues, Requests, Rules, Fields, and Timeline, or **Ctrl+Left/Right** to
-cycle between them from the index, filter, or evidence inspector. Switching views clears the
-previous view's filter and returns focus to the new index. `/` opens the current view's filter;
+Use **Alt+1–5** for Issues, Requests, Rules, Fields, and Timeline, or **[ / ]** to
+cycle between them from the index or evidence inspector. Brackets remain text while editing a
+filter. Switching views clears the previous view's filter and returns focus to the new index.
+`/` opens the current view's filter;
 Enter returns to the index and Escape clears the filter before leaving it.
+
+On macOS, Alt is **Option (⌥)**. In Apple Terminal, enable **Use Option as Meta key** under
+Settings → Profiles → your profile → Keyboard. In iTerm2, set **Left Option Key** to **Esc+**
+under Settings → Profiles → Keys → General. Then Option+1–5 selects the corresponding view.
 
 Fields lists only evidence locations retained in the report, not every field in a captured body.
 When none are retained, it explains the missing evidence, shows the omitted-record count, and

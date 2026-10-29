@@ -63,8 +63,8 @@ class ResultsView(Vertical):
     """Outcome → issue/request → occurrence → evidence with a local back stack."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+left", "cycle_lens(-1)", "Previous view", priority=True),
-        Binding("ctrl+right", "cycle_lens(1)", "Next view", priority=True),
+        Binding("left_square_bracket", "cycle_lens(-1)", "Previous view", key_display="["),
+        Binding("right_square_bracket", "cycle_lens(1)", "Next view", key_display="]"),
         *(
             Binding(f"alt+{index + 1}", f"lens('{lens}')", lens.title(), show=False, priority=True)
             for index, lens in enumerate(LENSES)
@@ -130,7 +130,7 @@ class ResultsView(Vertical):
         yield Caption("Loading sanitized results…", id="result-headline", markup=False)
         yield Caption("", id="result-counts", markup=False)
         yield ActionBar(tuple(Action(lens, lens.title()) for lens in LENSES), id="result-lenses")
-        yield Caption("Alt+1-5 views · Ctrl+←/→ previous/next view", id="result-view-keys")
+        yield Caption("Alt+1-5 views · [ / ] previous/next view", id="result-view-keys")
         with Horizontal(id="result-layout"):
             with Panel(title="Issues", id="result-index-panel"):
                 yield FilterInput("Filter this view…", id="result-filter")

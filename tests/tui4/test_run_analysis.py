@@ -184,9 +184,9 @@ def test_live_status_failed_rule_results_and_authenticated_bodies(
                         assert selected_reference in results.entries[group_key].references
                         assert results.links
                     _capture(app, f"{lens}-{size[0]}")
-                await pilot.press("ctrl+right")
+                await pilot.press("right_square_bracket")
                 assert results.lens == "issues"
-                await pilot.press("ctrl+left")
+                await pilot.press("left_square_bracket")
                 assert results.lens == "timeline"
                 await pilot.press("/", *"no-such-result")
                 await pilot.pause()
@@ -258,7 +258,7 @@ def test_live_status_failed_rule_results_and_authenticated_bodies(
                 await pilot.pause()
                 _capture(app, f"evidence-{size[0]}")
                 # View shortcuts also leave the full-width response inspector cleanly.
-                await pilot.press("ctrl+right")
+                await pilot.press("right_square_bracket")
                 assert results.lens == "requests"
                 assert not results.has_class("body-focus")
                 assert app.focused is results.query_one("#result-index", Table)
