@@ -32,8 +32,7 @@ from comparo.tui4.components.launchsummary import preview_sections
 from comparo.tui4.components.results import ResultsView
 from comparo.tui4.components.runview import LiveRunView
 from comparo.tui4.components.typography import Caption
-from comparo.tui4.models.diff import build_diff_document
-from comparo.tui4.models.diff import build_source_document
+from comparo.tui4.models.evidence import body_preview
 from comparo.tui4.models.explorer import ExplorerCatalog
 from comparo.tui4.models.explorer import build_catalog
 from comparo.tui4.models.launch import LaunchDraft
@@ -526,24 +525,7 @@ class LaunchWorkspace(Workspace):
                 event.references, None, "Capture unavailable or report verification failed."
             )
             return
-        texts = [window.content.decode("utf-8", errors="replace") for window in windows]
-        # Body data can include terminal controls even after value redaction.
-        texts = [
-            "".join(char if char.isprintable() or char in "\n\t" else "�" for char in text)
-            for text in texts
-        ]
-        document = (
-            build_diff_document(*texts) if len(texts) == 2 else build_source_document(texts[0])
-        )
-        message = " · ".join(
-            f"{window.reference.message.value}: {window.source_state}/{window.extent}"
-            f" · {len(window.content)} of "
-            f"{window.total_bytes if window.total_bytes is not None else '?'} bytes"
-            f" · {window.redaction_count} redactions"
-            + (f" · {window.reason}" if window.reason else "")
-            + (" · preview truncated at 64 KiB" if window.next_offset is not None else "")
-            for window in windows
-        )
+        document, message = body_preview(windows)
         event.view.show_body(event.references, document, message)
 
     def on_resize(self, event: Resize) -> None:
