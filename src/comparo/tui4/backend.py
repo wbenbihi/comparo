@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from comparo.application import ArtifactBodyReference
 from comparo.application import ArtifactBodyWindow
+from comparo.application import ArtifactOperationError
 from comparo.application import ArtifactReadLimits
 from comparo.application import AuthoredResourceInspectionRequest
 from comparo.application import AuthoredResourceWindow
@@ -30,6 +31,8 @@ from comparo.application import ProjectPlanRequest
 from comparo.application import ProjectWorkspaceRequest
 from comparo.application import ProjectWorkspaceResult
 from comparo.application import RenderPreviewWindowResult
+from comparo.application import ReportArchiveLimits
+from comparo.application import ReportArchiveListing
 from comparo.application import ResolvedValueInspectionBatch
 from comparo.application import ResolvedValueInspectionBatchResult
 from comparo.application import ResolvedValueInspectionTarget
@@ -48,13 +51,19 @@ from comparo.application import inspect_authored_resource
 from comparo.application import inspect_effective_resource
 from comparo.application import inspect_project_source
 from comparo.application import inspect_project_workspace
+from comparo.application import list_report_archive
 from comparo.application import persisted_production_execution_defaults_v1
 from comparo.application import project_results
 from comparo.application import read_artifact_body_window
+from comparo.application import read_artifact_manifest
+from comparo.application import render_artifact_report
 from comparo.application import resolve_project_root
+from comparo.application import validate_project_artifact_root
+from comparo.application.artifacts import ArtifactOperationErrorCode
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
+from comparo.reporters import ReportFormat
 from comparo.tui4.models.resource import EnvironmentHealthCheckResult
 from comparo.tui4.models.resource import ResolvedMatrixPlan
 from comparo.tui4.models.resource import ResolvedRequestTarget
@@ -72,6 +81,18 @@ MAXIMUM_INSPECTIONS_PER_PREPARATION = 2
 MAXIMUM_REGISTERED_RUNS = 8
 MAXIMUM_RESOLVED_FIELDS = 16
 RESOLVED_PROJECTION_NODES = 64
+REPORT_ARCHIVE_LIMIT = 500
+RESULT_READ_LIMITS = ArtifactReadLimits(
+    maximum_blobs=4096,
+    maximum_blob_bytes=64 * 1024 * 1024,
+    maximum_total_blob_bytes=512 * 1024 * 1024,
+    maximum_manifest_bytes=64 * 1024 * 1024,
+    maximum_report_bytes=64 * 1024 * 1024,
+    maximum_redaction_patterns=4096,
+    maximum_redaction_pattern_bytes=1024 * 1024,
+    maximum_redaction_value_bytes=256 * 1024,
+    maximum_redaction_value_nodes=4096,
+)
 
 RESOLVED_PROJECTION_LIMITS = ResolvedValueProjectionLimits(
     maximum_page_nodes=PositiveCount(value=RESOLVED_PROJECTION_NODES),
@@ -805,25 +826,57 @@ class TuiBackend:
         """Authenticate one bounded capture window using its exact manifest coordinate."""
         if self._artifact_root is None:
             raise RuntimeError("report storage is unavailable")
-        limits = ArtifactReadLimits(
-            maximum_blobs=4096,
-            maximum_blob_bytes=64 * 1024 * 1024,
-            maximum_total_blob_bytes=512 * 1024 * 1024,
-            maximum_manifest_bytes=64 * 1024 * 1024,
-            maximum_report_bytes=64 * 1024 * 1024,
-            maximum_redaction_patterns=4096,
-            maximum_redaction_pattern_bytes=1024 * 1024,
-            maximum_redaction_value_bytes=256 * 1024,
-            maximum_redaction_value_nodes=4096,
-        )
         return await read_artifact_body_window(
             self._artifact_root,
             reference.artifact_id,
             reference,
-            limits,
+            RESULT_READ_LIMITS,
             offset=0,
             maximum_output_bytes=64 * 1024,
         )
+
+    # --------------------------------------------------------- saved reports
+
+    def _existing_report_root(self) -> Path | None:
+        project = resolve_project_root(self._workspace_request.config)
+        selected = project / ARTIFACT_RELATIVE_ROOT
+        if not selected.exists() and not selected.is_symlink():
+            return None
+        root = validate_project_artifact_root(project, ARTIFACT_RELATIVE_ROOT)
+        self._artifact_root = root
+        return root
+
+    def list_reports(self) -> ReportArchiveListing:
+        """Read a bounded authenticated archive without creating storage or sending HTTP."""
+        root = self._existing_report_root()
+        if root is None:
+            return ReportArchiveListing(entries=(), failures=())
+        return list_report_archive(
+            root,
+            ReportArchiveLimits(maximum_entries=REPORT_ARCHIVE_LIMIT, artifact=RESULT_READ_LIMITS),
+        )
+
+    def read_report(self, bundle_id: str) -> ResultProjection:
+        """Reauthenticate the selected manifest and reuse the live result projection."""
+        root = self._existing_report_root()
+        if root is None:
+            raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE)
+        return project_results(read_artifact_manifest(root, bundle_id, RESULT_READ_LIMITS))
+
+    def report_export_path(self, bundle_id: str) -> Path:
+        """Suggest an output beside the project; no file is created here."""
+        return resolve_project_root(self._workspace_request.config) / f"report-{bundle_id}.json"
+
+    def export_report(self, bundle_id: str, destination: Path, format_name: str) -> None:
+        """Verify and export to an explicitly selected new file, never overwrite existing data."""
+        root = self._existing_report_root()
+        if root is None:
+            raise ArtifactOperationError(ArtifactOperationErrorCode.ROOT_UNAVAILABLE)
+        report = render_artifact_report(
+            root, bundle_id, RESULT_READ_LIMITS, ReportFormat(format_name)
+        )
+        with destination.expanduser().open("xb") as output:
+            output.write(report.content)
 
     @property
     def handle(self) -> ComparePreparationHandle | None:

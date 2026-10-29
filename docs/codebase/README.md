@@ -38,7 +38,9 @@ appropriate application projection exists. Domain support by itself is not a pro
   Explorer navigation boundary, representation state, kind-widget registry, action flow, and the
   procedure for adding resource kinds without coupling widgets to backend effects.
 - [TUI4 Launch](tui4-launch.md) documents configuration, plan review, execution, controls,
-  shared components, and the remaining result-inspection work.
+  shared components, and result inspection.
+- [TUI4 Reports](tui4-reports.md) documents the saved-run archive, filters, preview, export,
+  and reuse of the shared Analyze view.
 - [Application API reference](application-api-reference.md) is the frontend-neutral golden contract
   for project, preparation, current run, terminal result, archive, and body access. Use it before
   adding any presentation adapter.

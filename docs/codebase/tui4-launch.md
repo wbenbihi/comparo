@@ -156,8 +156,8 @@ evidence, such as `examples/quickstart`, populate the field index normally.
 
 Editing after a completed run releases the terminal service handle. Starting another run resets
 prior results and evidence. `comparo tui` still launches the older interface; the module command
-above selects TUI4 explicitly. Reports integration, saving authored profiles, and Scenario execution
-are outside this Launch implementation.
+above selects TUI4 explicitly. [Reports](tui4-reports.md) reuses this analysis surface for saved runs.
+Saving authored profiles and Scenario execution are outside this Launch implementation.
 
 Regression coverage is in `tests/tui4/test_launch_workspace.py` and
 `tests/tui4/test_run_analysis.py`, including real loopback execution, a 16-call Matrix run, a 22-call mixed Request run, manual
