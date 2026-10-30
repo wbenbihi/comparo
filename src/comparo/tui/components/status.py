@@ -1,129 +1,92 @@
-"""Shared status, diagnostic, and command-control components."""
+"""Shared glyph and label grammar for transport, rule and gate states."""
 
-from __future__ import annotations
+from collections import Counter
+from collections.abc import Iterable
 
-from typing import final
-from typing import override
+from rich.text import Text
+from textual.content import Content
 
-from textual.app import ComposeResult
-from textual.containers import Horizontal
-from textual.containers import VerticalScroll
-from textual.widgets import Static
+from comparo.tui.theme import style
 
-from comparo.application.inspection import ApplicationDiagnostic
-from comparo.tui.design import SemanticStatus
-from comparo.tui.design import semantic_style
-from comparo.tui.presentation import safe_terminal_text
-
-_SUCCESS_OUTCOMES = frozenset(
-    {"complete", "equivalent", "evaluated", "observed", "passed", "satisfied"}
-)
-_ADVISORY_OUTCOMES = frozenset({"not-evaluated", "partial", "skipped", "warning"})
-_FAILURE_OUTCOMES = frozenset({"drifted", "failed", "violated"})
-_ERROR_OUTCOMES = frozenset(
-    {"blocked", "error", "incomplete", "internal-error", "rejected", "unavailable"}
-)
-
-
-def status_for_outcome(outcome: str) -> SemanticStatus:
-    """Map an artifact or application outcome to the shared visual vocabulary."""
-    normalized = outcome.casefold()
-    if normalized in _SUCCESS_OUTCOMES:
-        return SemanticStatus.SUCCESS
-    if normalized in _ADVISORY_OUTCOMES:
-        return SemanticStatus.ADVISORY
-    if normalized in _FAILURE_OUTCOMES:
-        return SemanticStatus.FAILURE
-    if normalized in _ERROR_OUTCOMES:
-        return SemanticStatus.ERROR
-    if normalized == "cancelled":
-        return SemanticStatus.CANCELLED
-    if normalized == "running":
-        return SemanticStatus.RUNNING
-    if normalized in {"preparing", "queued"}:
-        return SemanticStatus.QUEUED
-    return SemanticStatus.NEUTRAL
+_STATES = {
+    "queued": ("·", "Queued", "queued"),
+    "running": ("◐", "Running", "running"),
+    "observed": ("✓", "Completed", "passed"),
+    "complete": ("✓", "Complete", "passed"),
+    "completed": ("✓", "Completed", "passed"),
+    "passed": ("✓", "Passed", "passed"),
+    "satisfied": ("✓", "Satisfied", "passed"),
+    "equivalent": ("✓", "Equivalent", "passed"),
+    "evaluated": ("✓", "Evaluated", "passed"),
+    "violated": ("✗", "Violated", "failed"),
+    "drifted": ("Δ", "Drifted", "drift"),
+    "failed": ("✗", "Failed", "failed"),
+    "error": ("!", "Error", "error"),
+    "unavailable": ("!", "Unavailable", "error"),
+    "blocked": ("!", "Blocked", "error"),
+    "incomplete": ("!", "Incomplete", "advisory"),
+    "partial": ("!", "Partial", "advisory"),
+    "rejected": ("!", "Rejected", "error"),
+    "internal-error": ("!", "Internal error", "error"),
+    "advisory": ("~", "Advisory", "advisory"),
+    "skipped": ("⊘", "Skipped", "skipped"),
+    "cancelled": ("⊘", "Cancelled", "cancelled"),
+    "not-evaluated": ("—", "Not evaluated", "queued"),
+    "pending": ("·", "Pending", "queued"),
+}
 
 
-@final
-class StatusBadge(Static):
-    """The single glyph, label, and class rendering for a semantic status."""
-
-    def __init__(
-        self,
-        status: SemanticStatus,
-        *,
-        detail: str | None = None,
-        id: str | None = None,
-        classes: str | None = None,
-    ) -> None:
-        """Initialize a badge through the central semantic mapping."""
-        super().__init__("", id=id, classes=classes, markup=False)
-        self._status = SemanticStatus.NEUTRAL
-        self._detail = detail
-        self.set_status(status, detail=detail)
-
-    @property
-    def status(self) -> SemanticStatus:
-        """Return the badge's current semantic state."""
-        return self._status
-
-    def set_status(self, status: SemanticStatus, *, detail: str | None = None) -> None:
-        """Update one badge through the central semantic style catalog."""
-        if type(status) is not SemanticStatus:
-            raise TypeError("status badge requires SemanticStatus")
-        old_style = semantic_style(self._status)
-        style = semantic_style(status)
-        self.remove_class(old_style.css_class)
-        self.add_class(style.css_class)
-        self._status = status
-        self._detail = detail
-        suffix = (
-            "" if detail is None else f" · {safe_terminal_text(detail, maximum_characters=128)}"
-        )
-        self.update(f"{style.glyph} {style.label}{suffix}")
+def status_text(value: str) -> Text:
+    """Preserve the producer's state with a non-color-only semantic label."""
+    character, label, token = _STATES.get(value, ("·", value.replace("-", " ").title(), "queued"))
+    return Text(f"{character} {label}", style(f"status.{token}"))
 
 
-@final
-class DiagnosticsList(VerticalScroll):
-    """Consistent value-free diagnostic rows for load and preparation failures."""
-
-    def __init__(
-        self,
-        diagnostics: tuple[ApplicationDiagnostic, ...],
-        *,
-        id: str | None = None,
-        classes: str | None = None,
-    ) -> None:
-        """Initialize rows from value-free application diagnostics."""
-        super().__init__(id=id, classes=classes)
-        self._diagnostics = diagnostics
-
-    @override
-    def compose(self) -> ComposeResult:
-        """Render typed diagnostics with shared severity semantics."""
-        for item in self._diagnostics:
-            source = "" if item.source is None else f" · {item.source.source}:{item.source.line}"
-            path = "" if not item.path else f" · {'.'.join(item.path)}"
-            text = safe_terminal_text(
-                f"{item.code} · {item.stage}{source}{path}",
-                maximum_characters=512,
-            )
-            with Horizontal(classes="diagnostic-row"):
-                yield StatusBadge(_diagnostic_status(item.severity))
-                yield Static(text, classes="diagnostic-text", markup=False)
+def status_cell(value: str) -> Content:
+    """Render status in the shared record table without parsing markup."""
+    return Content.from_rich_text(status_text(value))
 
 
-def _diagnostic_status(severity: str) -> SemanticStatus:
-    if severity.casefold() == "error":
-        return SemanticStatus.ERROR
-    if severity.casefold() == "warning":
-        return SemanticStatus.ADVISORY
-    return SemanticStatus.NEUTRAL
+def fact_counts(outcomes: Iterable[str]) -> Content:
+    """Count exact retained fact outcomes without deriving a new verdict."""
+    counts = Counter(outcomes)
+    if not counts:
+        return status_cell("pending")
+    text = Text()
+    for state, count in counts.items():
+        if text.plain:
+            text.append(" · ")
+        text.append(f"{count} ")
+        text.append_text(status_text(state))
+    return Content.from_rich_text(text)
 
 
-__all__ = (
-    "DiagnosticsList",
-    "StatusBadge",
-    "status_for_outcome",
-)
+def duration(nanoseconds: int | None) -> str:
+    """Show measured duration without turning absence into zero."""
+    if nanoseconds is None:
+        return "—"
+    return (
+        f"{nanoseconds / 1_000_000:.0f} ms"
+        if nanoseconds < 1_000_000_000
+        else f"{nanoseconds / 1_000_000_000:.2f} s"
+    )
+
+
+def compact_facts(outcomes: Iterable[str]) -> Content:
+    """Short exact fact counters for aligned comparison columns, not a new verdict."""
+    labels = {
+        "satisfied": ("✓", "held", "ok"),
+        "equivalent": ("✓", "same", "ok"),
+        "violated": ("✗", "broken", "err"),
+        "drifted": ("Δ", "drift", "err"),
+        "error": ("!", "error", "error-op"),
+        "not-evaluated": ("—", "N/E", "muted"),
+    }
+    counts = Counter(outcomes)
+    text = Text()
+    for outcome, count in counts.items():
+        mark, label, token = labels.get(outcome, ("·", outcome, "muted"))
+        if text.plain:
+            text.append(" · ")
+        text.append(f"{mark} {count} {label}", style(token))
+    return Content.from_rich_text(text) if counts else Content("—")

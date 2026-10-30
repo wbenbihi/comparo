@@ -171,7 +171,7 @@ def test_reviewed_package_members_come_only_from_git_index(
                 "src/comparo/__init__.py\n"
                 "src/comparo/py.typed\n"
                 "src/comparo/schemas/comparo-report-v1alpha1.schema.json\n"
-                "src/comparo/tui/components/comparo.tcss\n"
+                "src/comparo/tui/styles/main.tcss\n"
                 "src/comparo/tui/components/unreviewed.tcss\n"
                 "src/comparo/untracked.txt\n"
                 "README.md\n"
@@ -186,7 +186,7 @@ def test_reviewed_package_members_come_only_from_git_index(
             PurePosixPath("comparo/__init__.py"),
             PurePosixPath("comparo/py.typed"),
             PurePosixPath("comparo/schemas/comparo-report-v1alpha1.schema.json"),
-            PurePosixPath("comparo/tui/components/comparo.tcss"),
+            PurePosixPath("comparo/tui/styles/main.tcss"),
         }
     )
 

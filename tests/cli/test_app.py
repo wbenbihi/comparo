@@ -243,7 +243,7 @@ def test_tui_help_describes_relative_and_absolute_artifact_root_authority() -> N
 
     assert (code, stderr) == (0, "")
     assert "Project-relative archive created privately" in stdout
-    assert "after admitted Start; absolute" in stdout
+    assert "persisted run preparation; absolute" in stdout
     assert "operator-managed archives must already exist" in stdout
 
 
@@ -277,16 +277,6 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
             "23",
             "--maximum-outstanding-preparations",
             "3",
-            "--maximum-input-characters",
-            "8192",
-            "--maximum-input-items",
-            "257",
-            "--maximum-output-characters",
-            "16384",
-            "--maximum-output-items",
-            "129",
-            "--maximum-navigation-frames-per-workspace",
-            "33",
         ],
         services=cast("CliServices", _StaticServices()),
         stdout=stdout,
@@ -304,11 +294,6 @@ def test_tui_command_threads_caller_owned_limits_into_one_launch_contract() -> N
     assert limits.execution_settings.transport.capture.maximum_encoded_body_bytes.value == 1234
     assert limits.report_archive.maximum_entries == 23
     assert limits.maximum_outstanding_preparations == 3
-    assert limits.interaction.maximum_input_characters == 8192
-    assert limits.interaction.maximum_input_items == 257
-    assert limits.interaction.maximum_output_characters == 16384
-    assert limits.interaction.maximum_output_items == 129
-    assert limits.interaction.maximum_navigation_frames_per_workspace == 33
     assert limits.execution_settings.artifact.persist.value == "always"
     assert stdout.getvalue() == ""
     assert stderr.getvalue() == ""

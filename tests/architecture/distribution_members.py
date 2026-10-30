@@ -61,8 +61,13 @@ _REVIEWED_SECURITY_MODULES = frozenset(
 )
 _REVIEWED_PACKAGE_ASSETS = frozenset(
     {
-        "src/comparo/tui/components/comparo.tcss",
-        "src/comparo/tui4/styles/main.tcss",
+        "src/comparo/tui/styles/environment.tcss",
+        "src/comparo/tui/styles/launch.tcss",
+        "src/comparo/tui/styles/main.tcss",
+        "src/comparo/tui/styles/profile_resources.tcss",
+        "src/comparo/tui/styles/reports.tcss",
+        "src/comparo/tui/styles/request.tcss",
+        "src/comparo/tui/styles/resource_types.tcss",
     }
 )
 

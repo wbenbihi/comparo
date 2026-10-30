@@ -1,17 +1,18 @@
-"""The four persistent thin Comparo workspace compositions."""
+"""Top-level workspace registry."""
 
-from comparo.tui.workspaces.compare import CompareWorkspace as CompareWorkspace
-from comparo.tui.workspaces.compare import CompareWorkspaceState as CompareWorkspaceState
-from comparo.tui.workspaces.explorer import ExplorerWorkspace as ExplorerWorkspace
-from comparo.tui.workspaces.report import ReportWorkspace as ReportWorkspace
-from comparo.tui.workspaces.report import ReportWorkspaceState as ReportWorkspaceState
-from comparo.tui.workspaces.settings import SettingsWorkspace as SettingsWorkspace
+from comparo.tui.types import ComparoScreen
 
-__all__ = (
-    "CompareWorkspace",
-    "CompareWorkspaceState",
-    "ExplorerWorkspace",
-    "ReportWorkspace",
-    "ReportWorkspaceState",
-    "SettingsWorkspace",
-)
+from .base import Workspace
+from .debug import DebugWorkspace
+from .explorer import ExplorerWorkspace
+from .launch import LaunchWorkspace
+from .reports import ReportsWorkspace
+
+WORKSPACES: dict[ComparoScreen, type[Workspace]] = {
+    ComparoScreen.EXPLORE: ExplorerWorkspace,
+    ComparoScreen.LAUNCH: LaunchWorkspace,
+    ComparoScreen.REPORTS: ReportsWorkspace,
+    ComparoScreen.DEBUG: DebugWorkspace,
+}
+
+__all__ = ["WORKSPACES"]
