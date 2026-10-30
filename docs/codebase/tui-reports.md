@@ -1,10 +1,11 @@
-# TUI4 Reports
+# TUI Reports
 
 Reports follows `docs/design/tui-v2/references/reports.webp`: a searchable, date-grouped archive
 beside the selected run's outcome, top issues, provenance, integrity, and actions. It uses the
-TUI4 Menu, ActionBar, FilterInput, Panel, KeyValueList, typography, and status/color primitives.
+TUI Menu, ActionBar, FilterInput, Panel, KeyValueList, typography, and status/color primitives.
 
-Open workspace **3**. Existing runs come from the selected project's `.comparo/artifacts` archive.
+Open workspace **3**. Existing runs come from the selected project's `.comparo/artifacts` archive
+by default; `--artifact-root` selects another archive shared with Launch.
 No execution service is invoked when browsing or opening reports. A fresh process can inspect
 saved results without a live RunHandle or a running demo server.
 
@@ -14,7 +15,8 @@ Environment names in the listing are not assumed to define a baseline/candidate 
 uses the saved manifest's exact comparison links to show directed topology.
 
 Search matches safe report metadata. Status, profile, environment, date, and tag filters operate
-over a bounded authenticated listing (at most 500 physical archive entries). Date filters use
+over a bounded authenticated listing (500 physical archive entries by default, configurable with
+`--maximum-report-entries`). Date filters use
 local calendar days. Pages contain at most 50 reports; date headers are not selectable.
 Corrupt or unverifiable entries are counted separately and cannot be opened. Read-limit and
 archive failures have an explicit retry state; they do not appear as an empty successful archive.
@@ -57,7 +59,7 @@ verifies the artifact before rendering the bounded export and opens the destinat
 existing files are not overwritten. Report bodies and filesystem exception messages never enter
 archive metadata or arbitrary widget markup.
 
-Regression coverage is in `tests/tui4/test_reports.py`. It persists real authenticated test artifacts,
+Regression coverage is in `tests/tui/test_reports.py`. It persists real authenticated test artifacts,
 checks shared-analysis body access, filters, pagination, export/non-overwrite, invalid and empty
 archives, retries, stale preview results, and 80×30, 120×40, and 160×52 layouts. Set
-`COMPARO_SCREENSHOTS=/tmp/comparo-tui4-reports` to capture the rendered archive and analysis screens.
+`COMPARO_SCREENSHOTS=/tmp/comparo-tui-reports` to capture the rendered archive and analysis screens.

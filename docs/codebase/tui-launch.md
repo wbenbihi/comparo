@@ -1,4 +1,4 @@
-# TUI4 Launch
+# TUI Launch
 
 Launch owns one session draft and the Target → Plan → Run → Analyze lifecycle.
 It uses the existing application planner and execution services. It does not compile YAML,
@@ -7,7 +7,7 @@ calculate matrix products, evaluate results, or write project configuration.
 From the repository root:
 
 ```console
-uv run --frozen python -m comparo.tui4 examples/tui-showcase/comparo.yaml
+uv run --frozen comparo tui --config examples/tui-showcase/comparo.yaml
 ```
 
 For actual HTTP execution, start the loopback demo in another terminal:
@@ -35,7 +35,8 @@ selectors appear in labeled, indented `SelectionGroup` children. Profile-inherit
 and topology are explicitly read-only displays, not disabled selection menus.
 
 Mutation approval is an explicit run control and is enforced according to the admitted policy.
-The default TUI4 composition uses the existing trusted-local policy, displayed during review.
+Omitting `--policy` selects trusted-local authority; `--policy PATH` supplies an external
+ExecutionPolicy. The admitted authority is displayed during review.
 
 | Control | Action |
 | --- | --- |
@@ -155,15 +156,15 @@ evidence. Its Fields view therefore shows this explicit empty state; projects re
 evidence, such as `examples/quickstart`, populate the field index normally.
 
 Editing after a completed run releases the terminal service handle. Starting another run resets
-prior results and evidence. `comparo tui` still launches the older interface; the module command
-above selects TUI4 explicitly. [Reports](tui4-reports.md) reuses this analysis surface for saved runs.
+prior results and evidence. `comparo tui` and `python -m comparo.tui` launch this interface
+with the same command options. [Reports](tui-reports.md) reuses this analysis surface for saved runs.
 Saving authored profiles and Scenario execution are outside this Launch implementation.
 
-Regression coverage is in `tests/tui4/test_launch_workspace.py` and
-`tests/tui4/test_run_analysis.py`, including real loopback execution, a 16-call Matrix run, a 22-call mixed Request run, manual
+Regression coverage is in `tests/tui/test_launch_workspace.py` and
+`tests/tui/test_run_analysis.py`, including real loopback execution, a 16-call Matrix run, a 22-call mixed Request run, manual
 configuration, case filters, profile overrides, reset, cancellation, failed assertions, drift,
 authenticated evidence, mode isolation, background focus, and terminal sizes 80×30, 120×40,
-and 160×52. Set `COMPARO_SCREENSHOTS=/tmp/comparo-tui4-review` while running these tests to export
+and 160×52. Set `COMPARO_SCREENSHOTS=/tmp/comparo-tui-review` while running these tests to export
 populated Target, Plan, Run, and Analyze SVG snapshots.
 
 For a populated visual review, select **Run an execution profile → Launch review** in the

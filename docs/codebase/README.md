@@ -2,8 +2,8 @@
 
 This directory is the golden technical reference for Comparo's **current core and backend**. It
 describes the working tree as it exists, not only the intended architecture recorded by the
-roadmap and ADRs. It deliberately excludes `src/comparo/tui`: a replacement interface should
-consume the application contracts documented here rather than copy behavior from the current TUI.
+roadmap and ADRs. Application contracts remain the source of truth for backend behavior. The canonical
+`src/comparo/tui` package consumes these contracts through its component-based frontend.
 
 Last code audit: **2026-07-29**, on the `refactor` branch.
 
@@ -34,12 +34,12 @@ appropriate application projection exists. Domain support by itself is not a pro
 - [TUI/backend integration contract](tui-backend-integration.md) is the detailed callable API and
   information-design reference. It maps every TUI surface to application DTOs, lifecycle rules,
   paging, cancellation, safety guarantees, and current limitations.
-- [TUI4 resource component contract](tui4-resource-components.md) documents the implemented
+- [TUI resource component contract](tui-resource-components.md) documents the implemented
   Explorer navigation boundary, representation state, kind-widget registry, action flow, and the
   procedure for adding resource kinds without coupling widgets to backend effects.
-- [TUI4 Launch](tui4-launch.md) documents configuration, plan review, execution, controls,
+- [TUI Launch](tui-launch.md) documents configuration, plan review, execution, controls,
   shared components, and result inspection.
-- [TUI4 Reports](tui4-reports.md) documents the saved-run archive, filters, preview, export,
+- [TUI Reports](tui-reports.md) documents the saved-run archive, filters, preview, export,
   and reuse of the shared Analyze view.
 - [Application API reference](application-api-reference.md) is the frontend-neutral golden contract
   for project, preparation, current run, terminal result, archive, and body access. Use it before

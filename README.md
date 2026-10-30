@@ -46,7 +46,7 @@ uv run --frozen comparo diff \
 ```
 
 See the [CLI reference](https://github.com/wbenbihi/comparo/blob/main/docs/cli.md) for headless commands, trust semantics, exit codes,
-persistence, and runtime limits, and the [TUI guide](https://github.com/wbenbihi/comparo/blob/main/docs/tui.md) for the four-workspace terminal
+persistence, and runtime limits, and the [TUI guide](https://github.com/wbenbihi/comparo/blob/main/docs/tui.md) for the component-based terminal
 journey.
 
 ## Examples

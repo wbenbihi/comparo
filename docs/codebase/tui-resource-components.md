@@ -1,6 +1,6 @@
-# TUI4 resource component contract
+# TUI resource component contract
 
-This document is the extension guide for Explorer resource presentation in `src/comparo/tui4`.
+This document is the extension guide for Explorer resource presentation in `src/comparo/tui`.
 The implementation deliberately separates project inspection, navigation, presentation state,
 kind-specific projections, widgets, and effects.
 

@@ -28,7 +28,7 @@ rather than falling back to pathname-based file access on Windows.
 | `comparo artifact verify` | local reads | Authenticate a bundle and every declared sanitized blob. |
 | `comparo artifact blob` | local reads | Write one authenticated sanitized blob as exact bytes. |
 | `comparo report` | local reads | Render an authenticated bundle as JSON, JUnit, SARIF, or Markdown. |
-| `comparo tui` | local reads and optional HTTP | Open the four-workspace terminal frontend. |
+| `comparo tui` | local reads and optional HTTP | Open the main terminal frontend (Explore, Launch, Reports). |
 | `comparo completion` | none | Generate Bash, Zsh, or Fish completion text. |
 
 Run `comparo COMMAND --help` for the exact installed options. The command graph can also generate
@@ -44,9 +44,8 @@ In an interactive terminal, bare `comparo` opens the TUI with `./comparo.yaml`; 
 non-interactive bare invocation keeps the generated help behavior. `comparo tui` is the explicit
 form. It accepts `--config`, repeatable `--source`, `--policy`, and `--artifact-root`; all
 project/policy YAML, HTTP capture/decode, and artifact byte/count ceilings exposed by the execution
-commands; plus `--maximum-report-entries`, `--maximum-outstanding-preparations`,
-`--maximum-input-characters`, `--maximum-input-items`, and
-`--maximum-navigation-frames-per-workspace`. See the
+commands; plus `--maximum-report-entries` and `--maximum-outstanding-preparations`.
+The retired interface’s input/output/history limit flags are no longer accepted. See the
 [TUI guide](tui.md#launch-limits-and-artifact-root).
 
 ## Trust and ExecutionPolicy
