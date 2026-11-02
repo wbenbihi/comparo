@@ -41,15 +41,18 @@ November 2 checks passed 416 TUI/CLI/architecture tests before General, then 20 
 packaging tests for that addition.
 Ruff, formatting, strict mypy (803 Python files) and 12 import contracts passed. Current test
 collection finds 4,310 cases; this count is not a full-suite pass claim. The repository configures
-a 100% combined statement/branch coverage threshold. No new full coverage percentage, security
+a maintainer-approved 95% combined statement/branch coverage threshold (updated November 2). No new full coverage percentage, security
 grade or production-readiness certification is asserted by this documentation audit.
 
 Subsequent release preparation ran 4,313 tests in the local sandbox: 4,289 passed and 24 failed
 (23 blocked localhost binds and one stale showcase resource count). Coverage was 97.33%, below
-the required 100%. This restricted result is not release qualification; GitHub Actions must
+the then-required 100%. This restricted result is not release qualification; GitHub Actions must
 validate the PR. The first GitHub run measured **98.01% coverage** and found the stale count
-plus a catalog-shutdown race on Python 3.14. Focused fixes are awaiting the next compatibility
-run; coverage remains an independent release blocker. See the [release guide](docs/releasing.md).
+plus a catalog-shutdown race on Python 3.14. Both compatibility jobs passed in the second run,
+which measured 98.00% coverage and exposed a separate action-bar race. That component now
+preserves buttons during availability changes. The maintainer approved a 95% overall coverage
+floor, retaining branch measurement and existing tests. Full CI and packaging verification remain
+required; the policy change is not new evidence of coverage. See the [release guide](docs/releasing.md).
 
 The documentation refresh also passed 296 CLI/architecture tests, rechecked Ruff/formatting/mypy,
 validated all three example projects and planned all six showcase profiles without HTTP.

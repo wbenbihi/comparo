@@ -29,6 +29,16 @@ gzip --test dist/comparo-*.tar.gz
 unzip -t dist/comparo-*.whl
 ```
 
+CI requires at least **95% overall statement-and-branch coverage**. Branch measurement stays enabled;
+this floor is not a target to reduce coverage to. Preserve existing tests and add behavioral regression
+tests for bug fixes. Prioritize execution correctness, assertions, policy enforcement, secret handling,
+and artifact integrity; UI tests should verify observable behavior, keyboard focus, and asynchronous
+state transitions rather than merely execute lines. Review coverage changes alongside the code.
+
+A release is qualified only when the full GitHub Actions run passes, including Python 3.13/3.14,
+distribution validation, and the installed-wheel smoke test. Targeted local tests are supporting
+evidence, not a substitute for those checks.
+
 The archive checks require a clean reviewed Git index: untracked package files are deliberately
 rejected rather than treated as release inputs.
 

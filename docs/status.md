@@ -61,7 +61,7 @@ The latest feature verification passed **176 TUI/architecture tests** and **49 a
 tests**, plus Ruff, formatting, strict mypy and all **12 import contracts**. These are targeted
 results, not a claim of full-suite coverage or universal mockup acceptance. Test discovery on
 November 2 found **4,313 cases** after the Settings section tests; collection is not execution. The configured
-coverage threshold is 100%, and a full release coverage/build audit remains a separate gate.
+coverage threshold is now 95% (maintainer-approved November 2), and a full release coverage/build audit remains a separate gate.
 
 This documentation refresh additionally passed **296 CLI/architecture tests**, Ruff, formatting
 and strict mypy. All three example projects validated, and all six showcase ExecutionProfiles
@@ -81,8 +81,11 @@ the release gate. The release PR delegates definitive validation to GitHub Actio
 
 Initial GitHub Actions validation confirmed 4,312 passing tests on Python 3.13 and 4,311 on
 3.14; failures were the stale example count and a 3.14 catalog-shutdown race. Both have focused
-fixes and targeted regression coverage awaiting the next CI result. The main CI run measured
-**98.01% coverage**, so the 100% release gate remains unresolved.
+fixes and targeted regression coverage. Both compatibility jobs passed in the second run; its
+main job found a separate action-bar timing race and measured **98.00% coverage**. The shared
+component now preserves buttons during availability updates, with regression coverage. The
+maintainer approved a **95% overall coverage floor**, retaining branch measurement and existing
+tests. Full CI, distribution validation and installed-wheel checks must still pass.
 
 - [User TUI guide](tui.md), [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md),
   [Settings](codebase/tui-settings.md): actual controls and behavior.

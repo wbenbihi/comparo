@@ -14,14 +14,17 @@ Opening the PR starts the [CI workflow](../.github/workflows/ci.yml) on GitHub-h
 runners. CI installs the locked dependencies and runs:
 
 1. Lock consistency, Ruff lint/format, strict mypy and import contracts.
-2. The full test suite with the configured **100% statement/branch coverage gate**.
+2. The full test suite with the configured **95% combined statement/branch coverage gate**.
 3. Wheel/sdist builds, exact distribution membership and archive-integrity checks.
 4. An installed-wheel smoke test and Python 3.13/3.14 compatibility jobs.
 
 These isolated CI runs provide the release evidence. Local tests that cannot bind a loopback
 server in the development sandbox are not a substitute for the GitHub result. Keep the PR in
-draft until failures are resolved and the required checks pass. Do not lower or bypass the
-coverage gate to publish this refactor.
+draft until failures are resolved and the required checks pass. The maintainer approved a 95%
+overall coverage floor on November 2, retaining branch measurement and all existing tests. This
+replaces the previous blanket 100% requirement; it does not certify the uncovered paths. See the
+[quality policy](../CONTRIBUTING.md#quality-gates). Do not bypass this gate or treat it as a target
+to reduce existing coverage to.
 
 The repository's CI runners are distinct from Comparo's operator-owned ExecutionPolicy for
 running untrusted API projects. This release does not introduce a distributable Comparo CI action.
@@ -34,7 +37,7 @@ The November 2 local sandbox run completed **4,289 passing / 24 failing tests**:
 - The showcase inventory test in `tests/examples/test_projects.py` expects 44 resources; the
   current project contains 45. The PR follow-up corrects this assertion.
 - That restricted run measured **97.33%** combined coverage. The definitive CI measurement is
-  recorded below; the 100% release gate was not met by this local run.
+  recorded below; the then-configured 100% release gate was not met by this local run.
 
 Lint, formatting, strict typing, import contracts and lock verification passed locally. The latest
 Settings section-navigation change passed 17 targeted Settings/architecture tests. These results
@@ -47,12 +50,21 @@ do not constitute release approval. See [current implementation status](status.m
 - Python 3.13: **4,312 passed / 1 failed**, solely the stale showcase count.
 - Python 3.14: **4,311 passed / 2 failed**, the count and a Launch catalog reload completing during
   widget teardown after saving a profile.
-- Main check: **98.01% coverage**, below the required 100%, plus the stale count failure.
+- Main check: **98.01% coverage**, below the then-required 100%, plus the stale count failure.
 
 The count is corrected in `eff61cf`. The teardown race is fixed in `fb0ae71`, with deterministic
 regressions for both successful and failed catalog reads arriving after shutdown. Targeted checks
-passed (3 example-plan cases and 15 profile-authoring/architecture cases). The subsequent CI run
-must verify these fixes on both Python versions. Coverage remains a separate unresolved gate.
+passed (3 example-plan cases and 15 profile-authoring/architecture cases).
+
+[The second PR run](https://github.com/wbenbihi/comparo/actions/runs/41533468340) passed both Python
+compatibility jobs. The main check found a separate action-bar race in the profile-save journey
+(4,314 passed / 1 failed) and measured 98.00% coverage. Availability changes now update existing
+buttons instead of asynchronously removing and rebuilding them, preserving controls and focus.
+Regression tests exercise repeated availability changes, disabled/stale actions, and profile-save
+failures. Additional tests cover profile publication, build metadata, and platform/contract edges.
+
+The approved coverage policy is now 95% overall, with branch measurement retained. The next full
+GitHub run must pass tests, compatibility, packaging and wheel checks before qualification.
 
 ## After CI and review
 
