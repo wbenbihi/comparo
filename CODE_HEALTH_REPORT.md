@@ -47,7 +47,9 @@ grade or production-readiness certification is asserted by this documentation au
 Subsequent release preparation ran 4,313 tests in the local sandbox: 4,289 passed and 24 failed
 (23 blocked localhost binds and one stale showcase resource count). Coverage was 97.33%, below
 the required 100%. This restricted result is not release qualification; GitHub Actions must
-validate the PR. See the [release guide](docs/releasing.md).
+validate the PR. The first GitHub run measured **98.01% coverage** and found the stale count
+plus a catalog-shutdown race on Python 3.14. Focused fixes are awaiting the next compatibility
+run; coverage remains an independent release blocker. See the [release guide](docs/releasing.md).
 
 The documentation refresh also passed 296 CLI/architecture tests, rechecked Ruff/formatting/mypy,
 validated all three example projects and planned all six showcase profiles without HTTP.

@@ -79,6 +79,11 @@ showcase inventory's stale 44-resource expectation (45 are present). These resul
 the release gate. The release PR delegates definitive validation to GitHub Actions; see the
 [release guide](releasing.md) for checks, required follow-up and publication after merge.
 
+Initial GitHub Actions validation confirmed 4,312 passing tests on Python 3.13 and 4,311 on
+3.14; failures were the stale example count and a 3.14 catalog-shutdown race. Both have focused
+fixes and targeted regression coverage awaiting the next CI result. The main CI run measured
+**98.01% coverage**, so the 100% release gate remains unresolved.
+
 - [User TUI guide](tui.md), [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md),
   [Settings](codebase/tui-settings.md): actual controls and behavior.
 - [Application APIs](codebase/application-api-reference.md): backend contracts and ownership.

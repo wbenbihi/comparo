@@ -32,13 +32,27 @@ The November 2 local sandbox run completed **4,289 passing / 24 failing tests**:
 
 - 23 failures were localhost binding restrictions (`PermissionError`), requiring CI execution.
 - The showcase inventory test in `tests/examples/test_projects.py` expects 44 resources; the
-  current project contains 45. Reconcile the assertion with the reviewed example inventory.
+  current project contains 45. The PR follow-up corrects this assertion.
 - That restricted run measured **97.33%** combined coverage. The definitive CI measurement is
-  pending, and the 100% release gate has not been met by this local run.
+  recorded below; the 100% release gate was not met by this local run.
 
 Lint, formatting, strict typing, import contracts and lock verification passed locally. The latest
 Settings section-navigation change passed 17 targeted Settings/architecture tests. These results
 do not constitute release approval. See [current implementation status](status.md) for scope and gaps.
+
+## First GitHub Actions results and fixes
+
+[The initial PR run](https://github.com/wbenbihi/comparo/actions/runs/41530231464) completed:
+
+- Python 3.13: **4,312 passed / 1 failed**, solely the stale showcase count.
+- Python 3.14: **4,311 passed / 2 failed**, the count and a Launch catalog reload completing during
+  widget teardown after saving a profile.
+- Main check: **98.01% coverage**, below the required 100%, plus the stale count failure.
+
+The count is corrected in `eff61cf`. The teardown race is fixed in `fb0ae71`, with deterministic
+regressions for both successful and failed catalog reads arriving after shutdown. Targeted checks
+passed (3 example-plan cases and 15 profile-authoring/architecture cases). The subsequent CI run
+must verify these fixes on both Python versions. Coverage remains a separate unresolved gate.
 
 ## After CI and review
 
