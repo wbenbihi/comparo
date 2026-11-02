@@ -70,6 +70,7 @@ jobs:
       - name: Plan semantic release
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           RECOVERY_TAG: ${{ inputs.release_tag }}
         run: |
           if [[ -n "$RECOVERY_TAG" ]]; then
@@ -77,15 +78,23 @@ jobs:
             echo "recovery=true" >> "$GITHUB_OUTPUT"
             echo "tag=$RECOVERY_TAG" >> "$GITHUB_OUTPUT"
           else
-            next_version="$(uv run --frozen semantic-release version --print)"
-            last_version="$(uv run --frozen semantic-release version --print-last-released)"
+            # Even print-only commands emit released=false to GITHUB_OUTPUT.
+            # Keep their output separate from this step's authoritative decision.
+            next_version="$(env -u GITHUB_OUTPUT uv run --frozen semantic-release version --print)"
+            last_version="$(env -u GITHUB_OUTPUT uv run --frozen semantic-release version --print-last-released)"
+            tag="$(env -u GITHUB_OUTPUT uv run --frozen semantic-release version --print-tag)"
+            if [[ ! "$next_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || [[ "$tag" != "v$next_version" ]]; then
+              echo "Invalid semantic-release version/tag output" >&2
+              exit 1
+            fi
+            echo "Release plan: ${last_version:-none} -> $next_version ($tag)"
             if [[ "$next_version" == "$last_version" ]]; then
               echo "released=false" >> "$GITHUB_OUTPUT"
               echo "recovery=false" >> "$GITHUB_OUTPUT"
             else
               echo "released=true" >> "$GITHUB_OUTPUT"
               echo "recovery=false" >> "$GITHUB_OUTPUT"
-              echo "tag=$(uv run --frozen semantic-release version --print-tag)" >> "$GITHUB_OUTPUT"
+              echo "tag=$tag" >> "$GITHUB_OUTPUT"
             fi
           fi
 
