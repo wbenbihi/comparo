@@ -3,27 +3,31 @@
 The `refactor` branch contains the rebuilt immutable domain, shared selector engine, pure
 evaluation kernel, versioned configuration compiler, deterministic planner, run-scoped
 value/secrets boundary, bounded runtime, production HTTP adapter, sanitized artifact/reporting
-boundary, migrated local CLI, and frontend-neutral TUI application contracts. The current TUI
-presentation is rejected as a product reference; its replacement must consume the documented
-backend contracts below. The authoritative current documents are:
+boundary, local CLI, and the canonical component-based `comparo.tui` frontend.
+Documentation was reconciled with the working tree on **2026-10-31**. Start with the
+[current status and remaining gaps](status.md); implementation statements below describe the
+unreleased tree, not the historical v0.2.0 release. The authoritative current documents are:
 
 - [Core/backend codebase golden reference](codebase/README.md) — current implementation truth,
-  end-to-end pipelines, module catalog, contributor workflow, and replacement-TUI capability audit
+  end-to-end pipelines, module catalog, contributor workflow, and backend and TUI capability audit
 - [TUI/backend integration contract](codebase/tui-backend-integration.md) — callable application
   APIs, safe display fields, lifecycles, paging, cancellation, and screen-level data mapping
 - [Core domain foundation](core-domain-foundation.md)
 - [Selector language](selector-language.md)
 - [Pure evaluation kernel](core-evaluation-kernel.md)
-- [Versioned configuration compiler](configuration-compiler.md)
+- [Configuration authoring guide](configuration.md) and [versioned compiler](configuration-compiler.md)
 - [Deterministic run planner](run-planner.md)
 - [Run-scoped values and secrets](run-scoped-values.md)
 - [Offline runtime](offline-runtime.md)
 - [Production HTTP adapter](production-http-adapter.md)
-- [Sanitized artifacts, persistence, and reporters](artifacts-and-reporters.md)
+- [Report/artifact format guide](report-format.md) and [sanitization/persistence contract](artifacts-and-reporters.md)
 - [CLI reference](cli.md)
-- [Terminal UI](tui.md)
+- [Terminal UI](tui.md) — launch commands, default keys and limits
+- [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md), and
+  [Settings](codebase/tui-settings.md) — implemented workspace behavior
 - [TUI results implementation contract](tui-results-implementation-contract.md)
-- [TUI rework audit and implementation contract](tui-rework-plan.md)
+- [Historical TUI rework audit](tui-rework-plan.md) and [current design QA](../design-qa.md)
+- [Visual and interaction references](design/tui-v2/README.md) — retained mockups and design targets
 - [Runnable example projects](../examples/README.md)
 - [Architecture](architecture.md)
 - [Core refactor roadmap](core-refactor-roadmap.md)
@@ -36,5 +40,5 @@ modeled or compiled from capabilities wired through the current production compo
 application APIs. The current tree has a `comparo/v1alpha1` compiler, injected run-resolution
 ports, fake and production HTTP execution paths, sanitized artifacts, atomic POSIX local
 persistence, pure JSON/JUnit/SARIF/Markdown reporters, and a shared production execution
-composition used by `run`, `diff`, `exec`, and the TUI Compare workspace. The public plugin host,
+composition used by `run`, `diff`, `exec`, and the TUI Launch workspace. The public plugin host,
 scenarios, and dedicated GitHub Action remain later roadmap work.

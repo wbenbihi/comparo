@@ -49,11 +49,25 @@ Prefer small, final value types and composition. Inheritance is appropriate only
 substitutability relationship. Ports are narrow standard-library protocols, and effectful work
 stays outside the domain.
 
+## Terminal UI changes
+
+Use `src/comparo/tui` and `tests/tui`; retired versioned packages are not extension points.
+Read the [workspace guides](docs/tui.md) and [visual references](docs/design/tui-v2/README.md).
+Compose the existing component library and semantic glyph/color tokens. Standard Textual mechanics
+belong inside those components; workspaces must not introduce differently styled parallel widgets.
+Launch and Reports share `ResultsView` and the capture inspector.
+
+Run focused Pilot journeys at 80×30, 120×40 and 160×52, then relevant regressions. Capture and inspect
+actual screenshots when layout changes. A passing interaction test alone does not establish mockup
+fidelity. Document implemented controls separately from backend-only capabilities and design goals.
+User preference tests must use a temporary preference path rather than writing the developer's config.
+
 ## Commits
 
 Commit messages follow the [Angular Commit Convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit)
 (`type(scope): subject`), which drives automated semantic releases. Keep subjects concise and
-imperative; use a body only for breaking changes or large features. Common types: `feat`,
+imperative; use a body when it helps explain behavior or validation. Split unrelated changes into
+focused, reviewable commits; do not put an entire mixed working tree into one commit. Common types: `feat`,
 `fix`, `docs`, `refactor`, `test`, `chore`, `ci`, `build`, `perf`.
 
 ## Pull requests

@@ -10,7 +10,11 @@ explicit diff profiles, and can reduce those facts into a CI gate verdict.
 
 Comparo is alpha software. The production core, local CLI, and terminal UI have been rebuilt
 around the `comparo/v1alpha1` configuration lineage; the former prototype is quarantined and is
-not a compatibility target. Dedicated CI integration has not yet been migrated.
+not a compatibility target. The canonical TUI is `comparo.tui`, with Explore, Launch, Reports,
+Settings, and a component Debug gallery. Dedicated CI integration has not yet been migrated.
+
+The [current implementation status](docs/status.md) records supported surfaces, remaining gaps,
+and the distinction between this unreleased working tree and the older v0.2.0 release history.
 
 The executable subset is deliberately fail-closed: configuration can describe more of the future
 model than the first production runtime implements, and an execution command rejects unsupported
@@ -49,6 +53,19 @@ See the [CLI reference](https://github.com/wbenbihi/comparo/blob/main/docs/cli.m
 persistence, and runtime limits, and the [TUI guide](https://github.com/wbenbihi/comparo/blob/main/docs/tui.md) for the component-based terminal
 journey.
 
+## Terminal workflow
+
+- Explore resources and send a selected Request or ExecutionProfile to Launch with `c`.
+- Configure Target, prepare with Ctrl+R, review Plan, and execute with Ctrl+X.
+- Follow live request status, timing and rule outcomes; explicitly open Analyze after completion.
+- Reopen saved results in Reports using the same Analyze view. Press `i` to page captures,
+  inspect JSON/SSE, or review a sanitized cURL command.
+- Save a manual target as a new ExecutionProfile after reviewing its YAML.
+- Use Settings for persistent appearance, mouse, startup-workspace and shortcut preferences.
+
+These are default keys; Settings can remap the main workspace, Launch and Analyze commands.
+See the [TUI guide](docs/tui.md) for controls and limits.
+
 ## Examples
 
 The repository includes three runnable local projects backed by one deterministic loopback demo
@@ -61,7 +78,7 @@ uv run --frozen comparo tui --config examples/tui-showcase/comparo.yaml
 ```
 
 See the [example project guide](https://github.com/wbenbihi/comparo/blob/main/examples/README.md) for the expected outcomes and suggested
-Explorer, Compare, and Report journeys.
+Explore, Launch, and Reports journeys.
 
 ## Architecture
 
