@@ -58,6 +58,9 @@ from comparo.application import resolve_project_root
 from comparo.application import validate_existing_artifact_root
 from comparo.application import validate_project_artifact_root
 from comparo.application.artifacts import ArtifactOperationErrorCode
+from comparo.application.profile_authoring import ProfileDocument
+from comparo.application.profile_authoring import prepare_profile_document
+from comparo.application.profile_authoring import save_profile_document
 from comparo.core.domain.primitives import ByteCount
 from comparo.core.domain.primitives import Duration
 from comparo.core.domain.primitives import PositiveCount
@@ -913,3 +916,13 @@ class TuiBackend:
         self.discard_handle()
         self.compare.close()
         return await self.compare.aclose(timeout=SHUTDOWN_TIMEOUT)
+
+    def prepare_profile(
+        self, options: PlanningOptions, resource_id: str, name: str
+    ) -> ProfileDocument:
+        """Create a reviewable authored profile without writing project files."""
+        return prepare_profile_document(self._workspace_request, options, resource_id, name)
+
+    def save_profile(self, document: ProfileDocument) -> None:
+        """Publish exactly one reviewed profile after an explicit save action."""
+        save_profile_document(self._workspace_request, document)

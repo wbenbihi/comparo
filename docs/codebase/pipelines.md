@@ -72,6 +72,15 @@ The compiler recognizes but rejects reserved future directives such as `$case`, 
 `$step`, `$select`, `$transform`, `$patch`, and `$provider`. A frontend must not offer them as
 currently executable syntax.
 
+### Manual profile authoring
+
+The TUI's Save as profile action delegates to `application.profile_authoring`. Preview validates
+identity and representable planning selections and returns exact YAML plus its project-local path.
+Save compiles the temporary document with the project, publishes a new file exclusively, verifies
+normal discovery and refreshes catalogs. It does not edit existing resources, resolve values, save
+mutation approval or start execution. Invocation-only selections that cannot be represented in
+ExecutionProfile YAML fail explicitly. See [the authoring API](application-api-reference.md#manual-executionprofile-authoring).
+
 ### Source revision retention
 
 `LoadedCompilation` retains source-located parsed documents internally and a logical source

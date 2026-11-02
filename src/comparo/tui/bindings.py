@@ -91,6 +91,7 @@ def explorer_bindings() -> list[BindingType]:
             key_display=HEALTH_CHECK_KEY,
         ),
         Binding(RELOAD_KEY, "reload", "Reload", key_display="^r"),
+        Binding("c", "use_in_launch", "Use in Launch"),
     ]
 
 

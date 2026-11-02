@@ -21,9 +21,13 @@ from comparo.application.plan_inspection_identity import ResourceCoordinate
 from .backend import TuiBackend
 from .bindings import application_bindings
 from .components.header import AppHeader
+from .components.launchconfig import LaunchConfiguration
 from .components.navigation import NavTab
 from .components.results import ResultsView
 from .contracts import TuiLaunchRequest
+from .launch_handoff import UseInLaunch
+from .launch_handoff import apply_launch_target
+from .launch_handoff import validate_launch_target
 from .preferences import Preferences
 from .preferences import load_preferences
 from .preferences import preferences_path
@@ -132,3 +136,30 @@ class ComparoApp(App[None]):
         self.query_one(LaunchWorkspace)._update_controls()
         self.refresh(layout=True)
         return True
+
+    def on_use_in_launch(self, event: UseInLaunch) -> None:
+        """Populate an editable target while protecting an in-flight run."""
+        event.stop()
+        launch = self.query_one(LaunchWorkspace)
+        if (
+            launch.phase in {"loading", "preparing", "running", "cancelling"}
+            or launch.catalog is None
+        ):
+            self.notify(
+                "Launch is busy. Finish or cancel its current operation first.", severity="warning"
+            )
+            return
+        try:
+            validate_launch_target(launch.catalog, event.resource, event.environment)
+            if launch.phase in {"ready", "finished"}:
+                launch.action_edit()
+            apply_launch_target(
+                launch.query_one(LaunchConfiguration),
+                launch.catalog,
+                event.resource,
+                event.environment,
+            )
+        except ValueError as error:
+            self.notify(str(error), severity="warning")
+            return
+        self.action_workspace(ComparoScreen.LAUNCH)

@@ -9,9 +9,10 @@ modules named below so contributors can trace validation and ownership without g
 
 ## Boundary rules
 
-Every application product follows the same rules:
+Inspection and execution products follow these rules; explicit authoring/write products are
+described separately below:
 
-1. DTOs are frozen, keyword-only `msgspec.Struct` values or closed enums. They can be retained by
+1. Inspection DTOs are frozen, keyword-only `msgspec.Struct` values or closed enums. They can be retained by
    a frontend without retaining live providers, secrets, paths, sockets, or mutable core state.
 2. A success-or-diagnostics product never contains both. Diagnostics contain closed codes and
    safe coordinates; arbitrary adapter exception text never crosses this boundary.
@@ -303,6 +304,43 @@ JSON Pointer and page fields then apply. Event boundaries never depend on chunk 
 Failures are closed `ArtifactOperationErrorCode` values: unavailable/not-found bodies, unsupported
 format, decode failure, missing subtree/event, output cap, or structural projection cap. No parser
 exception or body fragment appears in the error.
+
+## Manual ExecutionProfile authoring
+
+Public module: `comparo.application.profile_authoring` (not re-exported from the package root).
+
+```python
+prepare_profile_document(
+    workspace: ProjectWorkspaceRequest,
+    options: PlanningOptions,
+    resource_id: str,
+    name: str,
+) -> ProfileDocument
+
+save_profile_document(workspace: ProjectWorkspaceRequest, document: ProfileDocument) -> None
+```
+
+Both calls are synchronous local-I/O operations and belong off the UI event loop. Preview loads
+and compiles the bounded project but writes nothing. `ProfileDocument` is a frozen dataclass with
+`resource_id`, `destination: Path`, and exact authored YAML `content`; the destination is deliberately
+visible for write review. This is an authoring product, not a live-value inspection DTO.
+
+IDs start with a lowercase letter and contain lowercase letters, digits or hyphens (maximum 63
+characters); names are printable and at most 120 characters. Existing profile IDs are rejected.
+The destination is `execution-profile-<id>.yaml` under the Project's local data directory. Directory
+symlinks and project-escaping destinations are rejected. Save validates a temporary source against
+the project, publishes exclusively without replacing an existing file, and checks discovery. A file
+excluded by the project's source filters is not retained.
+
+Representable selections include subjects, assertion-only environments or baseline/candidates,
+trials, maximum attempts, fail-fast, assertion/diff selections (including empty lists) and a selected
+gate. Inherited fields remain inherited; resolved values and mutation approval are never written.
+Selected saved profiles, invocation case filters, clearing an inherited gate, and invocation-only
+Matrix/value/Request/budget overrides are rejected rather than silently removed.
+
+`ProfileAuthoringError` contains fixed user-facing explanations. Handle `FileExistsError` and
+filesystem errors with fixed copy; never expose arbitrary exception text. Refresh project catalogs
+after saving; saving does not prepare a plan or execute HTTP.
 
 ## Error and serialization handling
 

@@ -2,7 +2,7 @@
 
 Launch owns one session draft and the Target → Plan → Run → Analyze lifecycle.
 It uses the existing application planner and execution services. It does not compile YAML,
-calculate matrix products, evaluate results, or write project configuration.
+calculate matrix products, or evaluate results. Profile writes go through the application authoring service.
 
 From the repository root:
 
@@ -19,7 +19,7 @@ uv run --frozen python examples/support/demo_server.py
 Open workspace `2`. The starting choices are **Run requests**, **Run an execution profile**, and
 **Run assertions**. Saved profile selection lives inside Target. Profile mode also offers
 **Configure manually**, using explicit Requests and comparison or assertion-only topology.
-Manual configuration is session-only; this screen does not save a new ExecutionProfile.
+Manual configuration stays in the session until you explicitly choose **Save as profile**.
 
 Variants exposes actual Matrix case filters and trials. Validation offers inherited, selected,
 or cleared assertion/diff/gate profiles. Request response schemas remain active when assertion
@@ -158,7 +158,24 @@ evidence, such as `examples/quickstart`, populate the field index normally.
 Editing after a completed run releases the terminal service handle. Starting another run resets
 prior results and evidence. `comparo tui` and `python -m comparo.tui` launch this interface
 with the same command options. [Reports](tui-reports.md) reuses this analysis surface for saved runs.
-Saving authored profiles and Scenario execution are outside this Launch implementation.
+Scenario execution remains unsupported by the production backend.
+
+### Reusing a manual target
+
+**Save as profile** on Target opens an ID/name editor and an exact YAML/destination preview.
+Save becomes available only after Preview. The application validates the new ExecutionProfile
+against the project, publishes a new file exclusively, checks normal project discovery, and refreshes
+both Launch and Explore. Existing source files are never overwritten. Selections include requests,
+environments or baseline/candidates, trials, retries, fail-fast, and assertion/diff/gate profiles.
+Inherited selections stay inherited; mutation approval stays session-only. Invocation-only Matrix
+case filters and clearing an inherited gate cannot be represented in profile YAML and are rejected
+explicitly; they are never silently dropped.
+
+From Explore, select a Request or ExecutionProfile and press **c** (**Use selected resource in
+Launch**). A Request uses the active Environment for assertion checks; without one it starts from
+project comparison defaults. An ExecutionProfile uses its own topology. This only populates Target:
+Prepare and Run remain separate explicit actions. A busy Launch rejects the handoff, and stale
+resource revisions are rejected before invalidating an existing plan.
 
 Regression coverage is in `tests/tui/test_launch_workspace.py` and
 `tests/tui/test_run_analysis.py`, including real loopback execution, a 16-call Matrix run, a 22-call mixed Request run, manual

@@ -18,17 +18,19 @@ from comparo.application import SourceInspectionError
 from comparo.tui.backend import HealthCheckBatch
 from comparo.tui.backend import ResolvedFieldBatch
 from comparo.tui.bindings import explorer_bindings
+from comparo.tui.components.actionbar import Action
+from comparo.tui.components.actionbar import ActionBar
 from comparo.tui.components.explorernavigator import ExplorerNavigator
 from comparo.tui.components.panel import Panel
 from comparo.tui.components.resourcedetail import ResourceDetailOverview
+from comparo.tui.explorer_projection import resolved_view
+from comparo.tui.launch_handoff import UseInLaunch
 from comparo.tui.models.explorer import ExplorerCatalog
 from comparo.tui.models.explorer import ResourceEntry
 from comparo.tui.models.explorer import build_catalog
 from comparo.tui.models.explorer import select_execution_environment
 from comparo.tui.models.resource import EnvironmentHealthCheckResult
 from comparo.tui.models.resource import InspectionPhase
-from comparo.tui.models.resource import ResolvedMatrixSelection
-from comparo.tui.models.resource import ResolvedResourceView
 from comparo.tui.models.resource import ResourceActionId
 from comparo.tui.models.resource import ResourceDetail
 from comparo.tui.models.resource import ResourceInspection
@@ -51,7 +53,6 @@ from comparo.tui.models.resource import toggle_overview_mode
 from comparo.tui.models.resource import unavailable_resolved
 from comparo.tui.models.resource import with_health_check
 from comparo.tui.models.resource_presenters import environment_health_check_targets
-from comparo.tui.models.resource_presenters import resolved_fields
 from comparo.tui.models.resource_presenters import resource_overview_supports_resolution
 from comparo.tui.models.resource_presenters import resource_resolution_paths
 from comparo.tui.models.resource_presenters import resource_resolution_subject_id
@@ -105,6 +106,7 @@ class ExplorerWorkspace(Workspace):
                 id="explorer-tree-panel",
             )
             yield ResourceDetailOverview(id="explorer-detail")
+        yield ActionBar(id="explorer-launch-action")
 
     @override
     def focus_default(self) -> None:
@@ -203,6 +205,13 @@ class ExplorerWorkspace(Workspace):
     def watch_detail(self) -> None:
         """Feed the overview."""
         self.query_one(ResourceDetailOverview).detail = self.detail
+        usable = self.detail is not None and self.detail.entry.summary.coordinate.kind in {
+            "Request",
+            "ExecutionProfile",
+        }
+        self.query_one("#explorer-launch-action", ActionBar).actions = (
+            Action("launch", "Use selected resource in Launch", key="c", enabled=usable),
+        )
 
     def watch_execution_environment(self) -> None:
         """Reflect the shared context while preserving the active resource view."""
@@ -568,32 +577,7 @@ class ExplorerWorkspace(Workspace):
             code = result.diagnostics[0] if result.diagnostics else "internal"
             self.detail = failed_resolved(detail, code)
             return
-        projected = resolved_fields(result.values)
-        occurrence = result.occurrence
-        self.detail = loaded_resolved(
-            detail,
-            ResolvedResourceView(
-                environment=environment,
-                subject=occurrence.subject,
-                execution_ordinal=occurrence.ordinal,
-                total_occurrences=result.total_occurrences or 1,
-                cell_id=occurrence.cell_id,
-                trial_id=occurrence.trial_id,
-                fields=projected.fields,
-                matrices=tuple(
-                    ResolvedMatrixSelection(
-                        binding=item.binding,
-                        matrix=item.matrix,
-                        case_id=item.case_id,
-                    )
-                    for item in occurrence.matrices
-                ),
-                request_target=result.request_target,
-                matrix_plan=result.matrix_plan,
-                diagnostics=projected.diagnostics,
-                incomplete=projected.incomplete or result.selection_incomplete,
-            ),
-        )
+        self.detail = loaded_resolved(detail, resolved_view(result, environment))
 
     def _apply_resolved_failure(
         self,
@@ -691,3 +675,19 @@ class ExplorerWorkspace(Workspace):
         ):
             self.detail = with_health_check(detail, inspection)
         self.app.refresh_bindings()
+
+    def action_use_in_launch(self) -> None:
+        """Transfer identity without executing or copying resolved values."""
+        if self.detail is not None and self.detail.entry.summary.coordinate.kind in {
+            "Request",
+            "ExecutionProfile",
+        }:
+            self.post_message(
+                UseInLaunch(self.detail.entry.summary.coordinate, self.execution_environment)
+            )
+
+    def on_action_bar_requested(self, event: ActionBar.Requested) -> None:
+        """Route the explicit Explore handoff action."""
+        if event.action == "launch":
+            event.stop()
+            self.action_use_in_launch()

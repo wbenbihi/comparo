@@ -29,6 +29,7 @@ from comparo.tui.components.launchsummary import LaunchSummary
 from comparo.tui.components.launchsummary import SummarySection
 from comparo.tui.components.launchsummary import draft_sections
 from comparo.tui.components.launchsummary import preview_sections
+from comparo.tui.components.profilesave import ProfileSave
 from comparo.tui.components.resultbody import read_preview
 from comparo.tui.components.results import ResultsView
 from comparo.tui.components.runview import LiveRunView
@@ -39,6 +40,7 @@ from comparo.tui.models.launch import LaunchDraft
 from comparo.tui.shortcuts import shortcut_label
 from comparo.tui.types import ComparoScreen
 from comparo.tui.workspaces.base import Workspace
+from comparo.tui.workspaces.explorer import ExplorerWorkspace
 
 
 class LaunchWorkspace(Workspace):
@@ -195,6 +197,13 @@ class LaunchWorkspace(Workspace):
                     primary=True,
                 ),
                 Action("reload", "Reload project", enabled=phase == "draft"),
+                Action(
+                    "save-profile",
+                    "Save as profile",
+                    enabled=phase == "draft"
+                    and not self.draft.problems
+                    and self.draft.execution_intent.value != "execution-profile",
+                ),
             )
         elif phase == "ready":
             count = self.review.plan.cardinality.environment_executions if self.review else 0
@@ -305,6 +314,9 @@ class LaunchWorkspace(Workspace):
     @on(ActionBar.Requested, "#launch-actions")
     def _action_requested(self, event: ActionBar.Requested) -> None:
         event.stop()
+        if event.action == "save-profile":
+            self.app.push_screen(ProfileSave(self.draft), self._profile_saved)
+            return
         actions = {
             "prepare": self.action_prepare,
             "run": self.action_run,
@@ -517,3 +529,9 @@ class LaunchWorkspace(Workspace):
         self.set_class(event.size.width < 128, "stacked-scope")
         self.query_one(LaunchSummary).compact = event.size.width < 128
         self.set_class(event.size.height < 42, "short")
+
+    def _profile_saved(self, saved: bool | None) -> None:
+        if saved:
+            self._load_catalog()
+            self.app.query_one(ExplorerWorkspace).action_reload()
+            self._status("Profile saved. Select it under Run an execution profile.")
