@@ -96,8 +96,10 @@ jobs:
           git config user.email actions@users.noreply.github.com
           uv run --frozen semantic-release version --no-push --no-vcs-release
 
-      - name: Rebuild recovery distributions
-        if: steps.plan.outputs.recovery == 'true'
+      # Semantic release performs its initial build before creating the version commit.
+      # Rebuild from the tagged commit so the shipped SHA describes the released source.
+      - name: Build distributions from the release commit
+        if: steps.plan.outputs.released == 'true'
         run: uv build
 
       - name: Verify release version identity
@@ -129,6 +131,14 @@ jobs:
           .wheel-smoke/bin/comparo --help
           .wheel-smoke/bin/comparo schema config > /dev/null
           .wheel-smoke/bin/comparo doctor --format json
+          RELEASE_COMMIT="$(git rev-parse HEAD)" .wheel-smoke/bin/python - <<'PY'
+          import os
+          from comparo.build_info import read_build_info
+
+          info = read_build_info()
+          assert info.sha == os.environ["RELEASE_COMMIT"], "wheel build SHA must match release commit"
+          assert not info.modified, "release wheel must come from unmodified source"
+          PY
 
       - name: Publish verified commit and tag atomically
         if: steps.plan.outputs.released == 'true' && steps.plan.outputs.recovery != 'true'
