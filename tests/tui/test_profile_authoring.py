@@ -144,7 +144,12 @@ def test_profile_dialog_requires_review_and_refreshes_both_catalogs(tmp_path: Pa
             await _wait(
                 pilot,
                 lambda: (
-                    explore.catalog is not None
+                    launch.catalog is not None
+                    and any(
+                        item.summary.coordinate.resource_id == "saved-ui"
+                        for item in launch.catalog.entries.values()
+                    )
+                    and explore.catalog is not None
                     and any(
                         item.summary.coordinate.resource_id == "saved-ui"
                         for item in explore.catalog.entries.values()
@@ -226,5 +231,58 @@ def test_catalog_reload_completion_is_ignored_during_shutdown(
 
             monkeypatch.setattr(app, "_close_all", close_with_pending_catalog)
             app.exit()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (ProfileAuthoringError("Review the profile again."), "Review the profile again."),
+        (FileExistsError("private-path-canary"), "That file already exists. Choose another ID."),
+        (
+            OSError("private-path-canary"),
+            "Could not save the profile. Check the project and destination.",
+        ),
+    ],
+)
+def test_profile_save_failure_keeps_review_and_never_exposes_exception_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception, expected: str
+) -> None:
+    async def scenario() -> None:
+        app = ComparoApp(_project(tmp_path, "quickstart"), preference_path=tmp_path / "prefs.json")
+        async with app.run_test() as pilot:
+            launch = app.query_one(LaunchWorkspace)
+            await _wait(pilot, lambda: launch.phase == "draft" and not launch.draft.problems)
+            dialog = ProfileSave(launch.draft)
+            await app.push_screen(dialog)
+            dialog.query_one("#profile-id", ValueInput).value = "saved-error"
+            dialog.query_one("#profile-name", ValueInput).value = "Saved error"
+            await pilot.pause()
+            _button(dialog, "preview").press()
+            await _wait(pilot, lambda: dialog.document is not None and not dialog.busy)
+            assert dialog.document is not None
+            destination = dialog.document.destination
+
+            def fail_save(document: object) -> None:
+                raise failure
+
+            monkeypatch.setattr(app.backend, "save_profile", fail_save)
+            _button(dialog, "save").press()
+            await _wait(
+                pilot,
+                lambda: expected in str(dialog.query_one("#profile-status", Caption).render()),
+            )
+            assert app.screen is dialog
+            assert not dialog.busy
+            assert "private-path-canary" not in str(
+                dialog.query_one("#profile-status", Caption).render()
+            )
+            assert not destination.exists()
+            assert not _button(dialog, "save").disabled
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is not dialog
+            assert app.backend.runs.count == 0
 
     asyncio.run(scenario())

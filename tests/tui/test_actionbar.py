@@ -21,7 +21,9 @@ class _ActionApp(App[None]):
 
     @override
     def compose(self) -> ComposeResult:
-        yield ActionBar((Action("preview", "Preview"), Action("save", "Save", enabled=False)))
+        bar = ActionBar()
+        bar.actions = (Action("preview", "Preview"), Action("save", "Save", enabled=False))
+        yield bar
 
     def on_action_bar_requested(self, event: ActionBar.Requested) -> None:
         assert event.control is self.query_one(ActionBar)
