@@ -580,6 +580,8 @@ def test_slice_and_plan_contracts_reject_projection_contradictions() -> None:
 
 def test_gate_attachment_and_compilation_must_match() -> None:
     plan = _plan()
+    with pytest.raises(TypeError, match="response schema"):
+        msgspec.structs.replace(plan.slices[0], response_schema=1)
     attached = _profile("GateProfile")
     profiles = PlanProfilesInspection(gate=attached)
     plan_slice = msgspec.structs.replace(plan.slices[0], profiles=profiles)

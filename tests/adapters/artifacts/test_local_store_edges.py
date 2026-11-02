@@ -1231,17 +1231,19 @@ def test_atomic_support_capability_and_platform_branches(monkeypatch: pytest.Mon
         (errno.EIO, OSError),
     ],
 )
-def test_linux_atomic_noreplace_result_mapping(
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_atomic_noreplace_result_mapping(
     monkeypatch: pytest.MonkeyPatch,
     number: int,
     expected: type[BaseException] | None,
+    platform: str,
 ) -> None:
     result = 0 if number == 0 else -1
-    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(
         ctypes,
         "CDLL",
-        lambda *_args, **_kwargs: _FakeLibrary(linux=result),
+        lambda *_args, **_kwargs: _FakeLibrary(linux=result, darwin=result),
     )
     monkeypatch.setattr(ctypes, "get_errno", lambda: number)
     if expected is None:
