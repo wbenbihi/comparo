@@ -1,6 +1,6 @@
 # Release through GitHub Actions
 
-The rebuilt implementation is proposed through a pull request from `refactor` to `main`.
+The rebuilt implementation was merged from `refactor` to `main` through PR #6.
 Versioning, tags, GitHub releases and PyPI publication belong to the repository's
 [Release workflow](../.github/workflows/release.yml), not a local publishing command.
 The target is the **0.3.0 minor release**, confirmed by a semantic-release no-operation preview.
@@ -63,8 +63,41 @@ buttons instead of asynchronously removing and rebuilding them, preserving contr
 Regression tests exercise repeated availability changes, disabled/stale actions, and profile-save
 failures. Additional tests cover profile publication, build metadata, and platform/contract edges.
 
-The approved coverage policy is now 95% overall, with branch measurement retained. The next full
-GitHub run must pass tests, compatibility, packaging and wheel checks before qualification.
+The approved coverage policy is now 95% overall, with branch measurement retained.
+[PR validation](https://github.com/wbenbihi/comparo/actions/runs/41536934471) subsequently passed:
+4,335 tests on both Python versions, 98.09% combined coverage, all static checks, distribution
+audits and installed-wheel smoke checks. PR #6 was merged as `ae2103e`.
+
+## Release planning incident and repair
+
+[The first merged release run](https://github.com/wbenbihi/comparo/actions/runs/41539521939)
+passed source verification but skipped publication. Semantic-release correctly calculated 0.3.0;
+its print-only queries also wrote `released=false` into `GITHUB_OUTPUT`. The final tag query
+therefore overwrote the workflow's own `released=true` decision. A green run did not mean that
+anything had been published: the tag, GitHub release and PyPI job were all skipped.
+
+The planner now removes `GITHUB_OUTPUT` from each print-only subprocess, validates the version/tag,
+logs the decision, and writes its own outputs exactly once. Regression tests run the real locked
+semantic-release package against temporary Git histories for a new release, no release and tag
+recovery. No local publication or manual version bump is involved.
+
+The workflow also restores the existing protected-branch publishing credential described below.
+Merge the repair PR after CI passes; that push starts a new release with the corrected workflow.
+Rerunning the original run would reuse the broken workflow. No v0.3.0 tag exists from that run.
+
+## Publishing credentials
+
+Checkout uses the ordinary Actions token without persisting Git credentials. Only the final
+atomic commit/tag push receives the existing repository secret `RELEASE_TOKEN`. This restores
+the authentication used by the working 0.2.0 workflow, but confines it to the publishing step
+after source, package and installed-wheel verification. The token must have repository write
+access and its owner must be permitted to push generated version commits to the release branch.
+With the current classic protection configuration, the existing administrator token uses the
+configured administrator exception; no branch-protection settings are changed by the workflow.
+
+The generated version commit starts normal CI, but a release-job guard prevents a recursive
+release. GitHub assets use the ordinary Actions token. PyPI publishing remains a separate job
+using OIDC Trusted Publishing and the `pypi` environment; `RELEASE_TOKEN` is not a PyPI credential.
 
 ## After CI and review
 

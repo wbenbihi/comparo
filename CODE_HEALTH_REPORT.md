@@ -52,7 +52,11 @@ plus a catalog-shutdown race on Python 3.14. Both compatibility jobs passed in t
 which measured 98.00% coverage and exposed a separate action-bar race. That component now
 preserves buttons during availability changes. The maintainer approved a 95% overall coverage
 floor, retaining branch measurement and existing tests. Full CI and packaging verification remain
-required; the policy change is not new evidence of coverage. See the [release guide](docs/releasing.md).
+required; the policy change is not new evidence of coverage. The final PR #6 run subsequently
+passed 4,335 tests on each supported Python version, measured 98.09% coverage and passed packaging
+and installed-wheel verification. After merge, the Release job passed verification but skipped
+publication due to an output collision in release planning. The workflow repair and recovery path
+are documented in the [release guide](docs/releasing.md).
 
 The documentation refresh also passed 296 CLI/architecture tests, rechecked Ruff/formatting/mypy,
 validated all three example projects and planned all six showcase profiles without HTTP.
