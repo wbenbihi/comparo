@@ -85,7 +85,11 @@ fixes and targeted regression coverage. Both compatibility jobs passed in the se
 main job found a separate action-bar timing race and measured **98.00% coverage**. The shared
 component now preserves buttons during availability updates, with regression coverage. The
 maintainer approved a **95% overall coverage floor**, retaining branch measurement and existing
-tests. Full CI, distribution validation and installed-wheel checks must still pass.
+tests. The final PR run passed **4,335 tests** on Python 3.13 and 3.14 with **98.09% coverage**,
+plus all static, packaging and installed-wheel checks. PR #6 was merged. The first Release run
+then passed verification but skipped publication because print-only semantic-release queries
+overwrote the planner's output. A workflow repair isolates those outputs and restores the existing
+protected-branch publishing credential; publication still awaits that repair reaching `main`.
 
 - [User TUI guide](tui.md), [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md),
   [Settings](codebase/tui-settings.md): actual controls and behavior.
