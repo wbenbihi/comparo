@@ -1,9 +1,14 @@
 # Interaction and feature contract
 
+Implementation mapping updated **2026-10-31**. This remains a design contract; the
+[current status](../../status.md) and [workspace guides](../../tui.md) distinguish implemented
+controls from remaining acceptance targets. In older screenshots, Compare means Launch and Report
+means Reports. Use the existing component library around Textual navigation primitives.
+
 ## Commands and key maps
 
 A semantic command definition contains identity, label, description, scope, availability, and
-dispatch intent. It does not contain a physical key. The default key map and later user key maps
+dispatch intent. The default key map and user key maps
 associate one or more Textual key strings with command identities.
 
 The resolved key map is the only physical-key source for Textual bindings, buttons, native Footer,
@@ -21,12 +26,20 @@ Defaults include:
 | activate selected item | `enter` |
 | go back / close contextual inspector | `escape` |
 | open command palette | `ctrl+p` |
-| reload current catalog | `r` |
-| use selected resource in Compare | `c` |
+| reload Explore catalog | `ctrl+r` |
+| reload Reports archive | `r` |
+| use selected Request/profile in Launch | `c` |
+| prepare Launch plan | `ctrl+r` |
+| execute reviewed plan | `ctrl+x` |
+| cancel running execution | `ctrl+k` |
+| Analyze Issues/Requests/Rules/Fields/Timeline | `alt+1` through `alt+5` |
+| cycle Analyze views | `[` / `]` |
+| inspect selected capture | `i` |
 
-The exact defaults for contextual Compare and analysis actions are declared with the implementing
-surface. User remapping is a future TUI preference, so neither project YAML nor execution policy
-owns it.
+The implemented main-command remapping lives in [Settings](../../codebase/tui-settings.md), not
+project YAML or execution policy. Supported keys are the command default, F1–F24 or Ctrl+Alt+letter;
+conflicting assignments are rejected across nested contexts. Remapping every local component action
+and a fully unified palette/help catalog remain broader design targets.
 
 ## Major-region focus
 
@@ -56,17 +69,18 @@ The inspector exposes applicable facets instead of empty universal tabs:
 - Profiles, policies, Value, and Project: kind-aware overview, effective composition,
   relationships, source, and provenance as permitted by their sanitized projection.
 
-Environment and matrix-case selectors are local Explorer context. `Use in Compare` transfers only
+Environment and matrix-case selectors are local Explorer context. `Use in Launch` transfers only
 safe resource identity and explicit local context. Sensitive values never reach a widget.
 
-## Compare
+## Launch
 
-Compare owns Assertions, Differences, Execution Profile, and the future Scenario mode in one
-lifecycle:
+Launch starts with Run requests, Run an execution profile, or Run assertions. Scenario execution
+is unsupported and must not appear as a working mode. The lifecycle is:
 
-1. Target uses project-aware native selectors for the starting profile, requests/scenarios,
-   environment topology, matrix variants, validation, and safety. The scope summary identifies
-   session overrides.
+1. Target starts with intent, then uses the component library for Request selection, saved/manual
+   profile configuration, topology, variants, validation and safety. Profile selection belongs
+   inside the profile section. The scope summary identifies session overrides. Save as profile
+   reviews exact YAML before creating a new resource; unsupported invocation-only fields fail explicitly.
 2. Plan is a dedicated immutable checkpoint. It shows destinations, methods, expanded scope,
    validation formula, limits, safety, sensitive source names, permitted destinations, writes,
    skips, diagnostics, and override provenance. Editing invalidates admission.
@@ -74,23 +88,25 @@ lifecycle:
    baseline/candidate lanes, counters, elapsed time, and cancellation. It remains active while the
    user visits another workspace.
 4. Analyze opens with Outcome and Issues, then drills through Occurrence to sanitized Evidence.
-   Requests, Rules, Fields, Cells, and Timeline are alternate lenses over stable references.
+   Requests, Rules, Fields and Timeline are alternate lenses over stable references; Matrix cases
+   stay in the Request/occurrence hierarchy rather than a separate Cells lens.
 
 LLM and SSE analysis presents normalized semantic, structural, and timing evidence. Chunk count or
 ordering is not itself a failure unless configured comparison rules make it one. Raw chunks remain
 an evidence view.
 
-## Report
+## Reports
 
-Report browses a bounded authenticated archive. The selected report shows outcome, important
+Reports browses a bounded authenticated archive. The selected report shows outcome, important
 causes, profile, environments, time, commit, and integrity. Opening analysis mounts the same
-components as Compare with read-only access. Report never sends an HTTP request.
+components as Launch with read-only access. Reports never sends an HTTP request.
 
 ## Settings
 
-Settings contains Appearance, Layout, Interaction, and Accessibility. It owns registered-theme
-selection, density, default workspace, mouse behavior, glyph preference, reduced motion, and later
-key-map editing. It never edits project configuration or execution policy.
+Settings currently contains Appearance & layout, Interaction and Keyboard shortcuts. It owns
+theme, density, startup workspace, mouse and main command remapping. Glyph preference, reduced
+motion and broader accessibility controls remain design targets. Settings never edits project
+configuration or execution policy. Theme/mouse changes apply next launch; spacing/keys apply on Save.
 
 ## Safety
 
@@ -98,5 +114,6 @@ Presentation receives sanitized application projections only. Detached bodies an
 are fetched lazily through authenticated, bounded leases. Data-bearing Rich markup is disabled;
 terminal controls and bidi controls are contained. Exceptions collapse to fixed safe messages.
 
-Displayed and copied cURL is deferred until a sanitized resolved-request projection, explicit
-secret placeholders, clipboard disclosure, and expiry behavior are accepted and tested.
+The shared capture inspector now displays/copies application-generated cURL from an authenticated
+stored sanitized request. It declares replay limitations and clipboard disclosure, requires a separate
+Copy action, expires its preview after 60 seconds and never injects live credentials or executes HTTP.

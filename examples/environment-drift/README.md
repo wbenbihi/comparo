@@ -14,14 +14,15 @@ uv run --frozen python examples/support/demo_server.py
 uv run --frozen comparo tui --config examples/environment-drift/comparo.yaml
 ```
 
-Run the two useful Execution profiles from Compare:
+In **Launch → Run an execution profile**, try:
 
 - `baseline-smoke` should pass and demonstrates an assertion-only topology;
 - `release-gate` should fail and populate the result surface with successful assertions, failed
   assertions, clean status diffs, and body/status drift.
 
-After each execution, visit Report and refresh. Reports are authenticated persisted artifacts;
-opening one does not resend the Requests.
+After each execution, visit Reports and refresh. Reports are authenticated persisted artifacts;
+opening one does not resend the Requests. Both the live run and saved reports use the same Analyze
+view. Ctrl+R prepares, Ctrl+X runs, and Ctrl+K cancels (default bindings).
 
 The dotenv-style files are deliberately named `baseline.values` and `candidate.values`. They hold
 non-secret demonstration labels, are declared by their respective Environment, and have no effect

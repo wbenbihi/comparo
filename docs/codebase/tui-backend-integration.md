@@ -1,11 +1,15 @@
 # TUI/backend integration contract
 
-This document is the implementation reference for a replacement Comparo TUI. It describes the
+This document is the backend integration reference for the canonical Comparo TUI and future frontends. It describes the
 backend information a TUI can display, the application functions it should call, and the lifecycle,
 safety, paging, cancellation, and identity contracts it must preserve.
 
-It documents the backend on the `refactor` branch as of **2026-07-29**. It does not describe the
-rejected current TUI implementation and does not require its component or state model to be reused.
+Reconciled with the `refactor` working tree on **2026-10-31**. Application availability in this
+contract is broader than current UI coverage. The canonical `comparo.tui` implementation reuses
+its existing component library, theme tokens and shared `ResultsView`; use the
+[workspace guides](../tui.md) for actual controls and [current status](../status.md) for gaps.
+Historical “Compare” and “Report” screen names in backend discussion map to Launch and Reports;
+Python service names such as `CompareService` are unchanged.
 
 The companion [application API reference](application-api-reference.md) is the canonical
 frontend-neutral callable and lifetime contract. This document adds TUI orchestration and
@@ -905,6 +909,11 @@ restored bundle and rolls it back to trash if verification fails. Permanent purg
 
 ## 15. Screen-level information map
 
+This map describes the data available from backend contracts. It is not a claim that the current
+form exposes every advanced API. Launch exposes the controls documented in [Launch](tui-launch.md).
+Reports uses `list_report_archive` with bounded client-side filters/pages; cursor queries,
+annotations and retention/restore are backend-only until separate UI controls are implemented.
+
 ### 15.1 Explorer
 
 | Surface | Primary contract | Information available |
@@ -916,7 +925,7 @@ restored bundle and rolls it back to trash if verification fails. Permanent purg
 | Resolved | ephemeral Compare handle + `ResolvedValueInspection` | One field, Environment/occurrence context, safe value nodes, provenance, freshness |
 | Dependencies | `ProjectRelationship` | Inbound/outbound targets, paths, origins |
 
-### 15.2 Compare · prepare
+### 15.2 Launch · Target and Plan
 
 | Surface | Primary contract | Information available |
 | --- | --- | --- |
@@ -929,7 +938,7 @@ restored bundle and rolls it back to trash if verification fails. Permanent purg
 | Rules | `PlanRuleWindow` | Compiled pre-run assertion/diff rules, selectors, operations, and origin |
 | Copy summary | `PlanClipboardSummary` | Constant-size checkpoint identity and counts |
 
-### 15.3 Compare · running
+### 15.3 Launch · Run
 
 | Surface | Primary contract | Information available |
 | --- | --- | --- |
@@ -943,7 +952,7 @@ There is no safe live raw request/response body or stream-chunk console. Keep th
 until a final sanitized artifact exists. Live rule facts are operational previews without evidence;
 the gate and authoritative facts still come only from the terminal artifact.
 
-### 15.4 Compare · results and Report · detail
+### 15.4 Launch and Reports · shared Analyze
 
 | Facet/pivot | Primary contract |
 | --- | --- |
@@ -963,10 +972,26 @@ the gate and authoritative facts still come only from the terminal artifact.
 
 ### 15.5 Settings
 
-Settings owns theme, density, default workspace, mouse preferences, and future key remapping.
+Settings implements theme, density, startup workspace, mouse preferences and main workspace,
+Launch, Analyze and quit shortcut remapping. It edits a draft and atomically saves the user-owned
+JSON preference file. Density and shortcuts apply immediately; theme, mouse and startup changes
+apply next launch. Glyph/reduced-motion preferences remain design targets. See [Settings](tui-settings.md).
 Execution policy, project YAML, selected Environments, safety classification, capture limits, and
 artifact persistence are execution/project concerns and must not be edited implicitly from this
 workspace. Plan review can expose them read-only.
+
+### 15.6 Manual profile saving and Explore handoff
+
+`application.profile_authoring.prepare_profile_document` produces exact authored YAML and a reviewed
+project-local destination; `save_profile_document` validates compilation, publishes a new file
+exclusively and verifies normal discovery. It does not resolve values or grant execution authority.
+The explicit authoring DTO is a frozen dataclass containing a destination Path, unlike path-free
+inspection projections. Unsupported invocation-only overrides are rejected. The TUI uses the
+existing `ProfileSave` component and refreshes Explore and Launch after success.
+
+Explore transfers exact Request/profile coordinates and the selected Environment to Launch through
+`UseInLaunch`. Validate revisions before discarding a prepared plan; reject a busy Launch. Populate
+an editable Target only. The user still prepares and starts execution explicitly.
 
 ## 16. Concurrency, backpressure, and stale-response rules
 

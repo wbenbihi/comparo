@@ -17,12 +17,15 @@ uv run --frozen comparo tui --config examples/quickstart/comparo.yaml
 
 Suggested journey:
 
-1. Open **Explorer** and inspect the two Environments, the `health` Request, and each profile.
-2. Open **Compare** in Differences mode. Use `health`, baseline `baseline`, and candidate
+1. Open **Explore** and inspect the two Environments, the `health` Request, and each profile.
+2. Open **Launch → Run requests** for an environment comparison. Use `health`, baseline `baseline`, and candidate
    `candidate` if the fields are not already populated.
-3. Press `p` to inspect the admitted plan, then `x` to execute it.
-4. Open **Report** and refresh to reopen the persisted result without another HTTP request.
-5. Try Execution profile mode with `compare-health` and `check-baseline`.
+3. Press Ctrl+R to inspect the admitted plan, then Ctrl+X to execute it. Open Analyze results
+   explicitly after the Run finishes; use `i` for captured response details.
+4. Open **Reports** and refresh to reopen the persisted result without another HTTP request.
+5. Try **Run an execution profile** with `compare-health` and `check-baseline`, or save a manual
+   target with **Save as profile** after reviewing the YAML.
+6. Open **Settings** to change preferences or remap the default keys.
 
 Headless comparison:
 

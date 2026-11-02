@@ -45,9 +45,11 @@ Browsing saved reports does not need the demo server.
 | `1` | Explore | Browse resources, inspect authored/effective/resolved views, dependencies, and Environment health. |
 | `2` | Launch | Configure a target, review its plan, follow execution, and analyze results. |
 | `3` | Reports | Search saved runs, preview outcomes, reopen the shared Analyze view, and export reports. |
-| `4` | Settings | Reserved workspace; settings controls are not implemented yet. |
+| `4` | Settings | Persist theme, density, startup workspace, mouse reporting and main command shortcuts. |
 | `5` | Debug | Inspect the reusable component gallery. |
 
+These are default keys and can be changed in Settings. The header shows the selected execution
+Environment and installed package version; compact widths hide the helper text to preserve navigation.
 The header supports pointer selection. `q` quits when a text input is not consuming the key.
 Workspace switches preserve the active run. The frontend uses shared components, glyphs,
 status colors, and theme tokens; backend services own planning, execution, evaluation, and artifacts.
@@ -55,7 +57,46 @@ status colors, and theme tokens; backend services own planning, execution, evalu
 - [Resource component guide](codebase/tui-resource-components.md): Explorer views and extension rules.
 - [Launch guide](codebase/tui-launch.md): Target → Plan → Run → Analyze, controls, and keyboard navigation.
 - [Reports guide](codebase/tui-reports.md): archive filters, preview, exports, and shared analysis.
+- [Settings guide](codebase/tui-settings.md): preferences, save/apply behavior, and shortcut remapping.
 - [Backend integration contract](codebase/tui-backend-integration.md): application DTOs and service lifetimes.
+
+## Working through a run
+
+Explore's **c** action sends a selected Request or ExecutionProfile to Launch without executing it.
+A Request uses the selected Environment for assertion checks; a profile keeps its own topology.
+A busy Launch or stale resource revision rejects the handoff.
+
+Target starts with **Run requests**, **Run an execution profile**, or **Run assertions**. Profile
+mode offers saved profiles and manual configuration. Ctrl+R prepares a plan; Ctrl+X executes the
+reviewed plan; Ctrl+E returns to editing; Ctrl+K cancels a running execution. Run stays visible when
+execution finishes, so even fast runs can be inspected before choosing **Analyze results**.
+
+**Save as profile** previews a new ExecutionProfile's YAML and destination before enabling Save.
+Existing files are never overwritten. Invocation-only Matrix case filters and clearing an inherited
+gate cannot be represented in the profile schema and are rejected explicitly. Mutation approval
+remains session-only.
+
+Analyze has Issues, Requests, Rules, Fields and Timeline lenses. Fields shows retained rule evidence,
+not every JSON body property. Press **i** on an occurrence for the shared capture inspector:
+raw bytes page in 64 KiB windows with `n` / `p`; JSON and SSE use 50-item pages; Enter drills down,
+`b` returns to the parent, and Escape restores Analyze. Structured inspection accepts up to 4 MiB,
+50,000 JSON nodes and 10,000 SSE events. **Review request cURL** uses the selected stored request,
+shows replay limitations, and requires a separate Copy action. It never sends the command.
+
+Reports opens persisted results without running HTTP. It filters a bounded listing (500 physical
+archive entries by default) and displays 50 reports per page. Large-archive cursor queries,
+retention/trash/restore and annotations exist in backend APIs but have no TUI controls yet.
+
+## Preferences
+
+General is the first Settings section, showing version, author, repository, source, license and
+full build SHA. Packaged builds retain their source revision; development installs identify the
+Comparo checkout. Modified source and missing revision information are explicit.
+
+Settings edits a draft until **Save & apply**. Preferences are stored in
+`$XDG_CONFIG_HOME/comparo/tui.json`, defaulting to `~/.config/comparo/tui.json`. Density and command
+shortcuts apply immediately; theme, mouse and startup-workspace changes apply next launch. Invalid
+saved preferences fall back to defaults with a notice and are not overwritten at startup.
 
 ## Analyze navigation on macOS
 

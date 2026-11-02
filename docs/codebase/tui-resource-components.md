@@ -352,8 +352,9 @@ through planning rather than adding a Request-first inference rule.
 5. Add semantic actions to `models/resource.py` only when their capability is real. A selectable
    unavailable representation may explain its missing context; disabled effect actions require a
    trusted explanation.
-6. Add the default key in `bindings.py`; every rendered action button must show its key. Future
-   remapping can replace this binding source without changing widgets.
+6. Add default semantic bindings in `bindings.py`; visible bound actions must show effective keys.
+   Main workspace/Launch/Analyze commands already support Settings remapping through binding IDs.
+   Local resource-action remapping remains follow-up work; do not imply it is already configurable.
 7. Test the pure projection, registry selection, capability state, and mounted interaction.
 
 ## Styling and interaction rules
@@ -363,7 +364,8 @@ through planning rather than adding a Request-first inference rule.
 - `BadgeSpec` is the shared badge contract. `badge_text()` embeds it in Rich tree/table text and
   the native `Badge` widget uses the same renderer in layouts. Its `solid`, `quiet`, and `status`
   emphasis variants express role, metadata, and live state without faux rounded Unicode caps.
-- Buttons are native Textual `Button` components and expose the same semantic action as their key.
+- Use the library `ActionBar` and semantic actions; it encapsulates native Textual Buttons and
+  exposes the same command to pointer and key activation.
 - Widgets emit Textual messages rather than callback closures or workspace imports.
 - Authored content is masked by default. Failures cross the boundary only as closed, value-free
   codes; unexpected exceptions collapse to `internal`.

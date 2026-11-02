@@ -2,7 +2,12 @@
 
 Date: 2026-07-26
 Target viewport: 160 columns × 52 rows
-Status: approved; implementation in progress
+Status: historical audit and design input; canonical implementation mapping updated 2026-10-31
+
+The canonical frontend is now `comparo.tui` (developed as TUI4). Use the existing component
+library, [current TUI guide](tui.md) and [status](status.md) for implementation decisions. The
+native-widget recipes below describe an older audit; they do not authorize bypassing the library.
+The screenshots remain useful design references, not a claim that all listed controls exist.
 
 The backend projections listed in this plan are now implemented. Their exact callable contracts,
 limits, safe display fields, and remaining constraints are documented in
@@ -12,7 +17,7 @@ capability assumptions in this older audit; the screenshots remain the visual re
 The authoritative visual and interaction specification is the
 [TUI v2 design contract](design/tui-v2/README.md). The generated screenshots in that contract are
 the primary visual and information-design source. The clickable mockup is incomplete and may be
-used only as a limited interaction reference. The rejected current TUI is never a source of truth.
+used only as a limited interaction reference. The retired alpha TUI is never a source of truth.
 
 ## Outcome
 
@@ -56,11 +61,11 @@ resource-specific hierarchy, raw/resolved inspection, or dependencies.
 
 Relevant implementation:
 
-- [`ProjectResourceList`](../src/comparo/tui/components/project.py) handles
+- `ProjectResourceList` (retired component) handles
   `ListView.Selected` only.
 - [`ExplorerWorkspace`](../src/comparo/tui/workspaces/explorer.py) updates the
   detail only after the custom `ResourceSelected` message.
-- [`ProjectResourceDetail`](../src/comparo/tui/components/project.py) can only
+- `ProjectResourceDetail` (retired component) can only
   render resource identity, metadata, and source position.
 
 ## 2. Current Compare preparation — critical

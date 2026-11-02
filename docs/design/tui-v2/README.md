@@ -1,11 +1,13 @@
 # Comparo TUI v2 design contract
 
-Date: 2026-07-26
-Status: approved for implementation
+Original reference date: 2026-07-26
+Status: retained visual contract; implementation mapping updated 2026-10-31
 Primary acceptance viewport: 160 columns by 52 rows
 
 This directory is the product and visual contract for the production Comparo terminal UI.
-It defines the interface that replaces the rejected alpha TUI.
+It retains the approved references used by the canonical `comparo.tui` implementation.
+The directory name is a design revision, not a runnable TUI version. Current behavior is documented
+in the [TUI guide](../../tui.md); visual acceptance evidence is in [current QA](../../../design-qa.md).
 
 ## Authority
 
@@ -20,8 +22,10 @@ When sources disagree, use this order:
    information-design reference.
 4. Historical prototypes demonstrate useful capabilities only. They are not designs to copy.
 
-The current TUI has no product, interaction, or visual authority. It may be inspected only to
-identify safe application boundaries that remain useful and implementation that must be removed.
+The retired alpha TUI is not a visual authority. New changes must use the existing canonical
+component library and established glyph/color tokens while being compared with these references.
+Use Textual mechanisms through those components; do not replace them with differently styled
+built-in controls or create a second Analyze implementation.
 
 ## Canonical product journey
 
@@ -33,9 +37,10 @@ Comparo helps a user answer five questions in order:
 4. Where and when did it happen?
 5. What sanitized evidence proves it?
 
-The four persistent workspaces are Explorer, Compare, Report, and Settings. Compare owns every
-live execution mode and the Target -> Plan -> Run -> Analyze lifecycle. Report is read-only and
-mounts the same analysis components as Compare.
+The product workspaces are **Explore**, **Launch**, **Reports**, and **Settings**; the implementation
+also exposes a **Debug** component gallery. Older reference captions use Explorer/Compare/Report:
+map them to Explore/Launch/Reports. Launch owns Target -> Plan -> Run -> Analyze; Reports reuses
+the same analysis components for persisted results. Reference filenames remain unchanged.
 
 ## Reference states
 

@@ -1,9 +1,9 @@
 # TUI showcase
 
 This deliberately dense local project exercises the current TUI and its awkward states, not only
-the happy path. It contains 44 non-Project resources (45 Explorer entries including the Project),
-17 Requests, all five implemented request-body lowering modes, two independently attached
-Matrices, local/inline/remote Schemas, reusable values, dotenv and file inputs, profiles, an
+the happy path. It contains 45 non-Project resources (46 Explore entries including the Project),
+17 Requests, six ExecutionProfiles, all five implemented request-body lowering modes, four
+Matrices (two attached to executable Requests and two reserved for the Scenario), local/inline/remote Schemas, reusable values, dotenv and file inputs, profiles, an
 intentionally unavailable credential, and one future Scenario.
 
 Start the server and TUI from the repository root:
@@ -15,14 +15,15 @@ uv run --frozen comparo tui --config examples/tui-showcase/comparo.yaml
 
 ## Suggested journeys
 
-### Explorer
+### Explore
 
 Use `o` for Overview, `s` for masked source, `g` for dependencies, and `r` to switch the Overview
 between raw and masked-resolved values. `Space` changes the shared execution Environment while
 an Environment is selected, and `h` runs its declared health check when available. Request
 Overview uses stable URL, Query, Headers, Cookies, Auth, Body, Runtime, and Contracts tabs; use
 left/right or the mouse to move between them. The active tab survives `r` and selection changes.
-Request selection and composition begin in Compare rather than through Explorer actions.
+Select a Request or ExecutionProfile and press `c` to populate Launch. This transfers identity
+and context only; preparation and execution remain explicit actions.
 
 All other kinds use continuous documents rather than Request-style tabs. Explore the Scenario,
 ExecutionProfile, AssertionProfile, DiffProfile, GateProfile, SafetyProfile, RedactionProfile, and
@@ -60,15 +61,18 @@ are not credentials. Resolved inspection must display them as `<masked>`. The th
 dotenv namespaces and contain public fixtures only. The remote Schema remains unbound because
 network acquisition requires an explicit safety decision.
 
-### Compare
+### Launch
 
-Use Execution profile mode:
+Choose **Run an execution profile**. Ctrl+R prepares, Ctrl+X runs and Ctrl+K cancels:
 
 - `matrix-release` creates 8 logical cells, 16 Environment executions, and 8 comparisons;
-- `repeated-matrix-release` doubles those counts with two trials;
-- `candidate-smoke` runs assertions without a baseline/candidate comparison.
+- `repeated-matrix-release` keeps 8 unique cells and uses two trials: 16 trial occurrences,
+  32 Environment executions and 16 comparisons;
+- `candidate-smoke` runs assertions without a baseline/candidate comparison;
 - `streaming-chunks` compares concatenated semantic text across two versus three SSE records;
-- `read-routing` groups relative routing, absolute routing, and an inline response contract.
+- `read-routing` groups relative routing, absolute routing, and an inline response contract;
+- `launch-review` combines eight catalog cells with health, release and inline-contract Requests:
+  11 logical cells, 22 Environment executions and 11 comparisons.
 
 The `catalog` Request attaches `audiences` and `locales` simultaneously. The planner forms their
 Cartesian product, while `$matrix` resolves `region`, `plan`, and `locale` inside a reusable query
@@ -76,11 +80,18 @@ Value. Every response is first validated against `Schema/catalog-response`. Only
 audience differs between baseline and candidate, across its two locale cells, so the result
 contains both clean and drifted comparisons.
 
-### Report
+### Reports and evidence
 
-After running both a passing and failing profile, refresh Report and navigate between the saved
+After running both a passing and failing profile, refresh Reports and navigate between the saved
 artifacts. This is useful for judging list density, verdict semantics, cross-references, and the
-shared result components without executing HTTP again.
+shared result components without executing HTTP again. Analyze opens Issues, Requests, Rules,
+Fields and Timeline with Alt+1–5 or bracket cycling. Press `i` for raw pages, JSON/SSE navigation
+and sanitized cURL review. Fields contains retained rule evidence; it is not a JSON body browser.
+The showcase artifact/redaction policy can omit inline evidence, producing an explicit empty Fields
+state; use the capture inspector for retained body structure.
+
+Settings persists theme, density, mouse, startup workspace and main command keys. Theme and mouse
+changes apply next launch; density and shortcuts apply when saved.
 
 The equivalent headless command is expected to exit with code `1` because two cells drift:
 

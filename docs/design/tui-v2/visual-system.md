@@ -1,5 +1,10 @@
 # Visual and theming system
 
+Reconciled **2026-10-31** with the canonical `comparo.tui` library. The retained screenshots define
+layout and information-hierarchy targets; `theme.py`, the shared components and workspace guides
+describe today's implementation. Historical neutral-method/text-only-kind proposals are superseded
+by the established Explorer vocabulary, which Launch and Reports must reuse.
+
 ## Hierarchy
 
 The screenshots define the target hierarchy:
@@ -16,27 +21,30 @@ colors. Terminal typography remains monospaced and information-dense.
 
 ## Theme boundary
 
-Comparo registers themes through Textual. A feature component uses semantic Textual variables and
-component variants; it never imports a palette, branches on a theme ID, or contains a literal
-color.
+Comparo registers themes through Textual. Components use semantic TCSS variables, component
+variants and `theme.style()` for Rich spans. Literal colors and theme-specific translation belong
+in `src/comparo/tui/theme.py`, not in feature widgets.
 
-The initial dark theme is based on the approved screenshots:
+The current dark theme uses these central tokens; the registered light theme translates both TCSS
+and Rich text styles:
 
-| Role | Initial value |
+| Role | Dark value |
 | --- | --- |
-| background | `#0D1117` |
-| surface | `#161B22` |
-| panel | `#21262D` |
-| foreground | `#E6EDF3` |
-| muted | `#8B949E` |
-| border | `#30363D` |
-| focus / primary / running | `#79A7FF` |
-| success | `#56D364` |
-| advisory | `#E3B341` |
-| failure / error | `#FF7B72` |
+| background | `#0B0F14` |
+| surface | `#121820` |
+| panel | `#18202C` |
+| foreground | `#D6E1EC` |
+| muted | `#68809C` |
+| border | `#243044` |
+| primary / baseline / running | `#4FD6E3` |
+| candidate | `#C89BF5` |
+| success | `#7BD88F` |
+| advisory | `#F0C060` |
+| failure | `#F2637E` |
+| operational error | `#FF9E64` |
 
-Theme selection references an extensible registered theme ID. `system` is a selection mode, not a
-theme implementation. New themes must be installable without changing feature widgets.
+Settings currently accepts `comparo-dark` and `comparo-light`; the saved theme applies next launch.
+Automatic system-theme selection and third-party theme installation are not current controls.
 
 Required theme-neutral component states are default, focused, hovered, cursor-highlighted,
 committed selection, disabled, loading, empty, advisory, failed, and unavailable. Focus is a pane
@@ -44,28 +52,36 @@ or widget state; cursor and committed selection are different item states.
 
 ## Status grammar
 
-ASCII is the guaranteed baseline. A verified Unicode glyph set may be a user preference.
+Current status rendering uses the shared `components.status` grammar:
 
-| State | Portable mark and label |
+| State | Mark and label |
 | --- | --- |
-| success | `+ PASSED` |
-| advisory | `~ ADVISORY` |
-| failure | `x FAILED` |
-| error | `! ERROR` |
-| running | `> RUNNING` |
-| queued | `. QUEUED` |
-| skipped | `- SKIPPED` |
-| cancelled | `# CANCELLED` |
-| redacted | `* REDACTED` |
-| neutral | `= NEUTRAL` |
+| passed | `✓ Passed` |
+| advisory | `~ Advisory` |
+| failed | `✗ Failed` |
+| error | `! Error` |
+| running | `◐ Running` |
+| queued | `· Queued` |
+| skipped | `⊘ Skipped` |
+| cancelled | `⊘ Cancelled` |
+| drifted | `Δ Drifted` |
+| not evaluated | `— Not evaluated` |
 
-Color never carries status alone. Resource kinds use compact textual labels such as `REQ`, `ENV`,
-`SCHEMA`, `MATRIX`, `ASSERT`, `DIFF`, and `PROFILE`; methods and environments remain neutral.
+Color never carries status alone. Preserve the producer's distinct completed, satisfied, equivalent,
+violated, unavailable and partial states rather than reducing all outcomes to pass/fail.
+
+Resource labels use the glyphs and semantic tokens in `theme.KIND_GLYPHS`: for example `⌂` Project,
+`◉` Environment, `⇄` Request, `▦` Matrix, `§` Schema, `$` Value and `▶` ExecutionProfile.
+`ResourceLabel` and the shared label fragments keep this vocabulary consistent across workspaces.
+Methods retain their established colors: GET green, POST amber, PUT blue, PATCH teal, DELETE red,
+HEAD/OPTIONS slate. Baseline and candidate roles retain distinct semantic colors and visible labels.
+Glyph selection/ASCII fallback is not yet a Settings preference.
 
 ## Density and responsiveness
 
-Comfortable density is the default and compact density is a TUI preference. Density changes
-spacing and row height through root classes or variables; it does not fork component markup.
+Comfortable density is the default and compact density is a persisted TUI preference. Saving density
+updates the root class immediately and tightens supported component spacing; it does not currently
+change every table's row height or fork component markup.
 
 One breakpoint policy classifies terminal-cell width:
 
@@ -75,8 +91,10 @@ One breakpoint policy classifies terminal-cell width:
 | `88-139` | standard | keep one index rail beside the active detail when useful |
 | `>= 140` | wide | match the primary screenshot composition |
 
-Components cannot declare private breakpoints. Evidence requiring side-by-side reading receives a
-wide replacement surface or drawer rather than two squeezed columns.
+Use the shared breakpoint policy for workspace/result composition. Local adaptations also exist:
+the header hides helper text below 110 columns, and Launch adapts its target/summary composition.
+Evidence requiring side-by-side reading must remain readable through a wider evidence surface or
+unified diff; the screenshot targets are not proof that every terminal size has passed visual QA.
 
 ## Component styling
 
@@ -84,5 +102,5 @@ wide replacement surface or drawer rather than two squeezed columns.
 - Reusable widgets own their local structure and semantic state classes.
 - Workspaces own composition only.
 - Cross-workspace descendant selectors are forbidden.
-- Raw hexadecimal, RGB, ANSI, or named colors outside registered theme definitions are forbidden.
+- Raw hexadecimal, RGB, ANSI, or named colors outside the central theme module are forbidden.
 - Textual variables describe semantic roles; feature names must not become palette variables.

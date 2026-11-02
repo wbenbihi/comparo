@@ -1,5 +1,9 @@
 # TUI v2 acceptance matrix
 
+Updated implementation mapping: **2026-10-31**. This is an acceptance checklist, not a pass
+certificate. See [current QA](../../../design-qa.md) for evidence. Compare/Report reference captions
+map to Launch/Reports; use the canonical component library, including its disclosure and selectors.
+
 ## Visual gate
 
 Each reference-backed state is captured at 160 by 52 terminal cells with deterministic fixtures.
@@ -31,8 +35,8 @@ Headless Textual Pilot journeys prove:
 
 ## Component and architecture gate
 
-- Native Textual widgets own standard mechanics.
-- Compare and Report mount the same analysis component.
+- Existing reusable components wrap native Textual mechanics; workspaces preserve their styling.
+- Launch and Reports reuse `ResultsView` and the shared capture inspector.
 - Theme definitions are the only raw-color source.
 - Default and user key maps are the only physical-key sources.
 - One breakpoint policy is shared by every component.
@@ -51,14 +55,14 @@ before presentation.
 ## Required journeys
 
 1. Filter Explorer, highlight each supported resource kind, switch applicable facets, change
-   environment/matrix context, follow a relationship, and transfer a Request into Compare.
+   environment/matrix context, follow a relationship, and transfer a Request into Launch.
 2. Select an Execution Profile, edit Target sections, prepare an immutable plan, return to edit,
    re-prepare, run, inspect progress, cancel, and complete without losing state when switching
    workspace.
 3. Analyze one failure from Outcome to Issue to Occurrence to Evidence, then pivot through Request,
    Rule, Field, and Timeline without losing the selected stable reference.
 4. Inspect normalized SSE evidence with raw events available on demand.
-5. Filter Report, isolate a corrupt entry, open a valid report, and use the same analysis journey
+5. Filter Reports, isolate a corrupt entry, open a valid report, and use the same analysis journey
    read-only.
 6. Change theme and density, exercise no-color semantics, and verify that no execution setting or
    project file changes.

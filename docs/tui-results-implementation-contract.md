@@ -1,7 +1,7 @@
 # TUI results implementation contract
 
-This contract defines the reusable, sanitized result surface shared by live Compare executions and
-persisted Report entries.
+Reconciled **2026-10-31**. This contract defines the reusable, sanitized result surface shared by
+Launch executions and persisted Reports. Older mockups call those workspaces Compare and Report.
 
 ## Boundary
 
@@ -49,16 +49,17 @@ accepts only exchange coordinates and must not be bypassed.
 
 | Component | Single responsibility |
 | --- | --- |
-| `ResultsWorkspaceView` | Shared responsive composition for live and stored results. |
-| `ResultSummary` | Artifact-owned completion, gate, and roll-up metrics. |
-| `ResultIndex` | Typed execution, assertion, comparison, or diff rows. |
+| `ResultsView` | Shared composition, artifact-owned summary, five lenses and local evidence navigation. |
+| `GroupedTable` / `Table` | Typed index, occurrence and message rows using the existing component library. |
 | `ResultDetail` | Evidence-light detail for one stable result reference. |
-| `StatusBadge` | Sole glyph, label, and semantic CSS mapping. |
-| `StatePanel` | Shared loading, empty, error, and content lifecycle. |
+| `components.status` | Shared outcome glyph, label and semantic color mapping. |
+| `DiffView` / `resultbody` / `resultlayout` | Body comparison, loading state and responsive evidence layout. |
+| `CaptureInspector` | Bounded raw/JSON/SSE browsing and reviewed sanitized cURL. |
 
-Compare mounts the surface with `ResultAccess.LIVE`; Report mounts the same class with
-`ResultAccess.READ_ONLY`. Access is a UI capability label, not an alternate interpretation of the
-artifact.
+Launch and Reports mount the same `ResultsView` class and feed it sanitized result projections.
+The owning workspace routes body requests through the backend. Neither view gains HTTP execution
+authority from an artifact; opening a stored report does not rerun it. There is no separate archived
+Analyze implementation or `ResultAccess` UI enum.
 
 ## Responsive contract
 
@@ -75,10 +76,13 @@ No result widget may declare a private breakpoint.
 ## Navigation contract
 
 - Selecting a row passes a typed `ResultReference` to the shared detail component.
-- The owning workspace records the reference in its own navigation stack.
-- `esc` pops that local stack before changing the workspace surface.
-- Opening a report never enters Compare; completing a live run never enters Report.
-- Background completion updates Compare without changing active workspace or focus.
+- `ResultsView` records selected references in its local history; `esc` backs out of detail first.
+- Issues, Requests, Rules, Fields and Timeline use `Alt+1`–`Alt+5` or `[` / `]` by default.
+  Settings can remap these commands. Fields shows retained rule/selector evidence, not every JSON key.
+- `i` opens the shared capture inspector; Escape returns to Analyze.
+- Opening a report never enters Launch; completing a live run never enters Reports.
+- Background completion updates Launch without changing active workspace or focus; Run remains
+  visible until the user explicitly opens Analyze.
 
 ## Safety and resource contract
 
@@ -94,10 +98,11 @@ No result widget may declare a private breakpoint.
 
 ## Acceptance gate
 
-The implementation is complete only when tests prove:
+These are acceptance requirements, not a statement that a fresh full-suite, coverage or visual
+audit has passed. See [current QA evidence](../design-qa.md) and [status](status.md).
 
 - the real shared result view mounts at 80, 120, and 160 columns;
-- Compare and Report instantiate the same result component;
+- Launch and Reports instantiate the same result component;
 - every component/workspace module reaches 100% statement and branch coverage;
 - live progress, cancellation, terminal results, report opening, local back navigation, and
   background no-focus-theft work through an injected fake backend;
