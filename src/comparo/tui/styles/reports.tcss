@@ -1,0 +1,47 @@
+ReportsWorkspace { padding: 0 1; }
+ReportsWorkspace #reports-title { height: 2; padding-top: 1; text-style: bold; color: $foreground; }
+ReportsWorkspace #reports-subtitle { height: 2; color: $comparo-muted; }
+ReportsWorkspace #reports-browse, ReportsWorkspace #reports-analysis { height: 1fr; }
+ReportsWorkspace #reports-filters {
+    layout: grid; grid-size: 3; grid-rows: 2 2; grid-columns: 1fr 1fr 1fr;
+    grid-gutter: 0 2; height: 6; border-top: solid $comparo-border; border-bottom: solid $comparo-border;
+}
+ReportsWorkspace.wide #reports-filters { grid-size: 6; grid-rows: 2; grid-columns: 2fr 1fr 1.3fr 1.2fr 1.2fr 1fr; height: 4; }
+ReportsWorkspace #reports-search { height: 1; border: none; margin-top: 1; }
+ReportsWorkspace SelectField { margin-top: 1; }
+ReportsWorkspace #reports-layout { height: 1fr; }
+ReportsWorkspace #reports-index { width: 60%; padding-right: 1; height: 1fr; }
+ReportsWorkspace.wide #reports-index { width: 66%; }
+ReportsWorkspace #reports-columns { height: 2; padding: 0 1; border-bottom: solid $comparo-border; }
+ReportsWorkspace #reports-archive { height: 1fr; padding: 0 1; scrollbar-size-vertical: 1; }
+ReportArchive > .option-list--option { padding: 0 0 1 0; }
+ReportArchive > .option-list--option-highlighted { background: $accent 16%; color: $foreground; }
+ReportArchive > .option-list--option-disabled { color: $comparo-muted; text-style: none; }
+ReportsWorkspace #reports-empty { height: 1fr; padding: 2; }
+ReportsWorkspace #reports-page-info { height: auto; color: $comparo-muted; padding: 0 1; }
+ReportsWorkspace #reports-page-actions { height: 2; padding-top: 1; }
+ReportsWorkspace #reports-preview { width: 1fr; height: 1fr; padding: 1 1 0 2; border-left: solid $comparo-border; }
+ReportPreview VerticalScroll { height: 1fr; scrollbar-size-vertical: 1; }
+ReportPreview Caption { height: auto; }
+ReportPreview #report-outcome { text-style: bold; margin-bottom: 1; }
+ReportPreview #report-gate { color: $comparo-muted; }
+ReportPreview Separator { margin: 0; }
+ReportPreview .report-section { color: $comparo-label; margin-bottom: 1; }
+ReportPreview KeyValueList { height: auto; grid-columns: 12 1fr; }
+ReportPreview #report-readonly { margin-top: 1; color: $comparo-muted; }
+ReportPreview #report-actions { layout: vertical; height: 5; margin-top: 1; }
+ReportPreview #report-actions Button { width: 100%; text-align: left; margin: 0 0 1 0; }
+ReportsWorkspace #reports-failures { height: auto; max-height: 3; color: $warning; }
+ReportsWorkspace #reports-notice { height: auto; max-height: 2; color: $comparo-muted; }
+ReportsWorkspace #reports-back { height: 2; }
+ReportsWorkspace.compact #reports-title { height: 1; padding-top: 0; }
+ReportsWorkspace.compact #reports-subtitle { height: 1; }
+ReportsWorkspace.compact #reports-filters { grid-size: 2; grid-rows: 2 2 2; height: 8; grid-columns: 1fr 1fr; }
+ReportsWorkspace.compact #reports-index { width: 100%; }
+ReportsWorkspace.compact #reports-preview { display: none; }
+ReportsWorkspace.compact.previewing #reports-index { display: none; }
+ReportsWorkspace.compact.previewing #reports-preview { display: block; border: none; }
+ReportsWorkspace.compact.previewing #reports-filters { display: none; }
+ReportsWorkspace.analyzing #reports-title, ReportsWorkspace.analyzing #reports-subtitle { display: none; }
+ReportsWorkspace.empty-archive #reports-index { width: 100%; }
+ReportsWorkspace.empty-archive #reports-preview { display: none; }

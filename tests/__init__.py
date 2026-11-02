@@ -1,1 +1,1 @@
-"""Test suite for comparo."""
+"""Comparo test suite."""

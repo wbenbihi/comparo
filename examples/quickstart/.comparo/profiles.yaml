@@ -1,0 +1,70 @@
+apiVersion: comparo/v1alpha1
+kind: AssertionProfile
+metadata:
+  id: http-success
+  name: HTTP success
+  description: Require one complete HTTP 200 response.
+  tags: [assertion, blocking]
+spec:
+  rules:
+    - id: status-is-200
+      selector: response.status
+      operator:
+        name: equals
+        expected: 200
+      severity: blocking
+      quantifier: one
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: stable-status
+  name: Stable status
+  description: Require the baseline and candidate status codes to match exactly.
+  tags: [diff, blocking]
+spec:
+  rules:
+    - id: status-is-stable
+      selector: response.status
+      comparator:
+        name: exact
+      severity: blocking
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: GateProfile
+metadata:
+  id: strict
+  name: Strict gate
+  description: Apply the current strict default verdict semantics.
+  tags: [gate, release]
+spec: {}
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: compare-health
+  name: Compare health
+  description: Reusable baseline-to-candidate health comparison.
+  tags: [comparison, recommended]
+spec:
+  subjects:
+    - $use: Request/health
+  baseline:
+    $use: baseline
+  candidates:
+    - $use: candidate
+---
+apiVersion: comparo/v1alpha1
+kind: ExecutionProfile
+metadata:
+  id: check-baseline
+  name: Check baseline only
+  description: Run assertions against only the baseline Environment.
+  tags: [assertions, smoke]
+spec:
+  subjects:
+    - $use: Request/health
+  environments:
+    - $use: baseline

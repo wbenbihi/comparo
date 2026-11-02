@@ -1,0 +1,639 @@
+"""Request-resolution and conservative materialization edge cases."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import cast
+from uuid import UUID
+
+import msgspec
+import pytest
+
+from comparo.core.configuration.canonical import CanonicalMember
+from comparo.core.configuration.canonical import CanonicalObject
+from comparo.core.domain.expressions import LiteralExpr
+from comparo.core.domain.expressions import ObjectExpr
+from comparo.core.domain.expressions import ObjectExpressionMember
+from comparo.core.domain.expressions import SensitiveLiteralExpr
+from comparo.core.domain.http.url import DecodedPathSegment
+from comparo.core.domain.http.url import UrlPath
+from comparo.core.domain.identity import ResourceId
+from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.identity import RunId
+from comparo.core.domain.lifecycle import CancellationSource
+from comparo.core.domain.planning_inputs import InvocationRequestEdit
+from comparo.core.domain.provenance import ProvenanceEntry
+from comparo.core.domain.provenance import ProvenanceKind
+from comparo.core.domain.provenance import ResolutionProvenance
+from comparo.core.domain.provenance import ResolutionSource
+from comparo.core.domain.provenance import ResolutionStep
+from comparo.core.domain.provenance import ResolutionStepOutcome
+from comparo.core.domain.provenance import ValueProvenance
+from comparo.core.domain.provenance import ValueProviderIdentity
+from comparo.core.domain.scopes import RunScope
+from comparo.core.domain.sensitivity import SensitiveValue
+from comparo.core.domain.sensitivity import TaintOriginId
+from comparo.core.domain.sensitivity import is_sensitive_value
+from comparo.core.domain.value_references import SymbolPath
+from comparo.core.domain.value_references import ValueNamespace
+from comparo.core.domain.values import Blocked
+from comparo.core.domain.values import BytesValue
+from comparo.core.domain.values import Error
+from comparo.core.domain.values import JsonInteger
+from comparo.core.domain.values import JsonObject
+from comparo.core.domain.values import JsonObjectMember
+from comparo.core.domain.values import JsonString
+from comparo.core.domain.values import Missing
+from comparo.core.domain.values import ResolutionBlockCode
+from comparo.core.domain.values import ResolutionErrorCode
+from comparo.core.domain.values import Unavailable
+from comparo.core.domain.values import UnavailableReason
+from comparo.core.planning.models import PreparedRun
+from comparo.core.planning.planner import plan_run
+from comparo.core.resolution import DeterministicGenerator
+from comparo.core.resolution import EnvironmentSnapshot
+from comparo.core.resolution import ResolutionTarget
+from comparo.core.resolution import ResolvedForWire
+from comparo.core.resolution import RunContext
+from comparo.core.resolution.snapshots import cell_inputs
+from comparo.core.runtime import BlockedExecution
+from comparo.core.runtime import CancelledExecution
+from comparo.core.runtime import ConfigurationRequestProvider
+from comparo.core.runtime import RequestPreparationFailure
+from comparo.core.runtime import UnavailableExecution
+from comparo.core.runtime import iter_execution_work
+from comparo.core.runtime import request_preparation as preparation
+from comparo.core.runtime.http import _attempt_scope
+from comparo.core.runtime.ports import PreparedRequest
+from comparo.core.runtime.request_lowering import lower_headers
+from tests.core.domain.http.factories import definition
+from tests.core.planning.conftest import authority
+from tests.core.planning.conftest import compile_project
+from tests.core.planning.conftest import document
+from tests.core.planning.conftest import invocation
+from tests.core.runtime.conftest import FixedClock
+
+
+def _prepared(
+    request: str,
+    *,
+    base_url: str = "'https://api.example.test'",
+    project_fields: str = "",
+    scenario: bool = False,
+    request_edit: InvocationRequestEdit | None = None,
+) -> PreparedRun:
+    subject_kind = "Scenario" if scenario else "Request"
+    subject_name = "flow" if scenario else "check"
+    project_prefix = f"{project_fields}, " if project_fields else ""
+    project = compile_project(
+        document(
+            "Project",
+            "demo",
+            f"{{{project_prefix}defaults: {{subjects: [{{$use: {subject_kind}/{subject_name}}}], "
+            "environments: [{$use: dev}]}}",
+        ),
+        document("Environment", "dev", f"{{baseUrl: {base_url}}}"),
+        document(subject_kind, subject_name, request),
+    )
+    result = plan_run(
+        project,
+        invocation(requests=() if request_edit is None else (request_edit,)),
+        authority(),
+    )
+    assert result.prepared is not None
+    return result.prepared
+
+
+def _context(prepared: PreparedRun) -> RunContext:
+    provider = ValueProviderIdentity(namespace="test", name="environment", version="1")
+    snapshots = tuple(
+        EnvironmentSnapshot(environment=item, entries=(), provider=provider)
+        for item in prepared.effective.environments
+    )
+    return RunContext(
+        prepared=prepared,
+        environment_snapshots=snapshots,
+        clock=FixedClock(),
+        generator=DeterministicGenerator(
+            SensitiveValue(
+                BytesValue(value=b"request-preparation-seed"),
+                origins=(TaintOriginId(value="test/request-seed"),),
+            )
+        ),
+    )
+
+
+async def _prepare(prepared: PreparedRun) -> PreparedRequest:
+    context = _context(prepared)
+    provider = ConfigurationRequestProvider(prepared, context)
+    work = next(iter_execution_work(prepared))
+    try:
+        return await provider.prepare(work, _attempt_scope(work, 0))
+    finally:
+        await provider.close()
+        await context.close()
+
+
+def _configuration_provenance() -> ValueProvenance:
+    return ValueProvenance(entries=(ProvenanceEntry(kind=ProvenanceKind.PROJECT),))
+
+
+def _resolution_provenance(outcome: ResolutionStepOutcome) -> ResolutionProvenance:
+    provider = ValueProviderIdentity(namespace="test", name="literal", version="1")
+    scope = RunScope(run_id=RunId(value=UUID(int=901)))
+    source = ResolutionSource(
+        namespace=ValueNamespace.VARIABLES,
+        symbol=SymbolPath(segments=("value",)),
+        provider=provider,
+        configuration=_configuration_provenance(),
+        scope=scope,
+    )
+    return ResolutionProvenance(
+        namespace=ValueNamespace.VARIABLES,
+        symbol=source.symbol,
+        provider=provider,
+        scope=scope,
+        steps=(ResolutionStep(source=source, outcome=outcome),),
+    )
+
+
+def test_explicit_url_query_headers_ports_and_sensitive_values_materialize() -> None:
+    prepared = _prepared(
+        "{request: {method: get, url: 'http://127.0.0.1:8080/a/?from=url', "
+        "query: {extra: 'yes'}, headers: {X-Test: ok}, body: null}}"
+    )
+    result = asyncio.run(_prepare(prepared))
+    assert not isinstance(result, RequestPreparationFailure)
+    assert result.method.value == "GET"
+    assert result.url.authority.host.value == "127.0.0.1"
+    assert result.url.authority.port is not None
+    assert result.url.authority.port.value == 8080
+    assert result.url.path.trailing_slash
+    assert tuple(item.name.value for item in result.url.query.parameters) == ("from", "extra")
+    assert result.headers.fields[0].name.value == "x-test"
+
+    secret = _prepared(
+        "{request: {method: GET, endpoint: /private, headers: {X-Token: '${secrets.token}'}}}",
+        project_fields="secrets: {token: hidden}",
+    )
+    secret_result = asyncio.run(_prepare(secret))
+    assert not isinstance(secret_result, RequestPreparationFailure)
+    assert isinstance(secret_result.headers.fields[0].value, SensitiveValue)
+    assert not is_sensitive_value(secret_result.url.path.segments[0])
+    assert secret_result.url.authority.host.value == "api.example.test"
+    assert isinstance(
+        secret_result.materialization.identity.effective_request_fingerprint,
+        SensitiveValue,
+    )
+
+
+def test_run_owned_request_edit_materializes_without_mutating_project_request() -> None:
+    provenance = _configuration_provenance()
+    edited = _prepared(
+        "{request: {method: GET, endpoint: /original}}",
+        request_edit=InvocationRequestEdit(
+            subject=ResourceId(value="check"),
+            endpoint=LiteralExpr(
+                value=JsonString(value="/temporary"),
+                provenance=provenance,
+            ),
+        ),
+    )
+
+    result = asyncio.run(_prepare(edited))
+
+    assert not isinstance(result, RequestPreparationFailure)
+    assert all(not is_sensitive_value(segment) for segment in result.url.path.segments)
+    assert tuple(
+        cast("DecodedPathSegment", segment).value for segment in result.url.path.segments
+    ) == ("temporary",)
+    request = edited.project.find(ResourceKind.REQUEST, ResourceId(value="check"))
+    assert request is not None
+    assert "/original" in repr(request.spec)
+    assert "/temporary" not in repr(request.spec)
+
+
+@pytest.mark.parametrize(
+    "request_config",
+    [
+        "{request: {method: GET, url: 'https://${secrets.target}/'}}",
+        "{request: {method: GET, endpoint: '/v1/${secrets.target}'}}",
+    ],
+)
+def test_secret_derived_routing_is_denied_before_normalization(request_config: str) -> None:
+    result = asyncio.run(
+        _prepare(
+            _prepared(
+                request_config,
+                project_fields="secrets: {target: 'PRIVATE.Example'}",
+            )
+        )
+    )
+
+    assert type(result) is RequestPreparationFailure
+    outcome = cast(UnavailableExecution, result.outcome)
+    assert outcome.code.value == "runtime.request.sensitive-target"
+
+
+def test_sensitive_method_origin_is_denied_by_routing_boundary() -> None:
+    origin = TaintOriginId(value="test/secret-method")
+    result = preparation._routing(
+        {
+            "method": JsonString(value="GET"),
+            "endpoint": JsonString(value="/"),
+        },
+        {"method": (origin,)},
+        "https://api.example.test",
+    )
+
+    assert type(result) is RequestPreparationFailure
+    outcome = cast(UnavailableExecution, result.outcome)
+    assert outcome.code.value == "runtime.request.sensitive-target"
+
+
+@pytest.mark.parametrize(
+    ("request_config", "base_url", "project_fields", "expected"),
+    [
+        (
+            "{request: {method: POST, endpoint: /, body: hello}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, url: 'ftp://api.test'}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, url: 'https://u:p@api.test/'}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, url: 'https://api.test/#part'}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, endpoint: /, query: nope}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, endpoint: /, query: {n: 1}}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, endpoint: /, headers: nope}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, endpoint: /, headers: {x: 1}}}",
+            "'https://api.test'",
+            "",
+            "shape-invalid",
+        ),
+        ("{request: {method: GET, endpoint: /}}", "12", "", "shape-invalid"),
+        (
+            "{request: {method: GET, endpoint: /}}",
+            "'${secrets.base}'",
+            "secrets: {base: 'https://api.test'}",
+            "shape-invalid",
+        ),
+        (
+            "{request: {method: GET, endpoint: /, headers: {x: '${env.MISSING}'}}}",
+            "'https://api.test'",
+            "",
+            "unavailable",
+        ),
+    ],
+)
+def test_unsupported_or_malformed_authored_shapes_fail_explicitly(
+    request_config: str,
+    base_url: str,
+    project_fields: str,
+    expected: str,
+) -> None:
+    result = asyncio.run(
+        _prepare(
+            _prepared(
+                request_config,
+                base_url=base_url,
+                project_fields=project_fields,
+            )
+        )
+    )
+    assert type(result) is RequestPreparationFailure
+    outcome = cast(UnavailableExecution, result.outcome)
+    assert outcome.code.value == f"runtime.request.{expected}"
+
+
+def test_provider_rejects_invalid_context_calls_and_non_request_subjects() -> None:
+    prepared = _prepared("{request: {method: GET, endpoint: /}}")
+    context = _context(prepared)
+    with pytest.raises(TypeError, match="PreparedRun and RunContext"):
+        ConfigurationRequestProvider(object(), context)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="PreparedRun and RunContext"):
+        ConfigurationRequestProvider(prepared, object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="finalizer must implement finalize"):
+        ConfigurationRequestProvider(
+            prepared, context, cast("preparation.RequestFinalizer", object())
+        )
+    object.__setattr__(context, "_run", RunScope(run_id=RunId(value=UUID(int=902))))
+    with pytest.raises(ValueError, match="another run"):
+        ConfigurationRequestProvider(prepared, context)
+    asyncio.run(context.close())
+
+    scenario_context = _context(prepared)
+    provider = ConfigurationRequestProvider(prepared, scenario_context)
+    work = next(iter_execution_work(prepared))
+    with pytest.raises(TypeError, match="ExecutionWork and AttemptScope"):
+        asyncio.run(provider.prepare(object(), _attempt_scope(work, 0)))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="ExecutionWork and AttemptScope"):
+        asyncio.run(provider.prepare(work, object()))  # type: ignore[arg-type]
+    msgspec.structs.force_setattr(
+        work,
+        "subject",
+        definition(ResourceKind.SCENARIO, "flow"),
+    )
+    result = asyncio.run(provider.prepare(work, _attempt_scope(work, 0)))
+    assert type(result) is RequestPreparationFailure
+    asyncio.run(provider.close())
+    asyncio.run(scenario_context.sanitization_snapshot())
+    asyncio.run(scenario_context.close())
+
+
+def test_provider_maps_unexpected_finalizer_failures_without_exposing_details() -> None:
+    class ExplodingFinalizer:
+        async def finalize(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("secret-adapter-detail")
+
+    async def scenario() -> RequestPreparationFailure:
+        prepared = _prepared("{request: {method: GET, endpoint: /}}")
+        context = _context(prepared)
+        provider = ConfigurationRequestProvider(
+            prepared,
+            context,
+            cast("preparation.RequestFinalizer", ExplodingFinalizer()),
+        )
+        work = next(iter_execution_work(prepared))
+        try:
+            result = await provider.prepare(work, _attempt_scope(work, 0))
+            assert type(result) is RequestPreparationFailure
+            return result
+        finally:
+            await provider.close()
+            await context.close()
+
+    outcome = asyncio.run(scenario()).outcome
+    assert type(outcome) is UnavailableExecution
+    assert outcome.code.value == "runtime.request.materialization-failed"
+
+
+def test_environment_resolution_propagates_field_failure_and_rejects_non_json_tls() -> None:
+    missing = _prepared(
+        "{request: {method: GET, endpoint: /}}",
+        base_url="'https://api.test', headers: {x: '${env.MISSING}'}",
+    )
+    missing_result = asyncio.run(_prepare(missing))
+    assert type(missing_result) is RequestPreparationFailure
+
+    async def invalid_tls() -> RequestPreparationFailure:
+        prepared = _prepared("{request: {method: GET, endpoint: /}}")
+        environment = prepared.project.find(ResourceKind.ENVIRONMENT, ResourceId(value="dev"))
+        assert environment is not None
+        spec = cast("CanonicalObject", environment.spec)
+        base_url = next(member.value for member in spec.members if member.name == "baseUrl")
+        invalid_spec = CanonicalObject(
+            members=(*spec.members, CanonicalMember(name="tls", value=base_url))
+        )
+        invalid_environment = msgspec.structs.replace(environment, spec=invalid_spec)
+        context = _context(prepared)
+        work = next(iter_execution_work(prepared))
+        try:
+            result = await preparation._resolve_environment(
+                context,
+                prepared,
+                invalid_environment,
+                work,
+                _attempt_scope(work, 0),
+            )
+            assert type(result) is RequestPreparationFailure
+            return result
+        finally:
+            await context.close()
+
+    assert type(asyncio.run(invalid_tls())) is RequestPreparationFailure
+
+
+def test_resolution_failures_map_to_value_free_execution_outcomes() -> None:
+    unavailable = Unavailable(
+        reason=UnavailableReason.NOT_FOUND,
+        provenance=_resolution_provenance(ResolutionStepOutcome.UNAVAILABLE),
+    )
+    missing = Missing(provenance=_resolution_provenance(ResolutionStepOutcome.MISSING))
+    failed = Error(
+        code=ResolutionErrorCode.PROVIDER_FAILED,
+        provenance=_resolution_provenance(ResolutionStepOutcome.ERROR),
+    )
+    cancelled = Error(
+        code=ResolutionErrorCode.CANCELLED,
+        provenance=_resolution_provenance(ResolutionStepOutcome.ERROR),
+    )
+    blocked = Blocked(
+        code=ResolutionBlockCode.SOURCE_DENIED,
+        provenance=_resolution_provenance(ResolutionStepOutcome.BLOCKED),
+    )
+
+    for result in (unavailable, missing):
+        mapped = preparation._resolution_failure(result)
+        assert mapped is not None
+        assert type(mapped.outcome) is UnavailableExecution
+        assert mapped.outcome.code.value == "runtime.request.unavailable"
+    mapped_failure = preparation._resolution_failure(failed)
+    assert mapped_failure is not None
+    assert type(mapped_failure.outcome) is UnavailableExecution
+    assert mapped_failure.outcome.code.value == "runtime.request.resolution-error"
+    mapped_cancelled = preparation._resolution_failure(cancelled)
+    assert mapped_cancelled is not None
+    assert mapped_cancelled.outcome == CancelledExecution(source=CancellationSource.PARENT_SCOPE)
+    mapped_blocked = preparation._resolution_failure(blocked)
+    assert mapped_blocked is not None
+    assert type(mapped_blocked.outcome) is BlockedExecution
+    assert preparation._resolution_failure(object()) is None
+    assert type(preparation._resolved_value(object())) is RequestPreparationFailure
+
+
+def test_missing_top_level_field_is_intentionally_omitted(
+    prepared_comparison_run: PreparedRun,
+) -> None:
+    class MissingContext:
+        async def resolve_for_wire(
+            self,
+            expression: object,
+            target: object,
+        ) -> Missing:
+            del expression, target
+            return Missing(provenance=_resolution_provenance(ResolutionStepOutcome.MISSING))
+
+    expression = ObjectExpr(
+        members=(
+            ObjectExpressionMember(
+                name="headers",
+                expression=LiteralExpr(
+                    value=JsonString(value="ignored"),
+                    provenance=_configuration_provenance(),
+                ),
+            ),
+        ),
+        provenance=_configuration_provenance(),
+    )
+    work = next(iter_execution_work(prepared_comparison_run))
+    result = asyncio.run(
+        preparation._resolve_fields(
+            cast("RunContext", MissingContext()),
+            expression,
+            ResolutionTarget(
+                symbol=SymbolPath(segments=("request",)),
+                scope=_attempt_scope(work, 0),
+                cell_inputs=cell_inputs(prepared_comparison_run, work.trial.cell),
+            ),
+        )
+    )
+
+    assert result == ({}, {})
+
+
+def test_sensitive_wire_value_is_revealed_only_inside_materialization_boundary(
+    prepared_comparison_run: PreparedRun,
+) -> None:
+    async def scenario() -> tuple[JsonObject, tuple[TaintOriginId, ...]]:
+        context = _context(prepared_comparison_run)
+        work = next(iter_execution_work(prepared_comparison_run))
+        attempt = _attempt_scope(work, 0)
+        payload = JsonObject(
+            members=(JsonObjectMember(name="method", value=JsonString(value="GET")),)
+        )
+        expression = SensitiveLiteralExpr(
+            value=SensitiveValue(
+                payload,
+                origins=(TaintOriginId(value="test/request-secret"),),
+            ),
+            provenance=_configuration_provenance(),
+        )
+        result = await context.resolve_for_wire(
+            expression,
+            ResolutionTarget(
+                symbol=SymbolPath(segments=("request",)),
+                scope=attempt,
+                cell_inputs=cell_inputs(prepared_comparison_run, work.trial.cell),
+            ),
+        )
+        assert type(result) is ResolvedForWire
+        resolved = preparation._resolved_value(result)
+        assert type(resolved) is tuple
+        text_result = await context.resolve_for_wire(
+            SensitiveLiteralExpr(
+                value=SensitiveValue(
+                    JsonString(value="not-object"),
+                    origins=(TaintOriginId(value="test/request-text-secret"),),
+                ),
+                provenance=_configuration_provenance(),
+            ),
+            ResolutionTarget(
+                symbol=SymbolPath(segments=("requestText",)),
+                scope=attempt,
+                cell_inputs=cell_inputs(prepared_comparison_run, work.trial.cell),
+            ),
+        )
+        assert type(text_result) is ResolvedForWire
+        assert type(preparation._resolved_value(text_result)) is tuple
+        public_text_result = await context.resolve_for_wire(
+            LiteralExpr(
+                value=JsonString(value="not-object"),
+                provenance=_configuration_provenance(),
+            ),
+            ResolutionTarget(
+                symbol=SymbolPath(segments=("requestPublicText",)),
+                scope=attempt,
+                cell_inputs=cell_inputs(prepared_comparison_run, work.trial.cell),
+            ),
+        )
+        assert type(public_text_result) is ResolvedForWire
+        assert type(preparation._resolved_value(public_text_result)) is tuple
+        for value in (
+            BytesValue(value=b"public"),
+            SensitiveValue(
+                BytesValue(value=b"secret"),
+                origins=(TaintOriginId(value="test/request-bytes-secret"),),
+            ),
+        ):
+            bytes_result = await context.resolve_for_wire(
+                (
+                    LiteralExpr(value=value, provenance=_configuration_provenance())
+                    if type(value) is BytesValue
+                    else SensitiveLiteralExpr(
+                        value=value,
+                        provenance=_configuration_provenance(),
+                    )
+                ),
+                ResolutionTarget(
+                    symbol=SymbolPath(segments=("requestBytes",)),
+                    scope=attempt,
+                    cell_inputs=cell_inputs(prepared_comparison_run, work.trial.cell),
+                ),
+            )
+            assert type(bytes_result) is ResolvedForWire
+            assert type(preparation._resolved_value(bytes_result)) is tuple
+        await context.close()
+        return cast("tuple[JsonObject, tuple[TaintOriginId, ...]]", resolved)
+
+    payload, origins = asyncio.run(scenario())
+    assert payload.members[0].value == JsonString(value="GET")
+    assert origins == (TaintOriginId(value="test/request-secret"),)
+
+
+def test_url_and_header_helpers_cover_root_ipv6_and_invalid_shapes() -> None:
+    provenance = _configuration_provenance()
+    assert preparation._path("/", ()) == UrlPath()
+    assert preparation._host("2001:db8::1").value == "2001:db8::1"
+    assert preparation._host("Example.TEST").value == "example.test"
+    assert preparation._join_url("https://api.test/", "/v1") == "https://api.test/v1"
+    with pytest.raises(ValueError, match="base URL cannot contain"):
+        preparation._join_url("https://api.test/?query=forbidden", "/v1")
+    missing_method = preparation._routing({}, {}, "https://api.test")
+    assert type(missing_method) is RequestPreparationFailure
+    missing_outcome = cast("UnavailableExecution", missing_method.outcome)
+    assert missing_outcome.code.value == "runtime.request.shape-invalid"
+    request_auth = JsonString(value="request-auth")
+    selected_auth, selected_origins = preparation._effective_authentication(
+        {"auth": request_auth},
+        {"auth": (TaintOriginId(value="test/request-auth"),)},
+        {"auth": JsonString(value="environment-auth")},
+        {},
+        same_origin=True,
+    )
+    assert selected_auth == request_auth
+    assert selected_origins
+    assert lower_headers(None, (), provenance).fields == ()
+    with pytest.raises(ValueError, match="absolute HTTP"):
+        preparation._absolute_url("relative", (), provenance)
+    with pytest.raises(ValueError, match="user information"):
+        preparation._absolute_url("https://u@api.test", (), provenance)
+    with pytest.raises(TypeError, match="headers must be an object"):
+        lower_headers(JsonString(value="x"), (), provenance)
+    with pytest.raises(TypeError, match="header value"):
+        lower_headers(
+            JsonObject(members=(JsonObjectMember(name="x", value=JsonInteger(value=1)),)),
+            (),
+            provenance,
+        )

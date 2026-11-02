@@ -1,1 +1,1 @@
-"""Adapters implementing the core's ports (httpx client, secret providers, reporters)."""
+"""Production-facing adapters around Comparo's injected core ports."""

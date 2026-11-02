@@ -1,0 +1,36 @@
+{
+  "$id": "https://comparo.dev/schemas/comparo-report-v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "const": "comparo.report/v1alpha1",
+      "type": "string"
+    },
+    "artifact": {
+      "$ref": "https://comparo.dev/schemas/comparo-artifact-v1alpha1.schema.json"
+    },
+    "artifact_api_version": {
+      "const": "comparo.artifact/v1alpha1",
+      "type": "string"
+    },
+    "artifact_id": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "format": {
+      "const": "json",
+      "type": "string"
+    }
+  },
+  "required": [
+    "api_version",
+    "format",
+    "artifact_api_version",
+    "artifact_id",
+    "artifact"
+  ],
+  "type": "object",
+  "x-comparo-validation": "runtime-semantic-validation-required"
+}

@@ -1,0 +1,250 @@
+# Sanitized artifacts, persistence, and reporters
+
+Step 9 establishes the boundary between Comparo's live execution graph and anything that may be
+saved or presented. A `RunResult` is an internal, live object: it may still refer to transient
+bodies and sensitive values. A `RunArtifact` is an independently versioned, immutable, bounded,
+and sanitized record. Persistent stores and reporters accept only the latter.
+
+```text
+PreparedRun + RunResult
+  + final run-scoped sanitization snapshot
+  + live body reader
+  -> ArtifactCapturingDriver
+  -> compile_run_artifact
+  -> comparo.artifact/v1alpha1
+       -> sanitized blob source
+       -> atomic local bundle
+       -> JSON / JUnit / SARIF / Markdown
+```
+
+## Ownership and lifecycle
+
+`ArtifactCapturingDriver` decorates the runtime `ExecutionDriver`. It retains live execution
+outcomes through assertion and diff evaluation, takes the final sanitizer snapshot, streams bodies
+through the sanitizer while their transient store is still open, and then closes the underlying
+driver. The compiler consumes only the resulting safe capture batch plus the terminal `PreparedRun`
+and `RunResult`. It always releases and wipes the sanitizer boundary, including rejection paths;
+the production composition root also releases it during outer failure or cancellation cleanup.
+
+This lifecycle is deliberate: moving artifact construction after transport, `RunContext`, or
+transient-body cleanup would make the final secret registry and complete bodies unavailable.
+
+## Artifact contract
+
+`comparo.artifact/v1alpha1` is distinct from the configuration API. Its strict codec rejects
+unknown fields, malformed variants, unsupported versions, and inputs above caller-owned limits.
+The checked-in JSON Schema is generated from the exact artifact types, pins the supported API
+version, and deliberately identifies itself as structural validation. Cross-record rules such as
+summary conservation, comparison lineage, occurrence uniqueness, definition closure, and blob
+closure remain mandatory runtime validation performed by the strict decoder.
+
+The manifest retains:
+
+- tool, run, invocation, configuration, sanitizer, and credential-catalog versions;
+- Project, ExecutionPolicy, ArtifactProfile, and RedactionProfile provenance where one effective
+  profile applies, together with credential-safe configuration and plan fingerprints;
+- terminal completion and gate outcomes without collapsing absence into success;
+- every execution, attempt, redirect exchange, comparison, assertion fact, and diff fact in
+  deterministic order;
+- exact execution-, attempt-, and exchange-level duration-or-absence timing facts;
+- exact gate, summary, and resource-budget counts;
+- explicit partial and omitted coverage;
+- content descriptors for sanitized blobs, with no path or transient storage locator.
+
+Artifact values use a closed tagged JSON vocabulary. Artifact DTOs do not reuse runtime or
+configuration structures, accept arbitrary mappings, or contain `SensitiveValue`, body handles,
+exceptions, or adapter types. A top-level artifact is valid only when its summaries exactly
+conserve retained outcomes, all comparison sides and coverage owners refer to retained executions,
+stable resource identities are unique, every embedded definition is declared, attempt, exchange,
+fact, application, and evidence occurrence identifiers are unique across the whole artifact, and
+its declared blobs exactly match all body references,
+including terminal pre-send requests.
+
+Configuration fingerprints replace declared secret containers, reusable `Value` payloads, typed
+authentication, cookies, known credential headers, and known credential query values with a fixed
+sensitive sentinel before hashing. This prevents exported fingerprints from becoming a
+confirmation oracle for those credential values while public configuration changes still affect
+identity. Authors must still classify application-specific confidential literals as secrets; no
+generic tool can infer every business-sensitive field.
+
+## Sanitization
+
+The run-scoped boundary registers every sealed sensitive value and the concrete values observed on
+the HTTP graph before it is sealed. It masks exact UTF-8, URL-encoded, form-encoded, JSON-string,
+and Base64 representations, including matches split across arbitrary stream chunks. Mandatory
+credential fields are masked as complete values: authorization headers, cookies, `Set-Cookie`,
+and the built-in credential query-name catalog cannot be weakened by project configuration.
+The artifact DTOs enforce that fixed credential floor again during construction and decoding;
+the runtime registry and literal matcher provide the broader backstop for project-declared and
+observed sensitive values.
+
+Sanitized requests retain required `url_redaction_count`, `header_redaction_count`, and
+`cookie_redaction_count` provenance alongside the safe values. URL accounting includes literal
+substitutions, mandatory credential-query masking, and each query parameter omitted by a
+source-wide custom rule. Header and cookie accounting includes every literal substitution and
+mandatory value mask; a source-wide rule counts each omitted field or cookie occurrence. These are
+trusted producer-owned operation counts, not values a consumer can reconstruct from sanitized
+data. Artifact decoding fail-closes when a declared count is below the mandatory query masking or
+retained masked-field/cookie lower bound that remains observable. It cannot prove generic
+literal-substitution or source-wide-omission counts after originals have been discarded. The typed
+provenance lets result views and cURL export disclose that a request was changed without retaining
+the original values. Consumers never scan for `<redacted>`: outside mandatory credential semantics
+that text may be an ordinary public literal with a zero count and no redaction warning.
+
+Literal matching has four explicit caller-owned ceilings: retained pattern count, aggregate
+retained pattern bytes, bytes in one source sensitive value, and nodes in one structured sensitive
+value. Registration and JSON rendering are incremental and iterative. Exhausting any ceiling, or
+encountering any unsupported sensitive value, wipes and closes the boundary and rejects safe
+capture with a value-free failure code. Binary patterns remain available to byte-stream
+sanitization but are excluded from text matching when they are not valid UTF-8, so they cannot
+split an unrelated Unicode code point.
+
+Application-specific redaction rules are fail-closed in this initial artifact implementation. A
+custom rule causes its selected source to be omitted conservatively if fine-grained application
+cannot be established safely; required request method/URL or response status/protocol rules omit
+the complete request or response record. Every such source-wide degradation is recorded as an
+artifact coverage issue. Evaluation always occurs on the live observation before persistence
+redaction, and diff exclusions never imply that content is safe to persist.
+
+Body source truth and artifact persistence truth remain separate. The artifact records whether a
+source was complete, remotely truncated, budget-exhausted, storage-failed, cancelled,
+decode-failed, policy-omitted, or explicitly truncated, independently from whether sanitized
+content was retained completely, partially, or omitted. Omitted content has no raw digest.
+If a request-source or response-body descriptor is itself sensitive, capture never opens or reads
+it: the whole source is omitted (or the artifact is rejected by policy), and neither its digest nor
+its exact byte count is retained. Policy-wide and custom body omission likewise withhold exact
+length metadata.
+
+## Bounded blob staging
+
+The in-memory blob target is intended for composition and tests. It enforces caller-supplied blob
+count, per-blob byte, and aggregate byte limits while streaming. Identical sanitized bytes are
+deduplicated by their sanitized SHA-256 digest. The transient-body adapter exposes only an async
+byte stream and never its locator.
+
+`PosixSanitizedBlobSpool` is the production staging target for Linux and macOS. It keeps sanitized
+body bytes in a newly created private directory beneath a caller-selected private root or the
+platform's sticky temporary directory rather than accumulating the aggregate body budget in RAM.
+Writers use restrictive, exclusive, descriptor-relative files; commit verifies the descriptor
+returned to the compiler, abort removes incomplete content, and close rejects new work, waits for
+admitted work, then best-effort wipes the private spool. The spool is still run-scoped temporary
+storage, not a published artifact bundle.
+
+## Local bundle store
+
+`LocalArtifactBundleSink` is a POSIX local-filesystem adapter for Linux and macOS. The caller must
+provide an existing absolute, user-owned root that is not group- or world-writable. The adapter
+pins that root with a directory descriptor and performs descendant operations descriptor-relative
+with no-follow and exclusive-create flags.
+
+A completed bundle has this physical shape:
+
+```text
+<root>/<artifact-id>/                 0700
+  results.json                       0600
+  manifest.json                      0600
+  COMPLETE                           0600
+  blobs/                             0700
+    <sanitized-sha256>               0600
+```
+
+The writer creates a randomized sibling staging directory, verifies every streamed blob's size
+and digest, synchronizes files and directories, writes `COMPLETE` last, and publishes with a
+platform no-replace atomic rename. It never overwrites an existing bundle. A root synchronization
+failure after publication is reported as `commit-uncertain`, not as a clean failure. Cancellation
+and ordinary failures clean the known staging transaction best-effort; a process interruption can
+leave a visibly named staging directory but never a completed final bundle.
+
+The reader reopens all nodes without following symlinks or accepting hard-linked files, enforces
+ownership, type, permission, and size constraints, authenticates the completion marker against the
+manifest and the results digest, checks the bundle/artifact version binding, decodes the strict
+artifact version, reconstructs blob names only from validated digests, and verifies every blob in
+fixed-size chunks without retaining whole bodies. `open_local_artifact_bundle` also exposes a
+lifetime-bound `SanitizedBlobSource` for offline body consumers. It accepts only descriptors
+declared by that artifact and performs a complete digest pass before yielding any bytes.
+Application body references additionally retain that same canonical results SHA-256. Body-window
+and authenticated-request services compare it before nested coordinate lookup, preventing a stale
+reference from selecting a different authenticated report that reuses an artifact ID.
+The first adapter intentionally rejects unsupported platforms rather than falling back to unsafe
+pathname checks. It is an availability contract for responsive local POSIX filesystems: once a
+blocking descriptor operation has started, cancellation waits for that operation and any required
+ownership disposal to settle before propagating, preventing abandoned or double-closed resources.
+Unbounded syscall latency on FUSE or network-backed roots, network-filesystem durability, and
+Windows persistence are not claimed.
+
+## Reporters
+
+All built-in reporters are deterministic, pure projections of `RunArtifact` with an exact atomic
+publication ceiling:
+
+- JSON uses `comparo.report/v1alpha1` as a report envelope around the complete artifact. Its strict
+  decoder, checked-in schema, and golden compatibility fixture are independent from the artifact
+  API version.
+- JUnit represents gate dimensions, so CI pass/fail semantics remain faithful to the gate rather
+  than reinterpreting individual rule facts.
+- SARIF 2.1.0 emits adverse assertion/diff facts and incomplete artifact coverage. Rule identities
+  include their definition identity, analyzer success is distinct from a failed Comparo gate, and
+  automation/finding fingerprints exclude per-run occurrence identifiers and whole-plan hashes.
+  Correlation uses stable project/policy identities plus subject, Environment, Matrix coordinate,
+  rule, and logical occurrence coordinates, so unrelated earlier findings do not renumber later
+  fingerprints.
+- Markdown uses fixed sections for overview, gate, coverage, executions, comparisons, findings,
+  and budgets, without embedding detached blob bodies.
+
+Presentation helpers remove terminal controls and escape their target syntax. Reporter errors and
+storage errors carry only closed, value-free codes; caught parser, filesystem, and rendering error
+text is never copied into a reportable outcome or retained through exception cause/context links.
+
+The report ceiling prevents partial publication; it is not an independent allocator limit because
+each reporter constructs one complete output before the final byte-count check. Reporter memory is
+instead bounded by the already-admitted artifact manifest, and reporters never load detached blob
+content. A future streaming reporter API would require a different atomic-output contract.
+
+Import contracts enforce the boundary in both directions: artifact DTOs cannot import live
+runtime, resolution, or adapter modules, and reporters cannot import the runtime, resolution,
+configuration, planning, selection, evaluation, transport, or storage adapters.
+
+## CLI integration and effective profiles
+
+The production runtime exposes opt-in persistence plus authenticated artifact inspection,
+verification, blob reading, and JSON/JUnit/SARIF/Markdown reporting. Selected `ArtifactProfile`,
+`RedactionProfile`, and `SafetyProfile` resources are bound before any project value or network
+effect. Project profiles restrict caller-owned execution settings: capture flags intersect,
+`never` is stricter than `on-gate-failure`, which is stricter than `always`, and
+`reject-artifact` is stricter than `omit`. A project therefore cannot use a profile to enable body
+capture or persistence disabled by its caller.
+
+The supported `ArtifactProfile` shape is `capture` (`requests`, `responses`, `bodies`, `evidence`)
+plus `storage` (`persist`, `unsafeSource`). `RedactionProfile.rules` accepts stable `id`, shared
+`selector`, and `mask`, `remove`, or `omit-source` action values; the mandatory secret-matching
+floor remains enabled regardless of `backstop`. `SafetyProfile.classification` accepts
+`responseBody` (`public` or `sensitive`) and `responseHeaders`. Environment-attached safety
+classification is applied only to that Environment, while common safety profiles apply to every
+selected Environment.
+
+`SafetyProfile.schemas` is the project-side restriction for public response Schemas. Absence means
+the profile adds no restriction. A present empty mapping denies every remote Schema; otherwise use
+exact query-free HTTP(S) root-document URIs or an explicit wildcard:
+
+```yaml
+schemas:
+  sources:
+    - https://schemas.example.test/chat-response.json
+```
+
+```yaml
+schemas:
+  allowAny: true
+```
+
+`allowAny: true` cannot be combined with `sources`. Multiple selected SafetyProfiles intersect;
+they never grant authority absent from the operator's ExecutionPolicy.
+
+Complete response bodies are public-by-default capture sources and pass through the same-run
+mandatory sanitizer before entering detached artifact blobs. Declared secrets and their known wire
+derivatives are still masked. A SafetyProfile may classify a body as sensitive, in which case the
+safe default omits it rather than pretending that arbitrary application data can be sanitized.
+Authenticated archive query, reviewed retention planning, recoverable trash moves, and verified
+restore are implemented. Retention preflights every candidate before moving any bundle. Trash does
+not reclaim disk space; permanent purge, encryption at rest, Windows storage, and historical
+artifact conversion remain explicit future capabilities and are not silently approximated.

@@ -1,0 +1,1 @@
+"""Pure artifact reporter tests."""

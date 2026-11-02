@@ -1,0 +1,4 @@
+{
+  "prototype-v1.yaml": "configuration.migration.prototype-unsupported",
+  "v1alpha1.yaml": "identity"
+}

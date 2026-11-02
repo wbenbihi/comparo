@@ -1,0 +1,2 @@
+# This file populates only the baseline Environment's explicit $env namespace.
+DEMO_LABEL=stable-release

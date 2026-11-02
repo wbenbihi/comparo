@@ -1,1091 +1,1637 @@
-"""Console entry point for comparo.
+"""Cyclopts and Rich integration for the Comparo command-line interface."""
 
-Only wiring lives here — the CLI is a thin front-end that will call the
-:mod:`comparo.core` engine. No engine logic belongs in this module.
-"""
+from __future__ import annotations
 
-import asyncio
-import json
-import os
-import re
+import sys
 from collections.abc import Callable
+from collections.abc import Sequence
+from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
-from typing import NoReturn
+from typing import BinaryIO
+from typing import Literal
+from typing import TextIO
 
-import typer
+from cyclopts import App
+from cyclopts import Parameter
+from cyclopts.docs import generate_html_docs
+from cyclopts.docs import generate_markdown_docs
+from cyclopts.docs import generate_rst_docs
+from cyclopts.exceptions import CycloptsError
+from rich.console import Console
+from rich.text import Text
 
-from comparo import __version__
-from comparo.adapters import openapi
-from comparo.adapters.httpx_client import HttpxClient
-from comparo.adapters.reporters import REPORTERS
-from comparo.core.assertions import evaluate_rules
-from comparo.core.assertions import passed as assertions_pass
-from comparo.core.assertions import request_response_rules
-from comparo.core.compare import CellDiff
-from comparo.core.compare import diff_run
-from comparo.core.diagnostics import LoadError
-from comparo.core.execute import Execution
-from comparo.core.execute import execute_all
-from comparo.core.execute import run_settings
-from comparo.core.execution import ExecutionResult
-from comparo.core.execution import run_execution
-from comparo.core.interpolation import InterpolationError
-from comparo.core.loader import LoadedProject
-from comparo.core.loader import load_project
-from comparo.core.models import Environment
-from comparo.core.models import ExecutionProfile
-from comparo.core.models import Request
-from comparo.core.redaction import Redactor
-from comparo.core.report import diff_passed
-from comparo.core.report_builder import record_from_diff
-from comparo.core.report_builder import record_from_execution
-from comparo.core.report_record import ReportRecord
-from comparo.core.resolve import EnvironmentSelectionError
-from comparo.core.resolve import ResolvedRequest
-from comparo.core.resolve import Resolver
-from comparo.core.resolve import resolve_pair
-from comparo.core.resolve import select_environment
-from comparo.core.schema import SCHEMA_ID
-from comparo.core.secrets import SecretError
+from comparo.application import ArtifactReadLimits
+from comparo.application import ReportArchiveLimits
+from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
+from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
+from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
+from comparo.cli.contracts import DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1
+from comparo.cli.contracts import DEFAULT_CLI_EXECUTION_LIMITS_V1
+from comparo.cli.contracts import DEFAULT_CLI_RENDER_LIMITS_V1
+from comparo.cli.contracts import ArtifactBlobRequest
+from comparo.cli.contracts import ArtifactReadRequest
+from comparo.cli.contracts import CliArtifactLimits
+from comparo.cli.contracts import CliColorMode
+from comparo.cli.contracts import CliCommandResult
+from comparo.cli.contracts import CliConfigLoadLimits
+from comparo.cli.contracts import CliExecutionCommandKind
+from comparo.cli.contracts import CliExecutionLimits
+from comparo.cli.contracts import CliExitCode
+from comparo.cli.contracts import CliInvocation
+from comparo.cli.contracts import CliMessageLevel
+from comparo.cli.contracts import CliOutputMode
+from comparo.cli.contracts import CliPayloadKind
+from comparo.cli.contracts import CliRenderLimits
+from comparo.cli.contracts import CliReportFormat
+from comparo.cli.contracts import DoctorRequest
+from comparo.cli.contracts import ExecutionRequest
+from comparo.cli.contracts import PlanRequest
+from comparo.cli.contracts import RenderRequest
+from comparo.cli.contracts import ReportRequest
+from comparo.cli.contracts import ValidateRequest
+from comparo.cli.execution import production_execution_settings
+from comparo.cli.loading import policy_load_limits
+from comparo.cli.loading import project_load_limits
+from comparo.cli.services import CliServices
+from comparo.cli.services import DefaultCliServices
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
+from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1
+from comparo.tui.contracts import TuiLaunchLimits
+from comparo.tui.contracts import TuiLaunchRequest
 
-app = typer.Typer(
-    name="comparo",
-    help="HTTP regression & diff testing across environments.",
-    add_completion=False,
-)
+type ColorName = Literal["auto", "always", "never"]
+type OutputName = Literal["human", "json"]
+type DocumentationFormat = Literal["markdown", "html", "rst"]
+type CompletionShell = Literal["bash", "zsh", "fish"]
+type ReportFormatName = Literal["json", "junit", "sarif", "markdown"]
 
-DEFAULT_CONFIG = Path("comparo.yaml")
-
-#: Exit codes, so CI can tell a real regression from a broken setup.
-_EXIT_GATE = 1  # ran, but the gate failed (drift / assertion failure / errored cell)
-_EXIT_USAGE = 2  # could not run: bad config, unknown env/profile/request, empty plan
-
-ConfigOption = Annotated[
+ColorOption = Annotated[ColorName, Parameter(name="--color")]
+OutputOption = Annotated[OutputName, Parameter(name="--format")]
+ConfigOption = Annotated[Path, Parameter(name="--config", alias="-C")]
+SourceOption = Annotated[
+    tuple[Path, ...],
+    Parameter(name="--source", alias="-S", consume_multiple=False),
+]
+PolicyOption = Annotated[
+    Path | None,
+    Parameter(
+        name="--policy",
+        help=(
+            "External ExecutionPolicy path; omit to use the permissive built-in "
+            "trusted-local authority."
+        ),
+    ),
+]
+SubjectOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--subject", consume_multiple=False),
+]
+EnvironmentOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--environment", alias="--env", consume_multiple=False),
+]
+CandidateOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--candidate", consume_multiple=False),
+]
+MatrixOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--matrix", consume_multiple=False),
+]
+BudgetOption = Annotated[
+    tuple[str, ...],
+    Parameter(name="--budget", consume_multiple=False),
+]
+FailFastOption = Annotated[
+    bool | None,
+    Parameter(name="--fail-fast", negative="--no-fail-fast"),
+]
+ArtifactRootOption = Annotated[Path, Parameter(name="--root")]
+BlobOutputLimitOption = Annotated[int, Parameter(name="--maximum-output-bytes")]
+ExecutionArtifactRootOption = Annotated[Path, Parameter(name="--artifact-root")]
+TuiArtifactRootOption = Annotated[
     Path,
-    typer.Option(
-        "--config",
-        "-C",
-        help="The comparo.yaml manifest to load (or a project directory).",
+    Parameter(
+        name="--artifact-root",
+        help=(
+            "Project-relative archive created privately for persisted run preparation; "
+            "absolute operator-managed archives must already exist."
+        ),
+    ),
+]
+MaximumReportEntriesOption = Annotated[int, Parameter(name="--maximum-report-entries")]
+MaximumPreparationsOption = Annotated[
+    int,
+    Parameter(name="--maximum-outstanding-preparations"),
+]
+TuiPersistenceOption = Annotated[
+    bool,
+    Parameter(
+        name="--persist",
+        negative="--no-persist",
+        help="Persist sanitized run reports; disable when policy forbids artifact storage.",
     ),
 ]
 
-import_app = typer.Typer(
-    name="import",
-    help="Scaffold a comparo project from an existing API description.",
-    no_args_is_help=True,
-    add_completion=False,
-)
-app.add_typer(import_app)
+
+class _InvalidTuiLaunchError(Exception):
+    """Value-free marker for invalid typed TUI launch limits."""
 
 
-def _version_callback(*, value: bool) -> None:
-    """Print the version and exit when the flag is set.
+@dataclass(frozen=True, kw_only=True)
+class _ArtifactLimitArguments:
+    """Cyclopts-only flattened form of the version-owned artifact limit contract."""
 
-    Args:
-        value: Whether the ``--version`` / ``-V`` flag was passed.
-    """
-    if value:
-        typer.echo(f"comparo {__version__}")
-        raise typer.Exit
-
-
-@app.callback(invoke_without_command=True)
-def main(
-    ctx: typer.Context,
-    *,
-    config: ConfigOption = DEFAULT_CONFIG,
-    version: Annotated[
-        bool,
-        typer.Option(
-            "--version",
-            "-V",
-            help="Show the version and exit.",
-            callback=_version_callback,
-            is_eager=True,
+    maximum_blobs: Annotated[
+        int,
+        Parameter(name="--maximum-blobs", help="Maximum blobs admitted in one artifact bundle."),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blobs
+    maximum_blob_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-blob-bytes",
+            help="Maximum bytes admitted for one artifact blob.",
         ),
-    ] = False,
-) -> None:
-    """Replay requests across environments and diff the responses.
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_blob_bytes
+    maximum_total_blob_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-total-blob-bytes",
+            help="Maximum aggregate blob bytes admitted per artifact bundle.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_total_blob_bytes
+    maximum_manifest_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-manifest-bytes",
+            help="Maximum artifact manifest bytes admitted.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_manifest_bytes
+    maximum_report_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-report-bytes",
+            help="Maximum bytes produced by one artifact report.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_report_bytes
+    maximum_redaction_patterns: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-patterns",
+            help="Maximum sensitive literal patterns admitted for redaction.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_patterns
+    maximum_redaction_pattern_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-pattern-bytes",
+            help="Maximum aggregate bytes admitted for redaction patterns.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_pattern_bytes
+    maximum_redaction_value_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-value-bytes",
+            help="Maximum bytes inspected in one value during redaction.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_value_bytes
+    maximum_redaction_value_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-value-nodes",
+            help="Maximum structured nodes inspected in one value during redaction.",
+        ),
+    ] = DEFAULT_CLI_ARTIFACT_LIMITS_V1.maximum_redaction_value_nodes
 
-    Run ``comparo`` with no command to open the terminal UI on ``./comparo.yaml``,
-    or ``comparo --config <manifest>`` to open it on a project elsewhere.
-    """
-    if ctx.invoked_subcommand is None:
-        _launch_tui(config)
+
+ArtifactLimitsOption = Annotated[_ArtifactLimitArguments, Parameter(name="*")]
+_DEFAULT_ARTIFACT_LIMIT_ARGUMENTS = _ArtifactLimitArguments()
 
 
-@app.command()
-def init(
-    directory: Annotated[
-        Path,
-        typer.Argument(help="Where to create the project (default: the current directory)."),
-    ] = Path(),
-    *,
-    name: Annotated[
-        str | None,
-        typer.Option("--name", "-n", help="Project name; prompted for if omitted."),
-    ] = None,
-    data: Annotated[
-        Path,
-        typer.Option("--data", help="Directory the project's objects live in."),
-    ] = Path(".comparo"),
+@dataclass(frozen=True, kw_only=True)
+class _ConfigLoadLimitArguments:
+    """Cyclopts-only flattened form of version-owned project-load limits."""
+
+    maximum_sources: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-sources",
+            help="Maximum project YAML sources discovered and admitted.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_sources
+    maximum_discovery_entries: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-discovery-entries",
+            help="Maximum filesystem entries examined during project source discovery.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_discovery_entries
+    maximum_total_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-total-bytes",
+            help="Maximum aggregate bytes admitted across all project YAML sources.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_total_bytes
+    maximum_total_documents: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-total-documents",
+            help="Maximum aggregate YAML documents admitted across the project.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_total_documents
+    maximum_total_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-total-nodes",
+            help="Maximum aggregate YAML nodes retained across the project.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_total_nodes
+    maximum_resources: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-resources",
+            help="Maximum compiled resource documents admitted across the project.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_resources
+    maximum_yaml_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-bytes",
+            help="Maximum bytes admitted from one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_bytes
+    maximum_yaml_documents: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-documents",
+            help="Maximum documents admitted from one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_documents
+    maximum_yaml_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-depth",
+            help="Maximum nesting depth admitted in one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_depth
+    maximum_yaml_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-config-yaml-nodes",
+            help="Maximum nodes admitted from one project YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_yaml_nodes
+    maximum_policy_yaml_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-policy-yaml-bytes",
+            help="Maximum bytes admitted from one explicit ExecutionPolicy YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_policy_yaml_bytes
+    maximum_policy_yaml_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-policy-yaml-depth",
+            help="Maximum nesting depth admitted in an ExecutionPolicy YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_policy_yaml_depth
+    maximum_policy_yaml_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-policy-yaml-nodes",
+            help="Maximum nodes admitted from one ExecutionPolicy YAML source.",
+        ),
+    ] = DEFAULT_CLI_CONFIG_LOAD_LIMITS_V1.maximum_policy_yaml_nodes
+
+
+ConfigLoadLimitsOption = Annotated[_ConfigLoadLimitArguments, Parameter(name="*")]
+_DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS = _ConfigLoadLimitArguments()
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ExecutionArguments:
+    """Cyclopts-only flattened arguments common to every execution journey."""
+
     config: Annotated[
-        str,
-        typer.Option("--config", "-C", help="Filename for the manifest."),
-    ] = "comparo.yaml",
-    description: Annotated[
-        str | None,
-        typer.Option("--description", help="A one-line project description."),
-    ] = None,
-) -> None:
-    """Scaffold a new comparo project: a manifest plus a starter data directory.
-
-    Writes ``<config>`` (the manifest) and ``<data>/`` with a sample environment
-    and request, so the project validates and runs immediately. Refuses to touch
-    an existing manifest or data directory, so it never clobbers your files.
-
-    Args:
-        directory: The directory to create the project in.
-        name: The project name; if omitted, comparo prompts for it.
-        data: The directory objects live in, relative to *directory*.
-        config: The manifest filename.
-        description: An optional one-line description.
-    """
-    _scaffold(directory, name, data, config, description)
-
-
-@import_app.command("openapi")
-def import_openapi(
-    spec: Annotated[Path, typer.Argument(help="The OpenAPI 3.x document (JSON or YAML).")],
-    *,
-    output: Annotated[
+        Path,
+        Parameter(
+            name="--config",
+            alias="-C",
+            help="Project manifest or directory containing comparo.yaml.",
+        ),
+    ] = Path("comparo.yaml")
+    source: Annotated[
+        tuple[Path, ...],
+        Parameter(
+            name="--source",
+            alias="-S",
+            consume_multiple=False,
+            help="Additional local YAML source; repeat to add more.",
+        ),
+    ] = ()
+    policy: Annotated[
         Path | None,
-        typer.Option(
-            "--output",
-            "-o",
-            help="Directory to create the project in (default: a slug of the project name).",
+        Parameter(
+            name="--policy",
+            help=(
+                "External ExecutionPolicy path; omit to use the permissive built-in "
+                "trusted-local authority."
+            ),
         ),
-    ] = None,
-    name: Annotated[
-        str | None,
-        typer.Option("--name", "-n", help="Project name; taken from info.title when omitted."),
-    ] = None,
-) -> None:
-    """Scaffold a comparo project from an OpenAPI 3.x specification.
-
-    Turns the mechanical parts of a spec into ``comparo/v1`` YAML: ``servers``
-    become Environments, operations become Requests, ``components.schemas`` become
-    Schema objects, and ``securitySchemes`` become ``$secret``-backed auth stubs.
-    It is a *scaffold* — no DiffProfile is generated (which fields are volatile is
-    your call) and no real credential is ever written. Refuses to overwrite an
-    existing manifest or data directory, like ``comparo init``.
-
-    Args:
-        spec: The OpenAPI 3.0/3.1 document to import (JSON or YAML).
-        output: Where to create the project; defaults to a slug of the project name.
-        name: The project name; taken from ``info.title`` when omitted.
-    """
-    if not spec.exists():
-        _abort(f"no spec at '{spec}' — pass the path to an OpenAPI 3.x document")
-    try:
-        document = openapi.load_spec(spec.read_text(encoding="utf-8"))
-        result = openapi.import_openapi(document, name=name)
-    except openapi.OpenApiImportError as error:
-        _abort(str(error))
-    except OSError as error:
-        _abort(f"could not read '{spec}': {error}")
-    directory = output if output is not None else Path(_slug(result.project_name))
-    _write_openapi_project(directory, result)
-
-
-@app.command()
-def validate(config: ConfigOption = DEFAULT_CONFIG) -> None:
-    """Validate a project's envelope, ids, and references.
-
-    Exits non-zero and prints every problem if the project does not load.
-
-    Args:
-        config: The manifest (or project directory) to validate.
-    """
-    loaded = _open_project(config)
-    if not loaded.objects:
-        typer.secho(
-            "no objects found — check that spec.data points at your object files",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(_EXIT_USAGE)
-    typer.secho(f"✓ {len(loaded.objects)} object(s) valid", fg=typer.colors.GREEN)
-
-
-@app.command()
-def doctor() -> None:
-    """Run the never-leak self-check: a canary secret through every sink.
-
-    Sends a known canary secret through every output path — the TUI display,
-    saved runs and reports, the JUnit/SARIF/JSON/Markdown reporters, the copied
-    curl, and the crash report — and verifies each one masked it. Exits non-zero
-    if any sink leaked. The TUI runs the same check in Settings → Security (``t``).
-    """
-    from comparo.adapters import doctor as doctor_adapter
-
-    checks = doctor_adapter.run_selfcheck()
-    for check in checks:
-        mark, colour = ("✓", typer.colors.GREEN) if check.ok else ("✗", typer.colors.RED)
-        typer.secho(f"{mark} {check.name:<18} {check.detail}", fg=colour)
-    passed = sum(1 for check in checks if check.ok)
-    total = len(checks)
-    typer.secho(
-        f"\n{passed}/{total} sinks masked the canary",
-        fg=typer.colors.GREEN if passed == total else typer.colors.RED,
-        bold=True,
-    )
-    if passed != total:
-        raise typer.Exit(_EXIT_USAGE)
-
-
-@app.command()
-def schema(
-    output: Annotated[
-        Path | None, typer.Option("--output", "-o", help="Write to a file instead of stdout.")
-    ] = None,
-    report: Annotated[
+    ] = None
+    subject: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--subject",
+            consume_multiple=False,
+            help="Request id; repeat to select multiple executable subjects.",
+        ),
+    ] = ()
+    matrix: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--matrix",
+            consume_multiple=False,
+            help="Matrix override as BINDING=MATRIX; repeat to add bindings.",
+        ),
+    ] = ()
+    trials: Annotated[
+        int | None,
+        Parameter(name="--trials", help="Positive trial-count override."),
+    ] = None
+    maximum_attempts: Annotated[
+        int | None,
+        Parameter(
+            name="--maximum-attempts",
+            help="Positive maximum-attempt override.",
+        ),
+    ] = None
+    fail_fast: Annotated[
+        bool | None,
+        Parameter(
+            name="--fail-fast",
+            negative="--no-fail-fast",
+            help="Enable or disable fail-fast execution.",
+        ),
+    ] = None
+    budget: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--budget",
+            consume_multiple=False,
+            help="Budget override as RESOURCE=LIMIT; repeat to add resources.",
+        ),
+    ] = ()
+    parameters_from: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--parameters-from",
+            consume_multiple=False,
+            help="Value resource as [ENV=]VALUE supplying invocation parameters; repeatable.",
+        ),
+    ] = ()
+    variables_from: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--variables-from",
+            consume_multiple=False,
+            help="Value resource as [ENV=]VALUE supplying invocation variables; repeatable.",
+        ),
+    ] = ()
+    secrets_from: Annotated[
+        tuple[str, ...],
+        Parameter(
+            name="--secrets-from",
+            consume_multiple=False,
+            help="Value resource as [ENV=]VALUE supplying invocation secrets; repeatable.",
+        ),
+    ] = ()
+    approve_mutations: Annotated[
         bool,
-        typer.Option(
-            "--report", help="Emit the saved-report record schema instead of the config schema."
+        Parameter(
+            name="--approve-mutations",
+            help="Approve requests classified as mutating by the effective policy.",
         ),
-    ] = False,
-) -> None:
-    """Emit a comparo JSON Schema — the config surface, or the saved-report record.
-
-    Both are generated from the object models, so they never drift from the real
-    shapes. Point an editor's YAML language server at the config schema for
-    autocomplete and inline validation, hand it to an agent authoring config, or
-    use ``--report`` to get the schema external tools consume saved reports with.
-
-    Args:
-        output: A file to write the schema to; prints to stdout when omitted.
-        report: Emit the report-record schema (run/diff/execution) rather than
-            the config-object schema.
-    """
-    from comparo.core.schema import json_schema
-    from comparo.core.schema import report_schema
-
-    document = json.dumps(report_schema() if report else json_schema(), indent=2) + "\n"
-    if output is not None:
-        output.parent.mkdir(parents=True, exist_ok=True)  # -o schema/foo.json in a new dir
-        output.write_text(document, encoding="utf-8")
-        typer.secho(f"✓ wrote {output}", fg=typer.colors.GREEN)
-    else:
-        typer.echo(document, nl=False)
-
-
-@app.command()
-def render(
-    request_id: Annotated[str, typer.Argument(help="metadata.id of the request to render.")],
-    *,
-    config: ConfigOption = DEFAULT_CONFIG,
-    env: Annotated[str | None, typer.Option("--env", "-e", help="Environment name or id.")] = None,
-) -> None:
-    """Show a request fully resolved for an environment, with secrets masked.
-
-    Args:
-        request_id: The ``metadata.id`` of the request to resolve.
-        config: The manifest (or project directory) to load.
-        env: The environment to resolve for; defaults to the project default.
-    """
-    loaded = _open_project(config)
-    obj = loaded.objects.get(request_id)
-    if not isinstance(obj, Request):
-        typer.secho(f"no Request with id '{request_id}'", fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE)
-    try:
-        environment = select_environment(loaded, env)
-    except EnvironmentSelectionError as error:
-        typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE) from error
-    try:
-        resolved = Resolver(loaded, environment).resolve_request(obj)
-    except (InterpolationError, SecretError) as error:
-        # A required ${VAR} unset (or a bad cast / unresolvable secret) is a config
-        # error, not a crash — surface it cleanly instead of a traceback (M-3).
-        typer.secho(f"could not resolve '{request_id}': {error}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE) from error
-    _print_resolved(resolved, environment.metadata.name, Redactor.for_project(loaded).text)
-
-
-@app.command(name="run")
-def run_requests(
-    request_id: Annotated[
-        str | None, typer.Argument(help="A single request id; omit to run all.")
-    ] = None,
-    *,
-    config: ConfigOption = DEFAULT_CONFIG,
-    env: Annotated[str | None, typer.Option("--env", "-e", help="Environment name or id.")] = None,
-) -> None:
-    """Execute requests against an environment and report status and latency.
-
-    Args:
-        request_id: A single request id to run, or ``None`` to run every request.
-        config: The manifest (or project directory) to load.
-        env: The environment to run against; defaults to the project default.
-    """
-    loaded = _open_project(config)
-    try:
-        environment = select_environment(loaded, env)
-    except EnvironmentSelectionError as error:
-        typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE) from error
-    requests = _select_requests(loaded, request_id)
-    if not requests:
-        typer.secho("no requests to run", fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE)
-    results = asyncio.run(_execute(loaded, environment, requests))
-    if not results:
-        # A selected request whose matrix expands to zero cells verifies nothing —
-        # a run that checked nothing must fail closed, never report a green gate.
-        typer.secho(
-            "nothing ran — the selected requests expanded to zero cells",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(_EXIT_USAGE)
-    ok = _print_results(loaded, results, environment.metadata.name)
-    if not ok:
-        raise typer.Exit(_EXIT_GATE)
-
-
-@app.command(name="exec")
-def exec_profile(
-    execution_id: Annotated[str, typer.Argument(help="The ExecutionProfile id to run.")],
-    *,
-    config: ConfigOption = DEFAULT_CONFIG,
-    report: Annotated[
-        list[str] | None,
-        typer.Option("--report", help="Report format(s): junit, sarif, json, markdown."),
-    ] = None,
-    output: Annotated[
-        Path | None, typer.Option("--output", "-o", help="Directory for report files.")
-    ] = None,
-) -> None:
-    """Run an ExecutionProfile headless — assert both envs, diff, and gate.
-
-    Exits 0 only when the gate passes (assertions hold on both environments and
-    nothing untriaged drifted), so CI can gate on it. This is the exact gate the
-    TUI Execution screen shows. With ``--report`` it also writes CI artifacts,
-    where a cell that failed only its assertions (no drift) is still a failure.
-
-    Args:
-        execution_id: The ``metadata.id`` of the ExecutionProfile to run.
-        config: The manifest (or project directory) to load.
-        report: Report format(s) to write (defaults to the manifest's).
-        output: The directory report files are written to.
-    """
-    loaded = _open_project(config)
-    profile = loaded.objects.get(execution_id)
-    if not isinstance(profile, ExecutionProfile):
-        typer.secho(f"no ExecutionProfile with id '{execution_id}'", fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE)
-    try:
-        result = asyncio.run(_run_execution(loaded, profile))
-    except EnvironmentSelectionError as error:
-        typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE) from error
-    redact = Redactor.for_project(loaded).text
-    _print_execution(result, redact)
-    _emit_reports(
-        loaded,
-        report,
-        output,
-        lambda: record_from_execution(
-            profile,
-            result,
-            record_id=_record_id(),
-            created=_record_created(),
-            tool=f"comparo {__version__}",
-            project=_project_name(loaded),
-            concurrency=run_settings(loaded)[0],
-            redact=redact,
+    ] = False
+    persist: Annotated[
+        bool,
+        Parameter(
+            name="--persist",
+            negative="--no-persist",
+            help="Persist a sanitized artifact bundle; disabled by default.",
         ),
-    )
-    raise typer.Exit(0 if result.passed else _EXIT_GATE)
-
-
-async def _run_execution(loaded: LoadedProject, profile: ExecutionProfile) -> ExecutionResult:
-    client, candidate_client = HttpxClient(), HttpxClient()
-    try:
-        return await run_execution(loaded, profile, client, candidate_client)
-    finally:
-        await client.aclose()
-        await candidate_client.aclose()
-
-
-def _print_execution(result: ExecutionResult, redact: Callable[[str], str] = str) -> None:
-    pair = f"{result.baseline} ⇄ {result.candidate}" if result.candidate else result.baseline
-    typer.secho(f"exec · {result.profile_id}  {pair}", bold=True)
-    for outcome in result.outcomes:
-        failed = [r for r in outcome.baseline_assertions + outcome.candidate_assertions if not r.ok]
-        cell = f"{outcome.request_id}" + (
-            f" [{redact(outcome.cell_key)}]" if outcome.cell_key else ""
-        )
-        if outcome.ok:
-            typer.secho(f"  ✓ {cell}", fg=typer.colors.GREEN)
-        else:
-            if outcome.error is not None:
-                reason = redact(outcome.error)
-            elif failed:
-                reason = redact(failed[0].label)
-            else:
-                reason = "drift"
-            typer.secho(f"  ✗ {cell:<40} {reason}", fg=typer.colors.RED)
-    counts = f"{len(result.outcomes)} cells · {result.drift} drift · {result.errors} error"
-    if result.passed:
-        typer.secho(f"\n✓ gate PASS  {counts}", fg=typer.colors.GREEN, bold=True)
-    else:
-        typer.secho(f"\n✗ gate FAIL  {counts}", fg=typer.colors.RED, bold=True)
-
-
-@app.command()
-def diff(
-    request_id: Annotated[
-        str | None, typer.Argument(help="A single request id; omit to diff all.")
-    ] = None,
-    *,
-    config: ConfigOption = DEFAULT_CONFIG,
-    pair: Annotated[str | None, typer.Option("--pair", "-p", help="Named diff pair.")] = None,
-    baseline: Annotated[
-        str | None, typer.Option("--baseline", "-b", help="Baseline environment.")
-    ] = None,
-    candidate: Annotated[
-        str | None, typer.Option("--candidate", "-c", help="Candidate environment.")
-    ] = None,
-    report: Annotated[
-        list[str] | None,
-        typer.Option("--report", help="Report format(s): junit, sarif, json, markdown."),
-    ] = None,
-    output: Annotated[
-        Path | None, typer.Option("--output", "-o", help="Directory for report files.")
-    ] = None,
-) -> None:
-    """Diff every request-cell across two environments and report drift.
-
-    Args:
-        request_id: A single request id to diff, or ``None`` for all.
-        config: The manifest (or project directory) to load.
-        pair: A named diff pair from the manifest.
-        baseline: An explicit baseline environment (overrides the pair).
-        candidate: An explicit candidate environment (overrides the pair).
-        report: Report format(s) to write.
-        output: The directory report files are written to.
-    """
-    loaded = _open_project(config)
-    try:
-        base_env, candidate_env = resolve_pair(loaded, pair, baseline, candidate)
-    except EnvironmentSelectionError as error:
-        typer.secho(str(error), fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE) from error
-    requests = _select_requests(loaded, request_id)
-    if not requests:
-        typer.secho("no requests to diff", fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE)
-    results = asyncio.run(_diff(loaded, base_env, candidate_env, requests))
-    redact = Redactor.for_project(loaded).text
-    if not results:
-        typer.secho(
-            "nothing to diff — every selected request expanded to zero cells",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(_EXIT_USAGE)
-    passed = _print_diffs(results, base_env.metadata.name, candidate_env.metadata.name, redact)
-    _emit_reports(
-        loaded,
-        report,
-        output,
-        lambda: record_from_diff(
-            base_env,
-            candidate_env,
-            results,
-            record_id=_record_id(),
-            created=_record_created(),
-            tool=f"comparo {__version__}",
-            project=_project_name(loaded),
-            concurrency=run_settings(loaded)[0],
-            redact=redact,
+    ] = False
+    artifact_root: Annotated[
+        Path,
+        Parameter(
+            name="--artifact-root",
+            help=("Existing local directory for explicitly persisted artifact bundles."),
         ),
-    )
-    if not passed:
-        raise typer.Exit(_EXIT_GATE)
+    ] = DEFAULT_CLI_ARTIFACT_ROOT_V1
+    output_format: Annotated[
+        OutputName,
+        Parameter(name="--format", help="Human or deterministic JSON output."),
+    ] = "human"
+    color: Annotated[
+        ColorName,
+        Parameter(name="--color", help="Terminal color behavior for human messages."),
+    ] = "auto"
 
 
-def _record_id() -> str:
-    from uuid import uuid4
-
-    return uuid4().hex[:6]
+ExecutionArgumentsOption = Annotated[_ExecutionArguments, Parameter(name="*")]
+_DEFAULT_EXECUTION_ARGUMENTS = _ExecutionArguments()
 
 
-def _record_created() -> str:
-    from datetime import UTC
-    from datetime import datetime
+@dataclass(frozen=True, kw_only=True)
+class _RuntimeLimitArguments:
+    """Cyclopts-only flattened version-owned runtime execution limits."""
 
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def _project_name(loaded: LoadedProject) -> str | None:
-    return loaded.project.metadata.name if loaded.project is not None else None
-
-
-def _emit_reports(
-    loaded: LoadedProject,
-    report: list[str] | None,
-    output: Path | None,
-    build: Callable[[], ReportRecord],
-) -> None:
-    """Write CI report artifacts, falling back to the manifest's report defaults.
-
-    *build* is deferred so the (small) report is materialized only when a format
-    is actually requested. An unknown format aborts even when nothing is written,
-    so a typo in ``--report`` never silently produces no artifact.
-    """
-    report_config = loaded.project.spec.report if loaded.project is not None else None
-    formats = report or (report_config.formats if report_config is not None else None)
-    unknown = [name for name in formats or [] if name not in REPORTERS]
-    if unknown:
-        known = ", ".join(sorted(REPORTERS))
-        _abort(f"unknown report format(s): {', '.join(unknown)} (known: {known})")
-    if not formats:
-        return
-    out_dir = output or Path(
-        report_config.output if report_config is not None and report_config.output else "reports"
-    )
-    _write_reports(build(), formats, out_dir)
-
-
-@app.command()
-def tui(config: ConfigOption = DEFAULT_CONFIG) -> None:
-    """Launch the terminal UI to explore a project.
-
-    Args:
-        config: The manifest (or project directory) to open.
-    """
-    _launch_tui(config)
-
-
-@app.command(name="help")
-def show_help(ctx: typer.Context) -> None:
-    """Show the full command reference."""
-    typer.echo(ctx.find_root().get_help())
-
-
-def _missing_config(config: Path) -> str:
-    return (
-        f"no project at '{config}' — run `comparo init` to create one, "
-        "or point --config at a manifest"
-    )
-
-
-def _open_project(config: Path) -> LoadedProject:
-    """Load a project from *config*, exiting with a friendly message on failure.
-
-    Args:
-        config: The manifest file or project directory to load.
-
-    Returns:
-        The validated project.
-    """
-    if not config.exists():
-        typer.secho(_missing_config(config), fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE)
-    try:
-        return load_project(config)
-    except LoadError as error:
-        _print_load_error(error)
-        raise typer.Exit(_EXIT_USAGE) from error
-
-
-def _launch_tui(config: Path) -> None:
-    """Open the TUI on *config*, or the error screen if the project will not load.
-
-    Args:
-        config: The manifest file or project directory to open.
-    """
-    from comparo.tui.app import ComparoApp
-
-    if not config.exists():
-        typer.secho(_missing_config(config), fg=typer.colors.RED, err=True)
-        raise typer.Exit(_EXIT_USAGE)
-    try:
-        loaded = load_project(config)
-    except LoadError as error:
-        ComparoApp.from_error(error).run()
-        raise typer.Exit(_EXIT_USAGE) from error
-    ComparoApp(loaded).run()
-
-
-def _scaffold(
-    directory: Path, name: str | None, data: Path, config: str, description: str | None
-) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    manifest = directory / config
-    data_dir = directory / data
-    if manifest.exists():
-        _abort(f"{manifest} already exists — refusing to overwrite")
-    if data_dir.exists():
-        _abort(f"{data_dir} already exists — refusing to touch your data")
-    if name is None:
-        name = typer.prompt("Project name").strip()
-    if not name:
-        _abort("a project name is required")
-    data_rel = os.path.relpath(data_dir, directory).replace(os.sep, "/")
-    manifest.write_text(
-        _manifest_yaml(name, f"project.{_slug(name)}", description, data_rel), encoding="utf-8"
-    )
-    (data_dir / "environments").mkdir(parents=True)
-    (data_dir / "requests").mkdir(parents=True)
-    (data_dir / "environments" / "local.yaml").write_text(_STARTER_ENV, encoding="utf-8")
-    (data_dir / "requests" / "example.yaml").write_text(_STARTER_REQUEST, encoding="utf-8")
-    (data_dir / "AGENTS.md").write_text(
-        _AGENTS_MD.replace("__SCHEMA_URL__", SCHEMA_ID), encoding="utf-8"
-    )
-    typer.secho(f"✓ created {manifest}", fg=typer.colors.GREEN)
-    typer.secho(
-        f"✓ created {data_dir}/ with a sample environment and request, and AGENTS.md",
-        fg=typer.colors.GREEN,
-    )
-    default_here = config == "comparo.yaml" and directory == Path()
-    flag = "" if default_here else f" --config {manifest}"
-    typer.echo("\nNext:")
-    typer.echo(f"  comparo validate{flag}    # check it loads")
-    typer.echo(f"  comparo{flag}             # open the TUI")
-
-
-def _write_openapi_project(directory: Path, result: openapi.ImportResult) -> None:
-    """Write a scaffolded project from an OpenAPI import, refusing to clobber files.
-
-    Mirrors :func:`_scaffold`: a ``comparo.yaml`` manifest plus a ``.comparo/``
-    data directory holding the environments, requests, and schemas — each file
-    carrying the editor schema modeline — and the agent-authoring ``AGENTS.md``.
-
-    Args:
-        directory: The directory to create the project in.
-        result: The objects the OpenAPI import produced.
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    manifest = directory / "comparo.yaml"
-    data_dir = directory / ".comparo"
-    if manifest.exists():
-        _abort(f"{manifest} already exists — refusing to overwrite")
-    if data_dir.exists():
-        _abort(f"{data_dir} already exists — refusing to touch your data")
-
-    manifest.write_text(
-        _manifest_yaml(
-            result.project_name,
-            f"project.{_slug(result.project_name)}",
-            "Imported from an OpenAPI document; refine it before relying on it.",
-            ".comparo",
-            default_env=result.default_environment,
-            diff_pairs=_openapi_diff_pairs(result),
+    body_memory_threshold_bytes: Annotated[
+        int,
+        Parameter(
+            name="--body-memory-threshold-bytes",
+            help="Per-body byte threshold before transient storage spills to disk.",
         ),
-        encoding="utf-8",
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.body_memory_threshold_bytes
+    maximum_transient_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-transient-body-bytes",
+            help="Maximum aggregate bytes retained in the run-local body store.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_transient_body_bytes
+    maximum_request_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-request-body-bytes",
+            help="Maximum serialized bytes admitted for one request body.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_request_body_bytes
+    maximum_request_json_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-request-json-depth",
+            help="Maximum nesting depth admitted for one JSON request body.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_request_json_depth
+    maximum_request_json_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-request-json-nodes",
+            help="Maximum nodes admitted for one JSON request body.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_request_json_nodes
+    maximum_authorization_occurrences: Annotated[
+        int,
+        Parameter(
+            name="--maximum-authorization-occurrences",
+            help="Maximum distinct HTTP authorization occurrences retained per run.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_authorization_occurrences
+    maximum_encoded_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-encoded-body-bytes",
+            help="Maximum encoded response bytes captured per exchange.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_encoded_body_bytes
+    maximum_entity_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-entity-body-bytes",
+            help="Maximum decoded entity bytes captured per exchange.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_entity_body_bytes
+    maximum_expansion_ratio: Annotated[
+        int,
+        Parameter(
+            name="--maximum-expansion-ratio",
+            help="Maximum decoded-to-encoded response expansion ratio.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_expansion_ratio
+    maximum_stream_records: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-records",
+            help="Maximum data records retained from one streaming response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_records
+    maximum_stream_controls: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-controls",
+            help="Maximum control records retained from one streaming response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_controls
+    maximum_stream_errors: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-errors",
+            help="Maximum decoding errors retained from one streaming response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_errors
+    maximum_stream_item_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-stream-item-bytes",
+            help="Maximum bytes admitted for one decoded stream item.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_stream_item_bytes
+    maximum_decoded_body_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-decoded-body-bytes",
+            help="Maximum ordinary response bytes admitted for semantic decoding.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_decoded_body_bytes
+    maximum_text_characters: Annotated[
+        int,
+        Parameter(
+            name="--maximum-text-characters",
+            help="Maximum text characters decoded from one ordinary response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_text_characters
+    maximum_json_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-json-depth",
+            help="Maximum nesting depth for an ordinary JSON response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_json_depth
+    maximum_json_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-json-nodes",
+            help="Maximum nodes decoded from one ordinary JSON response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_json_nodes
+    maximum_json_tokens: Annotated[
+        int,
+        Parameter(
+            name="--maximum-json-tokens",
+            help="Maximum tokens parsed from one ordinary JSON response.",
+        ),
+    ] = DEFAULT_CLI_EXECUTION_LIMITS_V1.maximum_json_tokens
+
+
+RuntimeLimitsOption = Annotated[_RuntimeLimitArguments, Parameter(name="*")]
+_DEFAULT_RUNTIME_LIMIT_ARGUMENTS = _RuntimeLimitArguments()
+
+
+@dataclass(frozen=True, kw_only=True)
+class _RenderLimitArguments:
+    """Cyclopts-only flattened version-owned offline render limits."""
+
+    maximum_file_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-file-bytes",
+            help="Maximum bytes read from one project file value.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_file_bytes
+    maximum_file_path_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-file-path-bytes",
+            help="Maximum encoded bytes admitted in one project-relative file path.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_file_path_bytes
+    maximum_file_segments: Annotated[
+        int,
+        Parameter(
+            name="--maximum-file-segments",
+            help="Maximum segments admitted in one project-relative file path.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_file_segments
+    maximum_environment_files: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-files",
+            help="Maximum dotenv files admitted for one Environment.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_files
+    maximum_environment_file_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-file-bytes",
+            help="Maximum bytes read from one Environment dotenv file.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_file_bytes
+    maximum_environment_total_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-total-bytes",
+            help="Maximum aggregate dotenv bytes admitted for one Environment.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_total_bytes
+    maximum_environment_entries: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-entries",
+            help="Maximum dotenv entries admitted for one Environment.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_entries
+    maximum_environment_line_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-environment-line-bytes",
+            help="Maximum bytes admitted in one dotenv line.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_environment_line_bytes
+    maximum_yaml_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-yaml-bytes",
+            help="Maximum bytes admitted for one explicit YAML value conversion.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_yaml_bytes
+    maximum_yaml_depth: Annotated[
+        int,
+        Parameter(
+            name="--maximum-yaml-depth",
+            help="Maximum nesting depth for one explicit YAML value conversion.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_yaml_depth
+    maximum_yaml_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-yaml-nodes",
+            help="Maximum nodes decoded by one explicit YAML value conversion.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_yaml_nodes
+    maximum_redaction_patterns: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-patterns",
+            help="Maximum sensitive literal patterns admitted for preview redaction.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_patterns
+    maximum_redaction_pattern_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-pattern-bytes",
+            help="Maximum aggregate bytes admitted for preview redaction patterns.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_pattern_bytes
+    maximum_redaction_value_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-value-bytes",
+            help="Maximum bytes inspected in one preview value during redaction.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_value_bytes
+    maximum_redaction_value_nodes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-redaction-value-nodes",
+            help="Maximum structured nodes inspected in one preview value.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_redaction_value_nodes
+    maximum_output_bytes: Annotated[
+        int,
+        Parameter(
+            name="--maximum-output-bytes",
+            help="Maximum bytes emitted by the complete rendered preview.",
+        ),
+    ] = DEFAULT_CLI_RENDER_LIMITS_V1.maximum_output_bytes
+
+
+RenderLimitsOption = Annotated[_RenderLimitArguments, Parameter(name="*")]
+_DEFAULT_RENDER_LIMIT_ARGUMENTS = _RenderLimitArguments()
+
+_LEVEL_STYLES: dict[CliMessageLevel, str] = {
+    CliMessageLevel.SUCCESS: "green",
+    CliMessageLevel.INFO: "cyan",
+    CliMessageLevel.WARNING: "yellow",
+    CliMessageLevel.ERROR: "bold red",
+}
+
+
+def _package_version() -> str:
+    """Return installed package metadata without consulting project configuration."""
+    try:
+        return version("comparo")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _invocation(result: CliCommandResult, color: ColorName) -> CliInvocation:
+    """Pair a service result with its outer presentation preference."""
+    return CliInvocation(result=result, color=CliColorMode(color))
+
+
+def _document_result(payload: str, kind: CliPayloadKind) -> CliCommandResult:
+    """Create a complete generated text document result."""
+    return CliCommandResult(
+        exit_code=CliExitCode.SUCCESS,
+        payload_kind=kind,
+        payload=payload.encode(),
     )
-    _write_objects(data_dir / "environments", result.environments)
-    _write_objects(data_dir / "requests", result.requests)
-    if result.schemas:
-        _write_objects(data_dir / "schemas", result.schemas)
-    (data_dir / "AGENTS.md").write_text(
-        _AGENTS_MD.replace("__SCHEMA_URL__", SCHEMA_ID), encoding="utf-8"
+
+
+def _generate_reference(cli: App, output_format: DocumentationFormat) -> tuple[str, CliPayloadKind]:
+    """Generate one reference format without erasing generator types."""
+    if output_format == "markdown":
+        return generate_markdown_docs(cli, usage_name="comparo"), CliPayloadKind.MARKDOWN
+    if output_format == "html":
+        return generate_html_docs(cli, usage_name="comparo"), CliPayloadKind.HTML
+    return generate_rst_docs(cli, usage_name="comparo"), CliPayloadKind.RST
+
+
+def _artifact_limits(value: _ArtifactLimitArguments) -> CliArtifactLimits:
+    """Project framework-owned parsed arguments to the framework-neutral contract."""
+    return CliArtifactLimits(
+        maximum_blobs=value.maximum_blobs,
+        maximum_blob_bytes=value.maximum_blob_bytes,
+        maximum_total_blob_bytes=value.maximum_total_blob_bytes,
+        maximum_manifest_bytes=value.maximum_manifest_bytes,
+        maximum_report_bytes=value.maximum_report_bytes,
+        maximum_redaction_patterns=value.maximum_redaction_patterns,
+        maximum_redaction_pattern_bytes=value.maximum_redaction_pattern_bytes,
+        maximum_redaction_value_bytes=value.maximum_redaction_value_bytes,
+        maximum_redaction_value_nodes=value.maximum_redaction_value_nodes,
     )
 
-    counts = (
-        f"{len(result.environments)} environment(s), {len(result.requests)} request(s), "
-        f"{len(result.schemas)} schema(s)"
+
+def _artifact_read_limits(value: _ArtifactLimitArguments) -> ArtifactReadLimits:
+    """Project CLI artifact ceilings into the application report-reader contract."""
+    limits = _artifact_limits(value)
+    return ArtifactReadLimits(
+        maximum_blobs=limits.maximum_blobs,
+        maximum_blob_bytes=limits.maximum_blob_bytes,
+        maximum_total_blob_bytes=limits.maximum_total_blob_bytes,
+        maximum_manifest_bytes=limits.maximum_manifest_bytes,
+        maximum_report_bytes=limits.maximum_report_bytes,
+        maximum_redaction_patterns=limits.maximum_redaction_patterns,
+        maximum_redaction_pattern_bytes=limits.maximum_redaction_pattern_bytes,
+        maximum_redaction_value_bytes=limits.maximum_redaction_value_bytes,
+        maximum_redaction_value_nodes=limits.maximum_redaction_value_nodes,
     )
-    typer.secho(f"✓ created {manifest}", fg=typer.colors.GREEN)
-    typer.secho(f"✓ created {data_dir}/ — {counts}, and AGENTS.md", fg=typer.colors.GREEN)
-    for warning in result.warnings:
-        typer.secho(f"⚠ {warning}", fg=typer.colors.YELLOW, err=True)
-    if result.secret_env_vars:
-        typer.echo("\nSecrets are declared as $env refs — provide real values before running:")
-        for var in result.secret_env_vars:
-            typer.echo(f"  export {var}=…")
-    typer.echo(
-        "\nThis is a scaffold: no diff profiles were generated — deciding which fields are\n"
-        "volatile is your call. Add DiffProfiles (and real secret values), then validate."
+
+
+def _execution_limits(
+    runtime: _RuntimeLimitArguments,
+    artifact: _ArtifactLimitArguments,
+) -> CliExecutionLimits:
+    """Project all caller-visible runtime ceilings into one immutable contract."""
+    return CliExecutionLimits(
+        body_memory_threshold_bytes=runtime.body_memory_threshold_bytes,
+        maximum_transient_body_bytes=runtime.maximum_transient_body_bytes,
+        maximum_request_body_bytes=runtime.maximum_request_body_bytes,
+        maximum_request_json_depth=runtime.maximum_request_json_depth,
+        maximum_request_json_nodes=runtime.maximum_request_json_nodes,
+        maximum_authorization_occurrences=runtime.maximum_authorization_occurrences,
+        maximum_encoded_body_bytes=runtime.maximum_encoded_body_bytes,
+        maximum_entity_body_bytes=runtime.maximum_entity_body_bytes,
+        maximum_expansion_ratio=runtime.maximum_expansion_ratio,
+        maximum_stream_records=runtime.maximum_stream_records,
+        maximum_stream_controls=runtime.maximum_stream_controls,
+        maximum_stream_errors=runtime.maximum_stream_errors,
+        maximum_stream_item_bytes=runtime.maximum_stream_item_bytes,
+        maximum_decoded_body_bytes=runtime.maximum_decoded_body_bytes,
+        maximum_text_characters=runtime.maximum_text_characters,
+        maximum_json_depth=runtime.maximum_json_depth,
+        maximum_json_nodes=runtime.maximum_json_nodes,
+        maximum_json_tokens=runtime.maximum_json_tokens,
+        artifact=_artifact_limits(artifact),
     )
-    typer.echo("\nNext:")
-    typer.echo(f"  comparo validate --config {manifest}    # check it loads")
-    typer.echo(f"  comparo --config {manifest}             # open the TUI")
 
 
-def _write_objects(directory: Path, objects: list[openapi.ImportedObject]) -> None:
-    """Write each imported object to ``<directory>/<id-suffix>.yaml`` with the modeline."""
-    directory.mkdir(parents=True, exist_ok=True)
-    for obj in objects:
-        filename = obj.id.split(".", 1)[-1] + ".yaml"
-        (directory / filename).write_text(
-            _SCHEMA_MODELINE + openapi.to_yaml(obj.document), encoding="utf-8"
-        )
+def _config_load_limits(value: _ConfigLoadLimitArguments) -> CliConfigLoadLimits:
+    """Project every caller-visible project-load ceiling into the CLI contract."""
+    return CliConfigLoadLimits(
+        maximum_sources=value.maximum_sources,
+        maximum_discovery_entries=value.maximum_discovery_entries,
+        maximum_total_bytes=value.maximum_total_bytes,
+        maximum_total_documents=value.maximum_total_documents,
+        maximum_total_nodes=value.maximum_total_nodes,
+        maximum_resources=value.maximum_resources,
+        maximum_yaml_bytes=value.maximum_yaml_bytes,
+        maximum_yaml_documents=value.maximum_yaml_documents,
+        maximum_yaml_depth=value.maximum_yaml_depth,
+        maximum_yaml_nodes=value.maximum_yaml_nodes,
+        maximum_policy_yaml_bytes=value.maximum_policy_yaml_bytes,
+        maximum_policy_yaml_depth=value.maximum_policy_yaml_depth,
+        maximum_policy_yaml_nodes=value.maximum_policy_yaml_nodes,
+    )
 
 
-def _openapi_diff_pairs(result: openapi.ImportResult) -> list[tuple[str, str, str]] | None:
-    """Pair the first two environments into a diff pair when a spec has 2+ servers."""
-    if len(result.environments) < 2:
-        return None
-    baseline = result.environments[0].id.split(".", 1)[-1]
-    candidate = result.environments[1].id.split(".", 1)[-1]
-    return [(f"{baseline}-vs-{candidate}", baseline, candidate)]
-
-
-def _abort(message: str) -> NoReturn:
-    typer.secho(message, fg=typer.colors.RED, err=True)
-    raise typer.Exit(_EXIT_USAGE)
-
-
-def _slug(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "app"
-
-
-def _yaml_scalar(value: str) -> str:
-    """Return *value* quoted only when a plain YAML scalar would be misread."""
-    unsafe = re.search(r"""[:#\[\]{}&*!|>'"%@`,]""", value) or value != value.strip()
-    if value and not unsafe and "\n" not in value:
-        return value
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-    return f'"{escaped}"'
-
-
-def _manifest_yaml(
-    name: str,
-    project_id: str,
-    description: str | None,
-    data: str,
+def _execution_request(
+    command: CliExecutionCommandKind,
+    arguments: _ExecutionArguments,
+    runtime_limits: _RuntimeLimitArguments,
+    artifact_limits: _ArtifactLimitArguments,
+    config_load_limits: _ConfigLoadLimitArguments,
     *,
-    default_env: str = "local",
-    diff_pairs: list[tuple[str, str, str]] | None = None,
-) -> str:
-    summary = description or "An HTTP regression & diff project."
-    environments = f"  environments:\n    default: {default_env}\n"
-    if diff_pairs:
-        environments += "    diffPairs:\n"
-        for pair_name, baseline, candidate in diff_pairs:
-            environments += (
-                f"      - name: {pair_name}\n"
-                f"        baseline: {baseline}\n"
-                f"        candidate: {candidate}\n"
+    execution_profile: str | None,
+    environments: tuple[str, ...],
+    baseline: str | None,
+    candidates: tuple[str, ...],
+) -> ExecutionRequest:
+    """Build the one shared service request without interpreting topology in the adapter."""
+    plan = PlanRequest(
+        config=arguments.config,
+        additional_sources=arguments.source,
+        policy=arguments.policy,
+        execution_profile=execution_profile,
+        subjects=arguments.subject,
+        environments=environments,
+        baseline=baseline,
+        candidates=candidates,
+        matrices=arguments.matrix,
+        trials=arguments.trials,
+        maximum_attempts=arguments.maximum_attempts,
+        fail_fast=arguments.fail_fast,
+        budgets=arguments.budget,
+        output=CliOutputMode(arguments.output_format),
+        load_limits=_config_load_limits(config_load_limits),
+        parameters_from=arguments.parameters_from,
+        variables_from=arguments.variables_from,
+        secrets_from=arguments.secrets_from,
+    )
+    return ExecutionRequest(
+        command=command,
+        plan=plan,
+        approve_mutations=arguments.approve_mutations,
+        persist=arguments.persist,
+        artifact_root=arguments.artifact_root,
+        limits=_execution_limits(runtime_limits, artifact_limits),
+        tool_version=_package_version(),
+    )
+
+
+def _register_execution_commands(cli: App, services: CliServices) -> None:
+    """Attach all effectful journeys as thin adapters over one service operation."""
+
+    @cli.command(name="run")
+    def run(
+        *,
+        environment: EnvironmentOption = (),
+        arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+    ) -> CliInvocation:
+        """Execute assertions against one or more Environments.
+
+        Args:
+            environment: Environment id; repeat to override project/profile topology.
+            arguments: Shared planning, policy, persistence, and output controls.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
+            runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
+            artifact_limits: Version-owned artifact and sanitization ceilings.
+        """
+        request = _execution_request(
+            CliExecutionCommandKind.RUN,
+            arguments,
+            runtime_limits,
+            artifact_limits,
+            config_load_limits,
+            execution_profile=None,
+            environments=environment,
+            baseline=None,
+            candidates=(),
+        )
+        return _invocation(services.execute(request), arguments.color)
+
+    @cli.command(name="diff")
+    def diff(
+        *,
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+    ) -> CliInvocation:
+        """Execute and compare a baseline Environment with one or more candidates.
+
+        Args:
+            baseline: Baseline Environment id overriding project/profile topology.
+            candidate: Candidate Environment id; repeat to add candidates.
+            arguments: Shared planning, policy, persistence, and output controls.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
+            runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
+            artifact_limits: Version-owned artifact and sanitization ceilings.
+        """
+        request = _execution_request(
+            CliExecutionCommandKind.DIFF,
+            arguments,
+            runtime_limits,
+            artifact_limits,
+            config_load_limits,
+            execution_profile=None,
+            environments=(),
+            baseline=baseline,
+            candidates=candidate,
+        )
+        return _invocation(services.execute(request), arguments.color)
+
+    @cli.command(name="exec")
+    def execute_profile(
+        profile: str,
+        /,
+        *,
+        environment: EnvironmentOption = (),
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        arguments: ExecutionArgumentsOption = _DEFAULT_EXECUTION_ARGUMENTS,
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+    ) -> CliInvocation:
+        """Execute an ExecutionProfile with optional assertion or comparison overrides.
+
+        Args:
+            profile: ExecutionProfile id selected from project configuration.
+            environment: Environment id; repeat to select assertion topology.
+            baseline: Baseline Environment id selecting comparison topology.
+            candidate: Candidate Environment id; repeat to add candidates.
+            arguments: Shared planning, policy, persistence, and output controls.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
+            runtime_limits: Version-owned storage, capture, stream, and decode ceilings.
+            artifact_limits: Version-owned artifact and sanitization ceilings.
+        """
+        request = _execution_request(
+            CliExecutionCommandKind.EXEC,
+            arguments,
+            runtime_limits,
+            artifact_limits,
+            config_load_limits,
+            execution_profile=profile,
+            environments=environment,
+            baseline=baseline,
+            candidates=candidate,
+        )
+        return _invocation(services.execute(request), arguments.color)
+
+
+def _render_limits(value: _RenderLimitArguments) -> CliRenderLimits:
+    """Project every caller-visible render ceiling into one immutable contract."""
+    return CliRenderLimits(
+        maximum_file_bytes=value.maximum_file_bytes,
+        maximum_file_path_bytes=value.maximum_file_path_bytes,
+        maximum_file_segments=value.maximum_file_segments,
+        maximum_environment_files=value.maximum_environment_files,
+        maximum_environment_file_bytes=value.maximum_environment_file_bytes,
+        maximum_environment_total_bytes=value.maximum_environment_total_bytes,
+        maximum_environment_entries=value.maximum_environment_entries,
+        maximum_environment_line_bytes=value.maximum_environment_line_bytes,
+        maximum_yaml_bytes=value.maximum_yaml_bytes,
+        maximum_yaml_depth=value.maximum_yaml_depth,
+        maximum_yaml_nodes=value.maximum_yaml_nodes,
+        maximum_redaction_patterns=value.maximum_redaction_patterns,
+        maximum_redaction_pattern_bytes=value.maximum_redaction_pattern_bytes,
+        maximum_redaction_value_bytes=value.maximum_redaction_value_bytes,
+        maximum_redaction_value_nodes=value.maximum_redaction_value_nodes,
+        maximum_output_bytes=value.maximum_output_bytes,
+    )
+
+
+def _register_render_command(cli: App, services: CliServices) -> None:
+    """Attach the offline request-preview journey to the command graph."""
+
+    @cli.command(name="render")
+    def render(
+        *,
+        config: ConfigOption = Path("comparo.yaml"),
+        source: SourceOption = (),
+        policy: PolicyOption = None,
+        profile: str | None = None,
+        subject: SubjectOption = (),
+        environment: EnvironmentOption = (),
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        matrix: MatrixOption = (),
+        trials: int | None = None,
+        maximum_attempts: int | None = None,
+        fail_fast: FailFastOption = None,
+        budget: BudgetOption = (),
+        parameters_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--parameters-from", consume_multiple=False),
+        ] = (),
+        variables_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--variables-from", consume_multiple=False),
+        ] = (),
+        secrets_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--secrets-from", consume_multiple=False),
+        ] = (),
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        limits: RenderLimitsOption = _DEFAULT_RENDER_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Resolve and sanitize planned requests without DNS or network activity.
+
+        Args:
+            config: Project manifest or directory containing comparo.yaml.
+            source: Additional local YAML source; repeat the option to add more.
+            policy: External ExecutionPolicy path; omission uses permissive trusted-local authority.
+            profile: ExecutionProfile id overriding project defaults.
+            subject: Request id; repeat to select multiple executable subjects.
+            environment: Environment id; repeat to select assertion topology.
+            baseline: Baseline Environment id selecting comparison topology.
+            candidate: Candidate Environment id; repeat to add candidates.
+            matrix: Matrix override as BINDING=MATRIX; repeat to add bindings.
+            trials: Positive trial-count override.
+            maximum_attempts: Positive maximum-attempt override.
+            fail_fast: Enable or disable fail-fast planning.
+            budget: Budget override as RESOURCE=LIMIT; repeat to add resources.
+            parameters_from: Value resource as [ENV=]VALUE supplying invocation parameters.
+            variables_from: Value resource as [ENV=]VALUE supplying invocation variables.
+            secrets_from: Value resource as [ENV=]VALUE supplying invocation secrets.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
+            limits: Version-owned local-source, sanitization, and output ceilings.
+            output_format: Human text or deterministic JSON output.
+            color: Terminal color behavior for failures.
+        """
+        request = RenderRequest(
+            plan=PlanRequest(
+                config=config,
+                additional_sources=source,
+                policy=policy,
+                execution_profile=profile,
+                subjects=subject,
+                environments=environment,
+                baseline=baseline,
+                candidates=candidate,
+                matrices=matrix,
+                trials=trials,
+                maximum_attempts=maximum_attempts,
+                fail_fast=fail_fast,
+                budgets=budget,
+                output=CliOutputMode(output_format),
+                load_limits=_config_load_limits(config_load_limits),
+                parameters_from=parameters_from,
+                variables_from=variables_from,
+                secrets_from=secrets_from,
+            ),
+            limits=_render_limits(limits),
+        )
+        return _invocation(services.render(request), color)
+
+
+def _register_artifact_commands(cli: App, services: CliServices) -> None:
+    """Attach artifact readers without adding their concerns to the main command graph."""
+    artifact = App(name="artifact", help="Read authenticated sanitized artifact bundles.")
+    cli.command(artifact)
+
+    @artifact.command(name="inspect")
+    def artifact_inspect(
+        bundle_id: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Authenticate a bundle and print a body-free result summary.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            root: Local artifact-store root.
+            limits: Version-owned finite read limits, individually overridable.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = ArtifactReadRequest(
+            root=root,
+            bundle_id=bundle_id,
+            limits=_artifact_limits(limits),
+            output=CliOutputMode(output_format),
+        )
+        return _invocation(services.artifact_inspect(request), color)
+
+    @artifact.command(name="verify")
+    def artifact_verify(
+        bundle_id: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Authenticate a bundle manifest and every declared sanitized blob.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            root: Local artifact-store root.
+            limits: Version-owned finite read limits, individually overridable.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = ArtifactReadRequest(
+            root=root,
+            bundle_id=bundle_id,
+            limits=_artifact_limits(limits),
+            output=CliOutputMode(output_format),
+        )
+        return _invocation(services.artifact_verify(request), color)
+
+    @artifact.command(name="blob")
+    def artifact_blob(
+        bundle_id: str,
+        sha256: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        maximum_output_bytes: BlobOutputLimitOption = DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1,
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Write one authenticated sanitized blob as exact raw bytes to redirected stdout.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            sha256: Declared SHA-256 blob identity.
+            root: Local artifact-store root.
+            limits: Version-owned finite read limits, individually overridable.
+            maximum_output_bytes: Independent maximum bytes written to redirected stdout.
+            color: Terminal color behavior for failures.
+        """
+        request = ArtifactBlobRequest(
+            root=root,
+            bundle_id=bundle_id,
+            sha256=sha256,
+            limits=_artifact_limits(limits),
+            maximum_output_bytes=maximum_output_bytes,
+        )
+        return _invocation(services.artifact_blob(request), color)
+
+    @cli.command(name="report")
+    def report(
+        bundle_id: str,
+        /,
+        *,
+        root: ArtifactRootOption = DEFAULT_CLI_ARTIFACT_ROOT_V1,
+        limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        report_format: Annotated[ReportFormatName, Parameter(name="--format")] = "json",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Render an authenticated artifact as JSON, JUnit, SARIF, or Markdown to stdout.
+
+        Args:
+            bundle_id: Artifact bundle id under the selected root.
+            root: Local artifact-store root.
+            limits: Version-owned finite read and report-output limits, individually overridable.
+            report_format: Built-in report format.
+            color: Terminal color behavior for failures.
+        """
+        request = ReportRequest(
+            root=root,
+            bundle_id=bundle_id,
+            limits=_artifact_limits(limits),
+            format=CliReportFormat(report_format),
+        )
+        return _invocation(services.report(request), color)
+
+
+def _register_tui_command(cli: App) -> None:
+    """Attach the lazy terminal frontend launch contract."""
+
+    @cli.command(name="tui")
+    def tui(
+        *,
+        config: ConfigOption = Path("comparo.yaml"),
+        source: SourceOption = (),
+        policy: PolicyOption = None,
+        artifact_root: TuiArtifactRootOption = Path(".comparo/artifacts"),
+        persist: TuiPersistenceOption = True,
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        runtime_limits: RuntimeLimitsOption = _DEFAULT_RUNTIME_LIMIT_ARGUMENTS,
+        artifact_limits: ArtifactLimitsOption = _DEFAULT_ARTIFACT_LIMIT_ARGUMENTS,
+        maximum_report_entries: MaximumReportEntriesOption = (
+            DEFAULT_TUI_MAXIMUM_REPORT_ENTRIES_V1
+        ),
+        maximum_outstanding_preparations: MaximumPreparationsOption = (
+            DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
+        ),
+    ) -> TuiLaunchRequest:
+        """Open the interactive terminal interface.
+
+        Args:
+            config: Project manifest or directory containing comparo.yaml.
+            source: Additional local YAML source; repeat the option to add more.
+            policy: External ExecutionPolicy path; omission uses trusted-local authority.
+            artifact_root: Authenticated sanitized report archive root.
+            persist: Persist sanitized run reports; disable for a no-storage execution policy.
+            config_load_limits: Caller-owned project and policy YAML admission ceilings.
+            runtime_limits: Caller-owned HTTP capture and decoding ceilings.
+            artifact_limits: Caller-owned artifact persistence and read ceilings.
+            maximum_report_entries: Maximum archived report entries admitted per refresh.
+            maximum_outstanding_preparations: Maximum retained Compare preparations.
+        """
+        try:
+            parsed_config_limits = _config_load_limits(config_load_limits)
+            parsed_execution_limits = _execution_limits(runtime_limits, artifact_limits)
+            limits = TuiLaunchLimits(
+                project_load=project_load_limits(parsed_config_limits),
+                policy_load=policy_load_limits(parsed_config_limits),
+                execution_settings=production_execution_settings(
+                    parsed_execution_limits,
+                    persist=persist,
+                ),
+                report_archive=ReportArchiveLimits(
+                    maximum_entries=maximum_report_entries,
+                    artifact=_artifact_read_limits(artifact_limits),
+                ),
+                maximum_outstanding_preparations=maximum_outstanding_preparations,
             )
-    return (
-        "apiVersion: comparo/v1\n"
-        "kind: Project\n"
-        "metadata:\n"
-        f"  name: {_yaml_scalar(name)}\n"
-        f"  id: {project_id}\n"
-        f"  description: {_yaml_scalar(summary)}\n"
-        "spec:\n"
-        "  # Where comparo's objects live, relative to this file.\n"
-        f"  data: {data}\n"
-        "\n" + environments + "\n"
-        "  run:\n"
-        "    concurrency: 4\n"
+            return TuiLaunchRequest(
+                config=config,
+                additional_sources=source,
+                policy=policy,
+                artifact_root=artifact_root,
+                limits=limits,
+            )
+        except Exception as error:
+            raise _InvalidTuiLaunchError from error
+
+
+def build_app(services: CliServices) -> App:
+    """Build an isolated command graph around injected framework-neutral services."""
+    cli = App(
+        name="comparo",
+        help="Validate and compare HTTP behavior across environments.",
+        version=_package_version,
+        default_parameter=Parameter(negative=()),
+        exit_on_error=False,
+        print_error=False,
+        result_action="return_value",
+        suppress_keyboard_interrupt=False,
     )
+    schema = App(name="schema", help="Print versioned public schemas and CLI documentation.")
+    cli.command(schema)
+    _register_artifact_commands(cli, services)
+    _register_execution_commands(cli, services)
+    _register_render_command(cli, services)
+    _register_tui_command(cli)
+
+    @schema.command(name="config")
+    def schema_config(*, color: ColorOption = "auto") -> CliInvocation:
+        """Print the comparo/v1alpha1 configuration JSON Schema.
+
+        Args:
+            color: Terminal color behavior for human messages.
+        """
+        return _invocation(services.configuration_schema(), color)
+
+    @schema.command(name="artifact")
+    def schema_artifact(*, color: ColorOption = "auto") -> CliInvocation:
+        """Print the versioned RunArtifact JSON Schema.
+
+        Args:
+            color: Terminal color behavior for human messages.
+        """
+        return _invocation(services.artifact_schema(), color)
+
+    @schema.command(name="report")
+    def schema_report(*, color: ColorOption = "auto") -> CliInvocation:
+        """Print the versioned JSON-report envelope schema.
+
+        Args:
+            color: Terminal color behavior for human messages.
+        """
+        return _invocation(services.report_schema(), color)
+
+    @schema.command(name="policy")
+    def schema_policy(*, color: ColorOption = "auto") -> CliInvocation:
+        """Print the comparo.policy/v1alpha1 ExecutionPolicy JSON Schema.
+
+        Args:
+            color: Terminal color behavior for human messages.
+        """
+        return _invocation(services.policy_schema(), color)
+
+    @schema.command(name="cli")
+    def schema_cli(
+        output_format: DocumentationFormat = "markdown",
+        /,
+        *,
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Print generated documentation for the installed command graph.
+
+        Args:
+            output_format: Documentation format to generate.
+            color: Terminal color behavior for human messages.
+        """
+        payload, payload_kind = _generate_reference(build_app(services), output_format)
+        return _invocation(
+            _document_result(payload, payload_kind),
+            color,
+        )
+
+    @cli.command(name="validate")
+    def validate(
+        *,
+        config: ConfigOption = Path("comparo.yaml"),
+        source: SourceOption = (),
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Load and compile a project without resolving values or using the network.
+
+        Args:
+            config: Project manifest or directory containing comparo.yaml.
+            source: Additional local YAML source; repeat the option to add more.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = ValidateRequest(
+            config=config,
+            additional_sources=source,
+            output=CliOutputMode(output_format),
+            load_limits=_config_load_limits(config_load_limits),
+        )
+        return _invocation(services.validate(request), color)
+
+    @cli.command(name="doctor")
+    def doctor(
+        *,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Run deterministic offline checks of the sensitive-value boundary.
+
+        Args:
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = DoctorRequest(output=CliOutputMode(output_format))
+        return _invocation(services.doctor(request), color)
+
+    @cli.command(name="plan")
+    def plan(
+        *,
+        config: ConfigOption = Path("comparo.yaml"),
+        source: SourceOption = (),
+        policy: PolicyOption = None,
+        profile: str | None = None,
+        subject: SubjectOption = (),
+        environment: EnvironmentOption = (),
+        baseline: str | None = None,
+        candidate: CandidateOption = (),
+        matrix: MatrixOption = (),
+        trials: int | None = None,
+        maximum_attempts: int | None = None,
+        fail_fast: FailFastOption = None,
+        budget: BudgetOption = (),
+        parameters_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--parameters-from", consume_multiple=False),
+        ] = (),
+        variables_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--variables-from", consume_multiple=False),
+        ] = (),
+        secrets_from: Annotated[
+            tuple[str, ...],
+            Parameter(name="--secrets-from", consume_multiple=False),
+        ] = (),
+        config_load_limits: ConfigLoadLimitsOption = _DEFAULT_CONFIG_LOAD_LIMIT_ARGUMENTS,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Compile and inspect a deterministic plan without resolving values or using the network.
+
+        Args:
+            config: Project manifest or directory containing comparo.yaml.
+            source: Additional local YAML source; repeat the option to add more.
+            policy: Explicit operator-owned policy; omission uses permissive
+                trusted-local authority.
+            profile: ExecutionProfile id to apply.
+            subject: Request id; repeat to select more than one executable subject.
+            environment: Environment id for an assertion run; repeat to select more than one.
+            baseline: Baseline Environment id for a comparison run.
+            candidate: Candidate Environment id; repeat to select more than one.
+            matrix: Matrix override as BINDING=MATRIX; repeat for multiple bindings.
+            trials: Positive trial-count override.
+            maximum_attempts: Positive per-execution attempt limit.
+            fail_fast: Enable fail-fast; use --no-fail-fast to disable it.
+            budget: Planning budget as RESOURCE=LIMIT; repeat for multiple resources.
+            parameters_from: Value resource as [ENV=]VALUE supplying invocation parameters.
+            variables_from: Value resource as [ENV=]VALUE supplying invocation variables.
+            secrets_from: Value resource as [ENV=]VALUE supplying invocation secrets.
+            config_load_limits: Version-owned project-source and YAML admission ceilings.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = PlanRequest(
+            config=config,
+            additional_sources=source,
+            policy=policy,
+            execution_profile=profile,
+            subjects=subject,
+            environments=environment,
+            baseline=baseline,
+            candidates=candidate,
+            matrices=matrix,
+            trials=trials,
+            maximum_attempts=maximum_attempts,
+            fail_fast=fail_fast,
+            budgets=budget,
+            output=CliOutputMode(output_format),
+            load_limits=_config_load_limits(config_load_limits),
+            parameters_from=parameters_from,
+            variables_from=variables_from,
+            secrets_from=secrets_from,
+        )
+        return _invocation(services.plan(request), color)
+
+    @cli.command(name="completion")
+    def completion(
+        shell: CompletionShell,
+        /,
+        *,
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Generate a static completion script without modifying shell startup files.
+
+        Args:
+            shell: Shell syntax to generate.
+            color: Terminal color behavior for human messages.
+        """
+        payload = cli.generate_completion(shell=shell)
+        return _invocation(_document_result(payload, CliPayloadKind.TEXT), color)
+
+    return cli
 
 
-#: Editors with the YAML language server autocomplete and validate against this.
-_SCHEMA_MODELINE = f"# yaml-language-server: $schema={SCHEMA_ID}\n"
-
-_STARTER_ENV = (
-    _SCHEMA_MODELINE
-    + """apiVersion: comparo/v1
-kind: Environment
-metadata:
-  name: Local
-  id: environment.local
-  description: A starter environment — point baseUrl at your API.
-spec:
-  baseUrl: https://postman-echo.com
-  timeout:
-    connect: 5s
-    read: 30s
-  health:
-    - method: GET
-      endpoint: /get
-"""
-)
-
-_STARTER_REQUEST = (
-    _SCHEMA_MODELINE
-    + """apiVersion: comparo/v1
-kind: Request
-metadata:
-  name: Example
-  id: request.example
-  description: A starter request — edit or replace it.
-  tags:
-    - smoke
-spec:
-  request:
-    method: GET
-    endpoint: /get
-    query:
-      hello: world
-  response:
-    status: 200
-"""
-)
-
-# Dropped into every scaffolded project so any coding agent working here is
-# instantly competent at authoring comparo config. `__SCHEMA_URL__` is replaced
-# with the real schema URL at write time.
-_AGENTS_MD = """# comparo — authoring guide for coding agents
-
-This directory is a **comparo** project: version-controlled YAML that replays HTTP
-requests across environments and diffs the responses to catch regressions. You may
-author and edit these files. **After any change, run `comparo validate` and fix
-what it reports** — its diagnostics are precise and name the fix.
-
-## The object model
-
-Each file is one object with a Kubernetes-style envelope:
-
-    apiVersion: comparo/v1
-    kind: <Kind>
-    metadata: { id, name, description?, tags? }
-    spec: { ... }
-
-Field names are **camelCase** (`baseUrl`, not `base_url`). The kinds:
-
-- **Environment** — a target: `baseUrl`, `timeout`, `variables`, `secrets`, `auth`, `health`.
-- **Request** — an HTTP request (`method`, `endpoint`, `headers`, `query`, `body`, `cookies`,
-  `auth`) with an optional response `schema` and `diff`/`assert` profiles. Matrix-expanded.
-- **Schema** — a JSON Schema used for structural validation.
-- **Instance** — reusable values injected by reference, to avoid duplication.
-- **Matrix** — the parameter cases a request runs against (values can inject into the path).
-- **DiffProfile** — how two responses are compared, per JSON path.
-- **AssertionProfile** — assertions on a single response (status, body, latency, schema).
-- **ExecutionProfile** — one run that asserts BOTH environments and diffs the pair, gated.
-- **Project** — the manifest (`comparo.yaml`): data dir, environments, concurrency.
-
-## References and secrets
-
-- `$ref: <id>` — link to another object by its `metadata.id`.
-- `$val: <instance-id>` — inject the value of an Instance by reference.
-- `$secret: NAME` — a secret declared in the environment. **Never write a real secret
-  value in these files.** Declare it once under an Environment's `secrets` (sourced from
-  `$env` or `$file`) and reference it by name. comparo masks declared secrets everywhere.
-- `$file: path` — read a value from a file (confined to the project root).
-
-## `${...}` interpolation (inside strings)
-
-- `${VAR}` — required (fails if unset)
-- `${VAR?}` — optional (empty if unset)
-- `${VAR | default}` — a default used only when unset
-- `${VAR:int}` — a typed cast (`int` | `number` | `bool`)
-
-## Diff modes (in a DiffProfile, per JSON path)
-
-- `ignore` — skip it (volatile fields: timestamps, generated ids)
-- `exact` — must be equal (recurses)
-- `type` — same JSON type
-- `shape` — same structure, values may differ (recurses)
-- `tolerance` — numbers within a delta
-
-## The loop
-
-1. Edit YAML.
-2. `comparo validate` — fix every diagnostic before moving on.
-3. `comparo run --env <env>` to execute, or
-   `comparo diff --baseline <A> --candidate <B>` to compare two environments.
-4. `comparo schema` prints the full JSON Schema — the complete, authoritative field
-   surface. Editors autocomplete against it via the modeline already on each file:
-   `# yaml-language-server: $schema=__SCHEMA_URL__`
-
-## Example — a request with a schema and a diff profile
-
-    # yaml-language-server: $schema=__SCHEMA_URL__
-    apiVersion: comparo/v1
-    kind: Request
-    metadata: { id: request.user, name: Get user }
-    spec:
-      request:
-        method: GET
-        endpoint: /users/${USER_ID}
-        headers:
-          Authorization: "Bearer ${API_TOKEN}"   # API_TOKEN is a $secret in the env
-      response:
-        schema: { $ref: schema.user }
-        diff: { $ref: diffprofile.user }
-
-Do not invent fields. When unsure, consult `comparo schema` or let `comparo validate`
-correct you.
-"""
+_DEFAULT_SERVICES = DefaultCliServices()
+_DEFAULT_APP = build_app(_DEFAULT_SERVICES)
 
 
-def _write_reports(record: ReportRecord, formats: list[str], output: Path) -> None:
-    # _emit_reports has already rejected any unknown format, so every name is a
-    # known reporter here.
-    output.mkdir(parents=True, exist_ok=True)
-    for name in formats:
-        reporter = REPORTERS[name]
-        rendered = reporter.render(record)
-        destination = output / reporter.filename
-        destination.write_text(rendered, encoding="utf-8")
-        typer.secho(f"  wrote {destination}", dim=True)
-        if name == "markdown":
-            summary = os.environ.get("GITHUB_STEP_SUMMARY")
-            if summary:
-                with Path(summary).open("a", encoding="utf-8") as handle:
-                    handle.write(rendered + "\n")
+def generate_cli_reference(output_format: DocumentationFormat = "markdown") -> str:
+    """Generate deterministic reference documentation from the command graph."""
+    if output_format == "markdown":
+        return generate_markdown_docs(_DEFAULT_APP, usage_name="comparo")
+    if output_format == "html":
+        return generate_html_docs(_DEFAULT_APP, usage_name="comparo")
+    return generate_rst_docs(_DEFAULT_APP, usage_name="comparo")
 
 
-async def _diff(
-    loaded: LoadedProject, baseline: Environment, candidate: Environment, requests: list[Request]
-) -> list[CellDiff]:
-    client = HttpxClient()
-    candidate_client = HttpxClient()
-    try:
-        return await diff_run(loaded, baseline, candidate, requests, client, candidate_client)
-    finally:
-        await client.aclose()
-        await candidate_client.aclose()
+def _console(stream: TextIO, color: CliColorMode) -> Console:
+    """Create a terminal console with explicit, testable color behavior."""
+    if color is CliColorMode.ALWAYS:
+        return Console(
+            file=stream,
+            force_terminal=True,
+            no_color=False,
+            highlight=False,
+            color_system="standard",
+        )
+    if color is CliColorMode.NEVER:
+        return Console(file=stream, color_system=None, no_color=True, highlight=False)
+    return Console(file=stream, highlight=False)
 
 
-def _print_diffs(
-    results: list[CellDiff],
-    baseline_name: str,
-    candidate_name: str,
-    redact: Callable[[str], str] = str,
-) -> bool:
-    typer.secho(f"diff · {baseline_name} ⇄ {candidate_name}", bold=True)
-    same = drift = errors = skipped = 0
-    for cell in results:
-        identifier = cell.request.metadata.id or cell.request.metadata.name
-        if cell.cell_key:
-            identifier = f"{identifier} [{redact(cell.cell_key)}]"
-        skipped += cell.skipped
-        if cell.error is not None:
-            errors += 1
-            typer.secho(f"  ! {identifier:<44} {redact(cell.error)}", fg=typer.colors.YELLOW)
-        elif cell.drifted:
-            drift += 1
-            typer.secho(f"  ✗ {identifier:<44} drift", fg=typer.colors.RED)
-            for field in cell.drifts:
-                typer.echo(f"      {redact(field.path)}  {redact(field.detail)}")
+def _requested_color(tokens: tuple[str, ...]) -> CliColorMode:
+    """Select help/error console color without exposing or interpreting other tokens."""
+    for index, argument in enumerate(tokens):
+        if argument.startswith("--color="):
+            candidate = argument.partition("=")[2]
+        elif argument == "--color" and index + 1 < len(tokens):
+            candidate = tokens[index + 1]
         else:
-            note = f"  ({cell.skipped} skipped)" if cell.skipped else ""
-            typer.secho(f"  ✓ {identifier:<44} same{note}", fg=typer.colors.GREEN)
-            same += 1
-    summary = f"{same} same · {drift} drift · {errors} error · {skipped} fields skipped"
-    typer.echo()
-    typer.secho(f"summary: {summary}", bold=True)
-    passed = diff_passed(len(results), drift, errors)
-    color = typer.colors.GREEN if passed else typer.colors.RED
-    typer.secho("gate: PASS" if passed else "gate: FAIL", fg=color)
-    return passed
-
-
-def _select_requests(loaded: LoadedProject, request_id: str | None) -> list[Request]:
-    if request_id is not None:
-        obj = loaded.objects.get(request_id)
-        return [obj] if isinstance(obj, Request) else []
-    requests = sorted(
-        (o for o in loaded.objects.values() if isinstance(o, Request)),
-        key=lambda request: request.metadata.id or "",
-    )
-    # With no explicit request, honour the manifest's default selection (if any).
-    selection = loaded.project.spec.selection if loaded.project is not None else None
-    if selection is not None and (selection.tags or selection.requests):
-        ids = set(selection.requests or [])
-        tags = set(selection.tags or [])
-        requests = [
-            request
-            for request in requests
-            if request.metadata.id in ids or (tags & set(request.metadata.tags or []))
-        ]
-    return requests
-
-
-async def _execute(
-    loaded: LoadedProject, environment: Environment, requests: list[Request]
-) -> list[Execution]:
-    client = HttpxClient()
-    try:
-        return await execute_all(loaded, environment, requests, client)
-    finally:
-        await client.aclose()
-
-
-def _print_results(loaded: LoadedProject, results: list[Execution], environment_name: str) -> bool:
-    """Print each result against its declared response, returning the gate verdict.
-
-    A request that returns a response is *not* automatically a pass — its
-    ``response.status`` / ``response.schema`` sugar is evaluated, so a 500 against
-    a declared 200 is red and fails the gate.
-    """
-    typer.secho(f"run · {environment_name}", bold=True)
-    redact = Redactor.for_project(loaded).text
-    ok_all = True
-    for execution in results:
-        identifier = execution.request.metadata.id or execution.request.metadata.name
-        if execution.cell_key:
-            identifier = f"{identifier} [{redact(execution.cell_key)}]"
-        response = execution.response
-        if response is None:
-            ok_all = False
-            error = redact(execution.error) if execution.error else "error"
-            typer.secho(f"  ✗ {identifier:<44} {error}", fg=typer.colors.RED)
             continue
-        rules = request_response_rules(loaded, execution.request)
-        checks = evaluate_rules(loaded, rules, execution)
-        latency = f"{response.elapsed_ms:.0f}ms"
-        if assertions_pass(checks):
-            typer.secho(f"  ✓ {identifier:<44} {response.status}  {latency}", fg=typer.colors.GREEN)
-        else:
-            ok_all = False
-            failed = next((c for c in checks if not c.ok and c.severity == "error"), None)
-            reason = redact(failed.label) if failed is not None else "check failed"
-            typer.secho(
-                f"  ✗ {identifier:<44} {response.status}  {latency}  {reason}", fg=typer.colors.RED
-            )
-    # Fail closed: an empty result set verified nothing and can never be a pass.
-    return ok_all and bool(results)
+        if candidate in {mode.value for mode in CliColorMode}:
+            return CliColorMode(candidate)
+    return CliColorMode.AUTO
 
 
-def _print_load_error(error: LoadError) -> None:
-    for diagnostic in error.diagnostics:
-        typer.echo(diagnostic.render(error.root), err=True)
-    typer.secho(f"\n✗ {len(error.diagnostics)} problem(s)", fg=typer.colors.RED, err=True)
+def _render_result(
+    result: CliCommandResult,
+    output: Console,
+    error: Console,
+    binary_output: BinaryIO | None,
+) -> bool:
+    """Render one complete result without interpreting payload content as markup."""
+    if result.payload_kind is CliPayloadKind.BINARY:
+        if binary_output is None or binary_output.isatty():
+            return False
+        binary_output.write(result.payload)
+        binary_output.flush()
+        return True
+    if result.payload_kind is not CliPayloadKind.HUMAN:
+        output.file.write(result.payload.decode())
+        output.file.flush()
+        return True
+    destination = output if result.exit_code is CliExitCode.SUCCESS else error
+    for message in result.messages:
+        destination.print(Text(message.text, style=_LEVEL_STYLES[message.level]))
+    return True
 
 
-def _print_resolved(
-    resolved: ResolvedRequest, environment_name: str, redact: Callable[[str], str] = str
-) -> None:
-    typer.secho(f"{redact(resolved.method)} {redact(resolved.url)}", bold=True)
-    typer.secho(f"  env: {environment_name}", dim=True)
-    if resolved.headers:
-        typer.echo("\nheaders:")
-        for key, value in resolved.headers:
-            typer.echo(f"  {redact(key)}: {redact(str(value))}")
-    if resolved.query:
-        typer.echo("\nquery:")
-        for key, value in resolved.query.items():
-            typer.echo(f"  {redact(key)}: {redact(str(value))}")
-    if resolved.body is not None:
-        typer.echo("\nbody:")
-        body = redact(json.dumps(resolved.body, indent=2, ensure_ascii=False))
-        typer.echo("\n".join(f"  {line}" for line in body.splitlines()))
-    if resolved.trail:
-        typer.echo("\nprovenance:")
-        for entry in resolved.trail:
-            tag = "secret" if entry.tainted else entry.origin.value
-            typer.echo(f"  {redact(entry.path):<26} {tag:<9} ← {redact(entry.detail)}")
+def _render_static_error(console: Console, message: str) -> None:
+    """Render a fixed adapter-owned error without exception or token text."""
+    console.print(Text(message, style="bold red"))
 
 
-def run() -> None:
-    """Entry point referenced by the ``comparo`` console script."""
-    app()
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    services: CliServices | None = None,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+    binary_stdout: BinaryIO | None = None,
+    stdin: TextIO | None = None,
+    tui_launcher: Callable[[TuiLaunchRequest], int] | None = None,
+) -> int:
+    """Run the CLI and return a stable exit code without raising parser exits."""
+    tokens = tuple(sys.argv[1:] if argv is None else argv)
+    color = _requested_color(tokens)
+    output_console = _console(sys.stdout if stdout is None else stdout, color)
+    error_console = _console(sys.stderr if stderr is None else stderr, color)
+    if not tokens and _is_interactive_terminal(stdin, stdout, stderr):
+        return _launch_tui(TuiLaunchRequest(), tui_launcher, error_console)
+    current_app = _DEFAULT_APP if services is None else build_app(services)
+    try:
+        parsed = current_app(
+            tokens,
+            console=output_console,
+            error_console=error_console,
+            exit_on_error=False,
+            print_error=False,
+            result_action="return_value",
+        )
+    except KeyboardInterrupt:
+        _render_static_error(error_console, "Interrupted.")
+        return int(CliExitCode.INTERRUPTED)
+    except (CycloptsError, _InvalidTuiLaunchError):
+        _render_static_error(error_console, "Invalid command invocation. Run with --help.")
+        return int(CliExitCode.INVALID_INVOCATION)
+    except Exception:  # noqa: BLE001 - the process boundary must fail closed without exception text.
+        _render_static_error(error_console, "Comparo could not complete the command safely.")
+        return int(CliExitCode.INTERNAL_ERROR)
+    if parsed is None:
+        return int(CliExitCode.SUCCESS)
+    if type(parsed) is TuiLaunchRequest:
+        return _launch_tui(parsed, tui_launcher, error_console)
+    if type(parsed) is not CliInvocation:
+        _render_static_error(error_console, "Comparo received an invalid command result.")
+        return int(CliExitCode.INTERNAL_ERROR)
+    raw_output = sys.stdout.buffer if binary_stdout is None and stdout is None else binary_stdout
+    if not _render_result(parsed.result, output_console, error_console, raw_output):
+        _render_static_error(error_console, "Comparo could not write binary output safely.")
+        return int(CliExitCode.INTERNAL_ERROR)
+    return int(parsed.result.exit_code)
 
 
-if __name__ == "__main__":
-    run()
+def _is_interactive_terminal(
+    stdin: TextIO | None,
+    stdout: TextIO | None,
+    stderr: TextIO | None,
+) -> bool:
+    """Open the implicit TUI only when all process streams are real terminals."""
+    streams = (
+        sys.stdin if stdin is None else stdin,
+        sys.stdout if stdout is None else stdout,
+        sys.stderr if stderr is None else stderr,
+    )
+    return all(stream.isatty() for stream in streams)
+
+
+def _launch_tui(
+    request: TuiLaunchRequest,
+    launcher: Callable[[TuiLaunchRequest], int] | None,
+    error_console: Console,
+) -> int:
+    """Invoke the lazy terminal adapter and contain its process-boundary failures."""
+    selected = _default_tui_launcher if launcher is None else launcher
+    try:
+        code = selected(request)
+    except KeyboardInterrupt:
+        _render_static_error(error_console, "Interrupted.")
+        return int(CliExitCode.INTERRUPTED)
+    except Exception:  # noqa: BLE001 - never expose terminal/bootstrap exception text
+        _render_static_error(
+            error_console,
+            "Comparo could not start the terminal interface safely.",
+        )
+        return int(CliExitCode.INTERNAL_ERROR)
+    if type(code) is not int or code < 0 or code > 255:
+        _render_static_error(error_console, "Comparo received an invalid terminal exit status.")
+        return int(CliExitCode.INTERNAL_ERROR)
+    return code
+
+
+def _default_tui_launcher(request: TuiLaunchRequest) -> int:
+    """Import Textual only after the user deliberately enters the TUI journey."""
+    from comparo.tui.launch import run_tui
+
+    return run_tui(request)
+
+
+__all__ = ["build_app", "generate_cli_reference", "main"]

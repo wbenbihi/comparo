@@ -1,0 +1,27 @@
+/* Continuous Scenario, execution, policy, and profile resource documents. */
+.resource-context-strip {
+    width: 100%;
+    height: 1;
+    margin-bottom: 1;
+}
+
+.resource-context-badge {
+    margin-right: 1;
+}
+
+.profile-section-body {
+    width: 100%;
+    height: auto;
+    min-height: 2;
+    padding: 0 1;
+    background: transparent;
+}
+
+.scenario-steps-table,
+.rule-profile-table,
+.resource-usage-table {
+    width: 100%;
+    height: auto;
+    min-height: 2;
+    max-height: 16;
+}

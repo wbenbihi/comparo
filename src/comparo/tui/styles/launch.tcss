@@ -1,0 +1,222 @@
+/* Launch page composition follows docs/design/tui-v2/references. */
+LaunchWorkspace { border: round $comparo-border; margin: 0 1; padding: 0 1; }
+#launch-steps { height: 2; padding: 0 1; }
+#launch-title { height: auto; color: $foreground; text-style: bold; padding: 0 1; }
+#launch-subtitle { height: auto; padding: 0 1; margin-bottom: 1; }
+#launch-layout { height: 1fr; }
+LaunchConfiguration { width: 1fr; height: 1fr; border: none; padding: 0; }
+#launch-target-columns { height: 1fr; }
+#launch-starting-point { width: 28; height: 1fr; padding: 0 1; margin-right: 1; }
+#launch-form { width: 1fr; height: 1fr; }
+#launch-form Vertical { height: auto; }
+#launch-form Disclosure { border: round $comparo-border; height: auto; margin-bottom: 1; }
+#launch-form Disclosure > Vertical { padding: 0 1; }
+.launch-section-title { color: $comparo-muted; height: 2; }
+.launch-section-label { color: $comparo-muted; height: 1; }
+#launch-profile-fields { height: auto; }
+#launch-profile { height: auto; min-height: 4; max-height: 18; }
+#launch-profile-info { height: auto; margin: 1 0; }
+#launch-mode { height: auto; min-height: 6; }
+#launch-requests { height: auto; min-height: 3; max-height: 12; }
+#launch-baseline, #launch-candidates, #launch-environments { height: auto; max-height: 6; }
+#launch-mutations { height: auto; }
+#launch-profile-topology, #launch-form Caption, #launch-form Hint { height: auto; }
+#launch-target-rail { width: 26%; min-width: 32; max-width: 48; height: 1fr; margin-left: 1; }
+LaunchSummary { width: 1fr; height: 1fr; border: none; border-left: solid $comparo-border; padding: 0 1; }
+LaunchSummary VerticalScroll { height: 1fr; }
+LaunchSummary KeyValueList { grid-size: 1; grid-columns: 1fr; }
+LaunchSummary .kv-key { color: $comparo-muted; margin-top: 1; }
+LaunchSummary .kv-value { width: 1fr; }
+#launch-target-actions { height: auto; layout: vertical; }
+#launch-target-actions Button { width: 100%; height: 3; content-align: center middle; }
+#launch-target-actions Button.primary { background: $accent 20%; color: $accent; }
+LaunchReview { width: 1fr; height: 1fr; border: none; padding: 0; }
+LaunchReview VerticalScroll { height: 1fr; }
+LaunchReview Caption { height: auto; }
+#launch-plan-table { height: auto; max-height: 8; }
+#launch-status { height: auto; max-height: 3; overflow-y: auto; padding: 0 1; }
+#launch-actions { margin-top: 1; height: 2; align-horizontal: right; }
+LaunchWorkspace.narrow #launch-layout { layout: vertical; }
+LaunchWorkspace.narrow LaunchConfiguration { width: 100%; height: 1fr; }
+LaunchWorkspace.narrow #launch-starting-point { width: 22; }
+LaunchWorkspace.narrow LaunchReview { width: 100%; height: 1fr; }
+
+/* Execution is one full-width region above two aligned lower inspectors. */
+
+/* Analysis retains one index and one evidence pane inside the page border. */
+.launch-plan-strip { color: $foreground; height: 2; padding: 0 1; }
+LaunchReview ReviewSection { height: auto; border-top: solid $comparo-border; padding: 0 1; }
+LaunchReview ReviewSection > Caption { width: 25; color: $foreground; }
+LaunchReview ReviewSection > Vertical { height: auto; width: 1fr; }
+LaunchReview ReviewSection Table { background: $background; }
+LaunchReview ReviewSection KeyValueList { margin: 0; }
+LaunchWorkspace.narrow ReviewSection > Caption { width: 18; }
+LaunchWorkspace LaunchConfiguration, LaunchWorkspace LaunchConfiguration:focus-within,
+LaunchWorkspace LaunchReview, LaunchWorkspace LaunchReview:focus-within { border: none; padding: 0; }
+ScopeContents .scope-section { height: auto; margin-top: 1; color: $comparo-muted; }
+ScopeContents .scope-label { height: auto; margin-top: 1; color: $comparo-muted; }
+ScopeContents .scope-value { height: auto; color: $foreground; }
+ScopeContents Hint { height: auto; }
+ScopeContents { height: auto; }
+LaunchWorkspace LaunchSummary { border: none; border-left: solid $comparo-border; }
+#launch-starting-point { width: 29; }
+#launch-profile { max-height: 10; }
+
+
+#launch-profile-source, #launch-topology-mode, #launch-fail-fast,
+#launch-assertions-mode, #launch-diffs-mode, #launch-gate-mode { height: auto; }
+#launch-assertions, #launch-diffs, #launch-gate { height: auto; max-height: 7; }
+ScopeContents .scope-label { margin-top: 0; }
+ScopeContents .scope-value { margin-bottom: 1; text-style: bold; }
+LaunchReview ReviewSection KeyValueList { grid-columns: 22 1fr; }
+LaunchReview Disclosure > Vertical { height: auto; }
+LaunchReview Disclosure { height: auto; }
+
+#launch-mode { min-height: 5; }
+#launch-starting-point { width: 32; }
+LaunchWorkspace.narrow #launch-starting-point { width: 21; }
+LaunchReview Disclosure { border: none; margin: 0; }
+LaunchReview .launch-plan-strip { height: 1; }
+
+LaunchWorkspace.short #launch-form Disclosure { margin-bottom: 0; }
+LaunchWorkspace.short #launch-requests { max-height: 8; }
+
+/* A proportional rail on wide terminals; a true horizontal summary below 128 columns. */
+LaunchWorkspace.stacked-scope #launch-layout { layout: vertical; }
+LaunchWorkspace.stacked-scope LaunchConfiguration { width: 100%; height: 1fr; }
+LaunchWorkspace.stacked-scope #launch-target-rail {
+    width: 100%; min-width: 0; max-width: 100%; height: 6;
+    layout: vertical; margin: 0;
+}
+LaunchWorkspace.stacked-scope LaunchSummary {
+    width: 100%; height: 4; border: none; border-top: solid $comparo-border; padding: 0 1;
+}
+LaunchWorkspace.stacked-scope #launch-target-actions {
+    width: 100%; height: 2; layout: horizontal; align-horizontal: right;
+}
+LaunchWorkspace.stacked-scope #launch-target-actions Button {
+    width: auto; height: 1; margin: 0 1; padding: 0 1;
+}
+ScopeContents .scope-inline-counts { height: auto; color: $foreground; text-style: bold; }
+LaunchWorkspace.stacked-scope ScopeContents Caption { height: auto; }
+
+#launch-profile-targets { height: auto; color: $foreground; }
+#launch-form .selection-title { color: $foreground; text-style: bold; }
+#launch-form SelectionGroup.dependent { border-left: solid $comparo-border; margin-left: 2; padding-left: 1; }
+
+LaunchWorkspace.narrow #launch-starting-point Hint { display: none; }
+LaunchWorkspace.narrow #launch-mode { min-height: 3; }
+
+/* Keep location and occurrence identity visible while only evidence scrolls. */
+
+
+
+
+
+/* Run: progress overview, request hierarchy, then aligned contextual inspectors. */
+LiveRunView #run-scope { color: $comparo-muted; margin-bottom: 1; }
+LiveRunView #run-progress { height: 1; }
+LiveRunView #run-statistics { height: auto; color: $comparo-muted; margin-bottom: 1; }
+LiveRunView #run-validation { height: auto; margin-bottom: 1; }
+LiveRunView #run-table-title { height: 1; color: $comparo-muted; }
+LiveRunView #run-calls { height: 1fr; min-height: 4; background: $background; }
+LiveRunView #run-coverage { color: $comparo-muted; height: auto; max-height: 2; }
+LiveRunView #run-inspectors { height: 12; min-height: 8; }
+LiveRunView #run-inspectors Panel { height: 1fr; overflow-y: auto; border: none; border-top: solid $comparo-border; padding: 1; }
+LiveRunView #run-activity-panel { border-left: solid $comparo-border; }
+LiveRunView.compact #run-inspectors { height: 10; }
+LiveRunView Table > .datatable--cursor { background: $accent 15%; }
+LiveRunView Table:focus > .datatable--cursor { background: $accent 22%; }
+
+/* Analyze: outcome -> lens-specific index -> explanation -> occurrences -> evidence. */
+ResultsView #result-headline { text-style: bold; height: auto; margin-bottom: 1; }
+ResultsView #result-counts { height: auto; margin-bottom: 1; }
+ResultsView #result-lenses { height: 2; border-bottom: solid $comparo-border; }
+ResultsView #result-lenses Button.primary { text-style: bold underline; }
+ResultsView #result-view-keys { height: auto; padding: 0 1; color: $comparo-muted; }
+ResultsView #result-empty { height: 1fr; padding: 1; }
+ResultsView #result-empty-title { height: auto; color: $foreground; text-style: bold; margin-bottom: 1; }
+ResultsView #result-empty-description { height: auto; max-width: 80; margin-bottom: 1; }
+ResultsView.empty-index #result-index-panel { display: block; width: 100%; }
+ResultsView.empty-index #result-detail-panel { display: none; }
+ResultsView #result-index-panel, ResultsView #result-detail-panel { height: 1fr; border: none; padding: 0 1; }
+ResultsView #result-index-panel { width: 30%; min-width: 30; }
+ResultsView #result-detail-panel { border-left: solid $comparo-border; }
+ResultsView.lens-requests #result-index-panel { width: 48%; }
+ResultsView.wide.lens-requests #result-index-panel { width: 56%; }
+ResultsView.lens-rules #result-index-panel, ResultsView.lens-fields #result-index-panel { width: 46%; }
+ResultsView.wide.lens-timeline #result-index-panel { width: 60%; }
+ResultsView #result-filter { height: 1; border: none; margin: 1 0; }
+ResultsView #result-coverage { height: auto; color: $comparo-muted; }
+ResultsView Table { background: $background; scrollbar-size-horizontal: 0; }
+ResultsView Table > .datatable--cursor { background: $accent 15%; }
+ResultsView Table:focus > .datatable--cursor { background: $accent 22%; }
+ResultsView #result-context { height: auto; max-height: 2; margin-bottom: 1; color: $comparo-muted; }
+ResultsView #result-scroll { height: 1fr; }
+ResultsView #result-overview, ResultsView #result-evidence { height: auto; }
+ResultsView #result-group-title { height: auto; text-style: bold; margin-bottom: 1; }
+ResultsView #result-group-summary { height: auto; color: $comparo-muted; margin-bottom: 1; }
+ResultsView #result-related { height: auto; min-height: 3; max-height: 7; }
+ResultsView #result-occurrences-title, ResultsView #result-issues-title { height: auto; text-style: bold; margin-top: 1; }
+ResultsView #result-issue-links { height: auto; max-height: 4; }
+ResultsView #result-selection { height: auto; text-style: bold; border-top: solid $comparo-border; padding-top: 1; margin-top: 1; }
+ResultsView #result-lanes { height: auto; margin-bottom: 1; }
+ResultsView #result-detail-actions { height: auto; min-height: 2; max-height: 3; border-top: solid $comparo-border; padding-top: 1; scrollbar-size-horizontal: 0; }
+ResultsView #result-detail-actions Button.primary { background: $accent 20%; }
+ResultsView #result-links-title { height: 1; color: $comparo-muted; }
+ResultsView #result-evidence-links { height: auto; max-height: 4; }
+ResultsView #result-messages { height: auto; max-height: 3; }
+ResultsView #result-body-labels { height: auto; }
+ResultsView #result-body-labels Caption { width: 1fr; height: auto; text-style: bold; }
+ResultsView #result-body { height: 12; min-height: 6; }
+ResultsView #result-body-status { height: auto; color: $comparo-muted; max-height: 3; }
+ResultsView.body-focus #result-overview, ResultsView.body-focus #result-links-title,
+ResultsView.body-focus #result-evidence-links { display: none; }
+ResultsView.body-focus #result-body { height: 20; }
+ResultDetail { height: auto; }
+ResultDetail .result-heading { height: auto; text-style: bold; margin-bottom: 1; }
+ResultDetail .fact-columns { height: auto; padding: 1 0; border-top: solid $comparo-border; }
+ResultDetail .fact-columns > Vertical { width: 1fr; height: auto; padding-right: 2; }
+ResultDetail .result-section-title { height: 1; text-style: bold; color: $foreground; }
+ResultDetail KeyValueList { grid-columns: 12 1fr; }
+ResultDetail Disclosure { border: none; margin: 0; }
+ResultsView.compact #result-counts { max-height: 2; margin: 0; }
+ResultsView.compact #result-headline { margin: 0; }
+ResultsView.compact #result-index-panel { width: 100%; min-width: 0; height: 1fr; }
+ResultsView.compact #result-detail-panel { display: none; border: none; }
+ResultsView.compact.inspecting #result-index-panel { display: none; }
+ResultsView.compact.inspecting #result-detail-panel { display: block; width: 100%; height: 1fr; }
+ResultsView.compact ResultDetail .fact-columns { layout: vertical; }
+ResultsView.compact #result-context { margin: 0; max-height: 1; }
+ResultsView.compact #result-group-title { margin: 0; }
+ResultsView.compact #result-group-summary { margin: 0; }
+ResultsView.compact.detail-focus #result-related,
+ResultsView.compact.detail-focus #result-occurrences-title { display: none; }
+ResultsView.compact #result-detail-actions { padding: 0; min-height: 1; }
+
+ResultsView #result-group-title { color: $foreground; margin-bottom: 0; }
+ResultsView #result-group-summary { margin-bottom: 1; }
+ResultsView #result-occurrences-title, ResultsView #result-issues-title { color: $foreground; }
+ResultsView #result-request-rollup { height: auto; margin-bottom: 1; }
+ResultsView.lens-requests.comparison-selected #result-detail { display: none; }
+ResultDetail .result-heading { margin-bottom: 0; }
+ResultDetail .fact-columns { padding: 1 0 0 0; }
+ResultsView Menu { color: $foreground; background: $background; }
+ResultsView Menu > .option-list--option-highlighted { color: $foreground; background: $accent 15%; }
+ResultsView #result-headline { margin-bottom: 0; }
+ResultsView #result-counts { margin-bottom: 1; }
+
+ResultsView.body-focus #result-index-panel { display: none; }
+ResultsView.body-focus #result-detail-panel { width: 100%; border-left: none; }
+ResultsView #result-body-labels.single-body #result-body-left { width: 100%; }
+
+/* Standard terminals give the Requests comparison its full width; Enter opens its inspector. */
+ResultsView.standard.lens-requests #result-index-panel { width: 100%; }
+ResultsView.standard.lens-requests #result-detail-panel { display: none; }
+ResultsView.standard.lens-requests.inspecting #result-index-panel { display: none; }
+ResultsView.standard.lens-requests.inspecting #result-detail-panel { display: block; width: 100%; border-left: none; }
+ResultsView.standard.lens-requests.body-focus #result-detail-panel { display: block; width: 100%; }
+
+ResultsView.body-focus #result-evidence { height: 1fr; }
+ResultsView.body-focus #result-body { height: 1fr; }
+ResultsView.body-focus #result-selection { margin-top: 0; padding-top: 0; }

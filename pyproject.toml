@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "comparo"
 version = "0.2.0"
-description = "HTTP regression & diff testing across environments — TUI, headless CLI, and CI."
+description = "Validate HTTP assertions and semantic differences across environments."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
@@ -18,43 +18,94 @@ classifiers = [
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: Testing",
   "Topic :: Software Development :: Quality Assurance",
   "Typing :: Typed",
 ]
 dependencies = [
-  "msgspec>=0.19.0",
-  "ruamel.yaml>=0.18.0",
-  "httpx>=0.28.0",
-  "httpx-sse>=0.4.0",
-  "typer>=0.15.0",
-  "textual>=0.86.0",
-  "jsonschema>=4.23.0",
-  "packaging>=24.0",
+  "cyclopts>=4.20,<5",
+  "httpcore[asyncio,http2]>=1.0.9,<2",
+  "jsonschema>=4.24,<5",
+  "google-re2>=1.1,<2",
+  "msgspec>=0.21.1,<1",
+  "pyyaml>=6.0.3,<7",
+  "referencing>=0.36,<1",
+  "rich>=14.1,<15",
+  "textual>=8.2.5,<9",
 ]
+
+[project.scripts]
+comparo = "comparo.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/wbenbihi/comparo"
 Repository = "https://github.com/wbenbihi/comparo"
 Issues = "https://github.com/wbenbihi/comparo/issues"
 
-[project.scripts]
-comparo = "comparo.cli.app:run"
-
 [dependency-groups]
 dev = [
+  "hatchling==1.27.0",
+  "hypothesis>=6.135.0",
   "ruff>=0.9.0",
   "mypy>=1.14.0",
   "pytest>=8.3.0",
   "pytest-cov>=6.0.0",
   "import-linter>=2.1.0",
   "pre-commit>=4.0.0",
-  "python-semantic-release>=9.15.0",
-  "types-jsonschema>=4.23.0",
+  "python-semantic-release==10.6.1",
+  "types-pyyaml>=6.0.12.20250516",
+]
+
+[tool.hatch.build]
+# Defense in depth for both wheels and source distributions. VCS ignore rules remove known local
+# state; release verification compares concrete archive members with the reviewed Git index.
+ignore-vcs = false
+exclude = [
+  "/**/__pycache__",
+  "/**/*.py[cod]",
+  "/**/.env*",
+  "/**/*.pem",
+  "/**/*.key",
+  "/**/*.p12",
+  "/**/*.pfx",
+  "/**/*.credentials",
+  "/**/*-secret.*",
+  "/**/.claude/**",
+  "/**/.codex/**",
+  "/**/.agents/**",
+  "/**/.hypothesis/**",
+  "/**/.pytest_cache/**",
+  "/**/.mypy_cache/**",
+  "/**/.ruff_cache/**",
+  "/**/.coverage*",
+  "/**/htmlcov/**",
+  "/**/reports/**",
+  "/**/.reports/**",
+  "/**/runs/**",
+  "/**/internal*/**",
+  "/**/*deprecated*/**",
+  "/**/*.ignore.*",
+  "/**/*.deprecated.*",
+  "/.gitignore",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/comparo"]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.sdist]
+# The sdist is an installation artifact, not a repository snapshot. Tests, working documentation,
+# editor state, agent state, and deprecated sources are deliberately absent.
+include = [
+  "/src/comparo",
+  "/README.md",
+  "/LICENSE",
+  "/pyproject.toml",
+  "/hatch_build.py",
+]
 
 # ── Lint & format ───────────────────────────────────────────────────────────
 [tool.ruff]
@@ -71,12 +122,23 @@ select = [
   "N",   # pep8-naming
   "UP",  # pyupgrade
   "B",   # flake8-bugbear
+  "BLE", # flake8-blind-except
+  "C90", # mccabe complexity
   "C4",  # flake8-comprehensions
+  "DTZ", # flake8-datetimez
+  "G",   # flake8-logging-format
+  "LOG", # flake8-logging
+  "PERF",# perflint
+  "PIE", # flake8-pie
+  "RET", # flake8-return
+  "S",   # flake8-bandit
   "SIM", # flake8-simplify
+  "T20", # flake8-print
   "PTH", # flake8-use-pathlib
   "TID", # flake8-tidy-imports
   "RUF", # ruff-specific
   "D",   # pydocstyle — enforce presence + Google style (no missing docstrings)
+  "ANN401", # prohibit dynamically typed Any parameters
   "PT",  # flake8-pytest-style — functional-test hygiene
 ]
 
@@ -89,9 +151,7 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # Test functions and fakes are self-describing; require module docstrings only.
-"tests/*" = ["S101", "D102", "D103", "D107"]
-# The TUI uses design glyphs (×, ·, ▌, ╎, ●) that trip the confusable-unicode rule.
-"src/comparo/tui/*.py" = ["RUF001"]
+"tests/*" = ["S101", "S105", "S106", "S107", "D102", "D103", "D107"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -103,16 +163,21 @@ strict = true
 warn_unreachable = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+extra_checks = true
+enable_error_code = [
+  "explicit-override",
+  "ignore-without-code",
+  "mutable-override",
+  "possibly-undefined",
+]
 files = ["src", "tests"]
-
-[[tool.mypy.overrides]]
-module = ["ruamel.*"]
-ignore_missing_imports = true
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 source = ["comparo"]
@@ -121,33 +186,235 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+fail_under = 95
 
-# ── Architecture guard: core must not import interfaces/adapters ─────────────
+# ── Architecture guards ───────────────────────────────────────────────
 [tool.importlinter]
 root_package = "comparo"
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "Interfaces and adapters may depend on core; core depends on neither"
-type = "layers"
-layers = [
-  "comparo.cli",
-  "comparo.tui",
-  "comparo.adapters",
-  "comparo.core",
+name = "The domain must not import adapter frameworks"
+type = "forbidden"
+source_modules = ["comparo.core.domain"]
+forbidden_modules = [
+  "aiohttp",
+  "cyclopts",
+  "httpcore",
+  "httpx",
+  "jsonschema",
+  "requests",
+  "rich",
+  "ruamel",
+  "textual",
+  "typer",
+  "urllib3",
 ]
 
 [[tool.importlinter.contracts]]
-name = "Core must not import an HTTP library directly"
+name = "Evaluation engines must remain independently replaceable"
+type = "independence"
+modules = [
+  "comparo.core.assertions",
+  "comparo.core.diffs",
+  "comparo.core.gates",
+]
+
+[[tool.importlinter.contracts]]
+name = "Pure evaluation engines must not import adapter frameworks"
 type = "forbidden"
-source_modules = ["comparo.core"]
-forbidden_modules = ["httpx", "requests", "aiohttp", "urllib3", "httpcore"]
+source_modules = [
+  "comparo.core.assertions",
+  "comparo.core.diffs",
+  "comparo.core.evaluation",
+  "comparo.core.gates",
+]
+forbidden_modules = [
+  "aiohttp",
+  "cyclopts",
+  "httpcore",
+  "httpx",
+  "jsonschema",
+  "requests",
+  "rich",
+  "ruamel",
+  "textual",
+  "typer",
+  "urllib3",
+]
+
+[[tool.importlinter.contracts]]
+name = "The core configuration compiler must not import document or filesystem adapters"
+type = "forbidden"
+source_modules = ["comparo.core.configuration"]
+forbidden_modules = [
+  "comparo.configuration",
+  "pathlib",
+  "yaml",
+  "aiohttp",
+  "httpx",
+  "requests",
+  "urllib3",
+]
+
+[[tool.importlinter.contracts]]
+name = "Version frontends must remain independent of canonical compiler stages"
+type = "forbidden"
+source_modules = ["comparo.core.configuration.v1alpha1"]
+forbidden_modules = [
+  "comparo.core.configuration.canonical",
+  "comparo.core.configuration.compiler",
+  "comparo.configuration",
+]
+
+[[tool.importlinter.contracts]]
+name = "Deterministic planning must remain pure and adapter independent"
+type = "forbidden"
+source_modules = ["comparo.core.planning"]
+forbidden_modules = [
+  "comparo.configuration",
+  "aiohttp",
+  "asyncio",
+  "cyclopts",
+  "httpcore",
+  "httpx",
+  "os",
+  "pathlib",
+  "random",
+  "requests",
+  "rich",
+  "ruamel",
+  "textual",
+  "time",
+  "typer",
+  "urllib3",
+  "yaml",
+]
+
+[[tool.importlinter.contracts]]
+name = "Run-scoped resolution must use injected effects"
+type = "forbidden"
+source_modules = ["comparo.core.resolution"]
+forbidden_modules = [
+  "comparo.configuration",
+  "aiohttp",
+  "cyclopts",
+  "httpcore",
+  "httpx",
+  "os",
+  "pathlib",
+  "random",
+  "requests",
+  "rich",
+  "ruamel",
+  "secrets",
+  "textual",
+  "time",
+  "typer",
+  "urllib3",
+  "yaml",
+]
+
+[[tool.importlinter.contracts]]
+name = "The runtime must depend on ports instead of production or front-end adapters"
+type = "forbidden"
+source_modules = ["comparo.core.runtime"]
+forbidden_modules = [
+  "comparo.configuration",
+  "aiohttp",
+  "cyclopts",
+  "httpcore",
+  "httpx",
+  "os",
+  "pathlib",
+  "random",
+  "requests",
+  "rich",
+  "ruamel",
+  "textual",
+  "time",
+  "typer",
+  "urllib3",
+  "yaml",
+]
+
+[[tool.importlinter.contracts]]
+name = "Persistable artifact DTOs must not depend on live run or secret domains"
+type = "forbidden"
+source_modules = [
+  "comparo.core.artifacts.codec",
+  "comparo.core.artifacts.common",
+  "comparo.core.artifacts.facts",
+  "comparo.core.artifacts.http",
+  "comparo.core.artifacts.lifecycle",
+  "comparo.core.artifacts.model",
+  "comparo.core.artifacts.values",
+]
+forbidden_modules = [
+  "comparo.adapters",
+  "comparo.core.domain.http",
+  "comparo.core.domain.sensitivity",
+  "comparo.core.planning",
+  "comparo.core.resolution",
+  "comparo.core.runtime",
+]
+
+[[tool.importlinter.contracts]]
+name = "Reporters consume only safe artifacts and have no runtime or adapter effects"
+type = "forbidden"
+source_modules = ["comparo.reporters"]
+forbidden_modules = [
+  "comparo.adapters",
+  "comparo.configuration",
+  "comparo.core.domain.http",
+  "comparo.core.domain.sensitivity",
+  "comparo.core.planning",
+  "comparo.core.resolution",
+  "comparo.core.runtime",
+  "asyncio",
+  "cyclopts",
+  "httpcore",
+  "os",
+  "pathlib",
+  "requests",
+  "rich",
+  "textual",
+  "typer",
+  "urllib3",
+  "yaml",
+]
+
+[[tool.importlinter.contracts]]
+name = "Artifact reference contracts remain pure and independently reusable"
+type = "forbidden"
+source_modules = ["comparo.application.artifact_references"]
+forbidden_modules = [
+  "comparo.adapters",
+  "comparo.application.artifacts",
+  "comparo.core",
+  "comparo.reporters",
+  "asyncio",
+  "os",
+  "pathlib",
+]
+
+[[tool.importlinter.contracts]]
+name = "Application services remain independent from terminal frontends"
+type = "forbidden"
+source_modules = ["comparo.application"]
+forbidden_modules = [
+  "comparo.cli",
+  "comparo.tui",
+  "cyclopts",
+  "rich",
+  "textual",
+]
 
 # ── Release automation (Angular commits → semantic release) ──────────────────
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 commit_parser = "conventional"
-build_command = "pip install uv && uv build"
+build_command = "uv lock --upgrade-package comparo && git add uv.lock && uv build"
 # Pre-1.0: keep every release in the 0.x line. allow_zero_version keeps 0.x
 # versions (never forcing a 1.0.0 minimum), and major_on_zero = false means even
 # a breaking change bumps the minor (0.x -> 0.(x+1)) instead of leaping to 1.0.0

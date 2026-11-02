@@ -1,0 +1,1 @@
+"""Sanitized artifact adapter tests."""

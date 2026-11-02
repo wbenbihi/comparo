@@ -1,0 +1,136 @@
+# Core and backend codebase guide
+
+This directory is the golden technical reference for Comparo's **current core and backend**. It
+describes the working tree as it exists, not only the intended architecture recorded by the
+roadmap and ADRs. Application contracts remain the source of truth for backend behavior. The canonical
+`src/comparo/tui` package consumes these contracts through its component-based frontend.
+
+Documentation reconciled with the working tree: **2026-10-31**, on the `refactor` branch.
+See [current status](../status.md) for implemented UI coverage, backend-only features, and limits.
+
+## How to read this guide
+
+Comparo exposes capabilities at four different levels. Treating them as interchangeable is the
+main source of false assumptions about what a frontend can do.
+
+| Level | Meaning | Example |
+| --- | --- | --- |
+| Modeled | Immutable domain types can represent the concept | Typed HTTP bodies, retries, SSE, and Scenario scopes exist |
+| Compiled | `comparo/v1alpha1` accepts and links the authored syntax | A Scenario or remote `responseSchema` can compile |
+| Executable | The production composition lowers the compiled graph and performs the behavior | Requests execute; Scenarios are rejected before effects |
+| Inspectable | A frontend-neutral application service exposes a safe projection | The plan, archive, resolved fields, and results are inspectable |
+
+A feature is usable by a new TUI only when every required stage is executable **and** an
+appropriate application projection exists. Domain support by itself is not a product feature.
+
+## Documents
+
+- [Architecture and boundaries](architecture.md) explains dependency direction, state ownership,
+  security boundaries, and the composition roots.
+- [Data and execution pipelines](pipelines.md) traces configuration from YAML through compilation,
+  planning, resolution, HTTP execution, evaluation, artifacts, and reports.
+- [Frontend capability audit](frontend-capability-audit.md) maps backend capabilities to current
+  CLI/TUI coverage and remaining frontend work.
+  It marks each expected Explorer, Compare, live-run, and Report capability as supported,
+  partial, or missing.
+- [TUI/backend integration contract](tui-backend-integration.md) is the detailed callable API and
+  information-design reference. It maps every TUI surface to application DTOs, lifecycle rules,
+  paging, cancellation, safety guarantees, and current limitations.
+- [TUI resource component contract](tui-resource-components.md) documents the implemented
+  Explorer navigation boundary, representation state, kind-widget registry, action flow, and the
+  procedure for adding resource kinds without coupling widgets to backend effects.
+- [TUI Launch](tui-launch.md) documents configuration, plan review, execution, controls,
+  shared components, and result inspection.
+- [TUI Settings](tui-settings.md) documents persistent presentation preferences, shortcut remapping,
+  and the actual execution-context/version header.
+- [TUI Reports](tui-reports.md) documents the saved-run archive, filters, preview, export,
+  and reuse of the shared Analyze view.
+- [Application API reference](application-api-reference.md) is the frontend-neutral golden contract
+  for project, preparation, current run, terminal result, archive, and body access. Use it before
+  adding any presentation adapter.
+- [Module catalog](module-catalog.md) maps backend packages/modules and the canonical terminal
+  adapter's ownership boundaries to their purpose.
+- [Contributor workflow](contributor-workflow.md) shows where to start, how to trace a feature,
+  which invariants must remain true, and how the repository is verified.
+
+The [accepted ADRs](../decisions/README.md) remain authoritative for product intent. The
+[refactor roadmap](../core-refactor-roadmap.md) remains authoritative for sequencing. When either
+document claims a broad engine capability, this guide records whether that capability is wired
+through the current configuration and production application path.
+
+## Product in one paragraph
+
+Comparo validates HTTP behavior across environments. A project declares reusable Requests,
+Environments, matrices, values, assertion profiles, diff profiles, gates, and execution defaults.
+A frontend selects an assertions-only or baseline-to-candidates topology. Comparo compiles and
+links the project, constructs a deterministic bounded plan, resolves scoped values, executes each
+environment occurrence, evaluates assertions and directed binary diffs, reduces the facts through
+a gate, sanitizes the run, and optionally persists a versioned report artifact. The canonical
+promise is cross-environment validation—not replaying captured traffic.
+
+## Current production-shaped vertical slice
+
+The production composition executes `Request` resources across one or more Environments. It
+supports run-scoped method/URL/endpoint/header/query/cookie/auth/body resolution, Environment HTTP
+overlays, request policy fields, ordinary and SSE response views, local and authorized remote JSON
+Schemas, the typed assertion catalog, semantic diff pipelines, configurable gates, and attached
+Safety/Redaction/Artifact profiles. Matrices, case filters, trials, baseline-to-many comparisons,
+bounded concurrency, cancellation, artifacts, reporters, and typed invocation overlays all use the
+same planner/runtime path.
+
+The intentionally unsupported product areas are stateful `Scenario` execution, WebSocket/gRPC,
+browser automation, and community plugin hosting/external judges. They remain modeled extension
+seams where useful, but fail before external effects if selected.
+
+The [capability audit](frontend-capability-audit.md) gives the complete frontend consequences.
+
+## Authoritative application entry points
+
+New backend capabilities should begin with `comparo.application`, not internal core objects.
+TUI components consume these services through the existing `TuiBackend` and shared components.
+
+The complete call/lifecycle guidance is in the
+[TUI/backend integration contract](tui-backend-integration.md). The compact table below is only an
+index.
+
+| Need | Application boundary |
+| --- | --- |
+| Load Explorer structure | `inspect_project_workspace` |
+| Read masked or explicitly exact YAML | `inspect_project_source` |
+| Read bounded effective structure | `inspect_effective_resource` |
+| Compile, authorize, and plan | `prepare_project_plan` |
+| Preview/save a manual ExecutionProfile | `profile_authoring.prepare_profile_document` / `save_profile_document` |
+| Build invocation/resource/request/profile overrides | `PlanningOptions` / `plan_project` |
+| Prepare and start Compare | `CompareService` |
+| Inspect a plan before execution | `PlanReviewInspection` and `inspect_plan` |
+| Resolve a safe outbound preview | `CompareService.preview_requests` (direct render functions are for headless composition) |
+| Discover/observe/cancel current and recent terminal runs | `RunService` over `ExecutionSession` |
+| Execute without the session facade | `execute_production` |
+| Project final results and sanitized HTTP metadata | `project_results` |
+| Page retained or archived result facts | `RunService.result_page` / `read_archived_result_page` |
+| Build Issues/Requests/Rules/Fields/Timeline lenses | `project_issues` / `project_requests` / `project_rules` / `project_fields` / `project_timeline` |
+| List persisted runs | `list_report_archive` |
+| Authenticate and inspect an artifact | `verify_artifact` / `inspect_artifact` |
+| Read a sanitized body by result coordinates | `read_artifact_body_window` |
+| Explore authenticated JSON/SSE structure | `read_artifact_structured_body_page` |
+| Export a secret-safe cURL | `export_artifact_curl` |
+| Query paginated report history | `query_report_archive` |
+| Plan/apply/restore report retention | `plan_report_retention` / `apply_report_retention` / `restore_report` |
+| Present safe human guidance | `present_diagnostic` |
+| Export a report | `render_artifact_report` |
+
+These boundaries return immutable renderer-independent DTOs, sanitized values, or closed error
+codes. A frontend must not render `CompiledProject`, `PreparedRun`, live observations, provider
+exceptions, or `SensitiveValue` instances directly.
+
+## Versions that must not be conflated
+
+| Version | Current value | Owns |
+| --- | --- | --- |
+| Project language | `comparo/v1alpha1` | Authored resources and directives |
+| Planning defaults | `comparo.execution` version `2` | Default admission requests |
+| Runtime defaults | `comparo.runtime-defaults` version `1` | Capture-budget provenance |
+| Artifact schema | `comparo.artifact/v1alpha1` | Sanitized persisted run contract |
+
+Configuration compatibility and artifact compatibility are independent. A frontend should route
+on typed DTOs or explicit version fields and never infer one version from another.

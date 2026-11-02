@@ -1,0 +1,22 @@
+apiVersion: comparo/v1alpha1
+kind: Project
+metadata:
+  id: quickstart
+  name: Quickstart comparison
+  description: Small passing project for learning Explorer, Compare, and Report.
+  tags: [example, local, passing]
+spec:
+  data: .comparo
+  defaults:
+    subjects:
+      - $use: Request/health
+    baseline:
+      $use: baseline
+    candidates:
+      - $use: candidate
+    assertions:
+      - $use: http-success
+    diffs:
+      - $use: stable-status
+    gate:
+      $use: strict

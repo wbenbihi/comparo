@@ -1,0 +1,476 @@
+"""Shared safe scalar, identity, capture, and failure artifact contracts."""
+
+from __future__ import annotations
+
+import re
+from fractions import Fraction
+from math import gcd
+from typing import final
+from urllib.parse import urlsplit
+
+import msgspec
+
+from comparo.core.domain.enums import DomainStrEnum
+
+ARTIFACT_API_VERSION = "comparo.artifact/v1alpha1"
+SANITIZER_VERSION = "comparo.sanitizer/v1alpha1"
+CREDENTIAL_CATALOG_VERSION = "comparo.credentials/v1alpha1"
+ARTIFACT_REDACTION_MARKER = "<redacted>"
+_STABLE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+~-]*")
+
+
+def require_text(value: object, *, label: str, maximum: int = 512) -> None:
+    """Require exact bounded non-empty text."""
+    if type(value) is not str or not value or len(value) > maximum:
+        raise ValueError(f"{label} must be bounded non-empty text")
+    require_unicode_scalars(value, label=label)
+
+
+def require_unicode_scalars(value: str, *, label: str) -> None:
+    """Reject unpaired surrogates that cannot cross a UTF-8 JSON boundary."""
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise ValueError(f"{label} must contain Unicode scalar values")
+
+
+def require_stable_token(value: object, *, label: str, maximum: int = 128) -> None:
+    """Require a bounded ASCII occurrence token safe for storage and local routing."""
+    require_text(value, label=label, maximum=maximum)
+    if type(value) is not str:
+        raise AssertionError("text validation guarantees an exact string")
+    if _STABLE_TOKEN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be a stable ASCII token")
+
+
+def require_sha256(value: object, *, label: str) -> None:
+    """Require one lowercase SHA-256 digest for this artifact API version."""
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{label} must be lowercase SHA-256")
+
+
+def require_count(value: object, *, label: str) -> None:
+    """Require an exact non-negative integer and reject bool."""
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+
+
+class ArtifactCompletionKind(DomainStrEnum):
+    """Terminal run lifecycle states retained independently from the gate."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    INTERNAL_ERROR = "internal-error"
+
+
+class ArtifactGateVerdict(DomainStrEnum):
+    """Persistable gate verdicts that never collapse absence into success."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    NOT_REQUESTED = "not-requested"
+
+
+class ArtifactExecutionOutcome(DomainStrEnum):
+    """Terminal Environment execution states."""
+
+    OBSERVED = "observed"
+    UNAVAILABLE = "unavailable"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
+
+
+class ArtifactComparisonOutcome(DomainStrEnum):
+    """Terminal directed comparison states."""
+
+    EVALUATED = "evaluated"
+    INCOMPLETE = "incomplete"
+
+
+class ArtifactFactEngine(DomainStrEnum):
+    """Pure engines from which artifact facts originate."""
+
+    ASSERTION = "assertion"
+    DIFF = "diff"
+
+
+class ArtifactFactOutcome(DomainStrEnum):
+    """Closed reporter-facing fact outcomes across both pure engines."""
+
+    SATISFIED = "satisfied"
+    VIOLATED = "violated"
+    SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
+    EQUIVALENT = "equivalent"
+    DRIFTED = "drifted"
+    INCOMPLETE = "incomplete"
+    ERROR = "error"
+    NOT_EVALUATED = "not-evaluated"
+
+
+class ArtifactSeverity(DomainStrEnum):
+    """Normalized severity retained without importing live gate types."""
+
+    BLOCKING = "blocking"
+    WARNING = "warning"
+    INFO = "info"
+
+
+class ArtifactCaptureExtent(DomainStrEnum):
+    """Truthful persistence extent of one authored or observed source."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    OMITTED = "omitted"
+
+
+class ArtifactSourceCaptureState(DomainStrEnum):
+    """Truth about the transient source before artifact policy is applied."""
+
+    COMPLETE = "complete"
+    REMOTE_TRUNCATED = "remote-truncated"
+    BUDGET_EXCEEDED = "budget-exceeded"
+    STORAGE_FAILED = "storage-failed"
+    CANCELLED = "cancelled"
+    READ_FAILED = "read-failed"
+    IDLE_TIMEOUT = "idle-timeout"
+    CONTENT_DECODING_FAILED = "content-decoding-failed"
+    POLICY_OMITTED = "policy-omitted"
+    EXPLICITLY_TRUNCATED = "explicitly-truncated"
+
+
+class ArtifactOmissionReason(DomainStrEnum):
+    """Value-free reasons sanitized capture could not be persisted completely."""
+
+    POLICY = "policy"
+    SOURCE_UNAVAILABLE = "source-unavailable"
+    SOURCE_INCOMPLETE = "source-incomplete"
+    REDACTION_FAILED = "redaction-failed"
+    DECODE_FAILED = "decode-failed"
+    BUDGET_EXCEEDED = "budget-exceeded"
+    STORAGE_FAILED = "storage-failed"
+    CANCELLED = "cancelled"
+
+
+class ArtifactAmountUnit(DomainStrEnum):
+    """Exact units retained for resource-budget accounting."""
+
+    COUNT = "count"
+    BYTES = "bytes"
+    NANOSECONDS = "nanoseconds"
+    RATIO = "ratio"
+
+
+@final
+class ArtifactDefinition(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Safe canonical identity and fingerprint of one authored definition."""
+
+    namespace: str
+    kind: str
+    resource_id: str
+    fingerprint: str
+
+    def __post_init__(self) -> None:
+        """Require bounded structural definition coordinates."""
+        for value, label, maximum in (
+            (self.namespace, "definition namespace", 63),
+            (self.kind, "definition kind", 63),
+            (self.resource_id, "definition resource ID", 255),
+        ):
+            require_text(value, label=label, maximum=maximum)
+        require_sha256(self.fingerprint, label="definition fingerprint")
+
+
+@final
+class ArtifactMetadata(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Version and occurrence identity fixed before rendering or persistence."""
+
+    artifact_id: str
+    run_id: str
+    invocation_id: str
+    created_unix_nanoseconds: int
+    tool_name: str
+    tool_version: str
+    configuration_api_version: str
+    sanitizer_version: str = SANITIZER_VERSION
+    credential_catalog_version: str = CREDENTIAL_CATALOG_VERSION
+
+    def __post_init__(self) -> None:
+        """Require deterministic, bounded metadata without ambient derivation."""
+        for value, label, maximum in (
+            (self.artifact_id, "artifact ID", 63),
+            (self.run_id, "run ID", 64),
+            (self.invocation_id, "invocation ID", 64),
+            (self.tool_name, "tool name", 63),
+            (self.tool_version, "tool version", 63),
+            (self.configuration_api_version, "configuration API version", 127),
+            (self.sanitizer_version, "sanitizer version", 127),
+            (self.credential_catalog_version, "credential catalog version", 127),
+        ):
+            if label in {"artifact ID", "run ID", "invocation ID"}:
+                require_stable_token(value, label=label, maximum=maximum)
+            else:
+                require_text(value, label=label, maximum=maximum)
+        if type(self.created_unix_nanoseconds) is not int:
+            raise TypeError("artifact creation instant must be integer nanoseconds")
+
+
+@final
+class ArtifactProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Safe reproducibility identities retained independently of live configuration."""
+
+    project: ArtifactDefinition
+    execution_policy: ArtifactDefinition
+    artifact_profile: ArtifactDefinition | None
+    redaction_profile: ArtifactDefinition | None
+    configuration_fingerprint: str
+    plan_fingerprint: str
+    ordering: str
+    execution_profile: ArtifactDefinition | None = None
+
+    def __post_init__(self) -> None:
+        """Require project, operator authority, and exact plan semantics."""
+        if type(self.project) is not ArtifactDefinition:
+            raise TypeError("artifact provenance requires a project definition")
+        if type(self.execution_policy) is not ArtifactDefinition:
+            raise TypeError("artifact provenance requires an ExecutionPolicy definition")
+        for profile, label in (
+            (self.execution_profile, "ExecutionProfile"),
+            (self.artifact_profile, "ArtifactProfile"),
+            (self.redaction_profile, "RedactionProfile"),
+        ):
+            if profile is not None and type(profile) is not ArtifactDefinition:
+                raise TypeError(f"artifact provenance {label} must be an ArtifactDefinition")
+        require_sha256(self.configuration_fingerprint, label="configuration fingerprint")
+        require_sha256(self.plan_fingerprint, label="plan fingerprint")
+        require_text(self.ordering, label="plan ordering", maximum=127)
+
+
+@final
+class ArtifactVcsProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Optional sanitized source-control coordinates supplied by the invocation."""
+
+    provider: str
+    repository: str
+    revision: str
+    branch: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded provider, repository, revision, and optional branch text."""
+        for value, label, maximum in (
+            (self.provider, "VCS provider", 63),
+            (self.repository, "VCS repository", 1024),
+            (self.revision, "VCS revision", 255),
+        ):
+            require_text(value, label=label, maximum=maximum)
+        if self.branch is not None:
+            require_text(self.branch, label="VCS branch", maximum=255)
+
+
+@final
+class ArtifactCiProvenance(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Optional sanitized CI occurrence coordinates supplied by the invocation."""
+
+    provider: str
+    run_id: str
+    job: str | None = None
+    url: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require bounded coordinates and a query-free HTTP(S) link when present."""
+        require_text(self.provider, label="CI provider", maximum=63)
+        require_text(self.run_id, label="CI run ID", maximum=255)
+        if self.job is not None:
+            require_text(self.job, label="CI job", maximum=255)
+        if self.url is not None:
+            require_text(self.url, label="CI URL", maximum=2048)
+            parsed = urlsplit(self.url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("CI URL must be an absolute credential- and query-free HTTP URL")
+
+
+@final
+class ArtifactRunAnnotations(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Sanitized optional user, VCS, and CI context retained with one run."""
+
+    title: str | None = None
+    notes: str | None = None
+    tags: tuple[str, ...] = ()
+    vcs: ArtifactVcsProvenance | None = None
+    ci: ArtifactCiProvenance | None = None
+    redaction_count: int = 0
+
+    def __post_init__(self) -> None:
+        """Require bounded immutable annotations and explicit sanitization evidence."""
+        if self.title is not None:
+            require_text(self.title, label="run title", maximum=255)
+        if self.notes is not None:
+            require_text(self.notes, label="run notes", maximum=16_384)
+        if type(self.tags) is not tuple or any(
+            type(item) is not str or not item or len(item) > 127 for item in self.tags
+        ):
+            raise ValueError("run tags must be immutable bounded non-empty text")
+        if len(self.tags) > 128 or len(set(self.tags)) != len(self.tags):
+            raise ValueError("run tags must be bounded and unique")
+        if self.vcs is not None and type(self.vcs) is not ArtifactVcsProvenance:
+            raise TypeError("run VCS provenance must be typed or absent")
+        if self.ci is not None and type(self.ci) is not ArtifactCiProvenance:
+            raise TypeError("run CI provenance must be typed or absent")
+        require_count(self.redaction_count, label="run annotation redaction count")
+
+
+@final
+class ArtifactMetric(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """One named non-negative exact count."""
+
+    name: str
+    value: int
+
+    def __post_init__(self) -> None:
+        """Require a bounded name and exact non-negative integer."""
+        require_text(self.name, label="artifact metric name", maximum=63)
+        require_count(self.value, label="artifact metric value")
+
+
+@final
+class ArtifactAmount(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """One exact non-negative budget amount without lossy unit conversion."""
+
+    unit: ArtifactAmountUnit
+    numerator: int
+    denominator: int = 1
+
+    def __post_init__(self) -> None:
+        """Require a reduced-shape positive denominator and unit coherence."""
+        if type(self.unit) is not ArtifactAmountUnit:
+            raise TypeError("artifact amount unit must be typed")
+        require_count(self.numerator, label="artifact amount numerator")
+        if type(self.denominator) is not int or self.denominator <= 0:
+            raise ValueError("artifact amount denominator must be a positive integer")
+        if self.unit is not ArtifactAmountUnit.RATIO and self.denominator != 1:
+            raise ValueError("non-ratio artifact amounts require denominator one")
+        if self.unit is ArtifactAmountUnit.RATIO and gcd(self.numerator, self.denominator) != 1:
+            raise ValueError("ratio artifact amounts must use reduced terms")
+
+    @property
+    def fraction(self) -> Fraction:
+        """Return the exact comparison value without exposing a wire dependency."""
+        return Fraction(self.numerator, self.denominator)
+
+
+@final
+class ArtifactBudget(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """One effective budget and its final value-free accounting snapshot."""
+
+    resource: str
+    scope: str
+    limit: ArtifactAmount
+    used: ArtifactAmount
+    exhausted: bool
+
+    def __post_init__(self) -> None:
+        """Require a bounded identity and coherent non-negative accounting."""
+        require_text(self.resource, label="artifact budget resource", maximum=127)
+        require_text(self.scope, label="artifact budget scope", maximum=255)
+        if type(self.limit) is not ArtifactAmount or type(self.used) is not ArtifactAmount:
+            raise TypeError("artifact budget amounts must be typed")
+        if self.limit.unit is not self.used.unit:
+            raise ValueError("artifact budget amounts must use one unit")
+        if type(self.exhausted) is not bool:
+            raise TypeError("artifact budget exhausted marker must be bool")
+        if self.exhausted != (self.used.fraction >= self.limit.fraction):
+            raise ValueError("artifact budget exhaustion must match its accounting")
+
+
+def require_metrics(metrics: object, *, label: str) -> None:
+    """Require unique, name-sorted immutable artifact metrics."""
+    if type(metrics) is not tuple or any(type(item) is not ArtifactMetric for item in metrics):
+        raise TypeError(f"{label} metrics must be immutable and typed")
+    names = tuple(item.name for item in metrics)
+    if len(set(names)) != len(names) or names != tuple(sorted(names)):
+        raise ValueError(f"{label} metric names must be unique and canonical")
+
+
+@final
+class ArtifactBlob(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Content-addressed sanitized blob metadata without any storage locator."""
+
+    sha256: str
+    byte_count: int
+    media_type: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require canonical digest, size, and optional safe media type."""
+        require_sha256(self.sha256, label="artifact blob digest")
+        require_count(self.byte_count, label="artifact blob byte count")
+        if self.media_type is not None:
+            require_text(self.media_type, label="artifact blob media type", maximum=255)
+
+
+@final
+class ArtifactCapture(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Truthful sanitized capture state for one body or evidence source."""
+
+    source_state: ArtifactSourceCaptureState
+    extent: ArtifactCaptureExtent
+    source_byte_count: int | None
+    blob: ArtifactBlob | None
+    reason: ArtifactOmissionReason | None = None
+    redaction_count: int = 0
+
+    def __post_init__(self) -> None:
+        """Prevent partial or omitted capture from masquerading as complete."""
+        if type(self.source_state) is not ArtifactSourceCaptureState:
+            raise TypeError("artifact source capture state must be typed")
+        if type(self.extent) is not ArtifactCaptureExtent:
+            raise TypeError("artifact capture extent must be typed")
+        if self.source_byte_count is not None:
+            require_count(self.source_byte_count, label="artifact source byte count")
+        if self.blob is not None and type(self.blob) is not ArtifactBlob:
+            raise TypeError("artifact capture blob must be ArtifactBlob")
+        if self.reason is not None and type(self.reason) is not ArtifactOmissionReason:
+            raise TypeError("artifact capture omission reason must be typed")
+        require_count(self.redaction_count, label="artifact redaction count")
+        _validate_capture_shape(self)
+
+
+def _validate_capture_shape(capture: ArtifactCapture) -> None:
+    """Keep persisted extent and source truth coherent."""
+    if capture.extent is ArtifactCaptureExtent.COMPLETE:
+        if capture.blob is None or capture.reason is not None:
+            raise ValueError("complete artifact capture requires only a blob")
+        if capture.source_state is not ArtifactSourceCaptureState.COMPLETE:
+            raise ValueError("incomplete source capture cannot become a complete artifact")
+    elif capture.reason is None:
+        raise ValueError("non-complete artifact capture requires an explicit reason")
+    if capture.extent is ArtifactCaptureExtent.PARTIAL and capture.blob is None:
+        raise ValueError("partial artifact capture requires a retained blob")
+    if capture.extent is ArtifactCaptureExtent.OMITTED and capture.blob is not None:
+        raise ValueError("omitted artifact capture cannot retain a blob or raw digest")
+
+
+@final
+class ArtifactFailure(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=True):
+    """Structured failure safe for persistence and presentation."""
+
+    stage: str
+    code: str
+    retryable: bool | None = None
+
+    def __post_init__(self) -> None:
+        """Retain bounded tokens instead of exception prose."""
+        require_text(self.stage, label="artifact failure stage", maximum=127)
+        require_text(self.code, label="artifact failure code", maximum=255)
+        if self.retryable is not None and type(self.retryable) is not bool:
+            raise TypeError("artifact retryable marker must be bool")

@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## Unreleased — rebuilt working tree (updated 2026-11-02)
+
+Target: **0.3.0 minor release**. See the [complete proposed release notes](docs/releases/0.3.0.md)
+for the changes since v0.2.0, migration notes and outstanding CI qualification.
+
+- Rebuilt the core, configuration/compiler, planner, HTTP execution, artifact/report and local CLI
+  paths around `comparo/v1alpha1` and frontend-neutral application contracts.
+- Promoted the component-based TUI (developed as TUI4) to `comparo.tui`; removed older terminal
+  implementations and retired versioned entry points/obsolete launch-limit flags.
+- Implemented Explore, Target/Plan/Run/Analyze, the Reports archive and shared result inspection.
+- Added persistent Settings and main-command shortcut remapping, plus actual context/version headers.
+- Added General as the first Settings section with package identity, source/license and build SHA;
+  wheels and source distributions retain the source revision and modified-source status.
+- Added Explore → Launch handoff and reviewed saving of manual targets as new ExecutionProfiles.
+- Added shared raw capture paging, JSON/SSE inspection and reviewed sanitized cURL copying.
+
+Package metadata still reads 0.2.0. This section describes the unreleased refactor, not a new release
+or a claim that the historical 0.2.0 package contains these features. See
+[current status](docs/status.md) for limits and remaining work. Entries below retain release history.
+
 ## v0.2.0 (2026-07-22)
 
 ### Bug Fixes

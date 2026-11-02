@@ -14,8 +14,11 @@ Steps or a minimal config that triggers it. Redact any secrets.
 **Expected behaviour**
 
 **Environment**
-- comparo version: `comparo --version`
+- comparo package version or commit:
 - Python version:
 - OS:
+- Terminal application and dimensions (for TUI issues):
+- Workspace and lifecycle state (Explore / Launch Target–Plan–Run–Analyze / Reports / Settings):
+- Custom shortcut/theme preferences, if relevant:
 
 **Additional context**

@@ -1,0 +1,111 @@
+apiVersion: comparo/v1alpha1
+kind: Schema
+metadata:
+  id: catalog-response
+  name: Catalog response schema
+  description: Local JSON Schema used to validate every catalog response before comparison.
+  tags: [schema, active, validation]
+spec:
+  type: object
+  required: [contractVersion, items]
+  properties:
+    contractVersion:
+      type: integer
+    items:
+      type: array
+---
+apiVersion: comparo/v1alpha1
+kind: Matrix
+metadata:
+  id: workflow-regions
+  name: Workflow regions
+  description: Future Scenario-only Matrix used to demonstrate multiple attachments.
+  tags: [matrix, scenario, future]
+spec:
+  cases:
+    - id: europe
+      values: {region: eu}
+    - id: americas
+      values: {region: us}
+---
+apiVersion: comparo/v1alpha1
+kind: Matrix
+metadata:
+  id: workflow-tiers
+  name: Workflow tiers
+  description: Second future Scenario-only Matrix for attachment-count presentation.
+  tags: [matrix, scenario, future]
+spec:
+  cases:
+    - id: free
+      values: {tier: free}
+    - id: pro
+      values: {tier: pro}
+---
+apiVersion: comparo/v1alpha1
+kind: Scenario
+metadata:
+  id: catalog-workflow
+  name: Catalog workflow
+  description: Future stateful journey visible in Explorer but intentionally not executable yet.
+  tags: [scenario, future, unbound]
+spec:
+  parameters:
+    catalogMode: preview
+  matrices:
+    - $use: Matrix/workflow-regions
+    - $use: Matrix/workflow-tiers
+  steps:
+    - id: check-health
+      request: health
+    - id: fetch-catalog
+      request: catalog
+      after: check-health
+---
+apiVersion: comparo/v1alpha1
+kind: SafetyProfile
+metadata:
+  id: local-read-only
+  name: Local read-only safety
+  description: Shared response-data classification attached to every local Environment.
+  tags: [safety, active, classification]
+spec:
+  classification:
+    responseBody: public
+    responseHeaders: [x-private]
+  schemas:
+    allowAny: false
+    sources:
+      - https://schemas.example.test/catalog.json
+---
+apiVersion: comparo/v1alpha1
+kind: RedactionProfile
+metadata:
+  id: demo-redaction
+  name: Demo redaction
+  description: Active project-level sanitization profile for future sensitive response headers.
+  tags: [redaction, active, sanitization]
+spec:
+  rules:
+    - id: private-response-header
+      selector: response.headers:x-private
+      action: remove
+  backstop: true
+---
+apiVersion: comparo/v1alpha1
+kind: ArtifactProfile
+metadata:
+  id: demo-artifacts
+  name: Demo artifacts
+  description: Active project-level profile retaining response bodies in persisted artifacts.
+  tags: [artifact, active, capture]
+spec:
+  capture:
+    requests: true
+    responses: true
+    bodies: true
+    evidence: false
+  storage:
+    persist: always
+    unsafeSource: reject-artifact
+  retention: {}

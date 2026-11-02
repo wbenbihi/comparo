@@ -1,0 +1,6 @@
+apiVersion: comparo/v1
+kind: Project
+metadata:
+  id: prototype-fixture
+  name: Prototype fixture
+spec: {}

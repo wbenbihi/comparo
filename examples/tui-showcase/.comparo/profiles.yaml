@@ -1,0 +1,151 @@
+apiVersion: comparo/v1alpha1
+kind: AssertionProfile
+metadata:
+  id: usable-response
+  name: Successful response
+  description: Require HTTP 200 across regular and streaming response shapes.
+  tags: [assertion, blocking, transport]
+spec:
+  rules:
+    - id: status-is-200
+      selector: response.status
+      operator:
+        name: equals
+        expected: 200
+      severity: blocking
+      quantifier: one
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: AssertionProfile
+metadata:
+  id: structured-response
+  name: Structured response checks
+  description: Demonstrates object selectors and presentation metadata without exposing operands.
+  tags: [assertion, structured, metadata]
+spec:
+  rules:
+    - id: request-id-present
+      name: Request ID header
+      description: Require at least one request identifier header value.
+      tags: [headers, contract]
+      selector:
+        source: response.headers
+        field:
+          name: x-request-id
+          occurrence: 0
+      operator:
+        name: cardinality
+        minimum: 1
+      quantifier: one
+      severity: warning
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: stable-status
+  name: Stable status
+  description: Exact HTTP status comparison shared by every Request.
+  tags: [diff, status, blocking]
+spec:
+  rules:
+    - id: status-is-stable
+      selector: response.status
+      comparator:
+        name: exact
+      severity: blocking
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: asymmetric-migration
+  name: Asymmetric migration
+  description: Compares differently shaped legacy and current response locations.
+  tags: [diff, migration, asymmetric]
+spec:
+  rules:
+    - id: legacy-to-current
+      name: Migrated payload
+      description: Normalize legacy text before comparing it with the current field.
+      tags: [migration, normalization]
+      transforms:
+        - name: normalizeText
+          trim: both
+      baseline:
+        selector:
+          source: response.body
+          view: json
+          path: /legacy
+      candidate:
+        selector:
+          source: response.body
+          view: json
+          path: /current
+        transforms: []
+      pairing: singular
+      comparator: exact
+      severity: blocking
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: exact-body
+  name: Exact body
+  description: Strict decoded JSON comparison for Requests where value drift matters.
+  tags: [diff, body, blocking]
+spec:
+  rules:
+    - id: body-is-exact
+      selector: response.body
+      comparator:
+        name: exact
+      severity: blocking
+      completeness: complete
+---
+apiVersion: comparo/v1alpha1
+kind: GateProfile
+metadata:
+  id: strict
+  name: Strict gate
+  description: Reduce blocking evaluation facts into a release verdict.
+  tags: [gate, release]
+spec:
+  severities: [blocking]
+  environmentRoles: [baseline, candidate, other]
+  requireCompleteRun: true
+  requireAssertionCoverage: true
+  requireDiffCoverage: false
+  thresholds:
+    - severity: blocking
+      violatedRules: 0
+      driftedRules: 0
+      unavailableRules: 0
+      incomparableRules: 0
+      incompleteRules: 0
+      errorRules: 0
+---
+apiVersion: comparo/v1alpha1
+kind: DiffProfile
+metadata:
+  id: equivalent-stream-content
+  name: Equivalent stream content
+  description: Projects JSON-bearing SSE data to text and compares concatenated semantic content.
+  tags: [diff, stream, sse, semantic]
+spec:
+  rules:
+    - id: concatenated-text-is-stable
+      selector: stream.events.data-json
+      transforms:
+        - name: streamProject
+          source: sse-json-data
+          path: /text
+      reducer:
+        name: concatenate
+        separator: ""
+      comparator:
+        name: exact
+      severity: blocking
+      completeness: complete

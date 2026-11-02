@@ -1,0 +1,19 @@
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: baseline
+  name: Baseline
+  description: Stable side of the local comparison.
+  tags: [baseline, local]
+spec:
+  baseUrl: http://127.0.0.1:18080/baseline
+---
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata:
+  id: candidate
+  name: Candidate
+  description: Candidate side of the local comparison.
+  tags: [candidate, local]
+spec:
+  baseUrl: http://127.0.0.1:18080/candidate

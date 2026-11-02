@@ -1,0 +1,238 @@
+"""Tests for typed capability requests and authority decisions."""
+
+import pytest
+
+from comparo.core.domain.capabilities import CapabilityCategory
+from comparo.core.domain.capabilities import CapabilityDenialReason
+from comparo.core.domain.capabilities import CapabilityDenied
+from comparo.core.domain.capabilities import CapabilityGranted
+from comparo.core.domain.capabilities import CapabilityId
+from comparo.core.domain.capabilities import CapabilityOperation
+from comparo.core.domain.capabilities import CapabilityRequest
+from comparo.core.domain.capabilities import CapabilityTargetKind
+from comparo.core.domain.capabilities import ExecutionPolicyAuthority
+from comparo.core.domain.capabilities import NamedCapabilityTarget
+from comparo.core.domain.identity import DefinitionRef
+from comparo.core.domain.identity import NamespaceId
+from comparo.core.domain.identity import ResourceId
+from comparo.core.domain.identity import ResourceIdentity
+from comparo.core.domain.identity import ResourceKind
+from comparo.core.domain.primitives import Fingerprint
+from comparo.core.domain.primitives import Sha256Digest
+
+
+def _capability_id() -> CapabilityId:
+    return CapabilityId(namespace="comparo.http", name="request", version="1")
+
+
+def _operation() -> CapabilityOperation:
+    return CapabilityOperation(value="send.request")
+
+
+def _definition(kind: ResourceKind = ResourceKind.EXECUTION_POLICY) -> DefinitionRef:
+    return DefinitionRef(
+        identity=ResourceIdentity(
+            namespace=NamespaceId(value="local"),
+            kind=kind,
+            resource_id=ResourceId(value="policy"),
+        ),
+        fingerprint=Fingerprint(
+            algorithm="sha256",
+            digest=Sha256Digest(hex_value="a" * 64),
+        ),
+    )
+
+
+def _authority() -> ExecutionPolicyAuthority:
+    return ExecutionPolicyAuthority(policy=_definition())
+
+
+def _request() -> CapabilityRequest:
+    return CapabilityRequest(
+        category=CapabilityCategory.HTTP,
+        capability_id=_capability_id(),
+        operation=_operation(),
+        target=NamedCapabilityTarget(
+            kind=CapabilityTargetKind.DESTINATION,
+            identifier="api.example.test:443",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("namespace", "name", "version"),
+    [
+        ("Bad", "request", "1"),
+        ("comparo", "bad_name", "1"),
+        ("comparo", "request", "v1"),
+        ("comparo", "request", "0"),
+        ("comparo", "request", chr(0x661)),
+        ("comparo", "request", "01"),
+        ("comparo", "request", 1),
+    ],
+)
+def test_capability_identity_rejects_ambiguous_values(
+    namespace: object,
+    name: object,
+    version: object,
+) -> None:
+    with pytest.raises(ValueError, match="capability"):
+        CapabilityId(namespace=namespace, name=name, version=version)  # type: ignore[arg-type]
+
+
+def test_capability_operation_requires_a_machine_token() -> None:
+    assert _operation().value == "send.request"
+    with pytest.raises(ValueError, match="lowercase dotted token"):
+        CapabilityOperation(value="send request")
+
+
+def test_named_target_is_a_non_payload_identifier() -> None:
+    target = NamedCapabilityTarget(
+        kind=CapabilityTargetKind.FILE_ROOT,
+        identifier="project-root",
+    )
+    assert target.identifier == "project-root"
+    with pytest.raises(TypeError, match="CapabilityTargetKind"):
+        NamedCapabilityTarget(kind="file-root", identifier="project-root")  # type: ignore[arg-type]
+    for invalid in (
+        " ",
+        "/Users/example/private",
+        "Bearer secret\nforged",
+        "target=value",
+        "a" * 256,
+    ):
+        with pytest.raises(ValueError, match="bounded structural token"):
+            NamedCapabilityTarget(
+                kind=CapabilityTargetKind.FILE_ROOT,
+                identifier=invalid,
+            )
+
+    schema_source = NamedCapabilityTarget(
+        kind=CapabilityTargetKind.SCHEMA_SOURCE,
+        identifier="https://schemas.example.test/public/schema.json",
+    )
+    assert schema_source.identifier.endswith("/schema.json")
+    for unsafe_url in (
+        "https://user:secret@schemas.example.test/schema.json",
+        "https://schemas.example.test/schema.json?token=secret",
+        "https://schemas.example.test/schema.json#private",
+        "http://schemas.example.test:not-a-port/schema.json",
+        "file:///private/schema.json",
+    ):
+        with pytest.raises(ValueError, match=r"alias or bounded HTTP\(S\) URL"):
+            NamedCapabilityTarget(
+                kind=CapabilityTargetKind.SCHEMA_SOURCE,
+                identifier=unsafe_url,
+            )
+
+    with pytest.raises(ValueError, match=r"alias or bounded HTTP\(S\) URL"):
+        NamedCapabilityTarget(
+            kind=CapabilityTargetKind.DESTINATION,
+            identifier=1,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="ResourceIdentity"):
+        NamedCapabilityTarget(
+            kind=CapabilityTargetKind.RESOURCE,
+            identifier="logical-resource",
+        )
+
+
+def test_capability_request_accepts_resource_and_named_targets() -> None:
+    resource = ResourceIdentity(
+        namespace=NamespaceId(value="local"),
+        kind=ResourceKind.SCHEMA,
+        resource_id=ResourceId(value="public-api"),
+    )
+    request = CapabilityRequest(
+        category=CapabilityCategory.REMOTE_SCHEMA,
+        capability_id=_capability_id(),
+        operation=_operation(),
+        target=resource,
+    )
+    assert request.target == resource
+    assert _request().category is CapabilityCategory.HTTP
+
+
+def test_capability_request_rejects_untyped_components() -> None:
+    capability_id = _capability_id()
+    operation = _operation()
+    with pytest.raises(TypeError, match="category"):
+        CapabilityRequest(
+            category="http",  # type: ignore[arg-type]
+            capability_id=capability_id,
+            operation=operation,
+        )
+    with pytest.raises(TypeError, match="capability ID"):
+        CapabilityRequest(
+            category=CapabilityCategory.HTTP,
+            capability_id="comparo.http/request/1",  # type: ignore[arg-type]
+            operation=operation,
+        )
+    with pytest.raises(TypeError, match="operation"):
+        CapabilityRequest(
+            category=CapabilityCategory.HTTP,
+            capability_id=capability_id,
+            operation="send",  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="target"):
+        CapabilityRequest(
+            category=CapabilityCategory.HTTP,
+            capability_id=capability_id,
+            operation=operation,
+            target="api.example.test",  # type: ignore[arg-type]
+        )
+
+
+def test_grant_and_denial_are_distinct_typed_decisions() -> None:
+    request = _request()
+    granted = CapabilityGranted(request=request, authority=_authority())
+    denied = CapabilityDenied(
+        request=request,
+        reason=CapabilityDenialReason.OUTSIDE_ALLOWED_TARGETS,
+        authority=_authority(),
+    )
+    assert granted.request == denied.request
+    assert denied.reason is CapabilityDenialReason.OUTSIDE_ALLOWED_TARGETS
+    assert isinstance(granted, CapabilityGranted)
+    assert isinstance(denied, CapabilityDenied)
+
+
+def test_capability_decisions_validate_request_reason_and_authority() -> None:
+    request = _request()
+    with pytest.raises(TypeError, match="CapabilityRequest"):
+        CapabilityGranted(request="request", authority=_authority())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="exact ExecutionPolicy"):
+        CapabilityGranted(request=request, authority=())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="CapabilityRequest"):
+        CapabilityDenied(
+            request="request",  # type: ignore[arg-type]
+            reason=CapabilityDenialReason.NOT_ALLOWED,
+            authority=_authority(),
+        )
+    with pytest.raises(TypeError, match="denial reason"):
+        CapabilityDenied(
+            request=request,
+            reason="not-allowed",  # type: ignore[arg-type]
+            authority=_authority(),
+        )
+    with pytest.raises(TypeError, match="exact ExecutionPolicy"):
+        CapabilityDenied(
+            request=request,
+            reason=CapabilityDenialReason.NOT_ALLOWED,
+            authority=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_capability_decisions_are_immutable() -> None:
+    decision = CapabilityGranted(request=_request(), authority=_authority())
+    with pytest.raises(AttributeError):
+        decision.authority = ()  # type: ignore[misc, assignment]
+
+
+def test_exact_policy_authority_requires_a_fingerprinted_execution_policy() -> None:
+    assert _authority().policy.fingerprint == _definition().fingerprint
+    with pytest.raises(TypeError, match="DefinitionRef"):
+        ExecutionPolicyAuthority(policy=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="ExecutionPolicy"):
+        ExecutionPolicyAuthority(policy=_definition(ResourceKind.PROJECT))

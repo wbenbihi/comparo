@@ -1,40 +1,62 @@
-# Examples
+# Comparo examples
 
-Runnable comparo projects, each built on a public echo/inspection service
-([httpbin](https://httpbin.org) or [postman-echo](https://postman-echo.com)) and focused on a
-different feature. Every valid project passes
-`comparo validate --config examples/<name>/comparo.yaml`; the broken one fails on purpose.
+These projects are runnable demonstrations of Comparo's current `comparo/v1alpha1` subset. They
+share a deterministic loopback service, so they do not require credentials, internet access, or a
+third-party API.
 
-| Project | What it exercises |
-| --- | --- |
-| [`sample-project`](sample-project) | the full tour — every object kind, and diffing across two environments |
-| [`matrix-project`](matrix-project) | **two matrices on one request** → cartesian expansion, plus **endpoint-path injection** (`/status/${code}`) |
-| [`canary-project`](canary-project) | a stable ⇄ canary **diff showcase** with one surgical regression, an AssertionProfile, and a release-gate ExecutionProfile |
-| [`postman-echo-project`](postman-echo-project) | an **exhaustive 1:1 reference** for the whole Postman Echo API — every method, status class, compression, streaming, cookies, `bodyType`, and all five diff modes |
-| [`sse-project`](sse-project) | **Server-Sent Events** — a bundled local SSE server whose two feeds differ by one event, so the diff catches it event-by-event (run `serve.py` first) |
-| [`auth-project`](auth-project) | **first-class Basic & Bearer auth** from masked secrets — environment-level default, per-request override, and an assert-only ExecutionProfile |
-| [`checks-project`](checks-project) | **status & schema assertions** that pass and fail — the Run screen's ASSERT column |
-| [`health-project`](health-project) | environments whose health resolves **green, orange, and red** |
-| [`broken-project`](broken-project) | a **menu of load errors** — the error screen and `comparo validate` diagnostics |
+## Start the demo service
 
-## Quick tour
+From the repository root, keep this process running in one terminal:
 
 ```console
-# the happy path
-comparo tui --config examples/sample-project/comparo.yaml
-
-# two matrices → six cells; press m to scope them
-comparo run --config examples/matrix-project/comparo.yaml --env prod
-
-# some assertions pass, some fail
-comparo run --config examples/checks-project/comparo.yaml --env prod
-
-# first-class Basic/Bearer auth from masked secrets — an assert-only CI gate
-comparo exec --config examples/auth-project/comparo.yaml execution.auth-smoke
-
-# probe health: green / orange / red
-comparo tui --config examples/health-project/comparo.yaml      # select an env, press h
-
-# see every diagnostic at once
-comparo validate --config examples/broken-project/comparo.yaml
+uv run --frozen python examples/support/demo_server.py
 ```
+
+It listens only on `127.0.0.1:18080` and exposes three logical Environment prefixes:
+`/baseline`, `/candidate`, and `/development`.
+
+## Choose a project
+
+| Project | Purpose | Expected comparison |
+| --- | --- | --- |
+| [`quickstart`](quickstart/README.md) | Smallest complete assertion and comparison project | Pass |
+| [`environment-drift`](environment-drift/README.md) | Mixed pass/fail results and Environment-local values | Fail deliberately |
+| [`tui-showcase`](tui-showcase/README.md) | Dense TUI catalog with 17 Request shapes, directives, two Matrices, local/inline/remote Schemas, profiles, safe failures, and a future Scenario | Two locale cells drift for the eu/pro audience |
+
+Open a project in a second terminal:
+
+```console
+uv run --frozen comparo tui --config examples/quickstart/comparo.yaml
+```
+
+Inside the TUI:
+
+- `1` opens Explore; select a Request or ExecutionProfile and press `c` to send it to Launch;
+- `2` opens Launch, where Ctrl+R prepares and Ctrl+X executes the reviewed plan;
+- Ctrl+K cancels execution; a completed Run stays visible until you choose Analyze results;
+- `3` opens Reports; saved results can be opened even after restarting the app;
+- `4` opens persistent Settings and `5` opens the component Debug gallery;
+- Ctrl+P opens the command palette and `q` quits outside text inputs.
+
+These are default keys; Settings can remap the main commands. Alt+1–5 selects Analyze lenses,
+`[` / `]` cycles them, and `i` opens paged raw/JSON/SSE captures and reviewed sanitized cURL.
+See [TUI controls](../docs/tui.md), including the macOS Option/Meta setup. Manual Launch targets
+can be saved as a new profile after a YAML preview. Example project writes are explicit.
+
+Executable profiles exercise current runtime capabilities. The larger showcase additionally keeps
+clearly tagged, unbound resources for schema-supported or future states—remote Schema acquisition,
+Request-local policy attachments, an unavailable credential, and Scenario—so Explorer can render
+them without pretending every declaration is executable today.
+
+## Headless equivalents
+
+Every project also works through the CLI:
+
+```console
+uv run --frozen comparo validate --config examples/quickstart/comparo.yaml
+uv run --frozen comparo plan --config examples/quickstart/comparo.yaml
+uv run --frozen comparo diff --config examples/quickstart/comparo.yaml
+```
+
+The loopback host and port are intentionally visible in each `Environment` resource. If port
+`18080` is unavailable, start the server on another non-privileged port and update those base URLs.

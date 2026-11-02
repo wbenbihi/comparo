@@ -1,0 +1,27 @@
+apiVersion: comparo/v1alpha1
+kind: Project
+metadata:
+  id: environment-drift
+  name: Environment drift
+  description: Local release gate with deliberate behavioral differences between Environments.
+  tags: [example, local, mixed-results]
+spec:
+  data: .comparo
+  defaults:
+    subjects:
+      - $use: Request/health
+      - $use: Request/release
+      - $use: Request/whoami
+      - $use: Request/degraded
+    baseline:
+      $use: baseline
+    candidates:
+      - $use: candidate
+    assertions:
+      - $use: usable-response
+    diffs:
+      - $use: stable-status
+    gate:
+      $use: strict
+    maximumAttempts: 1
+    failFast: false
