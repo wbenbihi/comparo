@@ -3,8 +3,9 @@
 The rebuilt implementation is proposed through a pull request from `refactor` to `main`.
 Versioning, tags, GitHub releases and PyPI publication belong to the repository's
 [Release workflow](../.github/workflows/release.yml), not a local publishing command.
-The next main-branch version is expected to be **0.3.0**; semantic-release determines the exact
-version from the merged Conventional Commits. Package metadata remains 0.2.0 until that workflow
+The target is the **0.3.0 minor release**, confirmed by a semantic-release no-operation preview.
+The existing pre-1.0 configuration keeps this history in the 0.x line; no major release is requested.
+See the [complete changes since v0.2.0](releases/0.3.0.md). Package metadata remains 0.2.0 until that workflow
 creates the version commit.
 
 ## Pull request validation

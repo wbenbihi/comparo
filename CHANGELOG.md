@@ -3,6 +3,9 @@
 
 ## Unreleased — rebuilt working tree (updated 2026-11-02)
 
+Target: **0.3.0 minor release**. See the [complete proposed release notes](docs/releases/0.3.0.md)
+for the changes since v0.2.0, migration notes and outstanding CI qualification.
+
 - Rebuilt the core, configuration/compiler, planner, HTTP execution, artifact/report and local CLI
   paths around `comparo/v1alpha1` and frontend-neutral application contracts.
 - Promoted the component-based TUI (developed as TUI4) to `comparo.tui`; removed older terminal
