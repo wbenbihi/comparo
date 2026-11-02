@@ -19,6 +19,7 @@ _EXPECTED_SDIST_INPUTS = {
     "/README.md",
     "/LICENSE",
     "/pyproject.toml",
+    "/hatch_build.py",
 }
 _REQUIRED_BUILD_EXCLUSIONS = {
     "/**/__pycache__",
@@ -75,6 +76,7 @@ def test_sdist_member_audit_rejects_untracked_working_and_sensitive_files() -> N
             PurePosixPath("comparo-0.2.0/PKG-INFO"),
             PurePosixPath("comparo-0.2.0/README.md"),
             PurePosixPath("comparo-0.2.0/pyproject.toml"),
+            PurePosixPath("comparo-0.2.0/hatch_build.py"),
             PurePosixPath("comparo-0.2.0/src/comparo/__init__.py"),
         }
     )
@@ -101,6 +103,7 @@ def test_sdist_audit_rejects_untracked_python_inside_the_package() -> None:
             PurePosixPath("comparo-0.2.0/PKG-INFO"),
             PurePosixPath("comparo-0.2.0/README.md"),
             PurePosixPath("comparo-0.2.0/pyproject.toml"),
+            PurePosixPath("comparo-0.2.0/hatch_build.py"),
             PurePosixPath("comparo-0.2.0/src/comparo/__init__.py"),
             PurePosixPath("comparo-0.2.0/src/comparo/untracked.py"),
         }
@@ -143,6 +146,7 @@ def test_distribution_audit_allows_only_exact_reviewed_security_module_paths() -
             PurePosixPath("comparo-0.2.0/PKG-INFO"),
             PurePosixPath("comparo-0.2.0/README.md"),
             PurePosixPath("comparo-0.2.0/pyproject.toml"),
+            PurePosixPath("comparo-0.2.0/hatch_build.py"),
             *(PurePosixPath("comparo-0.2.0/src") / member for member in package),
         }
     )
@@ -185,6 +189,7 @@ def test_reviewed_package_members_come_only_from_git_index(
         {
             PurePosixPath("comparo/__init__.py"),
             PurePosixPath("comparo/py.typed"),
+            PurePosixPath("comparo/_build_info.json"),
             PurePosixPath("comparo/schemas/comparo-report-v1alpha1.schema.json"),
             PurePosixPath("comparo/tui/styles/main.tcss"),
         }

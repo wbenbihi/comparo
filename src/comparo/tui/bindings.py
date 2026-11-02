@@ -30,10 +30,16 @@ RESOURCE_ACTION_KEYS: dict[str, str] = {
 def application_bindings() -> list[BindingType]:
     """Build global application and workspace bindings."""
     workspace_bindings = [
-        Binding(str(index), f'workspace("{screen.value}")', screen.value, show=False)
+        Binding(
+            str(index),
+            f'workspace("{screen.value}")',
+            screen.value,
+            show=False,
+            id=f"workspace.{screen.value.lower()}",
+        )
         for index, screen in enumerate(ComparoScreen, start=1)
     ]
-    return [Binding("q", "quit", "Quit"), *workspace_bindings]
+    return [Binding("q", "quit", "Quit", id="app.quit"), *workspace_bindings]
 
 
 def diff_view_bindings() -> list[BindingType]:
@@ -123,10 +129,42 @@ def launch_bindings() -> list[BindingType]:
             )
             for index in range(5)
         ),
-        Binding("ctrl+r", "prepare", "Prepare plan"),
-        Binding("ctrl+x", "run", "Run"),
-        Binding("ctrl+e", "edit", "Edit configuration"),
-        Binding("ctrl+k", "cancel", "Cancel run"),
+        Binding("ctrl+r", "prepare", "Prepare plan", id="launch.prepare"),
+        Binding("ctrl+x", "run", "Run", id="launch.run"),
+        Binding("ctrl+e", "edit", "Edit configuration", id="launch.edit"),
+        Binding("ctrl+k", "cancel", "Cancel run", id="launch.cancel"),
         Binding("o", "options", "Run options"),
         Binding("/", "focus_filter", "Filter"),
+    ]
+
+
+def analysis_bindings() -> list[BindingType]:
+    """Build remappable Analyze view controls and local navigation."""
+    return [
+        Binding(
+            "left_square_bracket",
+            "cycle_lens(-1)",
+            "Previous view",
+            key_display="[",
+            id="analyze.previous",
+        ),
+        Binding(
+            "right_square_bracket", "cycle_lens(1)", "Next view", key_display="]", id="analyze.next"
+        ),
+        *(
+            Binding(
+                f"alt+{index + 1}",
+                f"lens('{lens}')",
+                lens.title(),
+                show=False,
+                priority=True,
+                id=f"analyze.{lens}",
+            )
+            for index, lens in enumerate(("issues", "requests", "rules", "fields", "timeline"))
+        ),
+        Binding("/", "focus_filter", "Filter"),
+        Binding("g", "groups", "Groups"),
+        Binding("o", "occurrences", "Occurrences"),
+        Binding("e", "evidence", "Evidence"),
+        Binding("escape", "back", "Back"),
     ]

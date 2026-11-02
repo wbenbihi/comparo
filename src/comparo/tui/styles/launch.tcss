@@ -133,7 +133,7 @@ ResultsView #result-headline { text-style: bold; height: auto; margin-bottom: 1;
 ResultsView #result-counts { height: auto; margin-bottom: 1; }
 ResultsView #result-lenses { height: 2; border-bottom: solid $comparo-border; }
 ResultsView #result-lenses Button.primary { text-style: bold underline; }
-ResultsView #result-view-keys { height: 1; padding: 0 1; color: $comparo-muted; }
+ResultsView #result-view-keys { height: auto; padding: 0 1; color: $comparo-muted; }
 ResultsView #result-empty { height: 1fr; padding: 1; }
 ResultsView #result-empty-title { height: auto; color: $foreground; text-style: bold; margin-bottom: 1; }
 ResultsView #result-empty-description { height: auto; max-width: 80; margin-bottom: 1; }

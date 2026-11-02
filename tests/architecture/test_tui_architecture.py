@@ -133,7 +133,13 @@ def test_tui_never_imports_live_secrets_or_traceback_renderers() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 name = _call_name(node)
-                if name is not None and name.rpartition(".")[2] in _UNSAFE_CALLS:
+                # The bounded user-preferences reader is the sole presentation-owned file read.
+                preference_read = path == _TUI / "preferences.py" and name == "path.open"
+                if (
+                    name is not None
+                    and name.rpartition(".")[2] in _UNSAFE_CALLS
+                    and not preference_read
+                ):
                     violations.append(f"{path.relative_to(_ROOT)}:{node.lineno}:{name}")
     assert violations == []
 

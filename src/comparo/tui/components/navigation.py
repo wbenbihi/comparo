@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version
 from typing import override
 
 from textual.app import App
@@ -10,6 +12,7 @@ from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Static
 
+from comparo.tui.shortcuts import shortcut_label
 from comparo.tui.states import AppState
 from comparo.tui.types import ComparoScreen
 
@@ -35,7 +38,9 @@ class NavTab(Static):
     def display_name(self) -> str:
         """Text display in TUI."""
         if self.index is not None:
-            return f"{self.index}. {self.tab.value.upper()}"
+            return (
+                f"{shortcut_label('workspace.' + self.tab.value.lower())}. {self.tab.value.upper()}"
+            )
         return self.tab.value.upper()
 
     def on_click(self) -> None:
@@ -75,5 +80,18 @@ class NavHelper(Horizontal):
     @override
     def compose(self) -> ComposeResult:
         """Helpers."""
-        yield Static("env: DEV")
-        yield Static("vX.X.X")
+        yield Static("Context: none", id="header-context", markup=False)
+        try:
+            installed = version("comparo")
+        except PackageNotFoundError:
+            installed = "development"
+        yield Static(f"v{installed}", id="header-version", markup=False)
+
+    def on_mount(self) -> None:
+        """Track the exact selected Explorer execution context."""
+        self.watch(self.app, "state", self._state)
+
+    def _state(self, state: AppState) -> None:
+        context = state.execution_environment
+        label = "none" if context is None else f"{context.namespace}/{context.resource_id}"
+        self.query_one("#header-context", Static).update(f"Context: {label}")

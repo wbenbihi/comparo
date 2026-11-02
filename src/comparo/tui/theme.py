@@ -176,9 +176,9 @@ def kind_glyph(kind: str) -> tuple[str, str]:
 def style(name: str) -> str:
     """Resolve a semantic style name to a Rich style string."""
     if name in _STYLES:
-        return _STYLES[name]
+        return _themed_style(_STYLES[name])
     if name.startswith("method."):
-        return f"bold {METHOD_COLORS.get(name.removeprefix('method.'), MUTED)}"
+        return _themed_style(f"bold {METHOD_COLORS.get(name.removeprefix('method.'), MUTED)}")
     raise KeyError(f"unknown style token: {name}")
 
 
@@ -223,3 +223,56 @@ COMPARO_LIGHT = Theme(
         "comparo-label": "#46608A",
     },
 )
+
+# Semantic Rich spans must follow the registered light theme as well as TCSS.
+_LIGHT_COLORS = {
+    INK: "#F7F9FC",
+    SURFACE: "#EDF1F6",
+    PANEL: "#E4EAF1",
+    BORDER: "#C7D3E0",
+    FG: "#22303F",
+    BRIGHT: "#142333",
+    MUTED: "#52667E",
+    DIM: "#6B7D91",
+    LABEL: "#46608A",
+    GLYPH: "#52667E",
+    BLUE: "#255FA6",
+    TEAL: "#08736E",
+    AMBER: "#885A00",
+    SLATE: "#52667E",
+    STEEL: "#46608A",
+    BASELINE: "#0B7E93",
+    CANDIDATE: "#7C3AED",
+    OK: "#177A3D",
+    WARN: "#9A6700",
+    ERR: "#C7365A",
+    ERROR_OP: "#9D4700",
+    BADGE_GREEN_BG: "#D8F0DF",
+    BADGE_RED_BG: "#F9DDE4",
+    BADGE_AMBER_BG: "#F5E9C6",
+    BADGE_TEAL_BG: "#D8EFEC",
+    BADGE_ACTIVE_BG: "#DCE9FA",
+    BADGE_SLATE_BG: "#E4EAF1",
+    BADGE_BASELINE_BG: "#D5EEF3",
+    BADGE_CANDIDATE_BG: "#EBE0FB",
+    "#6BD48C": "#177A3D",
+    "#0D2117": "#D8F0DF",
+    "#250E15": "#F9DDE4",
+    "#0E1D28": "#D5EEF3",
+    "#08222B": "#FFFFFF",
+    "#2B1F04": "#FFFFFF",
+    "#1C2A3A": "#E4EAF1",
+}
+
+
+def _themed_style(value: str) -> str:
+    """Resolve colors in the active app context without process-global theme state."""
+    from textual._context import active_app
+
+    try:
+        light = active_app.get().theme == "comparo-light"
+    except LookupError:
+        light = False
+    if not light:
+        return value
+    return " ".join(_LIGHT_COLORS.get(part, part) for part in value.split(" "))

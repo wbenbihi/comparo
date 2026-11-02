@@ -127,7 +127,7 @@ def test_console_and_module_entry_points_use_the_main_application(
     from comparo.tui.__main__ import main as module_main
 
     launched: list[ComparoApp] = []
-    monkeypatch.setattr(ComparoApp, "run", lambda self: launched.append(self))
+    monkeypatch.setattr(ComparoApp, "run", lambda self, **kwargs: launched.append(self))
     arguments = ["--config", str(tmp_path / "comparo.yaml"), "--no-persist"]
     assert main(["tui", *arguments], stdout=StringIO(), stderr=StringIO()) == 0
     assert module_main(arguments) == 0

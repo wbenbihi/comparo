@@ -7,7 +7,6 @@ from contextlib import suppress
 from typing import ClassVar
 from typing import override
 
-from rich.text import Text
 from textual import on
 from textual import work
 from textual.app import ComposeResult
@@ -24,19 +23,20 @@ from comparo.tui.components.actionbar import Action
 from comparo.tui.components.actionbar import ActionBar
 from comparo.tui.components.filter import FilterInput
 from comparo.tui.components.launchconfig import LaunchConfiguration
+from comparo.tui.components.launchprogress import launch_steps
 from comparo.tui.components.launchsummary import LaunchReview
 from comparo.tui.components.launchsummary import LaunchSummary
 from comparo.tui.components.launchsummary import SummarySection
 from comparo.tui.components.launchsummary import draft_sections
 from comparo.tui.components.launchsummary import preview_sections
+from comparo.tui.components.resultbody import read_preview
 from comparo.tui.components.results import ResultsView
 from comparo.tui.components.runview import LiveRunView
 from comparo.tui.components.typography import Caption
-from comparo.tui.models.evidence import body_preview
 from comparo.tui.models.explorer import ExplorerCatalog
 from comparo.tui.models.explorer import build_catalog
 from comparo.tui.models.launch import LaunchDraft
-from comparo.tui.theme import style
+from comparo.tui.shortcuts import shortcut_label
 from comparo.tui.types import ComparoScreen
 from comparo.tui.workspaces.base import Workspace
 
@@ -161,8 +161,8 @@ class LaunchWorkspace(Workspace):
             return
         if self.phase != "draft" or self.draft != draft:
             return
-        # A cancelled thread-backed preview can finish during child teardown.
-        if not list(self.query(LaunchSummary)) or not list(self.query(LaunchConfiguration)):
+        # A thread-backed preview may finish after shutdown begins pruning children.
+        if not self.app.is_running:
             return
         if result.review is not None:
             self.query_one(LaunchSummary).sections = preview_sections(draft, result.review)
@@ -190,7 +190,7 @@ class LaunchWorkspace(Workspace):
                 Action(
                     "prepare",
                     "Prepare plan",
-                    "^r",
+                    shortcut_label("launch.prepare"),
                     enabled=bool(self.check_action("prepare", ())),
                     primary=True,
                 ),
@@ -202,15 +202,21 @@ class LaunchWorkspace(Workspace):
                 Action(
                     "run",
                     f"Run {count} calls",
-                    "^x",
+                    shortcut_label("launch.run"),
                     enabled=bool(self.check_action("run", ())),
                     primary=True,
                 ),
-                Action("edit", "Edit configuration", "^e"),
+                Action("edit", "Edit configuration", shortcut_label("launch.edit")),
             )
         elif phase in {"running", "cancelling"}:
             actions = (
-                Action("cancel", "Cancel run", "^k", enabled=phase == "running", primary=True),
+                Action(
+                    "cancel",
+                    "Cancel run",
+                    shortcut_label("launch.cancel"),
+                    enabled=phase == "running",
+                    primary=True,
+                ),
             )
         else:
             actions = (
@@ -219,7 +225,7 @@ class LaunchWorkspace(Workspace):
                     "Run summary" if self.analysis_open else "Analyze results",
                     primary=True,
                 ),
-                Action("edit", "Configure another run", "^e"),
+                Action("edit", "Configure another run", shortcut_label("launch.edit")),
             )
         target = phase in {"loading", "draft", "preparing"}
         self.query_one("#launch-actions", ActionBar).display = not target
@@ -234,21 +240,7 @@ class LaunchWorkspace(Workspace):
             if phase in {"running", "cancelling"} or not self.analysis_open
             else 3
         )
-        steps = Text()
-        for index, label in enumerate(("Target", "Plan", "Run", "Analyze")):
-            if index:
-                steps.append("   →   ", style("dim"))
-            steps.append(
-                ("✓ " if index < active else "● " if index == active else "· ") + label,
-                style(
-                    "status.passed"
-                    if index < active
-                    else "status.running"
-                    if index == active
-                    else "dim"
-                ),
-            )
-        self.query_one("#launch-steps", Caption).update(steps)
+        self.query_one("#launch-steps", Caption).update(launch_steps(active))
         count = self.review.plan.cardinality.environment_executions if self.review else 0
         title = (
             "What do you want to validate?"
@@ -516,17 +508,7 @@ class LaunchWorkspace(Workspace):
 
     @work(exclusive=True, group="launch-body")
     async def _read_body(self, event: ResultsView.BodyRequested) -> None:
-        try:
-            windows = [
-                await self.backend.read_result_body(reference) for reference in event.references
-            ]
-        except Exception:  # noqa: BLE001 - authenticated read failures remain value-free
-            event.view.show_body(
-                event.references, None, "Capture unavailable or report verification failed."
-            )
-            return
-        document, message = body_preview(windows)
-        event.view.show_body(event.references, document, message)
+        await read_preview(self.backend, event)
 
     def on_resize(self, event: Resize) -> None:
         """Allocate a readable rail or move its content below the configuration."""

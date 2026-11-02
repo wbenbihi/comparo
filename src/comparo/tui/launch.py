@@ -28,7 +28,8 @@ def build_tui_app(request: TuiLaunchRequest) -> ComparoApp:
 def run_tui(request: TuiLaunchRequest, *, app_factory: TuiAppFactory = build_tui_app) -> int:
     """Contain bootstrap failures and return only stable process exit codes."""
     try:
-        result = app_factory(request).run()
+        app = app_factory(request)
+        result = app.run(mouse=app.preferences.mouse) if isinstance(app, ComparoApp) else app.run()
     except KeyboardInterrupt:
         return 130
     except Exception:  # noqa: BLE001 - never expose bootstrap exception text

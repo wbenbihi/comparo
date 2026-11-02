@@ -4,6 +4,7 @@ from typing import override
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal
+from textual.events import Resize
 
 from .logo import ComparoLogo
 from .navigation import NavBar
@@ -19,3 +20,7 @@ class AppHeader(Horizontal):
         yield ComparoLogo()
         yield NavBar()
         yield NavHelper()
+
+    def on_resize(self, event: Resize) -> None:
+        """Give compact terminals room for workspace navigation."""
+        self.set_class(event.size.width < 110, "compact-header")

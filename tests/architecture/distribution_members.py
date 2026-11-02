@@ -17,6 +17,7 @@ _SDIST_METADATA = frozenset(
         PurePosixPath("PKG-INFO"),
         PurePosixPath("README.md"),
         PurePosixPath("pyproject.toml"),
+        PurePosixPath("hatch_build.py"),
     }
 )
 _WHEEL_METADATA = frozenset(
@@ -66,6 +67,7 @@ _REVIEWED_PACKAGE_ASSETS = frozenset(
         "src/comparo/tui/styles/main.tcss",
         "src/comparo/tui/styles/profile_resources.tcss",
         "src/comparo/tui/styles/reports.tcss",
+        "src/comparo/tui/styles/settings.tcss",
         "src/comparo/tui/styles/request.tcss",
         "src/comparo/tui/styles/resource_types.tcss",
     }
@@ -158,7 +160,7 @@ def _expected_package_files(source_root: Path) -> frozenset[PurePosixPath]:
     )
     if not members:
         raise DistributionAuditError("reviewed package member set is empty")
-    return members
+    return members | {PurePosixPath("comparo/_build_info.json")}
 
 
 def _without_sdist_root(

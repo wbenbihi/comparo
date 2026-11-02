@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from pathlib import PurePath
@@ -14,7 +15,6 @@ from textual.binding import BindingType
 from textual.reactive import reactive
 from textual.widgets import ContentSwitcher
 from textual.widgets import Footer
-from textual.widgets import Static
 
 from comparo.application.plan_inspection_identity import ResourceCoordinate
 
@@ -22,13 +22,20 @@ from .backend import TuiBackend
 from .bindings import application_bindings
 from .components.header import AppHeader
 from .components.navigation import NavTab
+from .components.results import ResultsView
 from .contracts import TuiLaunchRequest
+from .preferences import Preferences
+from .preferences import load_preferences
+from .preferences import preferences_path
+from .preferences import save_preferences
 from .states import AppState
 from .states import default_app_state
 from .theme import COMPARO_DARK
+from .theme import COMPARO_LIGHT
 from .types import ComparoScreen
 from .workspaces import WORKSPACES
 from .workspaces.explorer import ExplorerWorkspace
+from .workspaces.launch import LaunchWorkspace
 
 
 class ComparoApp(App[None]):
@@ -42,15 +49,26 @@ class ComparoApp(App[None]):
         "styles/profile_resources.tcss",
         "styles/launch.tcss",
         "styles/reports.tcss",
+        "styles/settings.tcss",
     ]
     BINDINGS: ClassVar[list[BindingType]] = application_bindings()
     state: reactive[AppState] = reactive(default_app_state, init=False)
 
-    def __init__(self, config: Path | TuiLaunchRequest) -> None:
+    def __init__(
+        self, config: Path | TuiLaunchRequest, *, preference_path: Path | None = None
+    ) -> None:
         """Initialize the application for a project path."""
         super().__init__()
+        self.preference_path = preference_path or preferences_path()
+        self.preferences, self.preference_notice = load_preferences(self.preference_path)
         self.register_theme(COMPARO_DARK)
-        self.theme = "comparo-dark"
+        self.register_theme(COMPARO_LIGHT)
+        self.theme = self.preferences.theme
+        self.set_keymap(self.preferences.keymap)
+        self.set_reactive(
+            ComparoApp.state,
+            replace(self.state, active_screen=ComparoScreen(self.preferences.workspace)),
+        )
         self.backend = TuiBackend(config)
 
     async def on_unmount(self) -> None:
@@ -63,13 +81,9 @@ class ComparoApp(App[None]):
     def compose(self) -> ComposeResult:
         """Render the main app."""
         yield AppHeader()
-        with ContentSwitcher(initial=ComparoScreen.EXPLORE, id="main"):
+        with ContentSwitcher(initial=self.state.active_screen, id="main"):
             for tab in ComparoScreen:
-                workspace = WORKSPACES.get(tab)
-                if workspace is not None:
-                    yield workspace()
-                else:
-                    yield Static(tab.value, id=tab, classes="Workspace")
+                yield WORKSPACES[tab]()
         yield Footer()
 
     def action_workspace(self, ws: str) -> None:
@@ -92,3 +106,29 @@ class ComparoApp(App[None]):
         self.query_one("#main", ContentSwitcher).current = self.state.active_screen
         for workspace in self.query(ExplorerWorkspace):
             workspace.execution_environment = self.state.execution_environment
+
+    def on_mount(self) -> None:
+        """Apply layout preferences after the screen exists."""
+        self.screen.set_class(self.preferences.density == "compact", "density-compact")
+        if self.preference_notice:
+            self.notify(self.preference_notice, severity="warning")
+
+    async def persist_preferences(self, preferences: Preferences) -> bool:
+        """Persist before activation so failed writes never discard the active settings."""
+        try:
+            await asyncio.to_thread(save_preferences, self.preference_path, preferences)
+        except OSError:
+            return False
+        if not self.is_running:
+            return True
+        self.preferences = preferences
+        self.preference_notice = ""
+        self.set_keymap(preferences.keymap)
+        self.screen.set_class(preferences.density == "compact", "density-compact")
+        for tab in self.query(NavTab):
+            tab.update(tab.display_name)
+        for results in self.query(ResultsView):
+            results.refresh_shortcuts()
+        self.query_one(LaunchWorkspace)._update_controls()
+        self.refresh(layout=True)
+        return True

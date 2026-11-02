@@ -6,7 +6,6 @@ from typing import override
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.binding import BindingType
 from textual.containers import Horizontal
 from textual.containers import Vertical
@@ -22,6 +21,7 @@ from comparo.application.results import ResultFact
 from comparo.application.results import ResultProjection
 from comparo.application.results import ResultReference
 from comparo.application.results import result_value_preview
+from comparo.tui.bindings import analysis_bindings
 from comparo.tui.breakpoints import LayoutClass
 from comparo.tui.breakpoints import layout_class
 from comparo.tui.components.actionbar import Action
@@ -35,6 +35,8 @@ from comparo.tui.components.menu import Menu
 from comparo.tui.components.menu import MenuItem
 from comparo.tui.components.panel import Panel
 from comparo.tui.components.resultdetail import ResultDetail
+from comparo.tui.components.resultlayout import body_labels
+from comparo.tui.components.resultlayout import fit_tables
 from comparo.tui.components.status import compact_facts
 from comparo.tui.components.status import duration
 from comparo.tui.components.status import fact_counts
@@ -53,6 +55,7 @@ from comparo.tui.models.results import analysis_entries
 from comparo.tui.models.results import field_location_label
 from comparo.tui.models.results import index_results
 from comparo.tui.models.results import item_label
+from comparo.tui.shortcuts import analysis_hint
 from comparo.tui.theme import kind_glyph
 from comparo.tui.theme import style
 
@@ -62,19 +65,7 @@ LENSES = ("issues", "requests", "rules", "fields", "timeline")
 class ResultsView(Vertical):
     """Outcome → issue/request → occurrence → evidence with a local back stack."""
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("left_square_bracket", "cycle_lens(-1)", "Previous view", key_display="["),
-        Binding("right_square_bracket", "cycle_lens(1)", "Next view", key_display="]"),
-        *(
-            Binding(f"alt+{index + 1}", f"lens('{lens}')", lens.title(), show=False, priority=True)
-            for index, lens in enumerate(LENSES)
-        ),
-        Binding("/", "focus_filter", "Filter"),
-        Binding("g", "groups", "Groups"),
-        Binding("o", "occurrences", "Occurrences"),
-        Binding("e", "evidence", "Evidence"),
-        Binding("escape", "back", "Back"),
-    ]
+    BINDINGS: ClassVar[list[BindingType]] = analysis_bindings()
     DEFAULT_CSS = """
     ResultsView { width: 1fr; height: 1fr; }
     #result-headline, #result-counts, #result-coverage { height: auto; padding: 0 1; }
@@ -130,7 +121,7 @@ class ResultsView(Vertical):
         yield Caption("Loading sanitized results…", id="result-headline", markup=False)
         yield Caption("", id="result-counts", markup=False)
         yield ActionBar(tuple(Action(lens, lens.title()) for lens in LENSES), id="result-lenses")
-        yield Caption("Alt+1-5 views · [ / ] previous/next view", id="result-view-keys")
+        yield Caption("", id="result-view-keys")
         with Horizontal(id="result-layout"):
             with Panel(title="Issues", id="result-index-panel"):
                 yield FilterInput("Filter this view…", id="result-filter")
@@ -1157,35 +1148,11 @@ class ResultsView(Vertical):
         self._body_mode_labels()
 
     def _body_mode_labels(self) -> None:
-        labels = self._body_labels
-        sided = len(labels) == 2
-        split = self.query_one(DiffView).view_mode == "split"
-        left = labels[0] if labels else Content("")
-        if sided and not split:
-            left = Content("Unified diff · ") + labels[0] + Content(" → ") + labels[1]
-        self.query_one("#result-body-left", Caption).update(left)
-        self.query_one("#result-body-right", Caption).update(labels[1] if sided else "")
-        self.query_one("#result-body-right").display = sided and split
-        self.query_one("#result-body-labels").set_class(not sided or not split, "single-body")
+        body_labels(self, self._body_labels)
 
     def _fit_tables(self) -> None:
-        if self.projection is None:
-            return
-        table = self.query_one("#result-related", Table)
-        table.fit_proportions(
-            (0.36, 0.17, 0.17, 0.17, 0.13)
-            if self.lens == "requests"
-            else (0.28, 0.24, 0.16, 0.13, 0.19)
-        )
-        index = self.query_one("#result-index", Table)
-        shares = {
-            "issues": (0.66, 0.34),
-            "requests": (0.37, 0.17, 0.17, 0.17, 0.12),
-            "rules": (0.6, 0.4),
-            "fields": (0.63, 0.37),
-            "timeline": (0.45, 0.33, 0.22),
-        }[self.lens]
-        index.fit_proportions(shares)
+        if self.projection is not None:
+            fit_tables(self, self.lens)
 
     @override
     def focus(self, scroll_visible: bool = True) -> "ResultsView":
@@ -1201,3 +1168,11 @@ class ResultsView(Vertical):
         )
         self.query_one(selector, Table).focus(scroll_visible)
         return self
+
+    def refresh_shortcuts(self) -> None:
+        """Keep Analyze hints synchronized with remapped dispatch."""
+        self.query_one("#result-view-keys", Caption).update(analysis_hint())
+
+    def on_mount(self) -> None:
+        """Show current keyboard preferences on both live and saved analysis."""
+        self.refresh_shortcuts()
