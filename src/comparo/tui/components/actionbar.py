@@ -37,7 +37,7 @@ class ActionBar(Horizontal):
     ActionBar Button:hover, ActionBar Button:focus { background: $accent 20%; color: $foreground; }
     ActionBar Button:disabled { color: $text-disabled; }
     """
-    actions: reactive[tuple[Action, ...]] = reactive((), recompose=True)
+    actions: reactive[tuple[Action, ...]] = reactive(())
 
     class Requested(Message):
         """An enabled semantic command was activated."""
@@ -72,6 +72,19 @@ class ActionBar(Horizontal):
                 compact=True,
                 flat=True,
             )
+
+    def watch_actions(self, actions: tuple[Action, ...]) -> None:
+        """Keep controls and keyboard focus stable when only availability changes."""
+        if not self.is_mounted:
+            return
+        buttons = list(self.query(Button))
+        if tuple(button.name for button in buttons) != tuple(action.id for action in actions):
+            self.refresh(recompose=True)
+            return
+        for button, action in zip(buttons, actions, strict=True):
+            button.label = Content(f"[{action.key}] {action.label}" if action.key else action.label)
+            button.disabled = not action.enabled
+            button.set_class(action.primary, "primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Emit only a currently enabled command."""
