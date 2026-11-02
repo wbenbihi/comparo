@@ -24,6 +24,21 @@ capabilities before resolving values, performing DNS, or opening a network conne
 [current CLI limitations](https://github.com/wbenbihi/comparo/blob/main/docs/cli.md#current-executable-subset) before using Comparo for a real
 service. This remains a pre-production release.
 
+> [!WARNING]
+> **AI Disclaimer**
+>
+> `comparo` was created as a personal initiative to learn and play with terminal user interface frameworks
+> and coding agents for real-life use cases. This tool has been really handy for both my personal and corporate projects.
+> Due to its **AI co-authoring**, and despite the fact I tried to require good development practices from an LLM agent,
+> I cannot advise you to rely on this tool for production purposes in its current state. This warning will stay here until I have fully
+> audited the code and can confidently release a prod-ready version.
+>
+> To be clear:
+>
+> **AI CODED THIS PROJECT BECAUSE I DIDN'T HAVE TIME TO SPEND ON IT. DO NOT BLINDLY TRUST THIS PROJECT, NOR ANY VIBE-CODED PROJECT YOU**
+> **HAVE NOT FULLY UNDERSTOOD OR AUDITED.**
+
+
 ## CLI
 
 The command graph includes offline schema, validation, planning, diagnostics, and sanitized render

@@ -74,6 +74,12 @@ focused, reviewable commits; do not put an entire mixed working tree into one co
 
 Keep PRs focused. Ensure the quality gates are green and add tests for behavioural changes.
 
+## Documentation ownership
+
+Preserve the author's AI Disclaimer in the README, including its wording and visibility.
+Documentation refreshes and release preparation must not remove or weaken it without an explicit
+request from the author.
+
 ## Releases
 
 Prepare the release as a PR to the intended release branch. GitHub Actions performs the full CI
