@@ -22,6 +22,7 @@ unreleased tree, not the historical v0.2.0 release. The authoritative current do
 - [Production HTTP adapter](production-http-adapter.md)
 - [Report/artifact format guide](report-format.md) and [sanitization/persistence contract](artifacts-and-reporters.md)
 - [CLI reference](cli.md)
+- [Release through GitHub Actions](releasing.md) — PR checks, publishing sequence and recovery
 - [Terminal UI](tui.md) — launch commands, default keys and limits
 - [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md), and
   [Settings](codebase/tui-settings.md) — implemented workspace behavior

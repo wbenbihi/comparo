@@ -15,6 +15,8 @@ Settings, and a component Debug gallery. Dedicated CI integration has not yet be
 
 The [current implementation status](docs/status.md) records supported surfaces, remaining gaps,
 and the distinction between this unreleased working tree and the older v0.2.0 release history.
+The next version is prepared through a PR and [released by GitHub Actions](docs/releasing.md)
+after CI and review; it has not been published yet.
 
 The executable subset is deliberately fail-closed: configuration can describe more of the future
 model than the first production runtime implements, and an execution command rejects unsupported

@@ -73,3 +73,10 @@ focused, reviewable commits; do not put an entire mixed working tree into one co
 ## Pull requests
 
 Keep PRs focused. Ensure the quality gates are green and add tests for behavioural changes.
+
+## Releases
+
+Prepare the release as a PR to the intended release branch. GitHub Actions performs the full CI
+validation and, after merge, versioning, packaging and publication. Preserve focused commits,
+leave version/tag creation to semantic-release, and resolve failing checks before merging.
+See the [release guide](docs/releasing.md) for the current findings, workflow and recovery steps.

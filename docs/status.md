@@ -60,7 +60,7 @@ is separate from a distributable Comparo GitHub Action. Release qualification re
 The latest feature verification passed **176 TUI/architecture tests** and **49 artifact/body/cURL
 tests**, plus Ruff, formatting, strict mypy and all **12 import contracts**. These are targeted
 results, not a claim of full-suite coverage or universal mockup acceptance. Test discovery on
-November 2 found **4,310 cases**; collection is not execution. The configured
+November 2 found **4,313 cases** after the Settings section tests; collection is not execution. The configured
 coverage threshold is 100%, and a full release coverage/build audit remains a separate gate.
 
 This documentation refresh additionally passed **296 CLI/architecture tests**, Ruff, formatting
@@ -72,6 +72,12 @@ The November 2 commit checks passed **416 TUI/CLI/architecture tests** before ad
 then **20 Settings/build/packaging tests** for that addition. The General layout was inspected at
 80 columns. Built wheel/sdist members passed the distribution audit; a wheel rebuilt from the
 sdist retained the same build SHA. This verifies provenance packaging, not full release qualification.
+
+The subsequent sandboxed full-suite run had **4,289 passing / 24 failing tests** and measured
+**97.33% coverage**. Of those failures, 23 were localhost binding restrictions and one was the
+showcase inventory's stale 44-resource expectation (45 are present). These results do not pass
+the release gate. The release PR delegates definitive validation to GitHub Actions; see the
+[release guide](releasing.md) for checks, required follow-up and publication after merge.
 
 - [User TUI guide](tui.md), [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md),
   [Settings](codebase/tui-settings.md): actual controls and behavior.
