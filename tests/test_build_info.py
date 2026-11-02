@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
 import pytest
@@ -53,3 +54,54 @@ def test_source_revision_uses_exact_checkout_and_reports_modified_source(
     assert len(calls) == 2
     monkeypatch.setattr(build_info, "which", lambda _: None)
     assert build_info.source_revision(tmp_path) == (None, False)
+
+
+@pytest.mark.parametrize("failure", [OSError("no git"), subprocess.TimeoutExpired("git", 2)])
+def test_source_revision_failure_is_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(build_info, "which", lambda _: "/usr/bin/git")
+
+    def run(*args: object, **kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert build_info.source_revision(tmp_path) == (None, False)
+
+
+def test_missing_distribution_metadata_keeps_available_build_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "comparo"
+    package.mkdir()
+    (package / "_build_info.json").write_text(json.dumps({"sha": "c" * 40, "modified": False}))
+    monkeypatch.setattr(build_info, "__file__", str(package / "build_info.py"))
+
+    def missing(name: str) -> None:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(build_info, "metadata", missing)
+    info = build_info.read_build_info()
+    assert info.version == "Development"
+    assert info.source == "Installed package"
+    assert info.sha == "c" * 40
+    assert info.author == info.license == info.repository == "Unavailable"
+
+
+def test_metadata_without_github_url_is_not_rewritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from email.message import Message
+
+    package = tmp_path / "comparo"
+    package.mkdir()
+    (package / "_build_info.json").write_text(json.dumps({"sha": "c" * 40, "modified": False}))
+    monkeypatch.setattr(build_info, "__file__", str(package / "build_info.py"))
+    info = Message()
+    info["Project-URL"] = "malformed"
+    info["Project-URL"] = "Source, https://example.test/source"
+    monkeypatch.setattr(build_info, "metadata", lambda _: info)
+    result = build_info.read_build_info()
+    assert result.source == "https://example.test/source"
+    assert result.repository == result.author == result.license == result.version == "Unavailable"
