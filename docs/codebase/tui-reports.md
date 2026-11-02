@@ -48,6 +48,11 @@ analyzer. It accepts the same `ResultProjection`, navigates the same typed refer
 the same bounded authenticated body-preview formatter. Alt+1–5 selects an Analyze lens;
 `[` / `]` cycles lenses without conflicting with macOS Ctrl+arrow shortcuts. Brackets remain
 ordinary characters inside text filters. Escape stays local to Analyze; Alt+Left returns to Reports.
+The view shortcuts can be remapped in [Settings](tui-settings.md).
+
+Press **i** for the shared capture inspector: raw byte paging, JSON subtrees, SSE events and reviewed
+sanitized request cURL. It retains exact attempt/exchange coordinates and returns to the same Analyze
+selection. See [capture controls and limits](tui-launch.md#full-capture-inspection).
 
 Listing and preview authenticate report metadata and manifests without reading detached captures.
 The preview says **Manifest verified**; each captured body is authenticated when explicitly read.

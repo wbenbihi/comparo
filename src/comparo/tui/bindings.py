@@ -167,5 +167,6 @@ def analysis_bindings() -> list[BindingType]:
         Binding("g", "groups", "Groups"),
         Binding("o", "occurrences", "Occurrences"),
         Binding("e", "evidence", "Evidence"),
+        Binding("i", "capture", "Inspect capture"),
         Binding("escape", "back", "Back"),
     ]

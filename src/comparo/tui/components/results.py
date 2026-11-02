@@ -24,6 +24,7 @@ from comparo.application.results import result_value_preview
 from comparo.tui.bindings import analysis_bindings
 from comparo.tui.breakpoints import LayoutClass
 from comparo.tui.breakpoints import layout_class
+from comparo.tui.capture_actions import inspect_capture
 from comparo.tui.components.actionbar import Action
 from comparo.tui.components.actionbar import ActionBar
 from comparo.tui.components.choicemenu import ChoiceMenu
@@ -168,6 +169,16 @@ class ResultsView(Vertical):
                             yield Caption("", id="result-body-right", markup=False)
                         yield DiffView(id="result-body")
                         yield Caption("", id="result-body-status", markup=False)
+                        yield ActionBar(
+                            (
+                                Action(
+                                    "capture",
+                                    "Inspect capture · pages / JSON / SSE / cURL",
+                                    key="i",
+                                ),
+                            ),
+                            id="result-capture-actions",
+                        )
                 yield ActionBar(id="result-detail-actions")
 
     def reset(self) -> None:
@@ -1176,3 +1187,13 @@ class ResultsView(Vertical):
     def on_mount(self) -> None:
         """Show current keyboard preferences on both live and saved analysis."""
         self.refresh_shortcuts()
+
+    @on(ActionBar.Requested, "#result-capture-actions")
+    def _capture_action(self, event: ActionBar.Requested) -> None:
+        event.stop()
+        self.action_capture()
+
+    def action_capture(self) -> None:
+        """Open bounded tools for this occurrence without changing Analyze selection."""
+        if self.projection is not None and self.selected is not None:
+            inspect_capture(self.app, self.projection, self._owner(self.items[self.selected]))

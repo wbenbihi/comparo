@@ -177,6 +177,21 @@ project comparison defaults. An ExecutionProfile uses its own topology. This onl
 Prepare and Run remain separate explicit actions. A busy Launch rejects the handoff, and stale
 resource revisions are rejected before invalidating an existing plan.
 
+### Full capture inspection
+
+Press **i** on a selected occurrence, or choose **Inspect capture**, to open the shared capture
+inspector. Message selection retains baseline/candidate, Request, Environment, attempt and exchange
+identity. Raw text pages in 64 KiB windows with **n / p**; JSON paths and SSE events page in groups
+of 50. Enter drills into an object/array or a JSON SSE event, **b** returns to the parent, and Escape
+restores the unchanged Analyze selection. Structured inspection is bounded to 4 MiB / 50,000 JSON
+nodes / 10,000 SSE events; the raw pager remains available for larger captures. Missing, truncated,
+redacted and unreadable evidence remains explicit.
+
+**Review request cURL** reconstructs the sanitized stored request for the selected attempt/exchange.
+It shows replay limitations before the explicit Copy action; it neither sends HTTP nor substitutes
+live credentials. Command previews expire after 60 seconds. Both Launch and Reports use this same
+inspector and the existing application body/cURL services.
+
 Regression coverage is in `tests/tui/test_launch_workspace.py` and
 `tests/tui/test_run_analysis.py`, including real loopback execution, a 16-call Matrix run, a 22-call mixed Request run, manual
 configuration, case filters, profile overrides, reset, cancellation, failed assertions, drift,

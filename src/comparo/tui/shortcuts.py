@@ -30,5 +30,5 @@ def analysis_hint() -> str:
     return (
         views
         + f" · {shortcut_label('analyze.previous')} / "
-        + f"{shortcut_label('analyze.next')} previous/next"
+        + f"{shortcut_label('analyze.next')} previous/next · i capture"
     )
