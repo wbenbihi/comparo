@@ -1,7 +1,7 @@
 # Comparo CLI
 
 The `comparo` executable is the local command adapter over the same preparation, planning,
-execution, artifact, and reporting services used by future frontends. Command handlers translate
+execution, artifact, and reporting services used by the canonical TUI and other frontends. Command handlers translate
 arguments and render structured outcomes; they do not own domain rules.
 
 Comparo is alpha software. The CLI is usable for the [current executable
@@ -28,7 +28,7 @@ rather than falling back to pathname-based file access on Windows.
 | `comparo artifact verify` | local reads | Authenticate a bundle and every declared sanitized blob. |
 | `comparo artifact blob` | local reads | Write one authenticated sanitized blob as exact bytes. |
 | `comparo report` | local reads | Render an authenticated bundle as JSON, JUnit, SARIF, or Markdown. |
-| `comparo tui` | local reads and optional HTTP | Open the main terminal frontend (Explore, Launch, Reports). |
+| `comparo tui` | local reads, explicit profile/preferences/report writes, optional HTTP | Open Explore, Launch, Reports, Settings and Debug. |
 | `comparo completion` | none | Generate Bash, Zsh, or Fish completion text. |
 
 Run `comparo COMMAND --help` for the exact installed options. The command graph can also generate

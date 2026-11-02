@@ -156,6 +156,7 @@ The repository groups tests by source responsibility:
 | `tests/core/assertions`, `diffs`, `gates`, `selection` | Pure evaluation semantics and budgets |
 | `tests/core/artifacts`, `tests/adapters/artifacts`, `tests/reporters` | Sanitization, schema, capture truth, persistence, authentication, report projections |
 | `tests/application` | Frontend-safe composition and use-case boundaries |
+| `tests/tui` | Shared components, Explore/Launch/Reports/Settings, captures, profile saving and responsive keyboard journeys |
 | `tests/security` | Secret, authority, HTTP topology, stream, and analysis adversarial properties |
 | `tests/properties` / `tests/conformance` | Generated invariants and pinned standards behavior |
 | `tests/architecture` | Imports, cohesion, immutability, packaging, and distribution membership |
@@ -175,17 +176,20 @@ uv run --frozen lint-imports
 uv run --frozen python -m pytest --cov --cov-report=term-missing
 uv build
 uv run --frozen python -m tests.architecture.distribution_members \
-  dist/comparo-0.2.0.tar.gz dist/comparo-0.2.0-py3-none-any.whl
+  dist/comparo-*.tar.gz dist/comparo-*.whl
 ```
 
 Ruff enforces broad correctness/security/docstring rules, mypy runs in strict mode, pytest treats
-warnings as errors, statement and branch coverage are configured at 100%, and the distribution
+warnings as errors, the combined statement/branch coverage gate is configured at 100% (a target,
+not a claim that the current working tree has achieved it), and the distribution
 check compares built members to an allowlist. Run smaller relevant suites during an incremental
 change, then the complete gates before a release.
 
 ## Documentation rules
 
 - This `docs/codebase/` directory describes current working behavior.
+- [Current status](../status.md) separates shipped UI, backend-only APIs and deferred work.
+- Historical audits and changelog releases retain their dates and must not be presented as current validation.
 - ADRs describe accepted constraints and product intent.
 - The roadmap describes implementation order and exit criteria.
 - Feature documents such as `configuration-compiler.md` explain a subsystem in depth.
@@ -196,7 +200,7 @@ When implementation changes a capability status, update the pipeline, frontend a
 catalog in the same incremental change. If a change contradicts an accepted ADR, supersede the
 ADR rather than silently editing its historical decision.
 
-## Handoff checklist for a replacement TUI
+## Checklist for TUI changes
 
 Read the [TUI/backend integration contract](tui-backend-integration.md) before implementing a
 workspace. It is the exhaustive callable and information-design reference.

@@ -5,7 +5,8 @@ tree implements **Steps 1 through 11**: the internal language, shared selector a
 kernels, versioned configuration compiler, deterministic admitted run planner, run-scoped
 value/secrets boundary, bounded runtime, production HTTP adapter, sanitized artifacts/reporters,
 application composition, local CLI, and component-based Textual TUI. Dedicated CI integration
-remains unmigrated.
+remains unmigrated. Current workspace coverage and remaining UI gaps are recorded in
+[implementation status](status.md).
 
 The accepted destination and implementation order are recorded in the
 [core refactor roadmap](core-refactor-roadmap.md). The exact Step 1 boundary is recorded in the
@@ -166,6 +167,7 @@ uv run --frozen python -m tests.architecture.distribution_members \
   dist/comparo-0.2.0.tar.gz dist/comparo-0.2.0-py3-none-any.whl
 ```
 
-The suite requires 100% statement and branch coverage across the current package. Distribution
+The configured coverage gate requires 100% combined statement/branch coverage across the current
+package. This is a release target, not a measurement from this documentation refresh. Distribution
 verification uses an exact member allowlist and fails if local untracked package sources or
 sensitive/deprecated paths could enter a release artifact.

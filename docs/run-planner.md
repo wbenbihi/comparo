@@ -192,6 +192,5 @@ require authorization under the same exact `ExecutionPolicy`; an admitted plan i
 network capability.
 
 Architecture contracts forbid adapter, HTTP client, filesystem, ambient environment, clock,
-randomness, scheduler, CLI, and TUI imports from `comparo.core.planning`. The planner suite covers
-every statement and branch, including malformed canonical graphs constructed outside the normal
-compiler path.
+randomness, scheduler, CLI, and TUI imports from `comparo.core.planning`. The planner suite exercises malformed canonical graphs constructed outside the normal compiler
+path as well as ordinary planning; current coverage must be measured with the configured gate.

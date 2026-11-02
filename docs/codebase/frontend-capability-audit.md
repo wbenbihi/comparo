@@ -1,6 +1,6 @@
 # Frontend capability audit
 
-This is the implementation contract for a replacement CLI/TUI/CI frontend. It answers whether a
+This is the backend capability contract for CLI/TUI/CI frontends, reconciled on **2026-10-31**. It answers whether a
 journey can be implemented through current backend contracts without importing live core objects
 or reimplementing business rules in presentation code.
 
@@ -15,8 +15,7 @@ Status meanings:
 The backend now supports the complete core Comparo journey: inspect a project, build or override a
 bounded execution, review the exact plan and authority, preview supported request occurrences
 lazily, run assertions and directed environment diffs, follow bounded live progress, inspect final
-facts and sanitized bodies, and browse/export/retain historical reports. The TUI does not need to
-import the current TUI code or invent missing domain behavior. The detailed callable contract and
+facts and sanitized bodies, and browse/export/retain historical reports. Backend support does not imply that every API already has a control in the canonical TUI. The detailed callable contract and
 all design consequences are in [TUI/backend integration](tui-backend-integration.md).
 
 The remaining product gaps are deliberate scope decisions, not hidden presentation work:
@@ -26,6 +25,20 @@ The remaining product gaps are deliberate scope decisions, not hidden presentati
 - browser automation, which is outside Comparo's scope;
 - a community plugin host/trust/packaging model and external LLM judge;
 - a generic frontend editor for arbitrary project resources.
+
+## Current TUI coverage
+
+Explore, Launch, Reports, Settings and Debug are implemented in `comparo.tui`. Launch and Reports
+share Analyze and the capture inspector. Settings persists appearance, mouse, startup workspace
+and main command shortcuts. Explore hands selected Request/profile identities to Launch; manual
+Launch targets can be saved as new ExecutionProfiles after an exact YAML preview.
+
+The tables below describe **application/backend availability**. The current Reports workspace
+uses a bounded 500-entry listing with local filters and 50-row pages, not the backend cursor-query,
+annotation or retention/restore interfaces. The Launch form exposes cases, trials, retries,
+fail-fast and assertion/diff/gate overrides; arbitrary value/Request/budget override editors remain
+backend/CLI capabilities. Generic resource editing, glyph preferences and reduced-motion settings
+are not implemented. See [current status](../status.md) and the workspace guides for UI coverage.
 
 ## Explorer
 
@@ -139,12 +152,21 @@ bodies produce a typed warning and non-executable file placeholder rather than f
 | Restore | Supported | `restore_report` | Restored bundle is authenticated; failed verification rolls it back to trash |
 | Run historical intent again | Deferred | artifacts retain safe provenance, not every live input | Comparo is not traffic replay; a future “run again” must deliberately reconstruct a new invocation |
 
+## Profile authoring
+
+`application.profile_authoring` previews and saves a new manually selected ExecutionProfile.
+Preview is read-only; Save revalidates compilation, publishes exclusively and checks discovery.
+The explicit `ProfileDocument` contains the reviewed destination and authored YAML, not resolved
+values. Matrix case filters, clearing inherited gates, and other invocation-only value/Request/
+budget overrides are rejected. There is no generic resource editor or profile overwrite action.
+
 ## Diagnostic and security contract
 
 - Frontends consume `ApplicationDiagnostic` and `present_diagnostic`; arbitrary exception text is
   never a user-facing message source.
-- Live `SensitiveValue`, `RunContext`, wire requests, observations, body handles, adapter
-  exceptions, and filesystem paths do not enter widget state.
+- Live `SensitiveValue`, `RunContext`, wire requests, observations, body handles and adapter
+  exceptions do not enter widget state. Inspection DTOs omit storage paths; explicit save/export
+  dialogs may display the destination selected or prepared for that write.
 - Project limits are caller-owned settings and policy ceilings. Versioned defaults are
   replaceable operational defaults, not schema-wide maximums.
 - Parent-process values are copied into one bounded sealed carrier with a value-free debug

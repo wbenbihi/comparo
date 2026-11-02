@@ -5,7 +5,8 @@ describes the working tree as it exists, not only the intended architecture reco
 roadmap and ADRs. Application contracts remain the source of truth for backend behavior. The canonical
 `src/comparo/tui` package consumes these contracts through its component-based frontend.
 
-Last code audit: **2026-07-29**, on the `refactor` branch.
+Documentation reconciled with the working tree: **2026-10-31**, on the `refactor` branch.
+See [current status](../status.md) for implemented UI coverage, backend-only features, and limits.
 
 ## How to read this guide
 
@@ -28,7 +29,8 @@ appropriate application projection exists. Domain support by itself is not a pro
   security boundaries, and the composition roots.
 - [Data and execution pipelines](pipelines.md) traces configuration from YAML through compilation,
   planning, resolution, HTTP execution, evaluation, artifacts, and reports.
-- [Frontend capability audit](frontend-capability-audit.md) is the handoff contract for a new TUI.
+- [Frontend capability audit](frontend-capability-audit.md) maps backend capabilities to current
+  CLI/TUI coverage and remaining frontend work.
   It marks each expected Explorer, Compare, live-run, and Report capability as supported,
   partial, or missing.
 - [TUI/backend integration contract](tui-backend-integration.md) is the detailed callable API and
@@ -39,12 +41,15 @@ appropriate application projection exists. Domain support by itself is not a pro
   procedure for adding resource kinds without coupling widgets to backend effects.
 - [TUI Launch](tui-launch.md) documents configuration, plan review, execution, controls,
   shared components, and result inspection.
+- [TUI Settings](tui-settings.md) documents persistent presentation preferences, shortcut remapping,
+  and the actual execution-context/version header.
 - [TUI Reports](tui-reports.md) documents the saved-run archive, filters, preview, export,
   and reuse of the shared Analyze view.
 - [Application API reference](application-api-reference.md) is the frontend-neutral golden contract
   for project, preparation, current run, terminal result, archive, and body access. Use it before
   adding any presentation adapter.
-- [Module catalog](module-catalog.md) maps every non-TUI package and source module to its purpose.
+- [Module catalog](module-catalog.md) maps backend packages/modules and the canonical terminal
+  adapter's ownership boundaries to their purpose.
 - [Contributor workflow](contributor-workflow.md) shows where to start, how to trace a feature,
   which invariants must remain true, and how the repository is verified.
 
@@ -81,8 +86,8 @@ The [capability audit](frontend-capability-audit.md) gives the complete frontend
 
 ## Authoritative application entry points
 
-New interactive code should begin with `comparo.application`, not internal core objects or the
-current TUI backend.
+New backend capabilities should begin with `comparo.application`, not internal core objects.
+TUI components consume these services through the existing `TuiBackend` and shared components.
 
 The complete call/lifecycle guidance is in the
 [TUI/backend integration contract](tui-backend-integration.md). The compact table below is only an
@@ -94,6 +99,7 @@ index.
 | Read masked or explicitly exact YAML | `inspect_project_source` |
 | Read bounded effective structure | `inspect_effective_resource` |
 | Compile, authorize, and plan | `prepare_project_plan` |
+| Preview/save a manual ExecutionProfile | `profile_authoring.prepare_profile_document` / `save_profile_document` |
 | Build invocation/resource/request/profile overrides | `PlanningOptions` / `plan_project` |
 | Prepare and start Compare | `CompareService` |
 | Inspect a plan before execution | `PlanReviewInspection` and `inspect_plan` |

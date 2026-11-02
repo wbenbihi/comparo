@@ -4,6 +4,11 @@ Step 0 of the core refactor roadmap was completed on 2026-07-24. These ADRs defi
 product and architecture boundaries for the new configuration lineage beginning at
 `comparo/v1alpha1`.
 
+Implementation mapping reviewed **2026-10-31**: the core, CLI and canonical TUI are implemented
+for the [current executable subset](../status.md). An accepted ADR may describe modeled/deferred
+capabilities, not a delivered feature. Original decision dates and context below remain unchanged;
+use current subsystem guides for runtime behavior and limitations.
+
 | ADR | Decision area | Status |
 | --- | --- | --- |
 | [0001](0001-product-boundary.md) | Product promise, surfaces, and protocol boundary | Accepted |

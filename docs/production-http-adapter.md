@@ -139,4 +139,5 @@ partial-body retention, aggregate deadlines, and stream framing against local pr
 bounded store readers.
 
 The Step 8 gate is the repository gate: Ruff, formatting, strict mypy, import-linter architecture
-contracts, and 100 percent statement and branch coverage.
+contracts and the configured 100% combined statement/branch coverage threshold. The threshold is
+a gate, not a new coverage result from this documentation refresh.

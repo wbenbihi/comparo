@@ -5,8 +5,10 @@ planner, runtime, evaluator, artifact, CLI, and TUI layers. It deliberately does
 read files or environment variables, perform network I/O, schedule asynchronous work, persist
 artifacts, or render output.
 
-The domain describes facts and valid state. Later services create and consume those facts through
-explicit ports.
+The domain describes facts and valid state. The implemented compiler, planner, resolution,
+runtime, artifact and frontend layers create and consume those facts through explicit ports.
+This document describes the domain boundary, not the current product-wide feature set; see
+[current status](status.md).
 
 ```text
 versioned configuration (Step 4)
@@ -157,8 +159,8 @@ or direct private-slot access is consequently outside this boundary.
 
 Complete decoded entity bodies are the semantic default, but body bytes do not live inside the
 domain graph. An immutable handle carries identity, exact extent, completeness, digest, media
-metadata, sensitivity, and a sealed store token. A future `BodyStore` owns memory-to-disk spooling,
-bounded reads, cleanup, and concurrent access.
+metadata, sensitivity, and a sealed store token. The production `TransientBodyStore` adapter owns
+bounded memory-to-disk storage and cleanup; these effects remain outside domain constructors.
 
 Request bytes use the same containment discipline. At materialization, the exact
 `EffectiveRequest` is projected into a value-free fingerprinted identity plus body-kind,
@@ -343,5 +345,6 @@ uv build
 ```
 
 The test suite combines direct-construction examples, architecture contracts, property tests, and
-security regressions. Branch coverage is enforced at 100% for this small foundational language;
-lowering that threshold requires an explicit engineering decision rather than a local exception.
+security regressions. The repository configures a 100% coverage gate; this is a target rather than
+a current measurement. Lowering that threshold requires an explicit engineering decision rather
+than a local exception.

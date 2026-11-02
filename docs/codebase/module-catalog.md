@@ -1,13 +1,16 @@
-# Non-TUI module catalog
+# Module catalog
 
-This catalog covers the production Python source outside `comparo.tui`. `__init__.py` modules
-primarily re-export their package's public contracts and are included with their package entry.
+This catalog maps the backend production modules and the canonical terminal adapter's main
+ownership boundaries. `__init__.py` modules primarily re-export their package's public contracts
+and are included with their package entry. The linked workspace guides detail TUI components.
 
 ## Repository roots
 
 | Path | Responsibility |
 | --- | --- |
 | `src/comparo/__init__.py` | Package metadata surface |
+| `src/comparo/build_info.py` | Installed package identity and bounded Comparo checkout/build provenance |
+| `hatch_build.py` | Embed source revision in wheel/sdist and preserve it during sdist-to-wheel builds |
 | `src/comparo/py.typed` | PEP 561 marker for typed consumers |
 | `src/comparo/schemas/` | Generated project and ExecutionPolicy JSON Schemas |
 | `pyproject.toml` | Packaging, dependencies, Ruff, mypy, pytest/coverage, import-linter contracts |
@@ -50,6 +53,7 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `production_execution` | Concrete production composition from prepared project through HTTP, evaluation, artifact compilation, and persistence |
 | `profile_binding` | Restrictive Safety/Redaction/Artifact profile composition over caller settings |
 | `project_outline` | Secret-free compiled resource structure and dependency/used-by graph |
+| `profile_authoring` | Preview and exclusively publish reviewed manual ExecutionProfiles; validate compilation and project discovery |
 | `project_workspace` | Explorer project compilation and safe resource/source snapshot facade |
 | `request_composition` | Field-by-field Request composition, precedence strategy, winning source, and contribution origins for one planned occurrence |
 | `remote_schemas`, `schema_validation`, `regex_validation`, `digest_validation` | Authorized bounded preparation of external/local evaluation capabilities |
@@ -340,7 +344,7 @@ filesystem, decoding, or serialization I/O.
 ## `comparo.cli`
 
 The CLI is an adapter over application services. It is useful as an integration example but is
-not the architectural source of truth for a replacement TUI.
+not the architectural source of truth for terminal behavior; frontends share application contracts.
 
 | Module | Responsibility |
 | --- | --- |
@@ -351,3 +355,26 @@ not the architectural source of truth for a replacement TUI.
 | `execution` | Headless prepare/execute/session orchestration over application services |
 | `services` | Artifact/report/archive and other application service adapters |
 | `rendering` | Rich terminal rendering of safe diagnostics, plans, results, and reports |
+
+
+## Canonical terminal adapter
+
+The canonical frontend is `comparo.tui`; old versioned implementations are removed.
+
+| Module / group | Responsibility |
+| --- | --- |
+| `app`, `launch`, `contracts`, `states`, `bindings` | Bootstrap, caller-owned launch limits, workspace/context state and default semantic bindings |
+| `backend` | Application-service facade and run/preparation ownership |
+| `preferences`, `shortcuts` | Validated user-owned preferences, atomic persistence and effective key labels |
+| `workspaces/explorer`, `explorer_projection` | Resource/context browsing and masked projection adaptation |
+| `launch_handoff` | Exact-revision Explore → Launch transfer, without execution |
+| `workspaces/launch`, `components/launchconfig`, `launchsummary`, `launchprogress`, `runview` | Target, plan checkpoint, live/frozen execution state and Analyze handoff |
+| `components/profilesave` | Explicit authored YAML/destination review before application-owned profile publication |
+| `components/results`, `resultdetail`, `resultbody`, `resultlayout` | Shared result lenses, evidence, bounded preview reads and responsive layout |
+| `capture_actions`, `evidence_access`, `components/captureinspector` | Exact selected captures; bounded raw/JSON/SSE reads and reviewed sanitized cURL |
+| `workspaces/reports`, `models/reports`, `components/reportarchive`, `reportpreview`, `reportexport` | Bounded archive browsing, filtering, preview, export and shared Analyze |
+| `workspaces/settings` | Draft preference editor and explicit Save/apply |
+| `theme`, `fragments`, `components`, `styles` | Shared semantic colors, method/entity glyphs, reusable controls and layout |
+
+See the [TUI guide](../tui.md) and [resource component contract](tui-resource-components.md) before
+extending a workspace. Backend code must not import this adapter.

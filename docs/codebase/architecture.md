@@ -26,7 +26,7 @@ flowchart LR
     SAFE --> ART["RunArtifact + sanitized blobs"]
     ART --> STORE["artifact adapter"]
     ART --> REPORT["application projections/reporters"]
-    REPORT --> UI["CLI / replacement TUI / CI"]
+    REPORT --> UI["CLI / canonical TUI / CI"]
 ```
 
 The important exception is `comparo.application`: it is a composition layer, not another pure
@@ -42,7 +42,7 @@ vertical slice. Frontends depend on application DTOs and services.
 | Run services | `comparo.core.resolution`, `runtime`, `artifacts` | Coordinate injected providers, scheduling, live capture, and artifact compilation | Only through ports; resolution/runtime may coordinate async state |
 | External adapters | `comparo.configuration`, `policy`, `adapters` | YAML/filesystem, ambient/env snapshots, HTTP, clocks, randomness, and persistence | Yes |
 | Use cases | `comparo.application` | Assemble adapters and core services behind safe frontend contracts | Yes |
-| Presentation adapters | `comparo.cli`, `comparo.reporters`, replacement TUI/CI | Parse commands and render safe application/artifact products | Only their own I/O |
+| Presentation adapters | `comparo.cli`, `comparo.tui`, `comparo.reporters`, future CI adapters | Parse commands and render safe application/artifact products | Only their own I/O |
 
 `comparo.reporters` is deliberately pure even though it sits near frontends: reporters accept a
 sanitized `RunArtifact` and produce bounded JSON, JUnit, SARIF, or Markdown bytes/text.
@@ -54,9 +54,10 @@ run- or service-owned objects.
 
 | Owner | Lifetime | Mutable state |
 | --- | --- | --- |
-| `CompareService` | Interactive Compare workspace | Bounded map of one-shot admitted-plan handles |
+| `CompareService` | Interactive Launch workspace | Bounded map of one-shot admitted-plan handles |
 | `ExecutionSession` | One interactive run | Task, cancellation, bounded occurrence rows/events, and latest coalesced snapshot |
 | `RunService` | One local frontend process | Bounded registry of current/recent terminal sessions and stable run handles |
+| `ComparoApp` / preferences | One terminal process / user config | Active workspace, execution context, saved presentation preferences and draft Settings edits |
 | `RunContext` | One run | Provider caches, environment snapshots, cancellation, and sensitive-value registry |
 | `TransientBodyStore` | One production run | Bounded memory/spooled response bodies |
 | `ArtifactCapturingDriver` | One production run | Sanitized capture batches and coverage issues |

@@ -1,9 +1,15 @@
 # Core refactor roadmap
 
 This document is the implementation guide for rebuilding Comparo's core and backend as a
-production-grade, modular engine. The current implementation is treated as an executable
-prototype: its useful behavior and fixtures inform the new engine, but its internal abstractions
-are not compatibility requirements.
+production-grade, modular engine. The original implementation was treated as an executable
+prototype; the rebuilt core, CLI and canonical TUI now implement the main vertical slice.
+The prototype's internal abstractions are not compatibility requirements.
+
+Status reconciled on **2026-10-31**: Steps 1–11 are implemented for the declared executable subset.
+Dedicated CI integration and release qualification remain pending. Safe stored-request cURL export
+is already implemented through an application service and the shared TUI capture inspector.
+See [current status](status.md) for precise UI coverage; design targets are not all accepted merely
+because the migration is complete.
 
 The guiding rule is to work from the pure domain center outward. Configuration syntax, network
 libraries, persistence, the CLI, and the TUI are adapters around the core rather than owners of
@@ -396,10 +402,12 @@ artifacts, or reconstruct secrets.
 
 Exit criterion: removing the TUI package would remove no backend capability or business rule.
 
-Status: complete. Explorer consumes safe project summaries; Compare consumes admitted plan
-previews, cancellable progress sessions, and sanitized result projections; Report consumes a
-bounded authenticated archive; Settings owns terminal-only preferences. The Textual shell and
-widgets contain no configuration, resolution, HTTP, evaluation, gate, or persistence logic. Both
+Status: implemented. Explore consumes safe project summaries; Launch consumes admitted plan
+previews, cancellable progress sessions and sanitized results; Reports consumes a bounded archive;
+Settings owns persisted terminal preferences. Launch and Reports share Analyze, raw/JSON/SSE capture
+inspection and reviewed sanitized cURL. Explore-to-Launch handoff and manual profile saving are wired.
+Project/profile and artifact writes remain application operations; preference persistence is
+owned by the terminal adapter. The shell contains no resolution, HTTP, evaluation or gate logic. Both
 bare interactive `comparo` and explicit `comparo tui` launch through caller-owned, versioned load,
 execution, artifact, report, and preparation limits.
 
@@ -462,9 +470,9 @@ Exit criteria:
 
 ## Step 14: safe request inspection and cURL export
 
-Status: backend support complete for authenticated post-run request captures. Planned-request cURL
-and the TUI clipboard adapter remain deferred and are not required for the first public rebuilt
-release.
+Status: application support and the shared TUI clipboard adapter are implemented for authenticated
+post-run request captures. Launch and Reports expose reviewed sanitized cURL with explicit copying
+and preview expiry. Planned-request cURL remains deferred.
 
 Add a reusable request-inspection capability for concrete planned or observed request occurrences.
 Its first command renderer emits a POSIX cURL representation through an application-layer safe

@@ -131,8 +131,8 @@ independence among `comparo.core.assertions`, `comparo.core.diffs`, and `comparo
 forbid HTTP clients, filesystem/configuration frameworks, CLI frameworks, and TUI frameworks from
 the pure kernel.
 
-The next configuration-compiler step owns authored syntax, version conversion, reference linking,
-static rule construction, and source-located diagnostics. Runtime and storage steps will own
+The implemented configuration compiler owns authored syntax, version conversion, reference linking,
+static rule construction and source-located diagnostics. Runtime and storage services own
 capability preparation, body streaming, scheduling, and persistence. Those layers consume the
 kernel contracts; they do not move their behavior into the evaluators.
 

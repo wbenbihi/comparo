@@ -245,6 +245,7 @@ Regression tests pin the properties most likely to fail under concurrency or fut
 - value-free provider exceptions and resolution failures;
 - architecture import allowlists and module-cohesion limits.
 
-The package maintains 100% statement and branch coverage. Import contracts forbid ambient,
+The repository configures a 100% combined statement/branch coverage gate; this is not a fresh
+coverage measurement. Import contracts forbid ambient,
 filesystem, network, YAML-parser, CLI/TUI, and adapter-framework dependencies in
 `comparo.core.resolution`.

@@ -142,7 +142,7 @@ It is both the offline implementation and the contract reference for the product
 
 ## Verification contract
 
-The Step 7 suite covers every runtime statement and branch. It pins:
+The runtime regression suite targets scheduling and lifecycle invariants. It pins:
 
 - the complete configuration-to-gate offline vertical slice;
 - attempt-scoped value and secret materialization without payload leakage;
