@@ -6,6 +6,35 @@ Comparo executes the same logical HTTP input against environments such as develo
 and production. It evaluates per-environment assertions, compares selected environment pairs under
 explicit diff profiles, and can reduce those facts into a CI gate verdict.
 
+## Install
+
+Requires **Python 3.13 or newer**. Install the published command with pipx:
+
+```console
+pipx install comparo
+comparo --help
+```
+
+Alternatively, install into a Python virtual environment:
+
+```console
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install comparo
+comparo --help
+```
+
+To update an existing pipx installation, run `pipx upgrade comparo`.
+The published version is currently **0.2.0**; this branch documents the proposed **0.3.0** release.
+Its rebuilt commands and configuration become available through that release. To try this branch
+before publication, use the [development setup](CONTRIBUTING.md#development-setup).
+
+## Terminal preview
+
+![Comparo Reports workspace with a searchable run archive and selected result details](docs/assets/tui-reports.png)
+
+The upcoming 0.3.0 interface, captured from the running app with example report data.
+
 ## Status
 
 Comparo is alpha software. The production core, local CLI, and terminal UI have been rebuilt
@@ -43,15 +72,15 @@ service. This remains a pre-production release.
 
 The command graph includes offline schema, validation, planning, diagnostics, and sanitized render
 journeys; shared production `run`, `diff`, and `exec` journeys; and authenticated artifact/report
-readers:
+readers. From a directory containing your `comparo.yaml` project:
 
 ```console
-uv run --frozen comparo --help
-uv run --frozen comparo validate --config comparo.yaml
-uv run --frozen comparo plan --config comparo.yaml --format json
-uv run --frozen comparo run --config comparo.yaml --env staging
-uv run --frozen comparo
-uv run --frozen comparo tui --config comparo.yaml
+comparo --help
+comparo validate --config comparo.yaml
+comparo plan --config comparo.yaml --format json
+comparo run --config comparo.yaml --env staging
+comparo
+comparo tui --config comparo.yaml
 ```
 
 Local execution defaults to the explicitly permissive trusted-local authority. A project used in
@@ -59,7 +88,7 @@ CI or obtained from an untrusted source must be paired with an operator-owned po
 project:
 
 ```console
-uv run --frozen comparo diff \
+comparo diff \
   --config comparo.yaml \
   --policy /operator/policies/comparo-ci.yaml \
   --baseline production \
@@ -87,11 +116,17 @@ See the [TUI guide](docs/tui.md) for controls and limits.
 
 The repository includes three runnable local projects backed by one deterministic loopback demo
 service. They cover a passing quickstart, deliberate cross-Environment drift, Environment-local
-values, execution profiles, and a larger two-Matrix TUI showcase:
+values, execution profiles, and a larger two-Matrix TUI showcase. From a repository checkout,
+start the demo in one terminal:
 
 ```console
-uv run --frozen python examples/support/demo_server.py
-uv run --frozen comparo tui --config examples/tui-showcase/comparo.yaml
+python examples/support/demo_server.py
+```
+
+Then open the showcase in another terminal:
+
+```console
+comparo tui --config examples/tui-showcase/comparo.yaml
 ```
 
 See the [example project guide](https://github.com/wbenbihi/comparo/blob/main/examples/README.md) for the expected outcomes and suggested
