@@ -105,28 +105,28 @@ class LaunchWorkspace(Workspace):
 
     @work(exclusive=True, group="launch-catalog")
     async def _load_catalog(self) -> None:
-        """Load safe catalog choices on a worker thread."""
+        """Load safe catalog choices without publishing results after shutdown."""
         self.phase = "loading"
         self._update_controls()
         try:
             result = await asyncio.to_thread(self.backend.load_workspace)
-            self.catalog = build_catalog(result)
         except Exception:  # noqa: BLE001 - arbitrary exception text can contain private values
-            self.catalog = None
-            self._status("Could not load the project. Correct the configuration and reload.")
-        else:
-            if self.catalog is None:
-                self._status(
-                    "\n".join(
-                        f"{present_diagnostic(item).title}: "
-                        f"{present_diagnostic(item).action} ({item.code})"
-                        for item in result.diagnostics
-                    )
-                )
+            result = None
+        if not self.app.is_running:
+            return
+        self.catalog = build_catalog(result) if result is not None else None
         self.phase = "draft"
         if self.catalog is not None:
             self.query_one(LaunchConfiguration).load(self.catalog)
         else:
+            self._status(
+                "\n".join(
+                    f"{present_diagnostic(d).title}: {present_diagnostic(d).action} ({d.code})"
+                    for d in result.diagnostics
+                )
+                if result is not None
+                else "Could not load the project. Correct the configuration and reload."
+            )
             self.query_one(LaunchSummary).sections = (
                 SummarySection("Unavailable", note="No executable project loaded."),
             )

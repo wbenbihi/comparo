@@ -1,7 +1,12 @@
 """Persisted profile equivalence and explicit Explore-to-Launch handoff."""
 
 import asyncio
+from collections.abc import Awaitable
+from collections.abc import Callable
+from inspect import unwrap
 from pathlib import Path
+from threading import Event
+from typing import cast
 
 import pytest
 from tests.tui.test_launch_workspace import _project
@@ -12,6 +17,7 @@ from textual.widgets import Button
 from comparo.application import CompareIntent
 from comparo.application import MatrixOverride
 from comparo.application import PlanningOptions
+from comparo.application import ProjectWorkspaceResult
 from comparo.application.profile_authoring import ProfileAuthoringError
 from comparo.tui.app import ComparoApp
 from comparo.tui.backend import TuiBackend
@@ -178,3 +184,47 @@ def test_save_rejects_unrepresentable_overrides_and_excluded_destination(tmp_pat
         backend.save_profile(document)
     assert not document.destination.exists()
     assert not tuple(document.destination.parent.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_catalog_reload_completion_is_ignored_during_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    async def scenario() -> None:
+        app = ComparoApp(_project(tmp_path, "quickstart"), preference_path=tmp_path / "prefs.json")
+        started, release = Event(), Event()
+        async with app.run_test() as pilot:
+            launch = app.query_one(LaunchWorkspace)
+            await _wait(pilot, lambda: launch.phase == "draft")
+            snapshot = app.backend.load_workspace()
+            retained = launch.catalog
+
+            def delayed_load() -> ProjectWorkspaceResult:
+                started.set()
+                assert release.wait(5), "Shutdown did not release the catalog read"
+                if failed:
+                    raise OSError("private-path-canary")
+                return snapshot
+
+            monkeypatch.setattr(app.backend, "load_workspace", delayed_load)
+            load = cast(
+                Callable[[LaunchWorkspace], Awaitable[None]], unwrap(LaunchWorkspace._load_catalog)
+            )
+            pending = asyncio.ensure_future(load(launch))
+            await _wait(pilot, started.is_set)
+            close_all = app._close_all
+
+            async def close_with_pending_catalog() -> None:
+                # Reproduce completion between child pruning and workspace-worker cancellation.
+                assert not app.is_running
+                await launch.query_one(LaunchConfiguration).remove()
+                release.set()
+                await pending
+                assert launch.catalog is retained
+                assert launch.phase == "loading"
+                await close_all()
+
+            monkeypatch.setattr(app, "_close_all", close_with_pending_catalog)
+            app.exit()
+
+    asyncio.run(scenario())
