@@ -1,9 +1,14 @@
 # TUI Settings
 
 Open **Settings** with **4**. The workspace uses the existing Panel, Menu, SelectField, ValueInput,
-Caption and ActionBar components. General, Appearance, Interaction and Keyboard shortcuts are navigable
-sections; edits remain a draft until **Save & apply**. Discard restores saved choices; Reset loads
-defaults into the draft without writing them.
+Caption and ActionBar components. General, Appearance, Interaction, Keyboard shortcuts and Plugins
+are separate sections. The right pane shows only the highlighted section. Up/Down switches sections
+while keeping focus in the left menu; Enter or click enters an editable section. Hidden sections
+retain unsaved edits and are excluded from keyboard focus. Edits remain a draft until **Save & apply**.
+Discard restores saved choices; Reset loads defaults into the draft without writing them. These
+actions appear in editable sections. General and the Plugins placeholder are read-only.
+
+Plugins is a placeholder only; plugin installation, activation and configuration are not available.
 
 **General** is the first section. It shows the installed version, author, repository, source link,
 license and full build SHA. Builds stamp the source revision into both the wheel and source

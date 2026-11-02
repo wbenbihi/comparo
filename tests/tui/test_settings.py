@@ -112,6 +112,7 @@ def test_settings_editor_applies_draft_and_light_theme_survives_restart(
         async with app.run_test(size=(80, 30)) as pilot:
             await pilot.press("4")
             settings = app.query_one(SettingsWorkspace)
+            await pilot.press("down", "enter")
             theme = settings.query_one("#setting-theme", SelectField)
             theme.focus()
             await pilot.press("enter", "down", "enter")
@@ -127,6 +128,60 @@ def test_settings_editor_applies_draft_and_light_theme_survives_restart(
             assert restarted.theme == "comparo-light"
             await pilot.press("4")
             restarted.save_screenshot("settings-light.svg", path=str(tmp_path))
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("size", [(80, 30), (120, 40), (160, 52)])
+def test_section_navigation_replaces_content_and_retains_unsaved_edits(
+    tmp_path: Path, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    async def scenario() -> None:
+        path = tmp_path / "prefs.json"
+        app = ComparoApp(Path("examples/quickstart"), preference_path=path)
+        async with app.run_test(size=size) as pilot:
+            await pilot.press("4")
+            settings = app.query_one(SettingsWorkspace)
+            sections = settings.query_one("#settings-sections", Menu)
+            names = tuple(item.id for item in sections.items)
+            assert names == ("general", "appearance", "interaction", "shortcuts", "plugins")
+
+            def assert_section(name: str) -> None:
+                assert [key for key in names if settings.query_one(f"#settings-{key}").display] == [
+                    name
+                ]
+
+            assert_section("general")
+            assert not settings.query_one("#settings-actions").display
+            await pilot.press("down")
+            assert_section("appearance")
+            assert sections.has_focus
+            await pilot.press("enter")
+            theme = settings.query_one("#setting-theme", SelectField)
+            assert theme.query_one(Button).has_focus
+            await pilot.press("enter", "down", "enter")
+            assert settings.draft.theme == "comparo-light"
+            app.save_screenshot(f"settings-appearance-{size[0]}.svg", path=str(tmp_path))
+            sections.focus()
+            await pilot.press("down")
+            assert_section("interaction")
+            await pilot.press("down")
+            assert_section("shortcuts")
+            await pilot.press("down", "enter")
+            assert_section("plugins")
+            assert sections.has_focus
+            assert not settings.query_one("#settings-actions").display
+            assert not path.exists()
+            app.save_screenshot(f"settings-plugins-{size[0]}.svg", path=str(tmp_path))
+            await pilot.press("home", "down", "enter")
+            assert_section("appearance")
+            assert settings.draft.theme == "comparo-light"
+            assert theme.value == "comparo-light"
+            next(b for b in settings.query(Button) if b.name == "save").press()
+            await _wait(pilot, lambda: path.exists())
+            assert load_preferences(path)[0].theme == "comparo-light"
 
     asyncio.run(scenario())
 

@@ -30,6 +30,9 @@ from comparo.tui.preferences import Preferences
 from comparo.tui.types import ComparoScreen
 from comparo.tui.workspaces.base import Workspace
 
+_SECTIONS = ("general", "appearance", "interaction", "shortcuts", "plugins")
+_EDITABLE_SECTIONS = ("appearance", "interaction", "shortcuts")
+
 
 class _PreferenceOwner(Protocol):
     preferences: Preferences
@@ -60,6 +63,7 @@ class SettingsWorkspace(Workspace):
                     MenuItem("appearance", "Appearance & layout"),
                     MenuItem("interaction", "Interaction"),
                     MenuItem("shortcuts", "Keyboard shortcuts"),
+                    MenuItem("plugins", "Plugins"),
                     id="settings-sections",
                 ),
                 title="SETTINGS",
@@ -121,6 +125,12 @@ class SettingsWorkspace(Workspace):
                         id="settings-key-actions",
                     )
                     yield Caption("", id="settings-key-summary", markup=False)
+                with Panel(title="PLUGINS", id="settings-plugins"):
+                    yield SectionTitle("Plugins are coming later")
+                    yield Caption(
+                        "Plugin support is not available yet. "
+                        "This section will contain plugin settings when support is added."
+                    )
         yield Caption("", id="settings-notice", markup=False)
         yield ActionBar(
             (
@@ -134,6 +144,7 @@ class SettingsWorkspace(Workspace):
     def on_mount(self) -> None:
         """Reflect the active preferences and any load diagnostic."""
         self._restore()
+        self._show_section("general")
         self._load_build_info()
 
     @work(exclusive=True, group="settings-build-info")
@@ -186,13 +197,20 @@ class SettingsWorkspace(Workspace):
             )
         )
 
-    @on(Menu.Selected, "#settings-sections")
-    def _section(self, event: Menu.Selected) -> None:
+    def _show_section(self, section: str) -> None:
+        """Keep drafts mounted while exposing only the active section and its controls."""
+        for name in _SECTIONS:
+            self.query_one(f"#settings-{name}").display = name == section
+        self.query_one("#settings-actions").display = section in _EDITABLE_SECTIONS
+        self.query_one("#settings-notice").display = section in _EDITABLE_SECTIONS
+        self.query_one("#settings-editor", VerticalScroll).scroll_home(animate=False)
+
+    @on(Menu.Highlighted, "#settings-sections")
+    def _section(self, event: Menu.Highlighted) -> None:
         event.stop()
-        panel = self.query_one(f"#settings-{event.item}")
-        panel.scroll_visible(animate=False, top=True)
-        if event.item != "general":
-            panel.query_one(SelectField).focus()
+        self._show_section(event.item)
+        if isinstance(event, Menu.Selected) and event.item in _EDITABLE_SECTIONS:
+            self.query_one(f"#settings-{event.item}").query_one(SelectField).focus()
 
     @on(SelectField.Changed)
     def _changed(self, event: SelectField.Changed) -> None:
