@@ -40,6 +40,7 @@ OK = "#7BD88F"
 WARN = "#F0C060"
 ERR = "#F2637E"
 ERROR_OP = "#FF9E64"
+MASKED = "#B7A1F3"
 
 GLYPH_PROJECT = "⌂"
 GLYPH_ENVIRONMENT = "◉"
@@ -81,12 +82,12 @@ _STYLES: dict[str, str] = {
     "err": ERR,
     "error-op": ERROR_OP,
     "value.null": f"italic {MUTED}",
-    "value.boolean": CANDIDATE,
+    "value.boolean": BLUE,
     "value.integer": AMBER,
     "value.number": AMBER,
     "value.text": TEAL,
     "value.reference": BLUE,
-    "value.masked": f"bold {WARN}",
+    "value.masked": f"bold {MASKED}",
     "badge.solid.neutral": f"bold {LABEL} on {BADGE_SLATE_BG}",
     "badge.solid.info": f"bold {TEAL} on {BADGE_TEAL_BG}",
     "badge.solid.success": f"bold {OK} on {BADGE_GREEN_BG}",
@@ -130,7 +131,7 @@ _STYLES: dict[str, str] = {
     "status.queued": DIM,
     "status.skipped": DIM,
     "status.cancelled": DIM,
-    "status.redacted": WARN,
+    "status.redacted": MASKED,
     "status.drift": ERR,
     "status.same": OK,
     "status.outbound": WARN,
@@ -247,6 +248,7 @@ _LIGHT_COLORS = {
     WARN: "#9A6700",
     ERR: "#C7365A",
     ERROR_OP: "#9D4700",
+    MASKED: "#6841B5",
     BADGE_GREEN_BG: "#D8F0DF",
     BADGE_RED_BG: "#F9DDE4",
     BADGE_AMBER_BG: "#F5E9C6",

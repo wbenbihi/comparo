@@ -9,9 +9,7 @@ from textual.containers import Vertical
 
 from comparo.tui.components.badge import Badge
 from comparo.tui.components.badge import BadgeTone
-from comparo.tui.components.table import Column
-from comparo.tui.components.table import Record
-from comparo.tui.components.table import Table
+from comparo.tui.components.resourcelinks import ResourceLinksTable
 from comparo.tui.components.typography import Hint
 from comparo.tui.models.resource import InspectionPhase
 from comparo.tui.models.resource import ResolvedResourceField
@@ -101,15 +99,8 @@ class ResourceUsageBody(Vertical):
         if not self._consumers:
             yield Hint(f"This {self._kind} has no declared consumers.")
             return
-        yield Table(
-            columns=(Column("kind", "Kind", width=18), Column("resource", "Consumer")),
-            records=tuple(
-                Record(f"consumer:{index}", (edge.target_kind, edge.target_id))
-                for index, edge in enumerate(self._consumers)
-            ),
-            classes="resource-usage-table",
-        )
-        yield Hint("Press g for the complete directional dependency graph.")
+        yield ResourceLinksTable(self._consumers, classes="resource-usage-table")
+        yield Hint("Enter opens the selected resource · g shows all relationships.")
 
 
 __all__ = [

@@ -1,0 +1,94 @@
+{
+  "apiVersion": "comparo/v1alpha1",
+  "kind": "Schema",
+  "metadata": {
+    "id": "customer",
+    "name": "customer"
+  },
+  "spec": {
+    "$id": "https://example.invalid/customer.schema.json",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "address": {
+        "type": "object",
+        "properties": {
+          "street": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
+---
+{
+  "apiVersion": "comparo/v1alpha1",
+  "kind": "Schema",
+  "metadata": {
+    "id": "deep-order",
+    "name": "deep-order"
+  },
+  "spec": {
+    "$id": "https://example.invalid/order.schema.json",
+    "type": "object",
+    "required": [
+      "customer",
+      "items"
+    ],
+    "properties": {
+      "customer": {
+        "$ref": "customer.schema.json"
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "sku"
+          ],
+          "properties": {
+            "sku": {
+              "type": "string"
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "size": {
+                  "type": "string"
+                },
+                "owner": {
+                  "$ref": "customer.schema.json"
+                }
+              }
+            }
+          }
+        }
+      },
+      "tree": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "$defs": {
+      "node": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/node"
+            }
+          }
+        }
+      }
+    }
+  }
+}

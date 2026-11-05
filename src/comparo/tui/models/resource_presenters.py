@@ -14,6 +14,8 @@ from comparo.tui.models.explorer import ProjectEnvironmentFact
 from comparo.tui.models.explorer import ResourceEntry
 from comparo.tui.models.fields import Field
 from comparo.tui.models.resource import ResolvedResourceField
+from comparo.tui.models.resource_links import ResourceDependency as ResourceDependency
+from comparo.tui.models.schema_document import SchemaNode
 
 if TYPE_CHECKING:
     from comparo.application import ProjectResourceSummary
@@ -165,6 +167,7 @@ class SchemaProperty:
     required: bool
     shape: str
     constraints: tuple[str, ...]
+    schema_path: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -174,7 +177,7 @@ class SchemaOverview:
     source: str
     root_type: str
     required: tuple[str, ...]
-    properties: tuple[SchemaProperty, ...]
+    properties: tuple[SchemaProperty | SchemaNode, ...]
     composition: tuple[ResourceSetting, ...]
     constraints: tuple[ResourceSetting, ...]
     consumers: tuple[ResourceDependency, ...]
@@ -196,17 +199,6 @@ class ValueDirective:
 
     path: tuple[str, ...]
     expression: str
-
-
-@dataclass(frozen=True)
-class ResourceDependency:
-    """One directed edge in a resource's safe dependency graph."""
-
-    direction: str
-    path: tuple[str, ...]
-    target_kind: str
-    target_id: str
-    origin: str
 
 
 @dataclass(frozen=True)
@@ -478,8 +470,7 @@ def resource_dependencies(entry: ResourceEntry) -> tuple[ResourceDependency, ...
         ResourceDependency(
             direction="used-by" if relationship.origin == "used-by" else "uses",
             path=relationship.path,
-            target_kind=relationship.target.kind,
-            target_id=relationship.target.resource_id,
+            target=relationship.target,
             origin=relationship.origin,
         )
         for relationship in outline.relationships
@@ -612,7 +603,9 @@ def _request_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ..
             )
         ),
     )
-    return tuple(path for path in candidates if path in available)
+    from comparo.tui.models.body_document import body_resolution_paths
+
+    return (*body_resolution_paths(entry), *(path for path in candidates if path in available))
 
 
 def _matrix_resolution_paths(entry: ResourceEntry) -> tuple[tuple[str, ...], ...]:
@@ -989,6 +982,7 @@ def schema_overview(entry: ResourceEntry) -> SchemaOverview:
                 required=required,
                 shape=field.value,
                 constraints=exact_constraints,
+                schema_path=field.path,
             )
         )
     top_names = tuple(field.path[0] for field in fields if len(field.path) == 1)

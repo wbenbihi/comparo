@@ -13,6 +13,9 @@ from comparo.tui.components.badge import Badge
 from comparo.tui.components.badge import BadgeEmphasis
 from comparo.tui.components.badge import BadgeTone
 from comparo.tui.components.badge import badge_text
+from comparo.tui.components.inspector import InspectorColumns
+from comparo.tui.components.inspector import InspectorSection
+from comparo.tui.components.resourcelinks import ResourceLinksTable
 from comparo.tui.components.separator import Separator
 from comparo.tui.components.typography import Hint
 from comparo.tui.models.resource import InspectionPhase
@@ -22,6 +25,7 @@ from comparo.tui.models.resource import ResourcePresentation
 from comparo.tui.models.resource_presenters import EnvironmentOverview
 from comparo.tui.models.resource_presenters import compiled_exact_fields
 from comparo.tui.models.resource_presenters import environment_overview
+from comparo.tui.models.resource_presenters import resource_dependencies
 from comparo.tui.theme import kind_glyph
 from comparo.tui.theme import style
 
@@ -170,33 +174,54 @@ class EnvironmentResourceDetails(BaseKindResourceDetails):
                 self.entry.summary.name or self.entry.summary.coordinate.resource_id,
             )
 
-        yield Separator(label="Connection", align="left", classes="tight")
-        yield ResourceSettingList(
-            overview.connection,
-            empty="No connection settings are declared.",
-            resolved=resolved,
+        with InspectorColumns():
+            yield InspectorSection(
+                "Connection",
+                ResourceSettingList(
+                    overview.connection,
+                    empty="No connection settings are declared.",
+                    resolved=resolved,
+                ),
+            )
+            yield InspectorSection(
+                "Policies",
+                ResourceSettingList(
+                    overview.policies,
+                    empty="No Environment-specific policies are declared.",
+                    resolved=resolved,
+                ),
+            )
+        with InspectorColumns():
+            yield InspectorSection(
+                "Runtime inputs",
+                ResourceSettingList(
+                    tuple(item for item in overview.runtime_inputs if item.name != "env"),
+                    empty="No Environment variables or secrets are declared.",
+                    resolved=resolved,
+                ),
+            )
+            yield InspectorSection(
+                "Value sources",
+                ResourceSettingList(
+                    tuple(item for item in overview.runtime_inputs if item.name == "env"),
+                    empty="No Environment value sources are declared.",
+                    resolved=resolved,
+                ),
+            )
+        yield InspectorSection(
+            "Request defaults",
+            ResourceSettingList(
+                overview.request_defaults,
+                empty="No headers, cookies, or authentication defaults are declared.",
+                resolved=resolved,
+            ),
         )
-
-        yield Separator(label="Runtime inputs", align="left")
-        yield ResourceSettingList(
-            overview.runtime_inputs,
-            empty="No Environment variables or secrets are declared.",
-            resolved=resolved,
-        )
-
-        yield Separator(label="Request defaults", align="left")
-        yield ResourceSettingList(
-            overview.request_defaults,
-            empty="No headers, cookies, or authentication defaults are declared.",
-            resolved=resolved,
-        )
-
-        yield Separator(label="Policies", align="left")
-        yield ResourceSettingList(
-            overview.policies,
-            empty="No Environment-specific policy profiles are attached.",
-            resolved=resolved,
-        )
+        yield Hint("Resolved values are inspected for this Environment; secrets remain masked.")
+        edges = resource_dependencies(self.entry)
+        if edges:
+            yield InspectorSection(
+                "Relationships & usage", ResourceLinksTable(edges, directions=True)
+            )
 
         yield Separator(label="Health", align="left")
         yield EnvironmentHealthStatus(self, overview)

@@ -7,6 +7,16 @@ from rich.text import TextType
 
 
 @dataclass(frozen=True)
+class TreePosition[T: str]:
+    """A tree location without retaining widgets or row content."""
+
+    cursor: T | None
+    expanded: frozenset[T]
+    scroll_x: float
+    scroll_y: float
+
+
+@dataclass(frozen=True)
 class MenuNode[T: str]:
     """One tree entry; a node with no children is a selectable leaf."""
 

@@ -12,6 +12,11 @@ from textual.content import Content
 
 from comparo.tui.components.badge import Badge
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.inspector import InspectorColumns
+from comparo.tui.components.inspector import InspectorSection
+from comparo.tui.components.list import Field
+from comparo.tui.components.list import KeyValueList
+from comparo.tui.components.resourcelinks import ResourceLinksTable
 from comparo.tui.components.separator import Separator
 from comparo.tui.components.table import Column
 from comparo.tui.components.table import Record
@@ -52,7 +57,7 @@ class ValueContextStrip(Horizontal):
                 classes="value-context-badge",
             ),
             Badge(
-                f"{len(overview.consumers)} consumers",
+                f"used by {len(overview.consumers)} resources",
                 tone=BadgeTone.SUCCESS if overview.consumers else BadgeTone.NEUTRAL,
                 classes="value-context-badge",
             ),
@@ -78,6 +83,17 @@ class ValueExpressionBody(Vertical):
         """Render the same hierarchy in raw and resolved modes."""
         if self._overview.value is None:
             yield Hint("This Value has no inspectable expression tree.")
+            return
+        if self._resolved:
+            yield KeyValueList(
+                *(
+                    Field(
+                        ".".join(field.path[1:]) or "value",
+                        Content.from_rich_text(Text(field.value, style(field.tone or "fg"))),
+                    )
+                    for field in self._resolved.values()
+                )
+            )
             return
         yield ResourceSettingList(
             (self._overview.value,),
@@ -131,26 +147,8 @@ class ValueUsageBody(Vertical):
         if not edges:
             yield Hint("This Value is isolated from other resources.")
             return
-        yield Table(
-            columns=(
-                Column("direction", "Direction", width=11),
-                Column("kind", "Kind", width=12),
-                Column("resource", "Resource"),
-            ),
-            records=tuple(
-                Record(
-                    f"edge:{index}",
-                    (
-                        Content.from_rich_text(Text(edge.direction, style("muted"))),
-                        Content.from_rich_text(Text(edge.target_kind, style("kind.value"))),
-                        Content.from_rich_text(Text(edge.target_id, style("fg"))),
-                    ),
-                )
-                for index, edge in enumerate(edges)
-            ),
-            classes="value-usage-table",
-        )
-        yield Hint("Press g for the complete directional dependency graph.")
+        yield ResourceLinksTable(edges, directions=True, classes="value-usage-table")
+        yield Hint("Enter opens the selected resource · g shows all relationships.")
 
 
 class ValueResourceDetails(BaseKindResourceDetails):
@@ -167,13 +165,18 @@ class ValueResourceDetails(BaseKindResourceDetails):
         """Render one continuous Value document in raw and resolved modes."""
         overview = value_overview(self.entry)
         yield ValueContextStrip(overview)
-        if self.resource.overview_mode is ResourceOverviewMode.RESOLVED:
-            yield resolution_status(
-                self.resource,
-                self.entry.summary.name or self.entry.summary.coordinate.resource_id,
-            )
-        yield Separator(label="Value", align="left", classes="resource-section-heading")
-        yield ValueExpressionBody(overview, self._resolved_fields())
+        with InspectorColumns():
+            yield InspectorSection("Expression", ValueExpressionBody(overview, {}))
+            with InspectorSection("Resolved value"):
+                if self.resource.overview_mode is ResourceOverviewMode.RAW:
+                    yield Hint("Press r to resolve this Value.")
+                else:
+                    yield resolution_status(
+                        self.resource,
+                        self.entry.summary.name or self.entry.summary.coordinate.resource_id,
+                    )
+                    if self.resource.resolved.phase is InspectionPhase.READY:
+                        yield ValueExpressionBody(overview, self._resolved_fields())
         yield Separator(label="Runtime inputs", align="left", classes="resource-section-heading")
         yield ValueInputsBody(overview)
         yield Separator(

@@ -81,6 +81,12 @@ class FilterInput(Horizontal):
     def value(self, value: str) -> None:
         self.query_one(Input).value = value
 
+    def restore_value(self, value: str) -> None:
+        """Replace a saved filter without reporting a new user edit."""
+        field = self.query_one(Input)
+        with field.prevent(Input.Changed):
+            field.value = value
+
     @override
     def focus(self, scroll_visible: bool = True) -> "FilterInput":
         """Forward focus to the inner field."""

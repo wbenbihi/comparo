@@ -24,11 +24,13 @@ from comparo.tui.components.resources.matrix import MatrixDefinitionBody
 from comparo.tui.components.resources.matrix import MatrixPlanBody
 from comparo.tui.components.resources.matrix import MatrixResourceDetails
 from comparo.tui.components.resources.matrix import MatrixUsageBody
+from comparo.tui.components.resources.matrix_browser import MatrixBrowser
 from comparo.tui.components.resources.schema import SchemaCompositionBody
 from comparo.tui.components.resources.schema import SchemaContextStrip
 from comparo.tui.components.resources.schema import SchemaPropertiesBody
 from comparo.tui.components.resources.schema import SchemaResourceDetails
 from comparo.tui.components.resources.schema import SchemaUsageBody
+from comparo.tui.components.resources.schema_tree import SchemaPropertyTree
 from comparo.tui.components.resources.value import ValueContextStrip
 from comparo.tui.components.resources.value import ValueExpressionBody
 from comparo.tui.components.resources.value import ValueInputsBody
@@ -52,6 +54,7 @@ from comparo.tui.models.resource_presenters import resource_resolution_subject_i
 from comparo.tui.models.resource_presenters import resource_resolution_subject_ids
 from comparo.tui.models.resource_presenters import schema_overview
 from comparo.tui.models.resource_presenters import value_overview
+from comparo.tui.theme import COMPARO_DARK
 from comparo.tui.workspaces.explorer import ExplorerWorkspace
 
 PROJECT = Path(__file__).parents[2] / "examples" / "tui-showcase"
@@ -271,6 +274,11 @@ def test_dedicated_kind_widgets_render_all_resource_sections_without_tabs() -> N
     value_detail = initial_detail(value_entry, environment.summary.coordinate)
 
     class ResourceKindsApp(App[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.register_theme(COMPARO_DARK)
+            self.theme = COMPARO_DARK.name
+
         @override
         def compose(self) -> ComposeResult:
             yield resource_widget(matrix_detail)
@@ -316,8 +324,11 @@ def test_dotted_display_paths_never_become_datatable_identity(tmp_path: Path) ->
         app = CollisionApp()
         async with app.run_test(size=(140, 45)):
             tables = tuple(app.query(Table))
-            assert len(tables) == 2
-            assert tuple(len(table.records) for table in tables) == (3, 2)
+            assert len(tables) == 1
+            tree = app.query_one(SchemaPropertyTree)
+            assert len(tree._properties) == 4
+            assert len(set(tree._properties)) == 4
+            assert len(tables[0].records) == 2
             for table in tables:
                 identities = tuple(record.id for record in table.records)
                 assert len(identities) == len(set(identities))
@@ -325,7 +336,7 @@ def test_dotted_display_paths_never_become_datatable_identity(tmp_path: Path) ->
     asyncio.run(inspect())
 
 
-def test_explorer_rejects_implicit_resolution_when_consumers_are_ambiguous() -> None:
+def test_explorer_resolves_values_independently_of_multiple_consumers() -> None:
     async def inspect() -> None:
         app = ComparoApp(PROJECT)
         async with app.run_test(size=(180, 55)) as pilot:
@@ -340,14 +351,22 @@ def test_explorer_rejects_implicit_resolution_when_consumers_are_ambiguous() -> 
             )
 
             workspace.action_toggle_resource_resolution()
-            await pilot.pause()
+            await _wait_until(
+                pilot,
+                lambda: (
+                    workspace.detail is not None
+                    and workspace.detail.resolved.phase is InspectionPhase.READY
+                ),
+            )
 
             assert workspace.detail is not None
             assert workspace.detail.overview_mode is ResourceOverviewMode.RESOLVED
-            assert workspace.detail.resolved.phase is InspectionPhase.UNAVAILABLE
-            assert workspace.detail.resolved.message == (
-                "Choose an explicit consumer before resolving (3 available)."
-            )
+            assert workspace.detail.resolved.message is None
+            assert workspace.detail.resolved.value is not None
+            fields = {field.path: field.value for field in workspace.detail.resolved.value.fields}
+            assert fields[("value", "Accept")] == "application/json"
+            assert fields[("value", "X-Demo-Client")] == "comparo-tui"
+            assert workspace.selected == shared.key
 
     asyncio.run(inspect())
 
@@ -361,6 +380,11 @@ def test_matrix_plan_copy_tracks_resolution_lifecycle() -> None:
     loading = loading_resolved(initial_detail(matrix, environment.summary.coordinate))
 
     class LoadingMatrixApp(App[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.register_theme(COMPARO_DARK)
+            self.theme = COMPARO_DARK.name
+
         @override
         def compose(self) -> ComposeResult:
             yield resource_widget(loading)
@@ -369,7 +393,7 @@ def test_matrix_plan_copy_tracks_resolution_lifecycle() -> None:
         app = LoadingMatrixApp()
         async with app.run_test(size=(140, 35)):
             copy = tuple(str(item.content) for item in app.query(Hint))
-            assert any("Compiling Matrix cases" in item for item in copy)
-            assert all("Press r to compile" not in item for item in copy)
+            assert len(app.query(MatrixBrowser)) == 1
+            assert all("Press r to browse" not in item for item in copy)
 
     asyncio.run(inspect())

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 from typing import override
 
@@ -30,6 +31,9 @@ from comparo.tui.components.table import Record
 from comparo.tui.components.table import Table
 from comparo.tui.components.typography import Caption
 from comparo.tui.components.typography import Hint
+from comparo.tui.components.viewposition import WidgetPosition
+from comparo.tui.components.viewposition import capture_positions
+from comparo.tui.components.viewposition import restore_positions
 from comparo.tui.fragments import glyph
 from comparo.tui.models.diff import build_source_document
 from comparo.tui.models.explorer import ResourceEntry
@@ -229,6 +233,14 @@ class ResolvedRepresentation(VerticalScroll):
         )
 
 
+@dataclass(frozen=True)
+class ResourceViewPosition:
+    """Inspector presentation bookmarks, without resource data or widgets."""
+
+    sections: tuple[tuple[str, str], ...]
+    widgets: tuple[WidgetPosition, ...]
+
+
 class ResourceDetailOverview(Widget):
     """Generic host for actions, representations, and registered kind widgets."""
 
@@ -240,6 +252,49 @@ class ResourceDetailOverview(Widget):
         """Initialize the host and its resource-kind section memory."""
         super().__init__(id=id, classes=classes)
         self._kind_sections: dict[str, str] = {}
+        self.rendered_key: str | None = None
+        self._pending_position: tuple[str, ResourceViewPosition | None] | None = None
+
+    def capture_position(self) -> ResourceViewPosition:
+        """Capture tabs, collection cursors, scroll and focus before following a link."""
+        return ResourceViewPosition(tuple(self._kind_sections.items()), capture_positions(self))
+
+    def prepare_navigation(self, key: str, position: ResourceViewPosition | None = None) -> None:
+        """Restore after the destination's representation has been recomposed."""
+        self._pending_position = (key, position)
+        if position is not None:
+            self._kind_sections = dict(position.sections)
+
+    @override
+    async def recompose(self) -> None:
+        """Apply navigation bookmarks only to their requested resource revision."""
+        await super().recompose()
+        pending = self._pending_position
+        if pending is not None:
+            self.call_after_refresh(self._restore_navigation, pending)
+
+    def _restore_navigation(self, pending: tuple[str, ResourceViewPosition | None]) -> None:
+        if self._pending_position is not pending:
+            return
+        if self.detail is None or self.detail.key != pending[0]:
+            self._pending_position = None
+            return
+        inspection = {
+            ResourceRepresentation.AUTHORED: self.detail.authored.phase,
+            ResourceRepresentation.EFFECTIVE: self.detail.effective.phase,
+            ResourceRepresentation.RESOLVED: self.detail.resolved.phase,
+            ResourceRepresentation.OVERVIEW: self.detail.resolved.phase,
+        }.get(self.detail.representation)
+        if inspection is InspectionPhase.LOADING:
+            return
+        self._pending_position = None
+        position = pending[1]
+        if position is not None:
+            restore_positions(self, position.widgets)
+        else:
+            target = next((child for child in self.query(Widget) if child.can_focus), None)
+            if target is not None:
+                target.focus()
 
     class ActionRequested(Message):
         """The host requested an effectful or representation-changing action."""
@@ -260,6 +315,7 @@ class ResourceDetailOverview(Widget):
     def compose(self) -> ComposeResult:
         """Compose the stable host chrome and active representation."""
         detail = self.detail
+        self.rendered_key = None if detail is None else detail.key
         if detail is None:
             yield Panel(Hint("Select a resource."), title="Overview")
             return

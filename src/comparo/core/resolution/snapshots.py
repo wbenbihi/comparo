@@ -18,6 +18,7 @@ from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.value_references import runtime_value_scope_kind
 from comparo.core.planning.models import PreparedRun
 from comparo.core.planning.models import ValueBindingLayer
+from comparo.core.resolution.inputs import ResolutionInputs
 from comparo.core.resolution.models import CellInputs
 from comparo.core.resolution.models import EnvironmentSnapshot
 from comparo.core.resolution.models import MatrixInputBinding
@@ -91,7 +92,7 @@ def cell_inputs(prepared: PreparedRun, cell: PlannedCell) -> CellInputs:
 
 
 def validate_environment_snapshots(
-    prepared: PreparedRun,
+    prepared: PreparedRun | ResolutionInputs,
     snapshots: tuple[EnvironmentSnapshot, ...],
 ) -> None:
     """Require one exact run-start snapshot for every and only selected Environment."""
@@ -99,7 +100,11 @@ def validate_environment_snapshots(
         type(snapshot) is not EnvironmentSnapshot for snapshot in snapshots
     ):
         raise TypeError("Environment snapshots must be a typed immutable tuple")
-    expected = tuple(prepared.effective.environments)
+    expected = (
+        prepared.environments
+        if type(prepared) is ResolutionInputs
+        else prepared.effective.environments
+    )
     actual = tuple(snapshot.environment for snapshot in snapshots)
     if len(actual) != len(set(actual)):
         raise ValueError("Environment snapshots must be unique")
@@ -122,7 +127,7 @@ def environment_snapshot(
 
 
 def namespace_binding(
-    prepared: PreparedRun,
+    prepared: PreparedRun | ResolutionInputs,
     namespace: ValueNamespace,
     symbol: SymbolPath,
     consumer: RuntimeScope,
@@ -135,11 +140,23 @@ def namespace_binding(
     }:
         raise ValueError("namespace bindings support variables, secrets, and parameters")
     selected: NamespaceBinding | None = None
-    for layer in prepared.effective.value_layers:
+    layers = (
+        prepared.value_layers
+        if type(prepared) is ResolutionInputs
+        else prepared.effective.value_layers
+    )
+    for layer in layers:
         expression = _layer_expression(layer, namespace)
         if expression is None:
             continue
         scoped = _layer_scope(layer, namespace, consumer)
+        if (
+            scoped is None
+            and type(prepared) is ResolutionInputs
+            and prepared.standalone
+            and namespace is ValueNamespace.PARAMETERS
+        ):
+            scoped = _layer_scope(layer, ValueNamespace.VARIABLES, consumer)
         if scoped is None:
             continue
         member = _first_member(expression, symbol)

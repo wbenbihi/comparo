@@ -4,8 +4,10 @@ from typing import ClassVar
 from typing import override
 
 from textual.app import ComposeResult
+from textual.containers import Vertical
 
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.inspector import InspectorColumns
 from comparo.tui.components.separator import Separator
 from comparo.tui.models.remaining_resource_presenters import execution_profile_overview
 from comparo.tui.models.resource import ResourceOverviewMode
@@ -57,44 +59,52 @@ class ExecutionProfileResourceDetails(BaseKindResourceDetails):
                 self.resource,
                 self.entry.summary.name or self.entry.summary.coordinate.resource_id,
             )
-        yield Separator(label="Selection", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.selection,
-            empty=(
-                "No selection is declared in this profile; Project defaults or invocation "
-                "overrides may supply it at execution."
-            ),
-            resolved=resolved,
-        )
-        yield Separator(
-            label="Execution controls",
-            align="left",
-            classes="resource-section-heading",
-        )
-        yield ResourceSettingsBody(
-            overview.controls,
-            empty=(
-                "No execution controls are declared here; Project defaults or invocation "
-                "overrides may supply them."
-            ),
-            resolved=resolved,
-        )
-        yield Separator(label="Runtime inputs", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.inputs,
-            empty="No execution-scoped parameters, variables, or secrets are declared.",
-            resolved=resolved,
-        )
-        yield Separator(
-            label="Evaluation & output",
-            align="left",
-            classes="resource-section-heading",
-        )
-        yield ResourceSettingsBody(
-            overview.evaluation,
-            empty="No execution-scoped evaluation or output profiles are attached.",
-            resolved=resolved,
-        )
+        with InspectorColumns():
+            with Vertical():
+                yield Separator(label="Selection", align="left", classes="resource-section-heading")
+                yield ResourceSettingsBody(
+                    overview.selection,
+                    empty=(
+                        "No selection is declared in this profile; Project defaults or invocation "
+                        "overrides may supply it at execution."
+                    ),
+                    resolved=resolved,
+                )
+            with Vertical():
+                yield Separator(
+                    label="Execution controls",
+                    align="left",
+                    classes="resource-section-heading",
+                )
+                yield ResourceSettingsBody(
+                    overview.controls,
+                    empty=(
+                        "No execution controls are declared here; Project defaults or invocation "
+                        "overrides may supply them."
+                    ),
+                    resolved=resolved,
+                )
+        with InspectorColumns():
+            with Vertical():
+                yield Separator(
+                    label="Runtime inputs", align="left", classes="resource-section-heading"
+                )
+                yield ResourceSettingsBody(
+                    overview.inputs,
+                    empty="No execution-scoped parameters, variables, or secrets are declared.",
+                    resolved=resolved,
+                )
+            with Vertical():
+                yield Separator(
+                    label="Evaluation & output",
+                    align="left",
+                    classes="resource-section-heading",
+                )
+                yield ResourceSettingsBody(
+                    overview.evaluation,
+                    empty="No execution-scoped evaluation or output profiles are attached.",
+                    resolved=resolved,
+                )
         yield Separator(label="Usage", align="left", classes="resource-section-heading")
         yield ResourceUsageBody(overview.consumers, kind="ExecutionProfile")
 

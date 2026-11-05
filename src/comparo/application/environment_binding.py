@@ -26,6 +26,7 @@ from comparo.core.domain.diagnostics import DiagnosticCode
 from comparo.core.domain.diagnostics import DiagnosticContext
 from comparo.core.domain.diagnostics import DiagnosticSeverity
 from comparo.core.domain.diagnostics import DiagnosticStage
+from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.provenance import ProvenanceEntry
 from comparo.core.domain.provenance import ProvenanceKind
@@ -262,16 +263,22 @@ def _lower_environment(
     resource: CompiledResource,
     project: PreparedProjectPlan,
 ) -> EnvironmentSnapshotRequest | None:
+    request = lower_environment_source(resource, project.policy.definition)
+    return None if request is None else _with_invocation_values(request, project)
+
+
+def lower_environment_source(
+    resource: CompiledResource,
+    policy: DefinitionRef,
+) -> EnvironmentSnapshotRequest | None:
+    """Lower an Environment's own sources without an execution plan or overlays."""
     source = object_member(resource_spec(resource), "env")
     provenance = _provenance(resource)
     if source is None:
-        return _with_invocation_values(
-            EnvironmentSnapshotRequest(
-                environment=resource.definition,
-                configuration=provenance,
-                policy=project.policy.definition,
-            ),
-            project,
+        return EnvironmentSnapshotRequest(
+            environment=resource.definition,
+            configuration=provenance,
+            policy=policy,
         )
     if type(source) is not JsonObject:
         return None
@@ -285,16 +292,13 @@ def _lower_environment(
     inline_values = _values(fields.get("values"), provenance)
     if file_sources is None or inline_values is None:
         return None
-    return _with_invocation_values(
-        EnvironmentSnapshotRequest(
-            environment=resource.definition,
-            configuration=provenance,
-            policy=project.policy.definition,
-            inherit_process=inherit.value,
-            files=file_sources,
-            values=inline_values,
-        ),
-        project,
+    return EnvironmentSnapshotRequest(
+        environment=resource.definition,
+        configuration=provenance,
+        policy=policy,
+        inherit_process=inherit.value,
+        files=file_sources,
+        values=inline_values,
     )
 
 

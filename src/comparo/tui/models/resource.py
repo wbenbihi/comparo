@@ -201,6 +201,16 @@ class ResolvedResourceView:
 
 
 @dataclass(frozen=True)
+class ResolvedValueView:
+    """A reusable Value resolved independently of execution occurrences."""
+
+    environment: ResourceCoordinate | None
+    fields: tuple[ResolvedResourceField, ...]
+    diagnostics: tuple[str, ...] = ()
+    incomplete: bool = False
+
+
+@dataclass(frozen=True)
 class EnvironmentHealthCheckResult:
     """Sanitized terminal outcome of an Environment health-check run."""
 
@@ -276,9 +286,10 @@ class ResourceDetail:
     execution_environment: ResourceCoordinate | None
     authored: ResourceInspection[AuthoredResourceWindow]
     effective: ResourceInspection[EffectiveResourceWindow]
-    resolved: ResourceInspection[ResolvedResourceView]
+    resolved: ResourceInspection[ResolvedResourceView | ResolvedValueView]
     health: ResourceInspection[EnvironmentHealthCheckResult]
     actions: tuple[ResourceAction, ...]
+    schema_catalog: tuple[ResourceEntry, ...] = ()
 
 
 def resolution_environment(detail: ResourceDetail) -> ResourceCoordinate | None:
@@ -415,7 +426,9 @@ def loading_resolved(detail: ResourceDetail) -> ResourceDetail:
     )
 
 
-def loaded_resolved(detail: ResourceDetail, value: ResolvedResourceView) -> ResourceDetail:
+def loaded_resolved(
+    detail: ResourceDetail, value: ResolvedResourceView | ResolvedValueView
+) -> ResourceDetail:
     """Attach one masked resolved projection for the current execution context."""
     if resolution_environment(detail) != value.environment:
         raise ValueError("resolved view Environment differs from resource context")

@@ -1,0 +1,16 @@
+apiVersion: comparo/v1alpha1
+kind: Project
+metadata:
+  id: explorer-inspection
+  name: Explorer inspection examples
+spec:
+  data: .comparo
+  variables:
+    client: public-demo
+  secrets:
+    token: example-secret-never-display
+  defaults:
+    parameters:
+      orderId: 42
+    environments: [{$use: local}]
+    subjects: [{$use: Request/checkout}]

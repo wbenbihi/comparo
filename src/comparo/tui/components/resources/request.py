@@ -25,6 +25,7 @@ from comparo.tui.models.explorer import ResourceEntry
 from comparo.tui.models.resource import InspectionPhase
 from comparo.tui.models.resource import ResolvedRequestTarget
 from comparo.tui.models.resource import ResolvedResourceField
+from comparo.tui.models.resource import ResolvedResourceView
 from comparo.tui.models.resource import ResourceOverviewMode
 from comparo.tui.models.resource import ResourcePresentation
 from comparo.tui.models.resource_presenters import RequestOverview
@@ -34,9 +35,12 @@ from comparo.tui.models.resource_presenters import request_overview
 from comparo.tui.theme import style
 
 from .base import BaseKindResourceDetails
+from .request_body import RequestBody
+from .request_summary import RequestSummary
 from .shared import ResourceSettingList
 from .shared import resolution_status
 
+_REQUEST_TAB_SUMMARY = "request-summary"
 _REQUEST_TAB_URL = "request-url"
 _REQUEST_TAB_QUERY = "request-query"
 _REQUEST_TAB_HEADERS = "request-headers"
@@ -47,6 +51,7 @@ _REQUEST_TAB_RUNTIME = "request-runtime"
 _REQUEST_TAB_CONTRACTS = "request-contracts"
 _REQUEST_TABS = frozenset(
     {
+        _REQUEST_TAB_SUMMARY,
         _REQUEST_TAB_URL,
         _REQUEST_TAB_QUERY,
         _REQUEST_TAB_HEADERS,
@@ -235,7 +240,7 @@ class RequestResourceDetails(BaseKindResourceDetails):
         if (
             self.resource.overview_mode is ResourceOverviewMode.RESOLVED
             and self.resource.resolved.phase is InspectionPhase.READY
-            and self.resource.resolved.value is not None
+            and isinstance(self.resource.resolved.value, ResolvedResourceView)
         ):
             resolved_target = self.resource.resolved.value.request_target
 
@@ -259,6 +264,7 @@ class RequestResourceDetails(BaseKindResourceDetails):
             id="request-tabs",
             classes="request-tabs",
         ):
+            yield TabPane("Summary", RequestSummary(self.entry, overview), id=_REQUEST_TAB_SUMMARY)
             yield TabPane(
                 "URL",
                 RequestTabBody(
@@ -307,11 +313,7 @@ class RequestResourceDetails(BaseKindResourceDetails):
             )
             yield TabPane(
                 "Body",
-                RequestTabBody(
-                    RequestTabGroup(None, overview.payload),
-                    empty="This Request has no body.",
-                    resolved=resolved,
-                ),
+                RequestBody(self.entry, resolved),
                 id=_REQUEST_TAB_BODY,
             )
             yield TabPane(
@@ -339,7 +341,7 @@ class RequestResourceDetails(BaseKindResourceDetails):
     def _active_tab(self) -> str:
         """Restore only a known Request tab, otherwise start with URL."""
         section = self.initial_section
-        return section if section in _REQUEST_TABS else _REQUEST_TAB_URL
+        return section if section in _REQUEST_TABS else _REQUEST_TAB_SUMMARY
 
     @on(TabbedContent.TabActivated, "#request-tabs")
     def on_request_tab_activated(self, event: TabbedContent.TabActivated) -> None:
