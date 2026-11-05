@@ -126,3 +126,55 @@ def test_init_request_validates_direct_construction() -> None:
         InitRequest(directory=".", output=CliOutputMode.HUMAN)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="typed"):
         InitRequest(directory=Path(), output="human")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="layout"):
+        InitRequest(directory=Path(), output=CliOutputMode.HUMAN, layout="unknown")
+
+
+def test_split_initialization_is_plannable_and_contains_each_resource_once(tmp_path: Path) -> None:
+    code, stdout, stderr = _invoke("init", str(tmp_path), "--layout", "split")
+    assert code == 0, (stdout, stderr)
+    assert {item.relative_to(tmp_path).as_posix() for item in tmp_path.rglob("*.yaml")} == {
+        "comparo.yaml",
+        ".comparo/environments.yaml",
+        ".comparo/requests/health.yaml",
+        ".comparo/profiles/checks.yaml",
+    }
+    assert "kind: Environment" not in (tmp_path / "comparo.yaml").read_text()
+    for command in ("validate", "plan", "render"):
+        code, stdout, stderr = _invoke(command, "--config", str(tmp_path), "--format", "json")
+        assert code == 0, (command, stdout, stderr)
+
+
+@pytest.mark.parametrize("kind", ["directory", "file", "symlink"])
+def test_split_init_preserves_existing_data_directory(tmp_path: Path, kind: str) -> None:
+    data = tmp_path / ".comparo"
+    if kind == "directory":
+        data.mkdir()
+        (data / "existing.yaml").write_text("keep")
+    elif kind == "file":
+        data.write_text("keep")
+    else:
+        data.symlink_to(tmp_path / "missing")
+    assert _invoke("init", str(tmp_path), "--layout", "split")[0] == 2
+    assert not (tmp_path / "comparo.yaml").exists()
+    if kind == "directory":
+        assert (data / "existing.yaml").read_text() == "keep"
+    elif kind == "file":
+        assert data.read_text() == "keep"
+    else:
+        assert data.is_symlink()
+
+
+def test_split_init_rolls_back_partial_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = os.link
+
+    def fail_manifest(source: Path, destination: Path) -> None:
+        if destination.name == "comparo.yaml":
+            raise PermissionError
+        original(source, destination)
+
+    monkeypatch.setattr(os, "link", fail_manifest)
+    assert _invoke("init", str(tmp_path), "--layout", "split")[0] == 2
+    assert list(tmp_path.iterdir()) == []

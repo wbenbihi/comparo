@@ -37,6 +37,7 @@ class CliPayloadKind(StrEnum):
     TEXT = "text"
     JSON = "json"
     MARKDOWN = "markdown"
+    RICH_MARKDOWN = "rich-markdown"
     HTML = "html"
     RST = "rst"
     BINARY = "binary"
@@ -335,6 +336,7 @@ class InitRequest(msgspec.Struct, frozen=True, kw_only=True):
 
     directory: Path
     output: CliOutputMode
+    layout: str = "single"
 
     def __post_init__(self) -> None:
         """Require a local path and a closed output mode."""
@@ -342,6 +344,8 @@ class InitRequest(msgspec.Struct, frozen=True, kw_only=True):
             raise TypeError("initialization directory must be a Path")
         if type(self.output) is not CliOutputMode:
             raise TypeError("initialization output mode must be typed")
+        if self.layout not in {"single", "split"}:
+            raise ValueError("initialization layout must be single or split")
 
 
 @final

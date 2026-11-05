@@ -17,6 +17,9 @@ rather than falling back to pathname-based file access on Windows.
 | Command | Effects | Purpose |
 | --- | --- | --- |
 | `comparo init [DIRECTORY]` | local writes | Create a starter project without overwriting an existing manifest. |
+| `comparo docs [TOPIC]` | package reads | Read version-matched authoring guides in Rich, Markdown, or JSON. |
+| `comparo skill show` | package reads | Print the portable Comparo authoring skill. |
+| `comparo skill install [DIRECTORY]` | local writes | Install a repository or personal (`--user`) authoring skill. |
 | `comparo schema …` | none | Print versioned configuration, policy, artifact, report, or generated CLI schemas. |
 | `comparo validate` | local reads | Discover and compile a project. |
 | `comparo plan` | local reads | Compile and inspect a deterministic admitted plan. |
@@ -31,6 +34,7 @@ rather than falling back to pathname-based file access on Windows.
 | `comparo report` | local reads | Render an authenticated bundle as JSON, JUnit, SARIF, or Markdown. |
 | `comparo tui` | local reads, explicit profile/preferences/report writes, optional HTTP | Open Explore, Launch, Reports, Settings and Debug. |
 | `comparo completion` | none | Generate Bash, Zsh, or Fish completion text. |
+| `comparo completion install/status/uninstall` | local reads/writes | Manage shell completion and check setup. |
 
 Run `comparo COMMAND --help` for the exact installed options. The command graph can also generate
 its own Markdown, HTML, or RST reference:
@@ -71,11 +75,13 @@ comparo
 running. The initial diff compares status codes; add selectors to compare response bodies or
 headers as needed.
 
-All starter resources are YAML documents in the same `comparo.yaml` file. Although the Project
-declares `spec.data: .comparo`, `init` does **not** create that directory; the starter works without
-it. As the project grows, create `.comparo/` and move resource documents into separate YAML files
-there, leaving the Project document in `comparo.yaml`. Move rather than copy the documents so
-each resource remains defined only once.
+By default, all starter resources are YAML documents in the same `comparo.yaml` file. Although
+the Project declares `spec.data: .comparo`, this layout does not create that directory.
+`comparo init --layout split` instead creates the Project manifest plus
+`.comparo/environments.yaml`, `.comparo/requests/health.yaml`, and `.comparo/profiles/checks.yaml`.
+Split initialization refuses an existing `.comparo/` path and rolls back newly published resource
+files if manifest publication fails. To split an existing project yourself, move resource documents
+into that directory, keeping only the Project in the manifest; do not duplicate definitions.
 
 `comparo init my-project` creates the directory if needed; run the following commands from that
 directory. Initialization never overwrites an existing `comparo.yaml`, including symlinks, and
@@ -297,6 +303,33 @@ diagnostics remove or escape terminal-control and bidirectional-control characte
 CI should distinguish a real behavioral failure (`1`) from invalid setup (`2`) and an incomplete
 run (`3`).
 
+## Bundled documentation and AI authoring
+
+```console
+comparo docs
+comparo docs authentication
+comparo docs configuration --format markdown
+comparo docs --format json
+comparo skill show
+comparo skill install
+comparo skill install --user
+```
+
+Documentation is bundled with the installed version and works offline. `docs` lists topics;
+`docs TOPIC` reads one. The default renders Markdown with Rich in an interactive terminal and
+outputs the original Markdown when piped or redirected. Explicit `--format markdown` and
+`--format json` always produce unstyled output. `--color auto|always|never` controls terminal
+color independently of Markdown layout; it never adds ANSI codes to raw documents or JSON.
+
+The authoring skill reads those docs and the generated schema, derives resources from API sources,
+and validates and plans the resulting project. Repository installation creates
+`.agents/skills/comparo/SKILL.md`; `--user` installs under `~/.agents/skills/comparo/`.
+It does not modify `AGENTS.md` or replace an existing different skill. See the authoritative
+[bundled topic sources](../src/comparo/cli/content/docs/) and
+[AI authoring guide](../src/comparo/cli/content/docs/agents.md). Markdown topics and the skill are
+package assets, not a second generated copy of these instructions; update those sources and test
+the embedded YAML examples when changing authoring behavior.
+
 ## Schemas and completion
 
 The installed package is self-describing:
@@ -306,10 +339,25 @@ comparo schema config > comparo.schema.json
 comparo schema policy > comparo-policy.schema.json
 comparo schema artifact > comparo-artifact.schema.json
 comparo schema report > comparo-report.schema.json
-comparo completion zsh > _comparo
+comparo completion zsh > comparo.zsh
+comparo completion install zsh
+comparo completion status zsh
+comparo completion uninstall zsh
 ```
 
-Completion generation writes only to stdout and never modifies shell startup files.
+Script generation writes only to stdout. Installation configures a managed startup-file block
+for zsh or Bash, or writes Fish's automatically loaded completion file. It respects `ZDOTDIR`
+and applicable XDG directories, works after Oh My Zsh initialization, and can be repeated to
+refresh completion after upgrades. Uninstall removes the managed script and block. Status reports
+on-disk configuration; restart the shell to load changes. Specify the shell when it differs from
+`SHELL`. Existing unowned scripts or incomplete managed blocks are preserved and reported.
+
+Scripts register themselves when sourced after shell completion initialization. They complete
+commands/options and read local project identities for environment, subject, and profile arguments,
+including the `exec` operand. Preceding `--config/-C` and `--source/-S` options select the project.
+Discovery is bounded (128 sources, 2 MiB total, 512 resources, 2048 directory entries); an invalid,
+missing, or larger project yields no dynamic suggestions. Completion never resolves values or
+makes HTTP requests. See `comparo docs completion` for setup and troubleshooting.
 
 ## Current executable subset
 

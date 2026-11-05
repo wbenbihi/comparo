@@ -20,6 +20,8 @@ creation. Start with [current status and remaining gaps](status.md). The authori
 - [Production HTTP adapter](production-http-adapter.md)
 - [Report/artifact format guide](report-format.md) and [sanitization/persistence contract](artifacts-and-reporters.md)
 - [CLI reference](cli.md)
+- [Bundled CLI authoring guides](../src/comparo/cli/content/docs/) — the same versioned Markdown
+  served by `comparo docs`, including completion setup and the Comparo AI skill
 - [0.4.0 release notes](releases/0.4.0.md) — branch changes, migration and qualification
 - [0.3.0 release notes](releases/0.3.0.md) — the tagged baseline and changes since v0.2.0
 - [Release through GitHub Actions](releasing.md) — PR checks, publishing sequence and recovery

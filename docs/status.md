@@ -9,7 +9,7 @@ branch changes, while [CHANGELOG](../CHANGELOG.md) separates them from tagged re
 
 | Surface | Current behavior |
 | --- | --- |
-| CLI | Exclusive starter-project creation (`init`), schema, validation, planning, diagnostics, sanitized previews, Request assertions, directed diffs, execution profiles, artifacts and JSON/Markdown/JUnit/SARIF reports |
+| CLI | Single-file/split starter projects, managed project-aware shell completion, bundled Rich/Markdown/JSON docs and an AI authoring skill; schema, validation, planning, diagnostics, sanitized previews, Request assertions, directed diffs, execution profiles, artifacts and JSON/Markdown/JUnit/SARIF reports |
 | Explore | Kind-aware inspectors; standalone Value resolution and Matrix cases; numbered JSON Body/path inspection; nested/local-reference Schema browsing; reversible relationships; masked source, Environment context and health checks; `c` hands a Request/profile to Launch |
 | Launch | Requests, saved/manual profiles or assertions; Target → Plan → Run → Analyze; Matrix case filters, trials, retries, fail-fast, assertion/diff/gate overrides, mutation approval and cancellation |
 | Profile saving | Review ID/name, exact YAML and destination; validate and exclusively save a new ExecutionProfile; refresh Explore and Launch |

@@ -6,6 +6,8 @@ See the [0.4.0 notes](docs/releases/0.4.0.md) for behavior, compatibility, previ
 qualification. Package metadata remains at 0.3.0 until the release workflow creates its version commit.
 
 - Add `comparo init [DIRECTORY]` with exclusive starter-manifest creation.
+- Add split project layouts, managed zsh/Bash/Fish completion and project-aware suggestions.
+- Ship offline Rich/Markdown/JSON authoring docs and an installable Comparo AI skill.
 - Resolve Values independently, preserving public siblings and masking secrets without a consumer.
 - Browse Matrix data cases independently of execution plans, bindings, trials and match navigation.
 - Add numbered JSON Body navigation, focused path/provenance and masked preview copying.

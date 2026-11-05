@@ -88,10 +88,26 @@ comparo init
 ```
 
 This creates a starter `comparo.yaml` with two local Environments, a health Request, and assertion
-and comparison profiles. All starter resources are in this one file; `init` does not create a
-`.comparo/` directory. Edit its `baseUrl` values and `/health` endpoint to match your APIs.
+and comparison profiles. By default all starter resources are in this one file;
+`comparo init --layout split` also creates `.comparo/` with separate environment, request, and
+profile files. Edit the `baseUrl` values and `/health` endpoint to match your APIs.
 Use `comparo init my-project` to create it in another directory; existing manifests are never
 overwritten.
+
+Read bundled documentation, enable shell completion, or install the AI authoring skill:
+
+```console
+comparo docs quickstart
+comparo completion install zsh
+comparo skill install
+```
+
+Docs use Rich formatting in an interactive terminal and clean Markdown when redirected. Use
+`--format markdown` or `--format json` for explicit raw output. The skill is installed in the
+current project's `.agents/skills/comparo/`; use `--user` for personal installation. In Codex,
+ask it to use `$comparo` to configure comparisons from your API specification or route tests.
+See the bundled [AI authoring guide](src/comparo/cli/content/docs/agents.md) and
+[completion guide](src/comparo/cli/content/docs/completion.md).
 
 From a directory containing your `comparo.yaml` project:
 
