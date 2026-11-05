@@ -1,6 +1,6 @@
 # Interaction and feature contract
 
-Implementation mapping updated **2026-10-31**. This remains a design contract; the
+Implementation mapping updated **2026-11-05**. This remains a design contract; the
 [current status](../../status.md) and [workspace guides](../../tui.md) distinguish implemented
 controls from remaining acceptance targets. In older screenshots, Compare means Launch and Report
 means Reports. Use the existing component library around Textual navigation primitives.
@@ -117,3 +117,16 @@ terminal controls and bidi controls are contained. Exceptions collapse to fixed 
 The shared capture inspector now displays/copies application-generated cURL from an authenticated
 stored sanitized request. It declares replay limitations and clipboard disclosure, requires a separate
 Copy action, expires its preview after 60 seconds and never injects live credentials or executes HTTP.
+
+## Explorer 0.4.0 resource inspection
+
+`r` resolves a Value or browses Matrix case data without a consumer picker. The active Environment
+supplies available inputs but a standalone Value needs no Environment. Matrix page controls are
+only collection paging; execution planning and trial selection belong to Launch. Body selection
+updates the focused-path inspector; Schema selection updates the exact source/definition pane.
+Enter follows typed resource links, and Escape returns through Explorer history with the prior
+filter, view, cursor, focus and scroll. Shared ActionBar controls keep the established compact style.
+
+Missing inputs, partial previews and locally unavailable schema targets remain explicit. A
+masked value signals successful protection, not failure: violet masks and blue JSON booleans are
+distinct, with textual markers retained without color. See [the implementation contract](../../explorer-0.4.0-plan.md).

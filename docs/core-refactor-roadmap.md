@@ -5,8 +5,9 @@ production-grade, modular engine. The original implementation was treated as an 
 prototype; the rebuilt core, CLI and canonical TUI now implement the main vertical slice.
 The prototype's internal abstractions are not compatibility requirements.
 
-Status reconciled on **2026-10-31**: Steps 1–11 are implemented for the declared executable subset.
-Dedicated CI integration and release qualification remain pending. Safe stored-request cURL export
+Status reconciled on **2026-11-05**: Steps 1–11 are implemented for the declared executable subset.
+The rebuilt baseline is tagged v0.3.0. Dedicated CI integration remains deferred; qualification
+must run again for the 0.4.0 branch. Safe stored-request cURL export
 is already implemented through an application service and the shared TUI capture inspector.
 See [current status](status.md) for precise UI coverage; design targets are not all accepted merely
 because the migration is complete.
@@ -413,7 +414,8 @@ execution, artifact, report, and preparation limits.
 
 ## Step 12: dedicated CI integration
 
-Status: pending and required before the first public rebuilt release.
+Status: deferred beyond the current 0.4.0 scope. The ordinary CLI and operator-owned policy
+remain the available automation path.
 
 Package the existing headless execution path as a deliberately restricted CI journey. The CI
 adapter does not receive its own planner, runtime, evaluator, reporter, or policy semantics. It
@@ -440,10 +442,10 @@ Exit criteria:
 
 ## Step 13: release qualification and publication
 
-Status: pending and required before the first public rebuilt release.
+Status: the rebuilt baseline is tagged v0.3.0; qualification repeats for every release, including
+0.4.0. GitHub Actions owns versioning, tags and publication after review and merge.
 
-Freeze and verify the first published new-lineage contract only after every required product
-surface is present. This step adds no domain behavior. It independently audits the assembled
+Verify the declared supported contract and its explicit limitations for each release. This step adds no domain behavior. It independently audits the assembled
 system, closes documentation and packaging gaps, and proves that the artifacts built by release
 automation are the artifacts that were reviewed.
 

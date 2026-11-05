@@ -1,6 +1,6 @@
 # Visual and theming system
 
-Reconciled **2026-10-31** with the canonical `comparo.tui` library. The retained screenshots define
+Reconciled **2026-11-05** with the canonical `comparo.tui` library. The retained screenshots define
 layout and information-hierarchy targets; `theme.py`, the shared components and workspace guides
 describe today's implementation. Historical neutral-method/text-only-kind proposals are superseded
 by the established Explorer vocabulary, which Launch and Reports must reuse.
@@ -42,6 +42,8 @@ and Rich text styles:
 | advisory | `#F0C060` |
 | failure | `#F2637E` |
 | operational error | `#FF9E64` |
+| masked / redacted data | `#B7A1F3` (light: `#6841B5`) |
+| JSON boolean | `#6CA9F0` (light: `#255FA6`) |
 
 Settings currently accepts `comparo-dark` and `comparo-light`; the saved theme applies next launch.
 Automatic system-theme selection and third-party theme installation are not current controls.
@@ -76,6 +78,15 @@ Resource labels use the glyphs and semantic tokens in `theme.KIND_GLYPHS`: for e
 Methods retain their established colors: GET green, POST amber, PUT blue, PATCH teal, DELETE red,
 HEAD/OPTIONS slate. Baseline and candidate roles retain distinct semantic colors and visible labels.
 Glyph selection/ASCII fallback is not yet a Settings preference.
+
+## Protected data
+
+The November 5 color decision reserves `value.masked` and `status.redacted` for protected data,
+using a dedicated violet in both themes. JSON booleans use blue (`value.boolean`) so a mask and
+`true`/`false` never share their color. Amber remains a warning, red a failure; masking is not an
+error state. `<masked>` and explicit redaction labels are mandatory without color. This decision
+supersedes the amber masking in older reference captures; it does not change other status colors.
+Use the shared semantic token in Value, Matrix and Body views, including focused-path details.
 
 ## Density and responsiveness
 

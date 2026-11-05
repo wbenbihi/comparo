@@ -25,6 +25,11 @@ The module entry point accepts the same options:
 python -m comparo.tui --config examples/tui-showcase/comparo.yaml
 ```
 
+When reviewing local changes, launch `.venv/bin/comparo tui --config
+examples/explorer-inspection/comparo.yaml` from the repository root. This selects the workspace
+environment even when a pipx installation of `comparo` appears first on `PATH`. Quit and relaunch
+the TUI after code changes; reloading the project does not reload Python modules.
+
 `--source PATH` adds a local YAML source and may be repeated. `--policy PATH` selects an external
 ExecutionPolicy; omission uses trusted-local authority. Bare `comparo` opens the interface only
 when stdin, stdout, and stderr are terminals. Redirected invocation prints CLI help, and the
@@ -59,6 +64,55 @@ status colors, and theme tokens; backend services own planning, execution, evalu
 - [Reports guide](codebase/tui-reports.md): archive filters, preview, exports, and shared analysis.
 - [Settings guide](codebase/tui-settings.md): preferences, save/apply behavior, and shortcut remapping.
 - [Backend integration contract](codebase/tui-backend-integration.md): application DTOs and service lifetimes.
+
+## Following resource relationships
+
+In Explore, press **g** to see the selected resource's **Uses** and **Used by** relationships.
+Focus the graph and press **Enter** on an edge to open its target. Consumer tables in Matrix,
+Schema, Value and profile overviews support Enter and mouse activation too.
+
+**Escape** returns through explicit relationship visits, restoring the previous filter, resource,
+view, tab, collection selection, scroll and focus. The filter retains its own Escape behavior:
+clear its text, then return focus to the resource tree. Following a link reveals the target by
+clearing the filter; Back restores the original filter. Tree highlighting does not create history.
+Navigation leaves the execution Environment unchanged and never runs a Request. After a catalog
+reload, Back uses the current resource revision and skips removed targets with a notice.
+
+### Resource-specific inspectors
+
+- **Request:** Summary links to the HTTP tabs. Body displays a numbered JSON document; arrows
+  select a path and update its value, directive and declaration origins. Copy uses only the masked
+  preview. Schema validation is explicitly marked as not checked.
+- **Matrix:** select an axis to inspect its options. Press `r` to browse generated data cases and
+  their values, including for an unused Matrix. Case pages contain at most 50 rows. No consumer,
+  execution plan or companion/trial selection is required. Selection survives Source/Graph visits.
+- **Schema:** the tree preserves objects, array item schemas, definitions and combinators.
+  Local `$ref` targets expand in place, including other project schemas identified by `$id`.
+  Recursive branches stop explicitly. The reference list opens the corresponding tree location.
+- **Environment:** connection and policy settings, runtime inputs and value sources, defaults,
+  relationships and health information are grouped separately.
+- **Value:** press `r` to resolve the Value independently of its consumers, even without an
+  Environment. Public fields remain readable and sensitive fields are masked individually.
+  A missing input affects that field; it never asks you to select a Request or Scenario.
+- **Profiles and Scenario:** rule/step collections drive selected-item details; execution, gate,
+  safety and artifact settings use semantic groups. Unsupported and reserved capabilities retain
+  their existing labels. Scenario inspection does not imply executable Scenario support.
+
+Paired panes sit side by side on wide terminals and stack below 140 columns. Arrow keys select
+rows; Tab moves between controls. A Matrix preview is bounded to 64 nodes and labels partial
+results. Case expansion failures and missing value inputs remain explicit. Request body declaration origins come from the application's compiled
+provenance. Other inspection views do not invent per-value source provenance that the application
+cannot provide.
+
+Masked/resolved secrets are violet in both themes, while JSON booleans are blue; amber and red
+remain warning/failure colors. The literal `<masked>` marker also works without color. The preview
+limits are 10,000 Matrix cases, 50 cases/page and 64 value nodes; Body documents stop at 512 lines
+and resolved batches cover at most 16 field targets; Schema expansion stops at 512 nodes/depth 32.
+Copying a Body copies its masked preview, not an unlimited payload. Remote Schema fetching and
+sample validation are not Explorer controls.
+
+Use the [inspection example](../examples/explorer-inspection/README.md) to exercise these paths
+without starting an HTTP server.
 
 ## Working through a run
 

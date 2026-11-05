@@ -1,6 +1,6 @@
 # Configuration reference
 
-Current lineage: **`comparo/v1alpha1`**, reconciled **2026-10-31**. The unsupported prototype's
+Current lineage: **`comparo/v1alpha1`**, reconciled **2026-11-05**. The unsupported prototype's
 `comparo/v1` syntax is retained in the [historical reference](history/configuration-prototype-v1.md).
 It is not accepted by the rebuilt compiler. For exact field shapes, generate the current schema:
 
@@ -12,6 +12,17 @@ uv run --frozen comparo schema policy
 The [compiler guide](configuration-compiler.md) defines discovery, linking, composition, expressions
 and validation. The generated schema plus compiler checks are authoritative; this guide provides
 the current authoring entry points rather than duplicating every field in a hand-maintained table.
+
+## Start a project
+
+`comparo init [DIRECTORY]` writes an exclusively created starter `comparo.yaml`. Its resources
+are all in that manifest; `.comparo/` is a later extension point and is not created by `init`.
+Edit the two local Environment URLs and `/health` endpoint, then run `comparo validate` and
+`comparo plan` before execution. See the [initialization options](cli.md#start-a-project).
+
+The 0.4.0 Explorer changes do not change this configuration lineage. Use the
+[inspection fixture](../examples/explorer-inspection/README.md) for standalone Values/Matrix cases,
+nested JSON bodies and local cross-schema references.
 
 ## Project layout and resources
 

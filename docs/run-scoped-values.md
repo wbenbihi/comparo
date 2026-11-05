@@ -1,7 +1,8 @@
 # Run-scoped values and secrets
 
 Step 6 implements Comparo's value-resolution boundary. It turns the unresolved expressions in a
-`PreparedRun` into exact immutable values without reading ambient process state from core code.
+`PreparedRun` or standalone `ResolutionInputs` into exact immutable values without reading ambient
+process state from core code.
 Every effect is injected, scoped, cached, provenance-bearing, and closed with its owning run.
 
 ```text
@@ -17,14 +18,33 @@ PreparedRun + EnvironmentSnapshot + CellInputs + injected ports
 ```
 
 This is a core service, not a filesystem, dotenv, secret-manager, or YAML implementation. The
-composition root supplies already admitted snapshots and narrow adapters. Step 7 will wire those
-ports into the first complete offline runtime.
+composition root supplies policy-checked snapshots and narrow adapters. The offline and production
+runtimes and the standalone inspection service use these same injected ports.
+
+## Standalone resource inspection
+
+`application.value_inspection.inspect_value` compiles an exact Value or Matrix revision and builds
+`ResolutionInputs` from Project defaults and the optional active Environment. It does not fabricate
+a Request, execution cell or Compare plan. An execution `PreparedRun` still adapts to the same
+input contract with its original bindings and scope behavior.
+
+In standalone mode, declared parameter defaults can resolve at Project/Environment scope as
+ordinary authored expressions. They are not represented as a runtime parameter production in a
+synthetic cell. Missing consumer-only parameters and Matrix inputs remain unavailable. Existing
+execution scope invariants are unchanged. The application resolves sibling expressions separately
+and uses `MaskedValueResolver` before returning bounded public nodes, irreversible masks or local
+unavailable fields. File/env providers still obey policy; this is not HTTP execution. Each inspection
+owns and closes its provider state. Generated/file-backed values are samples, not promises of the
+values a later execution will use.
+
+See the [standalone API](codebase/application-api-reference.md#standalone-value-and-matrix-inspection)
+for inputs, result states and bounds.
 
 ## Responsibilities
 
 `RunContext` owns one run's mutable lifetime and nothing broader:
 
-- the immutable `PreparedRun` and exact selected-Environment snapshots;
+- immutable `ResolutionInputs` (adapted from `PreparedRun` for execution) and exact selected-Environment snapshots;
 - the run coordinate, cancellation signal, and injected clock;
 - source-specific single-flight caches;
 - deterministic and optional secure generation providers;
@@ -194,7 +214,7 @@ values—including rotated attempt-scoped values—until context close.
 `resolve_for_wire` resolves the value, registers all resulting taint, then returns a
 `ResolvedForWire` containing both the present value and a same-run `SanitizationSnapshot` that
 already includes it. The runtime must carry this pair forward; it must not resolve a second time
-for sanitization. Step 9 will consume the snapshot at the explicit live-result-to-artifact
+for sanitization. The artifact pipeline consumes the snapshot at the explicit live-result-to-artifact
 boundary.
 
 This containment prevents accidental serialization and logging. It is not a sandbox against
@@ -245,7 +265,7 @@ Regression tests pin the properties most likely to fail under concurrency or fut
 - value-free provider exceptions and resolution failures;
 - architecture import allowlists and module-cohesion limits.
 
-The repository configures a 100% combined statement/branch coverage gate; this is not a fresh
+The repository configures a 95% combined statement/branch coverage gate; this is not a fresh
 coverage measurement. Import contracts forbid ambient,
 filesystem, network, YAML-parser, CLI/TUI, and adapter-framework dependencies in
 `comparo.core.resolution`.

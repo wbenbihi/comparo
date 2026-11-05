@@ -25,15 +25,24 @@ comparo --help
 ```
 
 To update an existing pipx installation, run `pipx upgrade comparo`.
-The published version is currently **0.2.0**; this branch documents the proposed **0.3.0** release.
-Its rebuilt commands and configuration become available through that release. To try this branch
-before publication, use the [development setup](CONTRIBUTING.md#development-setup).
+This branch prepares **0.4.0** on top of the tagged **v0.3.0** baseline. Its Explorer changes and
+`init` command require the checkout until the next release is published. Follow the
+[development setup](CONTRIBUTING.md#development-setup), then launch the checkout explicitly:
+
+```console
+.venv/bin/comparo tui --config examples/explorer-inspection/comparo.yaml
+```
+
+A bare `comparo` may select a separately installed pipx version. Restart the TUI after changing
+Python code; project reload does not reload application modules.
 
 ## Terminal preview
 
-![Comparo Reports workspace with a searchable run archive and selected result details](docs/assets/tui-reports.png)
+![Explorer Body inspection with nested JSON, a blue boolean and a violet masked secret](docs/assets/explorer-body-0.4.0.png)
 
-The upcoming 0.3.0 interface, captured from the running app with example report data.
+The 0.4.0 Body inspector, captured from this checkout. The header still reports package metadata
+0.3.0 until automated release versioning. See the [0.4.0 notes](docs/releases/0.4.0.md) and the
+[Reports preview](docs/assets/tui-reports.png).
 
 ## Status
 
@@ -43,7 +52,7 @@ not a compatibility target. The canonical TUI is `comparo.tui`, with Explore, La
 Settings, and a component Debug gallery. Dedicated CI integration has not yet been migrated.
 
 The [current implementation status](docs/status.md) records supported surfaces, remaining gaps,
-and the distinction between this unreleased working tree and the older v0.2.0 release history.
+and the distinction between the 0.4.0 branch changes and the tagged 0.3.0 baseline.
 The next version is prepared through a PR and [released by GitHub Actions](docs/releasing.md)
 after CI and review; it has not been published yet.
 
@@ -113,7 +122,10 @@ journey.
 
 ## Terminal workflow
 
-- Explore resources and send a selected Request or ExecutionProfile to Launch with `c`.
+- Explore resources, follow their relationships and return with Escape. Resolve a Value or
+  browse Matrix cases with `r` without choosing a consumer. Inspect Request Body paths and
+  nested local Schema references. Masked values are violet; JSON booleans are blue.
+- Send a selected Request or ExecutionProfile to Launch with `c`.
 - Configure Target, prepare with Ctrl+R, review Plan, and execute with Ctrl+X.
 - Follow live request status, timing and rule outcomes; explicitly open Analyze after completion.
 - Reopen saved results in Reports using the same Analyze view. Press `i` to page captures,
@@ -126,19 +138,19 @@ See the [TUI guide](docs/tui.md) for controls and limits.
 
 ## Examples
 
-The repository includes three runnable local projects backed by one deterministic loopback demo
-service. They cover a passing quickstart, deliberate cross-Environment drift, Environment-local
+The repository includes three executable local projects backed by one deterministic loopback demo
+service, plus an [Explorer inspection fixture](examples/explorer-inspection/README.md) that needs no server. They cover a passing quickstart, deliberate cross-Environment drift, Environment-local
 values, execution profiles, and a larger two-Matrix TUI showcase. From a repository checkout,
 start the demo in one terminal:
 
 ```console
-python examples/support/demo_server.py
+uv run --frozen python examples/support/demo_server.py
 ```
 
 Then open the showcase in another terminal:
 
 ```console
-comparo tui --config examples/tui-showcase/comparo.yaml
+.venv/bin/comparo tui --config examples/tui-showcase/comparo.yaml
 ```
 
 See the [example project guide](https://github.com/wbenbihi/comparo/blob/main/examples/README.md) for the expected outcomes and suggested

@@ -1,12 +1,10 @@
 # Comparo documentation
 
-The `refactor` branch contains the rebuilt immutable domain, shared selector engine, pure
-evaluation kernel, versioned configuration compiler, deterministic planner, run-scoped
-value/secrets boundary, bounded runtime, production HTTP adapter, sanitized artifact/reporting
-boundary, local CLI, and the canonical component-based `comparo.tui` frontend.
-Documentation was reconciled with the working tree on **2026-10-31**. Start with the
-[current status and remaining gaps](status.md); implementation statements below describe the
-unreleased tree, not the historical v0.2.0 release. The authoritative current documents are:
+Documentation reconciled for the **0.4.0 preparation branch on 2026-11-05**, based on tagged
+v0.3.0. The current implementation includes the immutable domain, versioned compiler, planner,
+run-scoped values, HTTP runtime, sanitized artifacts/reporters, local CLI and `comparo.tui`.
+The branch adds standalone Value/Matrix inspection, navigable Body/Schema views and starter-project
+creation. Start with [current status and remaining gaps](status.md). The authoritative documents are:
 
 - [Core/backend codebase golden reference](codebase/README.md) — current implementation truth,
   end-to-end pipelines, module catalog, contributor workflow, and backend and TUI capability audit
@@ -22,9 +20,11 @@ unreleased tree, not the historical v0.2.0 release. The authoritative current do
 - [Production HTTP adapter](production-http-adapter.md)
 - [Report/artifact format guide](report-format.md) and [sanitization/persistence contract](artifacts-and-reporters.md)
 - [CLI reference](cli.md)
-- [Proposed 0.3.0 release notes](releases/0.3.0.md) — complete change summary since v0.2.0
+- [0.4.0 release notes](releases/0.4.0.md) — branch changes, migration and qualification
+- [0.3.0 release notes](releases/0.3.0.md) — the tagged baseline and changes since v0.2.0
 - [Release through GitHub Actions](releasing.md) — PR checks, publishing sequence and recovery
 - [Terminal UI](tui.md) — launch commands, default keys and limits
+- [Explorer 0.4.0 scope](explorer-0.4.0-plan.md) — implemented resource views, resolution boundaries and remaining limits
 - [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md), and
   [Settings](codebase/tui-settings.md) — implemented workspace behavior
 - [TUI results implementation contract](tui-results-implementation-contract.md)

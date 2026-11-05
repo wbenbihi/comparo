@@ -2,7 +2,9 @@
 
 This document is the extension guide for Explorer resource presentation in `src/comparo/tui`.
 The implementation deliberately separates project inspection, navigation, presentation state,
-kind-specific projections, widgets, and effects.
+kind-specific projections, widgets, and effects. The 0.4.0 inspection changes use the existing
+component library. `value.masked` uses a dedicated violet role in both themes; `value.boolean`
+uses blue. Preserve textual mask markers and avoid mapping masked fields to warning/error tones.
 
 ## Data flow
 
@@ -31,8 +33,9 @@ ResourceDetailOverview host           components/resourcedetail.py
         └── semantic ActionRequested
                 │
                 ▼
-ExplorerWorkspace workers             workspaces/explorer.py
-                └── TuiBackend → application services
+ExplorerWorkspace / navigation controllers
+                ├── TuiBackend → execution-aware application services
+                └── value_inspection → standalone Value / Matrix sampling
 ```
 
 Widgets do not compile configuration, resolve values, read files, or call application services.
@@ -78,7 +81,7 @@ resource message.
 | Overview | `ProjectResourceSummary` and its outline | Value-safe application projection |
 | Authored | `inspect_authored_resource` | Exact resource document, masked by default, revision pinned |
 | Effective | `inspect_effective_resource` | Compiled structure and relationships; values remain conservative |
-| Resolved | Compare preparation inspection | Requires an Environment/occurrence/Matrix context and remains unavailable without it |
+| Resolved | Application masked inspection | Values/Matrix resolve independently; executable previews retain their specific context |
 
 Authored, effective, and resolved are separate products. A widget must never synthesize one from
 another. In particular, Explorer must not resolve a Request without an execution context.
@@ -112,9 +115,11 @@ rule: the selected logical resource is rebound to its new exact revision, the ac
 rebuilt, and Source is re-read against the new whole-file digest even when only a sibling YAML
 document changed.
 
-`r` does not resolve values in the Explorer process. Raw mode uses the safe resource outline;
-entering resolved mode asks `TuiBackend` for an ephemeral single-Environment preparation and
-calls the application-owned masked batch inspection. For a Request, that
+`r` invokes application-owned resolution. Values and Matrix cases use `application.value_inspection`
+with Project/Environment bindings and no executable consumer or Compare plan. Their public leaves
+remain readable, sensitive leaves are masked, and missing inputs affect only their own fields.
+Raw mode uses the safe resource outline. Other kinds use an ephemeral single-Environment
+preparation and application-owned masked batch inspection. For a Request, that
 preparation explicitly selects only the highlighted Request ID, and the backend verifies both the
 exact Request revision and Environment revision on the returned occurrence before inspecting any
 field. ExecutionProfile inspection uses `CompareIntent.EXECUTION_PROFILE`, selects that exact
@@ -163,6 +168,22 @@ The dependency graph is a presentation of application-owned relationship DTOs, n
 dependency resolver. `ResourceDependencyTree` inherits the generic `TreeMenu` mechanics and owns
 only the directional branches and row grammar.
 
+Dependency trees and `ResourceLinksTable` emit the same `OpenResource` message on Enter or native
+mouse activation. `ResourceDependency` retains the application-owned namespace, kind and ID;
+display strings are never parsed to find targets. `ExplorerNavigation` binds that identity to one
+current catalog entry and coordinates the workspace, navigator and detail host. Missing or
+ambiguous targets leave the selection unchanged. Events from obsolete inspector widgets are ignored.
+
+Explicit visits retain up to 50 value-free bookmarks: logical resource identity, representation,
+raw/resolved mode, kind sections, filter, tree expansion, collection cursors, focus and scroll.
+Back rebinds to the current revision and loads fresh inspection data. Removed resources are skipped
+with a notice. Ordinary tree highlights do not append history. The navigator owns revealing a link
+target and restoring the saved filter/tree state; the detail host restores its presentation after
+recomposition. A preserved resolved Overview is loaded when reopened from Graph or Source.
+
+Escape exposes Back before other workspace commands so it remains visible at compact widths.
+Focused child controls retain their own Escape behavior, including the filter's clear/dismiss steps.
+
 Explorer reload is `Ctrl+R`, leaving the unmodified `r` key to switch resource value layers.
 
 Resource provenance renders `ProjectSourceSummary.filename`, a safe basename projected by the
@@ -205,9 +226,25 @@ Current widget families are:
 
 Kind widgets consume pure projections from `models/resource_presenters.py` or
 `models/remaining_resource_presenters.py`; they do not traverse compiler objects. Matrix
-presentation lists declared axes and case collections from the safe outline. Its resolved
-execution-plan section reuses the application planner for one explicit Environment, consumer, and
-occurrence context; it never expands cases in the widget.
+presentation pairs an axis collection with authored option details. `MatrixBrowser` emits
+selection messages; `MatrixNavigation` owns latest-wins workers and bounded value-free selection
+memory. The controller calls `application.value_inspection`, which compiles data cases with the core
+Matrix implementation and resolves the selected case independently. Pages contain 50 case IDs and
+previews contain at most 64 nodes. No consumer, binding, trial or occurrence selector is exposed.
+The older execution-bound case inspection API remains available for execution-specific callers;
+it no longer drives Explorer. Stale completions cannot replace a newer selection.
+
+Request Body uses `RequestBody` and `models/body_document`: numbered JSON rows update the focused
+path inspector. Each leaf resolves independently so secret taint cannot hide public siblings.
+Compiled declaration origins cross the application boundary as value-free metadata. Copy uses the
+already masked document. Schema nodes use `models/schema_document` to preserve items/definitions,
+expand project-local references, and stop recursive branches. Remote fetch and sample validation
+are explicitly unperformed; no verified/valid status is inferred.
+
+`InspectorColumns`, `InspectorSection` and `RecordInspector` share responsive layout and
+collection/detail mechanics. Each widget owns its own default CSS; nested CSS must not accidentally
+leave a parent Vertical at a fractional height. `SchemaPropertyTree` identifies nodes by complete
+schema paths, so dotted property names and array nesting do not collide.
 
 The Project widget is intentionally more explicit than the generic field-based widgets. Its two
 comparison cards obtain baseline/candidate names and `local`/`live` locality from the related
@@ -217,15 +254,16 @@ definitions. Literal secrets remain redacted and other literals retain the outli
 safe previews; the widget never reparses `comparo.yaml` or resolves a value itself.
 
 The Environment widget uses one stable raw/resolved layout: execution-context/role/locality,
-connection, runtime inputs, request defaults, policies, health checks, and additional
-configuration. Resolution is always bound to the Environment being inspected, irrespective of
+connection/policies, runtime inputs/value sources, request defaults, linked relationships,
+health checks, and additional configuration. Paired sections stack at the shared breakpoint. Resolution is always bound to the Environment being inspected, irrespective of
 the shared execution context badge. In resolved mode, typed public values and masked secrets use
 semantic theme tokens; reference kind glyphs appear only when the overlay proves the resolved
 target metadata.
 
 The Request widget likewise retains one layout across raw and resolved modes. A native Textual
-`TabbedContent` inspector separates URL/parameters, query, headers, cookies, authentication, body,
-runtime behavior, and execution contracts. The eight tabs remain stable for every Request;
+`TabbedContent` inspector starts with Summary (shape, inputs and linked relationships), followed
+by URL/parameters, query, headers, cookies, authentication, body, runtime behavior, and execution
+contracts. The nine tabs remain stable for every Request;
 missing capabilities have explicit empty states instead of changing the navigation. Textual owns
 mouse selection, focus, and left/right tab navigation. The generic resource host remembers the
 selected kind section, so the active Request tab survives raw/resolved recomposition, source or
@@ -248,14 +286,14 @@ execution workflow; Explorer does not expose a cross-workspace shortcut or imply
 synthesized effective request.
 
 Request is the only resource inspector that uses tabs. Its tabs correspond to mutually exclusive
-HTTP request parts and benefit from keyboard/mouse switching. Matrix, Schema, Value, Scenario, and
+the summary and HTTP request parts and benefit from keyboard/mouse switching. Matrix, Schema, Value, Scenario, and
 every profile or policy inspector are continuous documents: all semantic sections remain mounted
 in one scroll, empty sections explain version defaults or missing declarations, and no internal
 tab selection state can hide related configuration.
 
 Scenario is a first-class Explorer section even while execution remains deferred. Its overview
 shows parameters and exact Matrix attachment count, ordered step/request/`after` topology,
-complete safe step structure, evaluation attachments, and usage. The visible warning states that
+selected-step safe structure, evaluation attachments, and usage. The visible warning states that
 this is an authored contract rather than an executable workflow; neither the widget nor the
 planner infers a Request-first implementation. Arbitrary step payload fields remain structural in
 both raw and resolved Overview until the Scenario grammar and runtime are typed.
@@ -268,7 +306,8 @@ effective topology from Project defaults or future CLI/TUI overrides. Resolved p
 variables, and secrets use the exact ExecutionProfile precedence context, with secrets masked.
 
 AssertionProfile and DiffProfile have separate registered widgets over a shared rule-profile
-component. Assertion rows show stable rule ID, structured/shorthand selector summary, operator,
+component. Rule rows show stable ID and severity; the selected-rule pane shows the
+structured/shorthand selector summary, operator,
 authored quantifier state, severity, and completeness. Diff rows preserve both baseline and
 candidate selectors and their independent transform/reducer pipelines, then show the shared
 pairing/comparator stage; missing required comparators are labeled missing, not defaulted. Rule

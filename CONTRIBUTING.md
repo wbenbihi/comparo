@@ -11,6 +11,16 @@ uv sync --frozen                          # create the venv from the committed l
 uv run --frozen pre-commit install --hook-type pre-commit --hook-type commit-msg
 ```
 
+To inspect local UI changes, run the workspace executable rather than an unrelated installed
+release, then restart it after Python edits:
+
+```console
+.venv/bin/comparo tui --config examples/explorer-inspection/comparo.yaml
+```
+
+The inspection fixture needs no HTTP server. The three execution demos use the service documented
+in [examples](examples/README.md).
+
 ## Quality gates
 
 Every change must pass the same checks CI runs:
@@ -65,7 +75,10 @@ Use `src/comparo/tui` and `tests/tui`; retired versioned packages are not extens
 Read the [workspace guides](docs/tui.md) and [visual references](docs/design/tui-v2/README.md).
 Compose the existing component library and semantic glyph/color tokens. Standard Textual mechanics
 belong inside those components; workspaces must not introduce differently styled parallel widgets.
-Launch and Reports share `ResultsView` and the capture inspector.
+Launch and Reports share `ResultsView` and the capture inspector. Resource inspectors use shared
+`ActionBar` actions; importing native Textual `Button` there is forbidden. `value.masked` is a
+dedicated violet role, distinct from blue booleans, amber warnings and red failures. Keep textual
+mask markers in no-color mode.
 
 Run focused Pilot journeys at 80×30, 120×40 and 160×52, then relevant regressions. Capture and inspect
 actual screenshots when layout changes. A passing interaction test alone does not establish mockup

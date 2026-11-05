@@ -1,25 +1,25 @@
 # CHANGELOG
 
+## Unreleased — 0.4.0 preparation (2026-11-05)
 
-## Unreleased — rebuilt working tree (updated 2026-11-02)
+See the [0.4.0 notes](docs/releases/0.4.0.md) for behavior, compatibility, preview limits and
+qualification. Package metadata remains at 0.3.0 until the release workflow creates its version commit.
 
-Target: **0.3.0 minor release**. See the [complete proposed release notes](docs/releases/0.3.0.md)
-for the changes since v0.2.0, migration notes and outstanding CI qualification.
+- Add `comparo init [DIRECTORY]` with exclusive starter-manifest creation.
+- Resolve Values independently, preserving public siblings and masking secrets without a consumer.
+- Browse Matrix data cases independently of execution plans, bindings, trials and match navigation.
+- Add numbered JSON Body navigation, focused path/provenance and masked preview copying.
+- Expand nested/local-reference Schemas with array-item levels, required flags and cycle stops.
+- Preserve resource relationships, Back navigation, focus, filters and inspection positions.
+- Use shared compact inspector actions and distinct masked/boolean colors in both themes.
+- Add an inspection fixture and refresh user, API, design and release documentation.
 
-- Rebuilt the core, configuration/compiler, planner, HTTP execution, artifact/report and local CLI
-  paths around `comparo/v1alpha1` and frontend-neutral application contracts.
-- Promoted the component-based TUI (developed as TUI4) to `comparo.tui`; removed older terminal
-  implementations and retired versioned entry points/obsolete launch-limit flags.
-- Implemented Explore, Target/Plan/Run/Analyze, the Reports archive and shared result inspection.
-- Added persistent Settings and main-command shortcut remapping, plus actual context/version headers.
-- Added General as the first Settings section with package identity, source/license and build SHA;
-  wheels and source distributions retain the source revision and modified-source status.
-- Added Explore → Launch handoff and reviewed saving of manual targets as new ExecutionProfiles.
-- Added shared raw capture paging, JSON/SSE inspection and reviewed sanitized cURL copying.
+## v0.3.0 (2026-11-02)
 
-Package metadata still reads 0.2.0. This section describes the unreleased refactor, not a new release
-or a claim that the historical 0.2.0 package contains these features. See
-[current status](docs/status.md) for limits and remaining work. Entries below retain release history.
+See the [0.3.0 release notes](docs/releases/0.3.0.md) for the rebuilt `comparo/v1alpha1` core,
+compiler, planner, HTTP execution, sanitized artifacts/reporters, local CLI and component-based
+TUI. This baseline introduced Explore, Launch/Analyze, Reports, persistent Settings/build identity,
+profile saving and shared capture/JSON/SSE/cURL inspection. The repository contains tag `v0.3.0`.
 
 ## v0.2.0 (2026-07-22)
 
