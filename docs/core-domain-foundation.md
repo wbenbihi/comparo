@@ -345,6 +345,6 @@ uv build
 ```
 
 The test suite combines direct-construction examples, architecture contracts, property tests, and
-security regressions. The repository configures a 100% coverage gate; this is a target rather than
+security regressions. The repository configures a 95% combined statement/branch coverage gate; this is a target rather than
 a current measurement. Lowering that threshold requires an explicit engineering decision rather
 than a local exception.

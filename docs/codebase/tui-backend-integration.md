@@ -126,6 +126,7 @@ observations, blob paths, or adapter exceptions in widget state.
 | Review retention | `plan_report_retention(...)` | Synchronous, authenticated | Show candidates and fingerprint before applying |
 | Apply retention | `apply_report_retention(...)` | Synchronous, recoverable mutation | Explicit confirmation; display partial failures |
 | Restore report | `restore_report(...)` | Synchronous, recoverable mutation | Refresh archive after success |
+| Inspect standalone Value / Matrix | `application.value_inspection.inspect_value(...)` | Async, bounded, policy-confined sampling | No Compare handle; reject stale resource/environment output |
 | Present diagnostic | `present_diagnostic(diagnostic)` | Pure synchronous | Render catalog text plus safe structured coordinates |
 
 ### 4.2 Lower-level entry points the TUI normally should not call
@@ -334,7 +335,14 @@ pages structural fields and relationships. `EffectiveResourceWindow` returns tot
 
 ### 6.6 Resolved view inside Explorer
 
-There is deliberately no context-free “resolve this Request” API. Runtime values depend on:
+Values and Matrix cases use `application.value_inspection.inspect_value` directly. Project and
+optional active-Environment inputs suffice; no consumer, binding, execution, trial or match selector
+belongs in these Explorer views. A standalone Value also resolves without any Environment. Missing
+runtime-only inputs stay local unavailable fields, secrets are irreversibly masked, and public
+siblings remain readable. The Matrix browser shows case pages and selected values only. See the
+[standalone API](application-api-reference.md#standalone-value-and-matrix-inspection).
+
+Requests retain execution-aware inspection. There is deliberately no context-free “resolve this Request” API. Runtime values depend on:
 
 - the selected Environment;
 - Matrix binding/case combination;
@@ -343,12 +351,14 @@ There is deliberately no context-free “resolve this Request” API. Runtime va
 - attached profiles and authority; and
 - captured or sampled local inputs.
 
-Explorer can offer a resolved facet by creating an ephemeral single-subject Compare preparation,
-letting the user choose the Environment/occurrence context, calling
-`CompareService.inspect_resolved_value`, and discarding the handle when the facet closes. It must
-display the selected Environment, cell/trial/execution coordinate, and freshness alongside the
-value. Explorer does not transfer a hidden draft or retained plan into Compare; Request selection
-and composition begin explicitly inside the Compare preparation journey.
+Explorer's Request backend creates an ephemeral single-subject preparation in the selected
+Environment and verifies the exact resource/context before inspecting a bounded field batch.
+Body leaves are prioritized so a secret field cannot mask public siblings. The UI labels the
+Environment and partial/unavailable state; it does not expose execution navigation as a prerequisite
+to understanding a resource. The handle is discarded after inspection. Body JSON and the selected
+path/declaration pane consume only safe application projections. Schema browsing uses the local
+catalog with explicit cycle stops and does not fetch remote documents. Resource selection and
+execution planning remain separate; `c` performs an explicit handoff to Launch.
 
 ## 7. Compare draft and invocation contract
 
@@ -922,7 +932,9 @@ annotations and retention/restore are backend-only until separate UI controls ar
 | Overview | `ProjectResourceSummary` + outline | Metadata and secret-free kind-aware structure |
 | Authored | `SourceWindow` | Masked/exact revision-pinned YAML with line paging |
 | Effective | `EffectiveResourceWindow` | Compiled fields, links/composition, consumers |
-| Resolved | ephemeral Compare handle + `ResolvedValueInspection` | One field, Environment/occurrence context, safe value nodes, provenance, freshness |
+| Resolved Value / Matrix | `ValueInspection` + optional `MatrixCaseWindow` | Standalone public/masked fields and generated cases, optional Environment |
+| Resolved Request / profiles | ephemeral Compare handle + resolved batch | Exact context, safe field nodes, partial/unavailable state |
+| Body / Schema navigation | safe compiled outline + resolved fields / local Schema catalog | JSON paths and origins; nested schema source pointers, local references and cycle stops |
 | Dependencies | `ProjectRelationship` | Inbound/outbound targets, paths, origins |
 
 ### 15.2 Launch · Target and Plan

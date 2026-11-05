@@ -51,12 +51,14 @@ from .contracts import CliReportFormat
 from .contracts import DoctorRequest
 from .contracts import ExecutionArtifactSummary
 from .contracts import ExecutionRequest
+from .contracts import InitRequest
 from .contracts import PlanRequest
 from .contracts import RenderRequest
 from .contracts import ReportRequest
 from .contracts import ValidateRequest
 from .execution import CliExecutionOutcome
 from .execution import execute_cli_request
+from .initialization import initialize_project
 from .loading import policy_load_limits
 from .loading import project_load_limits
 from .rendering import render_cli_request
@@ -66,6 +68,9 @@ _CLI_API_VERSION = "comparo.cli/v1alpha1"
 
 class CliServices(Protocol):
     """Narrow framework-neutral operations consumed by command callbacks."""
+
+    def init(self, request: InitRequest) -> CliCommandResult:
+        """Create a starter project without overwriting existing configuration."""
 
     def configuration_schema(self) -> CliCommandResult:
         """Return the public configuration schema."""
@@ -927,7 +932,11 @@ def _report(request: ReportRequest) -> CliCommandResult:
 
 @final
 class DefaultCliServices:
-    """Production read-only services used by the installed CLI."""
+    """Production services used by the installed CLI."""
+
+    def init(self, request: InitRequest) -> CliCommandResult:
+        """Create a starter project without making network requests."""
+        return initialize_project(request)
 
     def configuration_schema(self) -> CliCommandResult:
         """Return the canonical public configuration schema."""

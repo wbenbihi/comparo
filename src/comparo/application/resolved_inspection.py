@@ -59,6 +59,7 @@ from comparo.core.domain.sensitivity import SensitiveValue
 from comparo.core.domain.sensitivity import TaintOriginId
 from comparo.core.domain.value_kinds import ValueKind
 from comparo.core.domain.value_references import SymbolPath
+from comparo.core.domain.value_references import ValueNamespace
 from comparo.core.domain.values import Blocked
 from comparo.core.domain.values import BytesValue
 from comparo.core.domain.values import Error
@@ -254,6 +255,22 @@ class ResolvedValueProjectionLimits(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class MatrixCaseSelection(msgspec.Struct, frozen=True, kw_only=True):
+    """Exact compiled Matrix binding and case within the selected occurrence."""
+
+    binding: str
+    case_id: str
+
+    def __post_init__(self) -> None:
+        """Reject incomplete or unbounded identity text."""
+        if any(
+            type(value) is not str or not value or len(value) > 255 or not value.isprintable()
+            for value in (self.binding, self.case_id)
+        ):
+            raise ValueError("Matrix case selection must contain bounded printable identities")
+
+
+@final
 class ResolvedValueInspectionTarget(msgspec.Struct, frozen=True, kw_only=True):
     """Frontend-safe selection resolved later through an opaque Compare handle."""
 
@@ -265,6 +282,7 @@ class ResolvedValueInspectionTarget(msgspec.Struct, frozen=True, kw_only=True):
     start_node: int
     maximum_nodes: int
     expected_projection_fingerprint: str | None = None
+    matrix_case: MatrixCaseSelection | None = None
 
     def __post_init__(self) -> None:
         """Validate the whole selection without retaining a plan or local values."""
@@ -276,6 +294,10 @@ class ResolvedValueInspectionTarget(msgspec.Struct, frozen=True, kw_only=True):
             raise ValueError("resolved inspection target Environment must identify Environment")
         if type(self.limits) is not ResolvedValueProjectionLimits:
             raise TypeError("resolved inspection target limits must be typed")
+        if self.matrix_case is not None and (
+            type(self.matrix_case) is not MatrixCaseSelection or self.resource.kind != "Matrix"
+        ):
+            raise TypeError("compiled case inspection requires a typed Matrix selection")
         _validate_selection(
             field_path=self.field_path,
             execution_ordinal=self.execution_ordinal,
@@ -303,6 +325,7 @@ class _ResolvedValueInspectionRequest(msgspec.Struct, frozen=True, kw_only=True)
     maximum_nodes: int
     ambient_environment: CapturedAmbientEnvironment
     expected_projection_fingerprint: str | None = None
+    matrix_case: MatrixCaseSelection | None = None
 
     def __post_init__(self) -> None:
         """Validate finite coordinates before any local source can be opened."""
@@ -316,6 +339,10 @@ class _ResolvedValueInspectionRequest(msgspec.Struct, frozen=True, kw_only=True)
             raise ValueError("resolved inspection Environment coordinate must identify Environment")
         if type(self.settings) is not _ResolvedValueInspectionSettings:
             raise TypeError("resolved inspection requires typed settings")
+        if self.matrix_case is not None and (
+            type(self.matrix_case) is not MatrixCaseSelection or self.resource.kind != "Matrix"
+        ):
+            raise TypeError("compiled case inspection requires a typed Matrix selection")
         _validate_selection(
             field_path=self.field_path,
             execution_ordinal=self.execution_ordinal,
@@ -620,6 +647,7 @@ def _bind_resolved_value_target(
         maximum_nodes=target.maximum_nodes,
         ambient_environment=ambient_environment,
         expected_projection_fingerprint=target.expected_projection_fingerprint,
+        matrix_case=target.matrix_case,
     )
 
 
@@ -779,7 +807,8 @@ async def _inspect_with_resources(
     attempt = _attempt_scope(work)
     target = ResolutionTarget(
         symbol=symbol,
-        scope=attempt,
+        scope=attempt.execution.trial.cell if request.matrix_case is not None else attempt,
+        namespace=ValueNamespace.MATRIX if request.matrix_case is not None else None,
         cell_inputs=cell_inputs(request.project.prepared, work.trial.cell),
     )
     result = await MaskedValueResolver(resources.context).resolve(expression, target)
@@ -816,21 +845,73 @@ def _select(
         if (resource.definition.identity.kind is ResourceKind.ENVIRONMENT)
         else None
     )
+    if request.matrix_case is not None:
+        compiled_case = _select_matrix_case(request, work, request.matrix_case)
+        if type(compiled_case) is ApplicationDiagnostic:
+            return compiled_case
+        selected = _expression_and_symbol_at(
+            compiled_case, path, SymbolPath(segments=(request.matrix_case.binding,))
+        )
+        return _selection_result(request, work, selected)
     if resource.definition.identity.kind is ResourceKind.REQUEST:
         if resource.definition != work.subject:
             return _request_diagnostic(request, "resolution.inspect.subject-mismatch")
         if path and path[0] == "request":
-            authored = _child(node, "request")
-            if type(authored) is not ObjectExpr:  # pragma: no cover - compiler invariant
+            effective = _request_expression(request, work, node)
+            if effective is None:
                 return _request_diagnostic(request, "resolution.inspect.expression-not-found")
-            node = effective_request_expression(request.project.prepared, work, authored)
+            node = effective
             path = path[1:]
             symbol = SymbolPath(segments=("request",))
-    selected = _expression_and_symbol_at(node, path, symbol)
+    return _selection_result(request, work, _expression_and_symbol_at(node, path, symbol))
+
+
+def _selection_result(
+    request: _ResolvedValueInspectionRequest,
+    work: ExecutionWork,
+    selected: tuple[ValueExpression, SymbolPath] | None,
+) -> _Selection | ApplicationDiagnostic:
     if selected is None:
         return _request_diagnostic(request, "resolution.inspect.expression-not-found")
-    expression, selected_symbol = selected
-    return _Selection(expression=expression, work=work, symbol=selected_symbol)
+    expression, symbol = selected
+    return _Selection(expression=expression, work=work, symbol=symbol)
+
+
+def _request_expression(
+    request: _ResolvedValueInspectionRequest,
+    work: ExecutionWork,
+    node: object,
+) -> ObjectExpr | None:
+    authored = _child(node, "request")
+    if type(authored) is not ObjectExpr:
+        return None
+    return effective_request_expression(request.project.prepared, work, authored)
+
+
+def _select_matrix_case(
+    request: _ResolvedValueInspectionRequest,
+    work: ExecutionWork,
+    case: MatrixCaseSelection,
+) -> ObjectExpr | ApplicationDiagnostic:
+    """Bind compiled case values only after exact revision and occurrence checks."""
+    coordinate = next(
+        (
+            item
+            for item in work.trial.cell.matrix_cases
+            if item.binding.value == case.binding
+            and item.case_id.value == case.case_id
+            and _coordinate(item.matrix) == request.resource
+        ),
+        None,
+    )
+    if coordinate is None:
+        return _request_diagnostic(request, "resolution.inspect.matrix-case-mismatch")
+    binding = next(
+        item
+        for item in cell_inputs(request.project.prepared, work.trial.cell).bindings
+        if item.binding == coordinate.binding and item.case_id == coordinate.case_id
+    )
+    return binding.values
 
 
 def _find_resource(

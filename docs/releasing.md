@@ -1,127 +1,88 @@
 # Release through GitHub Actions
 
-The rebuilt implementation was merged from `refactor` to `main` through PR #6.
-Versioning, tags, GitHub releases and PyPI publication belong to the repository's
-[Release workflow](../.github/workflows/release.yml), not a local publishing command.
-The target is the **0.3.0 minor release**, confirmed by a semantic-release no-operation preview.
-The existing pre-1.0 configuration keeps this history in the 0.x line; no major release is requested.
-See the [complete changes since v0.2.0](releases/0.3.0.md). Package metadata remains 0.2.0 until that workflow
-creates the version commit.
+The current preparation target is **0.4.0**, based on the existing **v0.3.0** tag. See the
+[0.4.0 notes](releases/0.4.0.md) for scope and migration. Package metadata and `uv.lock` remain at
+0.3.0 while the branch is reviewed; the [Release workflow](../.github/workflows/release.yml)
+creates the version/changelog commit and tag after merge. Do not create a local release tag or
+manually bump the package version to simulate publication.
 
 ## Pull request validation
 
-Opening the PR starts the [CI workflow](../.github/workflows/ci.yml) on GitHub-hosted Ubuntu 24.04
-runners. CI installs the locked dependencies and runs:
+The [CI workflow](../.github/workflows/ci.yml) runs on pull requests and pushes to `main` on
+GitHub-hosted Ubuntu 24.04 runners. It checks:
 
-1. Lock consistency, Ruff lint/format, strict mypy and import contracts.
-2. The full test suite with the configured **95% combined statement/branch coverage gate**.
-3. Wheel/sdist builds, exact distribution membership and archive-integrity checks.
-4. An installed-wheel smoke test and Python 3.13/3.14 compatibility jobs.
+1. Locked dependencies, Ruff lint/format, strict mypy and all import contracts.
+2. The full test suite with the configured **95% combined statement/branch coverage floor**.
+3. Wheel/sdist builds, exact distribution membership and archive integrity.
+4. Installed-wheel CLI/schema/doctor smoke checks and Python 3.13/3.14 compatibility.
 
-These isolated CI runs provide the release evidence. Local tests that cannot bind a loopback
-server in the development sandbox are not a substitute for the GitHub result. Keep the PR in
-draft until failures are resolved and the required checks pass. The maintainer approved a 95%
-overall coverage floor on November 2, retaining branch measurement and all existing tests. This
-replaces the previous blanket 100% requirement; it does not certify the uncovered paths. See the
-[quality policy](../CONTRIBUTING.md#quality-gates). Do not bypass this gate or treat it as a target
-to reduce existing coverage to.
+Preserve existing coverage and meaningful regression tests; the floor is not a target to reduce
+coverage to. Local tests requiring HTTP servers must be allowed to bind loopback sockets. A
+sandbox-denied bind is not a passing test, and a local pass is not the final GitHub result.
+Follow [contributor quality gates](../CONTRIBUTING.md#quality-gates). Keep a release PR in draft
+until failures are resolved and the required checks pass.
 
-The repository's CI runners are distinct from Comparo's operator-owned ExecutionPolicy for
-running untrusted API projects. This release does not introduce a distributable Comparo CI action.
+Distribution audits compare archives with the reviewed Git index. Include every intended new
+package module in a focused commit before building; untracked package files are rejected. Builds
+embed the source SHA and modified-source flag. An editable workspace and a pipx release are
+separate installations; inspect local changes with `.venv/bin/comparo` from the repository.
+
+## Version selection
+
+Conventional `feat` commits since v0.3.0 select the next minor version, **0.4.0**. `fix` commits
+select patches when there are no feature changes. The pre-1.0 settings keep this release line at
+0.x (`allow_zero_version = true`, `major_on_zero = false`). Keep implementation and documentation
+commits focused; do not squash feature work into a `docs`-only message that loses its release signal.
+The workflow logs its version/tag decision before doing any publication. A feature branch is not a
+release channel; `main`, `alpha`, `beta` and `rc` are the configured channels.
 
 ## Current qualification findings
 
-The November 2 local sandbox run completed **4,289 passing / 24 failing tests**:
-
-- 23 failures were localhost binding restrictions (`PermissionError`), requiring CI execution.
-- The showcase inventory test in `tests/examples/test_projects.py` expects 44 resources; the
-  current project contains 45. The PR follow-up corrects this assertion.
-- That restricted run measured **97.33%** combined coverage. The definitive CI measurement is
-  recorded below; the then-configured 100% release gate was not met by this local run.
-
-Lint, formatting, strict typing, import contracts and lock verification passed locally. The latest
-Settings section-navigation change passed 17 targeted Settings/architecture tests. These results
-do not constitute release approval. See [current implementation status](status.md) for scope and gaps.
-
-## First GitHub Actions results and fixes
-
-[The initial PR run](https://github.com/wbenbihi/comparo/actions/runs/41530231464) completed:
-
-- Python 3.13: **4,312 passed / 1 failed**, solely the stale showcase count.
-- Python 3.14: **4,311 passed / 2 failed**, the count and a Launch catalog reload completing during
-  widget teardown after saving a profile.
-- Main check: **98.01% coverage**, below the then-required 100%, plus the stale count failure.
-
-The count is corrected in `eff61cf`. The teardown race is fixed in `fb0ae71`, with deterministic
-regressions for both successful and failed catalog reads arriving after shutdown. Targeted checks
-passed (3 example-plan cases and 15 profile-authoring/architecture cases).
-
-[The second PR run](https://github.com/wbenbihi/comparo/actions/runs/41533468340) passed both Python
-compatibility jobs. The main check found a separate action-bar race in the profile-save journey
-(4,314 passed / 1 failed) and measured 98.00% coverage. Availability changes now update existing
-buttons instead of asynchronously removing and rebuilding them, preserving controls and focus.
-Regression tests exercise repeated availability changes, disabled/stale actions, and profile-save
-failures. Additional tests cover profile publication, build metadata, and platform/contract edges.
-
-The approved coverage policy is now 95% overall, with branch measurement retained.
-[PR validation](https://github.com/wbenbihi/comparo/actions/runs/41536934471) subsequently passed:
-4,335 tests on both Python versions, 98.09% combined coverage, all static checks, distribution
-audits and installed-wheel smoke checks. PR #6 was merged as `ae2103e`.
+Branch-local evidence is recorded in [code health](../CODE_HEALTH_REPORT.md) and
+[design QA](../design-qa.md). No existing 0.3.0 CI result qualifies the new 0.4.0 code. Review the
+[current implementation status](status.md) and explicit preview/remote-schema limitations before
+release. The repository's own CI is separate from a distributable Comparo GitHub Action, which
+remains deferred.
 
 ## Release planning incident and repair
 
-[The first merged release run](https://github.com/wbenbihi/comparo/actions/runs/41539521939)
-passed source verification but skipped publication. Semantic-release correctly calculated 0.3.0;
-its print-only queries also wrote `released=false` into `GITHUB_OUTPUT`. The final tag query
-therefore overwrote the workflow's own `released=true` decision. A green run did not mean that
-anything had been published: the tag, GitHub release and PyPI job were all skipped.
-
-The planner now removes `GITHUB_OUTPUT` from each print-only subprocess, validates the version/tag,
-logs the decision, and writes its own outputs exactly once. Regression tests run the real locked
-semantic-release package against temporary Git histories for a new release, no release and tag
-recovery. No local publication or manual version bump is involved.
-
-The workflow also restores the existing protected-branch publishing credential described below.
-Merge the repair PR after CI passes; that push starts a new release with the corrected workflow.
-Rerunning the original run would reuse the broken workflow. No v0.3.0 tag exists from that run.
+The first 0.3.0 release attempt calculated the right version but skipped publication because
+semantic-release's print-only queries overwrote `GITHUB_OUTPUT` with `released=false`. The repaired
+planner removes that variable from query subprocesses, validates the version/tag and writes its
+own outputs once. Real-package regressions cover a new release, no release and tag recovery.
+The repair is merged and `v0.3.0` now exists. Historical qualification is retained in the
+[0.3.0 release notes](releases/0.3.0.md); the old instruction to wait for the repair is obsolete.
 
 ## Publishing credentials
 
 Checkout uses the ordinary Actions token without persisting Git credentials. Only the final
-atomic commit/tag push receives the existing repository secret `RELEASE_TOKEN`. This restores
-the authentication used by the working 0.2.0 workflow, but confines it to the publishing step
-after source, package and installed-wheel verification. The token must have repository write
-access and its owner must be permitted to push generated version commits to the release branch.
-With the current classic protection configuration, the existing administrator token uses the
-configured administrator exception; no branch-protection settings are changed by the workflow.
+atomic commit/tag push receives repository secret `RELEASE_TOKEN`; its owner must be authorized
+to push generated version commits to the protected release branch. The workflow does not change
+branch protection. GitHub assets use the ordinary Actions token. PyPI publishing is a separate
+job using OIDC Trusted Publishing and the `pypi` environment; `RELEASE_TOKEN` is not a PyPI credential.
 
-The generated version commit starts normal CI, but a release-job guard prevents a recursive
-release. GitHub assets use the ordinary Actions token. PyPI publishing remains a separate job
-using OIDC Trusted Publishing and the `pypi` environment; `RELEASE_TOKEN` is not a PyPI credential.
+The generated version commit starts normal CI, while a release-job guard prevents recursive release.
 
 ## After CI and review
 
-1. Resolve the CI failures, review migration behavior and mark the PR ready for review.
-2. Obtain the required approvals and merge to `main`, preserving the focused commits with a merge
-   commit where repository rules allow. Do not manually edit the version or create a release tag.
-3. The main-branch push starts Release. It revalidates the source, derives the version, and creates
-   the version/changelog commit and tag locally on the runner.
-4. Release rebuilds distributions **after** the version commit. It verifies the version, archive
-   members and installed wheel, including that the embedded build SHA equals the release commit
-   and the build is unmodified.
-5. Only after verification does the workflow atomically push the commit/tag and create the GitHub
-   release. The separate `publish` job uses the `pypi` environment and OIDC Trusted Publishing.
-   Complete an environment approval if the repository requires one.
-6. Confirm the Release and publish jobs succeed, inspect the GitHub assets and PyPI version, then
-   install the released wheel and verify Settings → General reports the release version and SHA.
-
-Merging is the publishing trigger; creating or updating the PR does not publish a release. The
-`alpha`, `beta` and `rc` branches are also configured release channels, but this PR targets `main`.
+1. Review the concrete changes, resolve CI failures and obtain the required approvals.
+2. Merge to `main`, preserving the feature release signal and focused history where repository
+   rules allow. **Merging is the publication trigger**; creating a branch or PR is not.
+3. Release revalidates source, derives the version, and creates the version/changelog commit and
+   tag locally on the runner.
+4. It rebuilds distributions after that commit and verifies version identity, archive membership,
+   integrity and the installed wheel. Embedded build SHA must match the release commit and the
+   modified flag must be false.
+5. Only then does it atomically push the version commit/tag and create the GitHub release. The
+   separate OIDC `publish` job uploads the verified distributions to PyPI.
+6. Confirm Release and publish both succeed, inspect GitHub assets and PyPI version, then install
+   the released wheel and check Settings → General. A green job that skipped publication is not
+   evidence that a package was released.
 
 ## Recovery
 
 If publication is interrupted after a tag exists, use **Actions → Release → Run workflow** on
-the corresponding release branch with `release_tag` set to that existing tag (for example,
-`v0.3.0`). The workflow validates ancestry, checks out that exact commit, reruns verification,
-rebuilds assets and resumes publication. Leave `release_tag` empty only when intentionally asking
-the workflow to evaluate a new release. Never overwrite or force-move an existing release tag.
+the release branch with `release_tag` set to that existing tag, for example `v0.3.0` or, after it
+has been created, `v0.4.0`. The workflow validates ancestry, checks out the exact commit, reruns
+verification, rebuilds assets and resumes publication. Leave `release_tag` empty only when
+intentionally evaluating a new release. Never overwrite or force-move a release tag.

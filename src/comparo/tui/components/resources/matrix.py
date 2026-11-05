@@ -8,27 +8,28 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
+from textual.content import Content
 from textual.widgets import Static
 
 from comparo.tui.components.badge import Badge
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.inspector import RecordInspector
+from comparo.tui.components.list import Field
+from comparo.tui.components.resourcelinks import ResourceLinksTable
 from comparo.tui.components.separator import Separator
 from comparo.tui.components.table import Column
 from comparo.tui.components.table import Record
-from comparo.tui.components.table import Table
 from comparo.tui.components.typography import Hint
-from comparo.tui.models.resource import InspectionPhase
 from comparo.tui.models.resource import ResolvedResourceField
 from comparo.tui.models.resource import ResourceOverviewMode
 from comparo.tui.models.resource import ResourcePresentation
 from comparo.tui.models.resource_presenters import MatrixOverview
-from comparo.tui.models.resource_presenters import compiled_exact_fields
 from comparo.tui.models.resource_presenters import matrix_overview
 from comparo.tui.theme import style
 
 from .base import BaseKindResourceDetails
+from .matrix_browser import MatrixBrowser
 from .shared import ResourceSettingList
-from .shared import resolution_status
 
 
 class MatrixContextStrip(Horizontal):
@@ -79,18 +80,32 @@ class MatrixDefinitionBody(Vertical):
         if not self._overview.axes:
             yield Hint("This Matrix uses explicit cases instead of declared axes.")
             return
+        details = {}
         for axis in self._overview.axes:
-            count = len(axis.options)
-            yield Separator(
-                label=f"{axis.id} · {count} {'option' if count == 1 else 'options'}",
-                align="left",
-                classes="tight",
-            )
-            yield ResourceSettingList(
-                tuple(option.value for option in axis.options),
-                empty="This axis has no options.",
-                resolved=self._resolved,
-            )
+            fields = []
+            for option in axis.options:
+                setting = option.value
+                value = self._resolved.get(setting.path)
+                fields.append(
+                    Field(option.id, Content(setting.value if value is None else value.value))
+                )
+                for child in setting.details:
+                    value = self._resolved.get((*setting.path, *child.path))
+                    fields.append(
+                        Field(
+                            " / ".join((option.id, *child.path)),
+                            Content(child.value if value is None else value.value),
+                        )
+                    )
+            details[axis.id] = tuple(fields)
+        yield RecordInspector(
+            (Column("axis", "Axis"), Column("options", "Options", width=8)),
+            tuple(
+                Record(axis.id, (axis.id, str(len(axis.options)))) for axis in self._overview.axes
+            ),
+            details,
+            title="Selected axis",
+        )
 
 
 class MatrixCasesBody(Vertical):
@@ -142,45 +157,10 @@ class MatrixPlanBody(Vertical):
     @override
     def compose(self) -> ComposeResult:
         """Render the planner-owned case list or a truthful context hint."""
-        inspection = self._resource.resolved
-        plan = (
-            inspection.value.matrix_plan
-            if self._resource.overview_mode is ResourceOverviewMode.RESOLVED
-            and inspection.value is not None
-            else None
-        )
-        if plan is None:
-            if self._resource.overview_mode is not ResourceOverviewMode.RESOLVED:
-                yield Hint(
-                    "Press r to compile cases in the selected Environment and consumer scope."
-                )
-            elif inspection.phase is InspectionPhase.LOADING:
-                yield Hint("Compiling Matrix cases for the selected execution context…")
-            elif inspection.phase is InspectionPhase.FAILED:
-                yield Hint(f"Matrix case compilation failed: {inspection.message}")
-            elif inspection.phase is InspectionPhase.UNAVAILABLE:
-                yield Hint(inspection.message or "Matrix case compilation is unavailable.")
-            else:
-                yield Hint("This Matrix is not attached under one unambiguous binding.")
-            return
-        subject = f"{plan.subject.kind}/{plan.subject.resource_id}"
-        yield Static(
-            Text.assemble(
-                ("Binding  ", style("muted")),
-                (plan.binding, style("kind.matrix")),
-                ("   Subject  ", style("muted")),
-                (subject, style("fg")),
-            ),
-            classes="matrix-plan-context",
-        )
-        yield Table(
-            columns=(Column("ordinal", "#", width=4), Column("case", "Compiled case ID")),
-            records=tuple(
-                Record(case_id, (str(index), case_id))
-                for index, case_id in enumerate(plan.cases, start=1)
-            ),
-            classes="matrix-plan-table",
-        )
+        if self._resource.overview_mode is not ResourceOverviewMode.RESOLVED:
+            yield Hint("Press r to browse cases and their values.")
+        else:
+            yield MatrixBrowser(self._resource)
 
 
 class MatrixUsageBody(Vertical):
@@ -197,18 +177,8 @@ class MatrixUsageBody(Vertical):
         if not self._overview.consumers:
             yield Hint("This Matrix has no declared consumers.")
             return
-        yield Table(
-            columns=(Column("kind", "Kind", width=12), Column("resource", "Consumer")),
-            records=tuple(
-                Record(
-                    f"consumer:{index}",
-                    (item.target_kind, item.target_id),
-                )
-                for index, item in enumerate(self._overview.consumers)
-            ),
-            classes="matrix-usage-table",
-        )
-        yield Hint("Press g for the complete directional dependency graph.")
+        yield ResourceLinksTable(self._overview.consumers, classes="matrix-usage-table")
+        yield Hint("Enter opens the selected resource · g shows all relationships.")
 
 
 class MatrixResourceDetails(BaseKindResourceDetails):
@@ -224,38 +194,16 @@ class MatrixResourceDetails(BaseKindResourceDetails):
     def compose(self) -> ComposeResult:
         """Render one continuous Matrix document in raw and resolved modes."""
         overview = matrix_overview(self.entry)
-        resolved = self._resolved_fields()
-        plan = (
-            self.resource.resolved.value.matrix_plan
-            if self.resource.overview_mode is ResourceOverviewMode.RESOLVED
-            and self.resource.resolved.phase is InspectionPhase.READY
-            and self.resource.resolved.value is not None
-            else None
-        )
-        yield MatrixContextStrip(overview, None if plan is None else len(plan.cases))
-        if self.resource.overview_mode is ResourceOverviewMode.RESOLVED:
-            yield resolution_status(
-                self.resource,
-                self.entry.summary.name or self.entry.summary.coordinate.resource_id,
-            )
+        resolved: dict[tuple[str, ...], ResolvedResourceField] = {}
+        yield MatrixContextStrip(overview, None)
         yield Separator(label="Definition", align="left", classes="resource-section-heading")
         yield MatrixDefinitionBody(overview, resolved)
         yield Separator(label="Cases", align="left", classes="resource-section-heading")
         yield MatrixCasesBody(overview, resolved)
-        yield Separator(label="Execution plan", align="left", classes="resource-section-heading")
+        yield Separator(label="Generated cases", align="left", classes="resource-section-heading")
         yield MatrixPlanBody(self)
         yield Separator(label="Usage", align="left", classes="resource-section-heading")
         yield MatrixUsageBody(overview)
-
-    def _resolved_fields(self) -> dict[tuple[str, ...], ResolvedResourceField]:
-        """Index exact structural values and masked resolution overlays."""
-        if self.resource.overview_mode is not ResourceOverviewMode.RESOLVED:
-            return {}
-        fields = {field.path: field for field in compiled_exact_fields(self.entry)}
-        inspection = self.resource.resolved
-        if inspection.phase is InspectionPhase.READY and inspection.value is not None:
-            fields.update((field.path, field) for field in inspection.value.fields)
-        return fields
 
 
 __all__ = [

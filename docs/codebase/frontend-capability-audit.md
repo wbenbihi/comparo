@@ -1,6 +1,6 @@
 # Frontend capability audit
 
-This is the backend capability contract for CLI/TUI/CI frontends, reconciled on **2026-10-31**. It answers whether a
+This is the backend capability contract for CLI/TUI/CI frontends, reconciled on **2026-11-05**. It answers whether a
 journey can be implemented through current backend contracts without importing live core objects
 or reimplementing business rules in presentation code.
 
@@ -40,6 +40,11 @@ fail-fast and assertion/diff/gate overrides; arbitrary value/Request/budget over
 backend/CLI capabilities. Generic resource editing, glyph preferences and reduced-motion settings
 are not implemented. See [current status](../status.md) and the workspace guides for UI coverage.
 
+Explore additionally resolves Values and Matrix case data without a consumer, renders navigable
+JSON Body paths, expands project-local Schema references with cycle stops, and restores location
+when following resource links and Back. Masked values use a distinct semantic color. These are
+inspection controls, not execution planning or remote-schema validation controls.
+
 ## Explorer
 
 | Capability | Status | Backend contract | Notes |
@@ -53,7 +58,9 @@ are not implemented. See [current status](../status.md) and the workspace guides
 | Show effective compiled structure | Supported | `inspect_effective_resource` | Fingerprint-exact, value-safe, paged fields and relationships |
 | Raw/effective side by side | Supported | source + effective inspection services | Use source/resource fingerprints to label the two representations honestly |
 | Show runtime-resolved Request values | Supported | `render_prepared_request_window` | Sanitized finalized request previews, including body/auth-bearing occurrences, one caller-bounded ordinal window at a time |
-| Show arbitrary generic resolved values | Supported | `CompareService.inspect_resolved_value` / `ResolvedValueInspectionTarget` | Exact retained plan, execution ordinal, Environment, Matrix cell, and effective Request overrides; sensitive values are irreversibly masked and public values are fingerprinted, paged, and bounded |
+| Resolve standalone Values / Matrix cases | Supported | `application.value_inspection.inspect_value` | Exact resource/environment revisions, Project/Environment defaults, bounded public siblings, masked secrets; no consumer or plan |
+| Browse local nested Schema references | Supported, bounded | `ProjectOutlineField` / local catalog | Exact safe schema facts; no remote fetch or sample validation in Explorer |
+| Show arbitrary execution-bound resolved values | Supported | `CompareService.inspect_resolved_value` / `ResolvedValueInspectionTarget` | Exact retained plan, execution ordinal, Environment, Matrix cell, and effective Request overrides; sensitive values are irreversibly masked and public values are fingerprinted, paged, and bounded |
 | Run Environment health checks | Supported | `Environment.spec.healthChecks` / `TuiBackend.run_environment_health_checks` | Ordered, unique, revision-pinned Request references execute as a normal single-Environment assertion run; safety and artifact/report contracts remain authoritative |
 | Explain planning precedence | Supported | plan provenance inspections + `CompareService.inspect_request_composition` | Field-by-field method, URL, headers, query, cookies, auth, body, stream, transport, and policy contributions retain origin and winning strategy |
 

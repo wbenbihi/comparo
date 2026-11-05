@@ -1,15 +1,19 @@
 """Reusable resource overview fields and dependency graph components."""
 
 from collections.abc import Mapping
+from typing import ClassVar
 from typing import override
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Vertical
 from textual.widgets import Static
 
+from comparo.tui.bindings import resource_link_bindings
 from comparo.tui.components.badge import BadgeTone
 from comparo.tui.components.badge import badge_text
+from comparo.tui.components.resourcelinks import OpenResource
 from comparo.tui.components.treemenu import TreeMenu
 from comparo.tui.components.typography import Caption
 from comparo.tui.components.typography import Hint
@@ -17,6 +21,7 @@ from comparo.tui.models.explorer import ResourceEntry
 from comparo.tui.models.navigation import MenuNode
 from comparo.tui.models.resource import InspectionPhase
 from comparo.tui.models.resource import ResolvedResourceField
+from comparo.tui.models.resource import ResolvedValueView
 from comparo.tui.models.resource import ResourceDetail
 from comparo.tui.models.resource_presenters import ResourceDependency
 from comparo.tui.models.resource_presenters import ResourceSetting
@@ -111,11 +116,11 @@ class ResourceSettingList(Vertical):
 class ResourceDependencyTree(TreeMenu[str]):
     """One-hop dependency graph over the generic tree mechanics."""
 
+    BINDINGS: ClassVar[list[BindingType]] = resource_link_bindings()
+
     def __init__(self, dependencies: tuple[ResourceDependency, ...]) -> None:
         """Build directional graph branches from immutable dependency edges."""
-        self._dependencies = {
-            f"dependency:{index}": dependency for index, dependency in enumerate(dependencies)
-        }
+        self._dependencies = {dependency.key: dependency for dependency in dependencies}
         branches: list[MenuNode[str]] = []
         for direction, title in (("uses", "Uses"), ("used-by", "Used by")):
             leaves = tuple(
@@ -126,6 +131,14 @@ class ResourceDependencyTree(TreeMenu[str]):
             if leaves:
                 branches.append(MenuNode(f"direction:{direction}", title, children=leaves))
         super().__init__(*branches, classes="resource-dependency-graph")
+
+    def on_tree_menu_selected(self, event: TreeMenu.Selected[str]) -> None:
+        """Open only an explicitly activated edge, never a directional branch."""
+        if event.menu is self:
+            event.stop()
+            dependency = self._dependencies.get(event.item)
+            if dependency is not None:
+                self.post_message(OpenResource(self, dependency.target))
 
     @override
     def format_node(self, node: MenuNode[str]) -> Text:
@@ -174,23 +187,17 @@ def resolution_status(resource: ResourceDetail, context: str) -> Static:
     if inspection.phase is not InspectionPhase.READY or inspection.value is None:
         return Hint(inspection.message or f"Resolved values are unavailable for {context}.")
     resolved = inspection.value
-    subject = f"{resolved.subject.kind}/{resolved.subject.resource_id}"
-    occurrence = f"occurrence {resolved.execution_ordinal + 1}/{resolved.total_occurrences}"
-    matrices = ", ".join(f"{item.binding}={item.case_id}" for item in resolved.matrices)
-    cell = f"{resolved.cell_id[:8]}…"
-    trial = f"{resolved.trial_id[:8]}…"
-    suffixes: list[str] = []
-    if resolved.diagnostics:
-        suffixes.append(f"{len(resolved.diagnostics)} unavailable")
+    if isinstance(resolved, ResolvedValueView):
+        suffix = " · partial view" if resolved.incomplete else ""
+        return Caption(f"Resolved · secrets masked{suffix}")
+    suffixes = []
     if resolved.incomplete:
-        suffixes.append("bounded partial view")
-    if matrices:
-        suffixes.insert(0, f"matrices {matrices}")
-    suffix = "" if not suffixes else f" · {' · '.join(suffixes)}"
-    return Caption(
-        f"Resolved preview for {context} · {subject} · {occurrence} · "
-        f"cell {cell} · trial {trial} · masked{suffix}"
-    )
+        suffixes.append("partial view")
+    if resolved.diagnostics:
+        suffixes.append(f"{len(resolved.diagnostics)} unavailable fields")
+    suffixes.extend(f"{item.binding}={item.case_id}" for item in resolved.matrices)
+    suffix = "" if not suffixes else " · " + " · ".join(suffixes)
+    return Caption(f"Resolved · {resolved.environment.resource_id} · secrets masked{suffix}")
 
 
 __all__ = [

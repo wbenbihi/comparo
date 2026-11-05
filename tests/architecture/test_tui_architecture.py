@@ -194,3 +194,16 @@ def test_only_the_canonical_terminal_package_remains() -> None:
     for retired in ("tui3", "tui4", "tuibis"):
         assert not (_PACKAGE / retired).exists()
         assert not (_ROOT / "tests" / retired).exists()
+
+
+def test_resource_inspectors_use_shared_actions_instead_of_native_buttons() -> None:
+    """Keep resource controls within the agreed compact semantic action grammar."""
+    violations = [
+        str(path.relative_to(_ROOT))
+        for path, tree in _sources(_TUI / "components" / "resources")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "textual.widgets"
+        and any(alias.name == "Button" for alias in node.names)
+    ]
+    assert violations == []

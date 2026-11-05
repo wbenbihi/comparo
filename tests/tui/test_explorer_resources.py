@@ -1448,8 +1448,9 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
         request_details = app.query_one(RequestResourceDetails)
         assert len(app.query(RequestResourceDetails)) == 1
         tabbed = request_details.query_one("#request-tabs", TabbedContent)
-        assert tabbed.active == "request-url"
+        assert tabbed.active == "request-summary"
         assert [pane.id for pane in request_details.query(TabPane)] == [
+            "request-summary",
             "request-url",
             "request-query",
             "request-headers",
@@ -1459,7 +1460,8 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
             "request-runtime",
             "request-contracts",
         ]
-        assert len(request_details.query(RequestTabBody)) == 8
+        assert len(request_details.query(RequestTabBody)) == 7
+        assert len(request_details.query("RequestBody")) == 1
         assert len(app.query(ResourceSettingList)) == 5
         body_empty = request_details.query_one("#request-body .request-tab-empty", Static)
         assert str(body_empty.content) == "This Request has no body."

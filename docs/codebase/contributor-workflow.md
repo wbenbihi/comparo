@@ -180,8 +180,8 @@ uv run --frozen python -m tests.architecture.distribution_members \
 ```
 
 Ruff enforces broad correctness/security/docstring rules, mypy runs in strict mode, pytest treats
-warnings as errors, the combined statement/branch coverage gate is configured at 100% (a target,
-not a claim that the current working tree has achieved it), and the distribution
+warnings as errors, the combined statement/branch coverage floor is configured at 95% (not a
+target to reduce existing coverage to), and the distribution
 check compares built members to an allowlist. Run smaller relevant suites during an incremental
 change, then the complete gates before a release.
 

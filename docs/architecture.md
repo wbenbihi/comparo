@@ -164,10 +164,10 @@ uv run --frozen lint-imports
 uv run --frozen python -m pytest --cov --cov-report=term-missing
 uv build
 uv run --frozen python -m tests.architecture.distribution_members \
-  dist/comparo-0.2.0.tar.gz dist/comparo-0.2.0-py3-none-any.whl
+  dist/comparo-*.tar.gz dist/comparo-*.whl
 ```
 
-The configured coverage gate requires 100% combined statement/branch coverage across the current
+The configured coverage gate requires 95% combined statement/branch coverage across the current
 package. This is a release target, not a measurement from this documentation refresh. Distribution
 verification uses an exact member allowlist and fails if local untracked package sources or
 sensitive/deprecated paths could enter a release artifact.

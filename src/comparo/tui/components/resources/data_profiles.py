@@ -4,8 +4,10 @@ from typing import ClassVar
 from typing import override
 
 from textual.app import ComposeResult
+from textual.containers import Vertical
 
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.inspector import InspectorColumns
 from comparo.tui.components.separator import Separator
 from comparo.tui.components.typography import Hint
 from comparo.tui.models.remaining_resource_presenters import artifact_profile_overview
@@ -60,22 +62,27 @@ class SafetyProfileResourceDetails(BaseKindResourceDetails):
             empty="This profile does not include or extend another SafetyProfile.",
             resolved=resolved,
         )
-        yield Separator(
-            label="Remote schemas",
-            align="left",
-            classes="resource-section-heading",
-        )
-        yield ResourceSettingsBody(
-            overview.schemas,
-            empty="No remote Schema source restriction is declared.",
-            resolved=resolved,
-        )
-        yield Separator(label="Classification", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.classification,
-            empty="Version defaults classify response data for this profile.",
-            resolved=resolved,
-        )
+        with InspectorColumns():
+            with Vertical():
+                yield Separator(
+                    label="Remote schemas",
+                    align="left",
+                    classes="resource-section-heading",
+                )
+                yield ResourceSettingsBody(
+                    overview.schemas,
+                    empty="No remote Schema source restriction is declared.",
+                    resolved=resolved,
+                )
+            with Vertical():
+                yield Separator(
+                    label="Classification", align="left", classes="resource-section-heading"
+                )
+                yield ResourceSettingsBody(
+                    overview.classification,
+                    empty="Version defaults classify response data for this profile.",
+                    resolved=resolved,
+                )
         yield Separator(label="Budgets", align="left", classes="resource-section-heading")
         yield ResourceSettingsBody(
             overview.budgets,
@@ -188,18 +195,21 @@ class ArtifactProfileResourceDetails(BaseKindResourceDetails):
                 self.resource,
                 self.entry.summary.name or self.entry.summary.coordinate.resource_id,
             )
-        yield Separator(label="Capture", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.capture,
-            empty="Version defaults determine sanitized capture coverage.",
-            resolved=resolved,
-        )
-        yield Separator(label="Storage", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.storage,
-            empty="Version defaults determine artifact persistence behavior.",
-            resolved=resolved,
-        )
+        with InspectorColumns():
+            with Vertical():
+                yield Separator(label="Capture", align="left", classes="resource-section-heading")
+                yield ResourceSettingsBody(
+                    overview.capture,
+                    empty="Version defaults determine sanitized capture coverage.",
+                    resolved=resolved,
+                )
+            with Vertical():
+                yield Separator(label="Storage", align="left", classes="resource-section-heading")
+                yield ResourceSettingsBody(
+                    overview.storage,
+                    empty="Version defaults determine artifact persistence behavior.",
+                    resolved=resolved,
+                )
         yield Separator(
             label=f"Retention · {overview.retention_support.value}",
             align="left",

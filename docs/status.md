@@ -1,15 +1,16 @@
 # Current implementation status
 
-Reconciled against the working tree on **2026-11-02**. Package metadata remains **0.2.0**, alpha,
-Python **3.13+**. The rebuilt `comparo/v1alpha1` implementation and recent TUI work are unreleased;
-the dated entries in [CHANGELOG](../CHANGELOG.md) describe earlier releases, not this working tree.
+Reconciled on **2026-11-05** for **0.4.0 preparation**, based on tagged `v0.3.0`.
+Package metadata remains **0.3.0** until GitHub Actions creates the next version commit. Python
+**3.13+** is required; the project remains alpha. The [0.4.0 notes](releases/0.4.0.md) describe
+branch changes, while [CHANGELOG](../CHANGELOG.md) separates them from tagged releases.
 
 ## Implemented product surfaces
 
 | Surface | Current behavior |
 | --- | --- |
-| CLI | Schema, validation, planning, diagnostics, sanitized previews, Request assertions, directed diffs, execution profiles, artifacts and JSON/Markdown/JUnit/SARIF reports |
-| Explore | Resource hierarchy, kind-aware overview, masked source/effective/resolved inspection, dependencies, Environment context and health checks; `c` hands a Request/profile to Launch |
+| CLI | Single-file/split starter projects, managed project-aware shell completion, bundled Rich/Markdown/JSON docs and an AI authoring skill; schema, validation, planning, diagnostics, sanitized previews, Request assertions, directed diffs, execution profiles, artifacts and JSON/Markdown/JUnit/SARIF reports |
+| Explore | Kind-aware inspectors; standalone Value resolution and Matrix cases; numbered JSON Body/path inspection; nested/local-reference Schema browsing; reversible relationships; masked source, Environment context and health checks; `c` hands a Request/profile to Launch |
 | Launch | Requests, saved/manual profiles or assertions; Target → Plan → Run → Analyze; Matrix case filters, trials, retries, fail-fast, assertion/diff/gate overrides, mutation approval and cancellation |
 | Profile saving | Review ID/name, exact YAML and destination; validate and exclusively save a new ExecutionProfile; refresh Explore and Launch |
 | Analyze | Shared Issues, Requests, Rules, Fields and Timeline lenses, occurrence identity, HTTP metadata, rule evidence and body comparison |
@@ -23,6 +24,18 @@ versioned `tui4` entry point are removed. Retained design references are under `
 reference filenames containing `compare` and `report` map to today's Launch and Reports workspaces.
 
 ## Limits and application timing
+
+- Value inspection needs no Request, Scenario or Environment. Project defaults and the active
+  Environment supply declared inputs; absent runtime-only inputs stay unavailable. Public siblings
+  remain readable beside masked secrets. Samples are regenerated when inspection is refreshed.
+- Matrix inspection compiles up to 10,000 data cases, pages 50 cases at a time and previews up to
+  64 value nodes. There are no consumer, binding, trial or match selectors in Explorer.
+- Request Body is a safe JSON preview, not a transmitted or validated request. Its document is
+  capped at 512 lines; the resolved overlay covers at most 16 field targets with up to 64 nodes
+  per target. Uninspected leaves stay marked as not resolved. Copy uses the masked preview.
+- Schema browsing expands project-local references with explicit cycle stops and bounds of
+  512 nodes/depth 32. Remote schemas are not fetched by Explorer and sample validation is not
+  implemented there. This is separate from runtime response-schema validation.
 
 - Reports loads at most 500 physical archive entries by default (`--maximum-report-entries`),
   then filters and displays 50 reports per page. This is not cursor-based large-archive browsing.
@@ -57,43 +70,17 @@ is separate from a distributable Comparo GitHub Action. Release qualification re
 
 ## Verification and sources of truth
 
-The latest feature verification passed **176 TUI/architecture tests** and **49 artifact/body/cURL
-tests**, plus Ruff, formatting, strict mypy and all **12 import contracts**. These are targeted
-results, not a claim of full-suite coverage or universal mockup acceptance. Test discovery on
-November 2 found **4,313 cases** after the Settings section tests; collection is not execution. The configured
-coverage threshold is now 95% (maintainer-approved November 2), and a full release coverage/build audit remains a separate gate.
+Local verification for this branch is recorded in the [code health snapshot](../CODE_HEALTH_REPORT.md)
+and [design QA](../design-qa.md). A local pass is not a GitHub Actions release qualification or a
+claim of complete mockup acceptance. The repository requires 95% combined statement/branch
+coverage, strict static checks, Python 3.13/3.14 compatibility, distribution membership/integrity
+checks and an installed-wheel smoke test before publication. See the [release guide](releasing.md).
 
-This documentation refresh additionally passed **296 CLI/architecture tests**, Ruff, formatting
-and strict mypy. All three example projects validated, and all six showcase ExecutionProfiles
-planned successfully without HTTP. Local Markdown file links and anchors were checked; external
-links and a new complete visual review were not part of this refresh.
+Historical 0.3.0 CI results belong to the [0.3.0 release record](releases/0.3.0.md); they do not
+certify new 0.4.0 code.
 
-The November 2 commit checks passed **416 TUI/CLI/architecture tests** before adding General,
-then **20 Settings/build/packaging tests** for that addition. The General layout was inspected at
-80 columns. Built wheel/sdist members passed the distribution audit; a wheel rebuilt from the
-sdist retained the same build SHA. This verifies provenance packaging, not full release qualification.
-
-The subsequent sandboxed full-suite run had **4,289 passing / 24 failing tests** and measured
-**97.33% coverage**. Of those failures, 23 were localhost binding restrictions and one was the
-showcase inventory's stale 44-resource expectation (45 are present). These results do not pass
-the release gate. The release PR delegates definitive validation to GitHub Actions; see the
-[release guide](releasing.md) for checks, required follow-up and publication after merge.
-
-Initial GitHub Actions validation confirmed 4,312 passing tests on Python 3.13 and 4,311 on
-3.14; failures were the stale example count and a 3.14 catalog-shutdown race. Both have focused
-fixes and targeted regression coverage. Both compatibility jobs passed in the second run; its
-main job found a separate action-bar timing race and measured **98.00% coverage**. The shared
-component now preserves buttons during availability updates, with regression coverage. The
-maintainer approved a **95% overall coverage floor**, retaining branch measurement and existing
-tests. The final PR run passed **4,335 tests** on Python 3.13 and 3.14 with **98.09% coverage**,
-plus all static, packaging and installed-wheel checks. PR #6 was merged. The first Release run
-then passed verification but skipped publication because print-only semantic-release queries
-overwrote the planner's output. A workflow repair isolates those outputs and restores the existing
-protected-branch publishing credential; publication still awaits that repair reaching `main`.
-
-- [User TUI guide](tui.md), [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md),
+- [TUI guide](tui.md), [Launch](codebase/tui-launch.md), [Reports](codebase/tui-reports.md),
   [Settings](codebase/tui-settings.md): actual controls and behavior.
+- [Explorer contract](explorer-0.4.0-plan.md): standalone inspection, navigation and bounds.
 - [Application APIs](codebase/application-api-reference.md): backend contracts and ownership.
-- [Design QA](../design-qa.md): current evidence and outstanding visual acceptance work.
-- [Code health snapshot](../CODE_HEALTH_REPORT.md): measured source inventory and verification limits.
-- [ADRs](decisions/README.md): accepted product constraints; their original dates remain historical.
+- [ADRs](decisions/README.md): accepted constraints; original decision dates remain historical.

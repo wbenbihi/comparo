@@ -1,8 +1,8 @@
 # Comparo examples
 
-These projects are runnable demonstrations of Comparo's current `comparo/v1alpha1` subset. They
-share a deterministic loopback service, so they do not require credentials, internet access, or a
-third-party API.
+The three execution projects demonstrate Comparo's current `comparo/v1alpha1` subset using a
+deterministic loopback service. The Explorer inspection project is separate and needs no server.
+None requires credentials, internet access or a third-party API.
 
 ## Start the demo service
 
@@ -19,6 +19,7 @@ It listens only on `127.0.0.1:18080` and exposes three logical Environment prefi
 
 | Project | Purpose | Expected comparison |
 | --- | --- | --- |
+| [`explorer-inspection`](explorer-inspection/README.md) | Standalone Values, unused Matrix, nested JSON body, cross-schema references and cycles; no server | Inspection only |
 | [`quickstart`](quickstart/README.md) | Smallest complete assertion and comparison project | Pass |
 | [`environment-drift`](environment-drift/README.md) | Mixed pass/fail results and Environment-local values | Fail deliberately |
 | [`tui-showcase`](tui-showcase/README.md) | Dense TUI catalog with 17 Request shapes, directives, two Matrices, local/inline/remote Schemas, profiles, safe failures, and a future Scenario | Two locale cells drift for the eu/pro audience |
@@ -50,7 +51,8 @@ them without pretending every declaration is executable today.
 
 ## Headless equivalents
 
-Every project also works through the CLI:
+The three execution projects also work through the CLI; `explorer-inspection` is intended for
+inspection and deliberately points at a loopback endpoint with no server:
 
 ```console
 uv run --frozen comparo validate --config examples/quickstart/comparo.yaml

@@ -49,3 +49,6 @@
     min-height: 2;
     max-height: 14;
 }
+
+/* Embedded property trees have a bounded viewport inside the overview document. */
+SchemaPropertyBrowser SchemaPropertyTree { height: 22; }

@@ -5,12 +5,15 @@ from typing import override
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.content import Content
 
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.inspector import InspectorColumns
+from comparo.tui.components.inspector import RecordInspector
+from comparo.tui.components.list import Field
 from comparo.tui.components.separator import Separator
 from comparo.tui.components.table import Column
 from comparo.tui.components.table import Record
-from comparo.tui.components.table import Table
 from comparo.tui.components.typography import Hint
 from comparo.tui.models.remaining_resource_presenters import RuleProfileOverview
 from comparo.tui.models.remaining_resource_presenters import gate_profile_overview
@@ -40,45 +43,33 @@ class RuleProfileRulesBody(Vertical):
         if not self._overview.rules:
             yield Hint(f"This {self._overview.family} profile declares no local rules.")
             return
-        operation_title = "Operator" if self._overview.family == "assertion" else "Side pipeline"
-        yield Table(
-            columns=(
-                Column("id", "Rule"),
-                Column("side", "Side", width=10),
-                Column("selector", "Selector"),
-                Column("pipeline", operation_title),
-                Column("combination", "Quantifier / combine"),
-                Column("severity", "Severity", width=12),
-                Column("completeness", "Completeness", width=14),
-            ),
-            records=tuple(
-                Record(
-                    f"rule:{index}:{side_index}",
+        details = {}
+        for rule in self._overview.rules:
+            fields = [
+                Field("Rule", Content(rule.id)),
+                Field("Severity", rule.severity),
+                Field("Completeness", rule.completeness),
+                Field("Combine", Content(rule.combination)),
+                Field("Quantifier", Content(rule.quantifier or "Not declared")),
+                Field("Name", "Declared" if rule.name_declared else "Not declared"),
+                Field("Description", "Declared" if rule.description_declared else "Not declared"),
+            ]
+            for side in rule.sides:
+                fields.extend(
                     (
-                        rule.id if side_index == 0 else "↳",
-                        side.role,
-                        side.selector,
-                        side.pipeline,
-                        rule.combination if side_index == 0 else "↳ shared",
-                        rule.severity,
-                        rule.completeness,
-                    ),
+                        Field(f"{side.role} selector", Content(side.selector)),
+                        Field(f"{side.role} pipeline", Content(side.pipeline)),
+                    )
                 )
-                for index, rule in enumerate(self._overview.rules)
-                for side_index, side in enumerate(rule.sides)
-            ),
+            fields.append(Field("Tags", Content(", ".join(rule.tags) or "None")))
+            details[rule.id] = tuple(fields)
+        yield RecordInspector(
+            (Column("id", "Rule"), Column("severity", "Severity", width=10)),
+            tuple(Record(rule.id, (rule.id, rule.severity)) for rule in self._overview.rules),
+            details,
+            title="Selected rule",
             classes="rule-profile-table",
         )
-        for rule in self._overview.rules:
-            metadata: list[str] = []
-            if rule.name_declared:
-                metadata.append("name declared")
-            if rule.description_declared:
-                metadata.append("description declared")
-            if rule.tags:
-                metadata.append(f"tags {', '.join(rule.tags)}")
-            if metadata:
-                yield Hint(f"{rule.id} · {' · '.join(metadata)}")
         yield Hint("Runtime operands remain concealed in Overview; press s for masked source.")
 
 
@@ -174,22 +165,25 @@ class GateProfileResourceDetails(BaseKindResourceDetails):
                 self.resource,
                 self.entry.summary.name or self.entry.summary.coordinate.resource_id,
             )
-        yield Separator(label="Scope", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.scope,
-            empty="Version defaults select the gate severities and Environment roles.",
-            resolved=resolved,
-        )
-        yield Separator(
-            label="Coverage requirements",
-            align="left",
-            classes="resource-section-heading",
-        )
-        yield ResourceSettingsBody(
-            overview.requirements,
-            empty="Version defaults provide fail-closed coverage requirements.",
-            resolved=resolved,
-        )
+        with InspectorColumns():
+            with Vertical():
+                yield Separator(label="Scope", align="left", classes="resource-section-heading")
+                yield ResourceSettingsBody(
+                    overview.scope,
+                    empty="Version defaults select the gate severities and Environment roles.",
+                    resolved=resolved,
+                )
+            with Vertical():
+                yield Separator(
+                    label="Coverage requirements",
+                    align="left",
+                    classes="resource-section-heading",
+                )
+                yield ResourceSettingsBody(
+                    overview.requirements,
+                    empty="Version defaults provide fail-closed coverage requirements.",
+                    resolved=resolved,
+                )
         yield Separator(label="Thresholds", align="left", classes="resource-section-heading")
         yield ResourceSettingsBody(
             overview.thresholds,

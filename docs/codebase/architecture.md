@@ -33,6 +33,11 @@ The important exception is `comparo.application`: it is a composition layer, not
 kernel. It imports the core contracts and concrete local adapters needed for the first production
 vertical slice. Frontends depend on application DTOs and services.
 
+The standalone Explorer path branches from compiled configuration and policy into
+`application.value_inspection` and the injected resolver. It returns safe Value/Matrix projections
+without building an execution plan or sending HTTP. `ResolutionInputs` separates the resolver's
+binding requirements from a `PreparedRun`, whose execution adapter retains existing semantics.
+
 ## Package layers
 
 | Layer | Package | Responsibility | May own effects? |

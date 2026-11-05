@@ -13,6 +13,7 @@ from typing import Annotated
 from typing import BinaryIO
 from typing import Literal
 from typing import TextIO
+from typing import cast
 
 from cyclopts import App
 from cyclopts import Parameter
@@ -21,10 +22,15 @@ from cyclopts.docs import generate_markdown_docs
 from cyclopts.docs import generate_rst_docs
 from cyclopts.exceptions import CycloptsError
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.text import Text
 
 from comparo.application import ArtifactReadLimits
 from comparo.application import ReportArchiveLimits
+from comparo.cli.completion import completion_paths
+from comparo.cli.completion import manage_completion
+from comparo.cli.completion_candidates import candidates
+from comparo.cli.completion_scripts import completion_script
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_LIMITS_V1
 from comparo.cli.contracts import DEFAULT_CLI_ARTIFACT_ROOT_V1
 from comparo.cli.contracts import DEFAULT_CLI_BLOB_OUTPUT_BYTES_V1
@@ -48,13 +54,18 @@ from comparo.cli.contracts import CliRenderLimits
 from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
 from comparo.cli.contracts import ExecutionRequest
+from comparo.cli.contracts import InitRequest
 from comparo.cli.contracts import PlanRequest
 from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
 from comparo.cli.contracts import ValidateRequest
+from comparo.cli.documentation import install_skill
+from comparo.cli.documentation import read_documentation
+from comparo.cli.documentation import skill_markdown
 from comparo.cli.execution import production_execution_settings
 from comparo.cli.loading import policy_load_limits
 from comparo.cli.loading import project_load_limits
+from comparo.cli.onboarding import document
 from comparo.cli.services import CliServices
 from comparo.cli.services import DefaultCliServices
 from comparo.tui.contracts import DEFAULT_TUI_MAXIMUM_OUTSTANDING_PREPARATIONS_V1
@@ -70,6 +81,7 @@ type ReportFormatName = Literal["json", "junit", "sarif", "markdown"]
 
 ColorOption = Annotated[ColorName, Parameter(name="--color")]
 OutputOption = Annotated[OutputName, Parameter(name="--format")]
+DocsOutputOption = Annotated[Literal["auto", "markdown", "json"], Parameter(name="--format")]
 ConfigOption = Annotated[Path, Parameter(name="--config", alias="-C")]
 SourceOption = Annotated[
     tuple[Path, ...],
@@ -1257,6 +1269,191 @@ def _register_tui_command(cli: App) -> None:
             raise _InvalidTuiLaunchError from error
 
 
+def _register_init_command(cli: App, services: CliServices) -> None:
+    """Register offline project scaffolding with the shared service boundary."""
+
+    @cli.command(name="init")
+    def init(
+        directory: Path = Path(),
+        /,
+        *,
+        layout: Literal["single", "split"] = "single",
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Create a starter comparo.yaml without overwriting an existing file.
+
+        Args:
+            directory: Project directory to create or initialize; defaults to the current directory.
+            layout: Keep all resources in one file or create separate .comparo resource files.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = InitRequest(
+            directory=directory, output=CliOutputMode(output_format), layout=layout
+        )
+        return _invocation(services.init(request), color)
+
+
+def _register_docs_commands(cli: App) -> None:
+    """Expose packaged authoring docs and skill installation."""
+
+    @cli.command(name="docs")
+    def docs(
+        topic: str | None = None,
+        /,
+        *,
+        output_format: DocsOutputOption = "auto",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Read version-matched documentation, with Rich output in interactive terminals.
+
+        Args:
+            topic: Topic to read; omit to list available topics.
+            output_format: Auto renders in terminals; markdown and json always remain raw.
+            color: Terminal color behavior, independent of the selected output format.
+        """
+        return _invocation(read_documentation(topic, output_format), color)
+
+    skill = App(name="skill", help="Inspect or install the Comparo AI authoring skill.")
+    cli.command(skill)
+
+    @skill.command(name="show")
+    def show_skill(*, color: ColorOption = "auto") -> CliInvocation:
+        """Print the portable SKILL.md instructions as raw Markdown.
+
+        Args:
+            color: Terminal color behavior for errors.
+        """
+        return _invocation(document(skill_markdown(), CliPayloadKind.MARKDOWN), color)
+
+    @skill.command(name="install")
+    def skill_install(
+        directory: Path = Path(),
+        /,
+        *,
+        user: bool = False,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Install in DIRECTORY/.agents/skills, or in your personal skills with --user.
+
+        Args:
+            directory: API repository directory; defaults to the current directory.
+            user: Install for all your projects in ~/.agents/skills instead.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        if user and directory != Path():
+            return _invocation(_invalid_skill_destination(output_format == "json"), color)
+        return _invocation(
+            install_skill(directory, user=user, machine=output_format == "json"), color
+        )
+
+
+def _invalid_skill_destination(machine: bool) -> CliCommandResult:
+    """Reject conflicting personal and repository skill destinations."""
+    from comparo.cli.onboarding import outcome
+
+    return outcome(
+        "skill install",
+        "invalid-destination",
+        "Choose a directory or --user, not both.",
+        success=False,
+        machine=machine,
+    )
+
+
+def _register_completion_commands(cli: App) -> None:
+    """Preserve script generation while adding managed setup and dynamic candidates."""
+    completion = App(
+        name="completion", help="Generate, install, check, or remove shell completion."
+    )
+    cli.command(completion)
+
+    @completion.default
+    def generate(shell: CompletionShell, /, *, color: ColorOption = "auto") -> CliInvocation:
+        """Generate completion text without modifying shell files.
+
+        Args:
+            shell: Shell syntax to generate.
+            color: Terminal color behavior for errors.
+        """
+        return _invocation(
+            document(completion_script(shell, cli.generate_completion(shell=shell))), color
+        )
+
+    @completion.command(name="install")
+    def install(
+        shell: CompletionShell | None = None,
+        /,
+        *,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Install completion and a managed shell startup block.
+
+        Args:
+            shell: Shell to configure; defaults to the login shell in SHELL.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        try:
+            selected = cast("CompletionShell", completion_paths(shell).shell)
+        except ValueError:
+            return _invocation(
+                manage_completion("install", shell, machine=output_format == "json"), color
+            )
+        script = completion_script(selected, cli.generate_completion(shell=selected))
+        return _invocation(
+            manage_completion("install", selected, script=script, machine=output_format == "json"),
+            color,
+        )
+
+    @completion.command(name="status")
+    def status(
+        shell: CompletionShell | None = None,
+        /,
+        *,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Check completion files and startup configuration on disk.
+
+        Args:
+            shell: Shell to inspect; defaults to the login shell in SHELL.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        return _invocation(
+            manage_completion("status", shell, machine=output_format == "json"), color
+        )
+
+    @completion.command(name="uninstall")
+    def uninstall(
+        shell: CompletionShell | None = None,
+        /,
+        *,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Remove the managed completion script and startup block.
+
+        Args:
+            shell: Shell to configure; defaults to the login shell in SHELL.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        return _invocation(
+            manage_completion("uninstall", shell, machine=output_format == "json"), color
+        )
+
+    @cli.command(name="_complete", show=False)
+    def complete_words(*words: str) -> CliInvocation:
+        """Return newline-delimited completion candidates without terminal formatting."""
+        return _invocation(document("\n".join(candidates(tuple(words))) + "\n"), "never")
+
+
 def build_app(services: CliServices) -> App:
     """Build an isolated command graph around injected framework-neutral services."""
     cli = App(
@@ -1275,6 +1472,9 @@ def build_app(services: CliServices) -> App:
     _register_execution_commands(cli, services)
     _register_render_command(cli, services)
     _register_tui_command(cli)
+    _register_init_command(cli, services)
+    _register_docs_commands(cli)
+    _register_completion_commands(cli)
 
     @schema.command(name="config")
     def schema_config(*, color: ColorOption = "auto") -> CliInvocation:
@@ -1450,22 +1650,6 @@ def build_app(services: CliServices) -> App:
         )
         return _invocation(services.plan(request), color)
 
-    @cli.command(name="completion")
-    def completion(
-        shell: CompletionShell,
-        /,
-        *,
-        color: ColorOption = "auto",
-    ) -> CliInvocation:
-        """Generate a static completion script without modifying shell startup files.
-
-        Args:
-            shell: Shell syntax to generate.
-            color: Terminal color behavior for human messages.
-        """
-        payload = cli.generate_completion(shell=shell)
-        return _invocation(_document_result(payload, CliPayloadKind.TEXT), color)
-
     return cli
 
 
@@ -1523,6 +1707,9 @@ def _render_result(
             return False
         binary_output.write(result.payload)
         binary_output.flush()
+        return True
+    if result.payload_kind is CliPayloadKind.RICH_MARKDOWN and output.file.isatty():
+        output.print(Markdown(result.payload.decode()))
         return True
     if result.payload_kind is not CliPayloadKind.HUMAN:
         output.file.write(result.payload.decode())

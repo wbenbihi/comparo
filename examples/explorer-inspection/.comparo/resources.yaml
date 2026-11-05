@@ -1,0 +1,61 @@
+apiVersion: comparo/v1alpha1
+kind: Environment
+metadata: {id: local, name: Local inspection}
+spec:
+  baseUrl: http://127.0.0.1:9
+---
+apiVersion: comparo/v1alpha1
+kind: Value
+metadata: {id: line-item, name: Public nested value}
+spec:
+  value:
+    sku: plan-pro
+    quantity: 2
+    options:
+      color: blue
+      enabled: true
+---
+apiVersion: comparo/v1alpha1
+kind: Value
+metadata: {id: standalone, name: Standalone value with masked secret}
+spec:
+  value:
+    client: {$var: client}
+    item: {$use: Value/line-item}
+    credential: {$secret: token}
+    derived: 'Bearer ${secrets.token}'
+---
+apiVersion: comparo/v1alpha1
+kind: Matrix
+metadata: {id: standalone, name: Matrix without consumers}
+spec:
+  axes:
+    region:
+      - {id: eu, value: europe}
+      - {id: us, value: america}
+    tier:
+      - {id: free, value: free}
+      - {id: pro, value: pro}
+---
+apiVersion: comparo/v1alpha1
+kind: Request
+metadata: {id: checkout, name: Nested JSON body}
+spec:
+  parameters:
+    orderId: 42
+  request:
+    method: POST
+    endpoint: /checkout
+    bodyType: json
+    body:
+      orderId: {$param: orderId}
+      customer:
+        id: user-1
+        address:
+          city: Paris
+          postalCode: '75001'
+      items:
+        - {$use: Value/line-item}
+      payment:
+        token: {$secret: token}
+      client: {$var: client}

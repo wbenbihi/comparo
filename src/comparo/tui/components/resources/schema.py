@@ -1,25 +1,22 @@
 """Schema overview focused on validation structure and consumers."""
 
+from dataclasses import replace
 from typing import ClassVar
 from typing import override
 
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.containers import Vertical
-from textual.content import Content
 
 from comparo.tui.components.badge import Badge
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.resourcelinks import ResourceLinksTable
 from comparo.tui.components.separator import Separator
-from comparo.tui.components.table import Column
-from comparo.tui.components.table import Record
-from comparo.tui.components.table import Table
 from comparo.tui.components.typography import Hint
 from comparo.tui.models.resource import ResourcePresentation
 from comparo.tui.models.resource_presenters import SchemaOverview
 from comparo.tui.models.resource_presenters import schema_overview
-from comparo.tui.theme import style
+from comparo.tui.models.schema_document import schema_nodes
 
 from .base import BaseKindResourceDetails
 from .shared import ResourceSettingList
@@ -40,7 +37,7 @@ class SchemaContextStrip(Horizontal):
             ),
             Badge(overview.root_type, tone=BadgeTone.ACTIVE, classes="schema-context-badge"),
             Badge(
-                f"{property_count} {'property' if property_count == 1 else 'properties'}",
+                f"{property_count} schema nodes",
                 tone=BadgeTone.NEUTRAL,
                 classes="schema-context-badge",
             ),
@@ -54,7 +51,7 @@ class SchemaContextStrip(Horizontal):
 
 
 class SchemaPropertiesBody(Vertical):
-    """Recursive schema property table using dotted payload paths."""
+    """Expandable property structure with a synchronized definition pane."""
 
     def __init__(self, overview: SchemaOverview) -> None:
         """Initialize from immutable structural metadata."""
@@ -63,38 +60,13 @@ class SchemaPropertiesBody(Vertical):
 
     @override
     def compose(self) -> ComposeResult:
-        """Render a scan-friendly validation contract."""
+        """Keep every property accessible without flattening nested object structure."""
         if not self._overview.properties:
             yield Hint("This Schema does not declare object properties.")
             return
-        yield Table(
-            columns=(
-                Column("path", "Property"),
-                Column("type", "Type", width=14),
-                Column("presence", "Presence", width=11),
-                Column("constraints", "Constraints"),
-            ),
-            records=tuple(
-                Record(
-                    f"property:{index}",
-                    (
-                        Content.from_rich_text(Text(".".join(prop.path), style("fg"))),
-                        Content.from_rich_text(Text(prop.type, style("kind.schema"))),
-                        Content.from_rich_text(
-                            Text(
-                                "required" if prop.required else "optional",
-                                style("warn" if prop.required else "muted"),
-                            )
-                        ),
-                        Content.from_rich_text(
-                            Text(", ".join(prop.constraints) or "—", style("muted"))
-                        ),
-                    ),
-                )
-                for index, prop in enumerate(self._overview.properties)
-            ),
-            classes="schema-properties-table",
-        )
+        from .schema_tree import SchemaPropertyBrowser
+
+        yield SchemaPropertyBrowser(self._overview.properties)
 
 
 class SchemaCompositionBody(Vertical):
@@ -108,13 +80,6 @@ class SchemaCompositionBody(Vertical):
     @override
     def compose(self) -> ComposeResult:
         """Render composition and constraints as distinct semantic sections."""
-        if self._overview.composition:
-            yield Separator(label="Composition", align="left", classes="tight")
-            yield ResourceSettingList(
-                self._overview.composition,
-                empty="",
-                resolved={},
-            )
         if self._overview.constraints:
             yield Separator(label="Root constraints", align="left", classes="tight")
             yield ResourceSettingList(
@@ -140,18 +105,8 @@ class SchemaUsageBody(Vertical):
         if not self._overview.consumers:
             yield Hint("This Schema has no declared consumers.")
             return
-        yield Table(
-            columns=(Column("kind", "Kind", width=12), Column("resource", "Consumer")),
-            records=tuple(
-                Record(
-                    f"consumer:{index}",
-                    (item.target_kind, item.target_id),
-                )
-                for index, item in enumerate(self._overview.consumers)
-            ),
-            classes="schema-usage-table",
-        )
-        yield Hint("Press g for the complete directional dependency graph.")
+        yield ResourceLinksTable(self._overview.consumers, classes="schema-usage-table")
+        yield Hint("Enter opens the selected resource · g shows all relationships.")
 
 
 class SchemaResourceDetails(BaseKindResourceDetails):
@@ -166,12 +121,19 @@ class SchemaResourceDetails(BaseKindResourceDetails):
     @override
     def compose(self) -> ComposeResult:
         """Render Schema anatomy as one continuous validation document."""
-        overview = schema_overview(self.entry)
+        overview = replace(
+            schema_overview(self.entry),
+            properties=schema_nodes(self.entry, self.resource.schema_catalog),
+        )
         yield SchemaContextStrip(overview)
-        yield Separator(label="Properties", align="left", classes="resource-section-heading")
+        if overview.source == "remote":
+            yield Hint(
+                "Remote schema document has not been fetched. No cached validation is claimed."
+            )
+        yield Separator(label="Schema structure", align="left", classes="resource-section-heading")
         yield SchemaPropertiesBody(overview)
         yield Separator(
-            label="Composition & constraints",
+            label="Root constraints",
             align="left",
             classes="resource-section-heading",
         )

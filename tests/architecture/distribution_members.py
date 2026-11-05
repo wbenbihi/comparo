@@ -62,6 +62,16 @@ _REVIEWED_SECURITY_MODULES = frozenset(
 )
 _REVIEWED_PACKAGE_ASSETS = frozenset(
     {
+        "src/comparo/cli/content/docs/quickstart.md",
+        "src/comparo/cli/content/docs/configuration.md",
+        "src/comparo/cli/content/docs/requests.md",
+        "src/comparo/cli/content/docs/authentication.md",
+        "src/comparo/cli/content/docs/assertions.md",
+        "src/comparo/cli/content/docs/comparisons.md",
+        "src/comparo/cli/content/docs/completion.md",
+        "src/comparo/cli/content/docs/agents.md",
+        "src/comparo/cli/content/docs/limitations.md",
+        "src/comparo/cli/content/skills/comparo/SKILL.md",
         "src/comparo/tui/styles/environment.tcss",
         "src/comparo/tui/styles/launch.tcss",
         "src/comparo/tui/styles/main.tcss",

@@ -5,7 +5,7 @@ describes the working tree as it exists, not only the intended architecture reco
 roadmap and ADRs. Application contracts remain the source of truth for backend behavior. The canonical
 `src/comparo/tui` package consumes these contracts through its component-based frontend.
 
-Documentation reconciled with the working tree: **2026-10-31**, on the `refactor` branch.
+Documentation reconciled with the **0.4.0 preparation branch on 2026-11-05**, based on v0.3.0.
 See [current status](../status.md) for implemented UI coverage, backend-only features, and limits.
 
 ## How to read this guide
@@ -20,8 +20,10 @@ main source of false assumptions about what a frontend can do.
 | Executable | The production composition lowers the compiled graph and performs the behavior | Requests execute; Scenarios are rejected before effects |
 | Inspectable | A frontend-neutral application service exposes a safe projection | The plan, archive, resolved fields, and results are inspectable |
 
-A feature is usable by a new TUI only when every required stage is executable **and** an
-appropriate application projection exists. Domain support by itself is not a product feature.
+A feature is usable by the TUI only when its required behavior and safe application projection
+exist. Inspection need not execute a resource: Values and Matrix cases resolve independently,
+and Scenario declarations remain inspectable despite deferred Scenario execution. Domain support
+by itself is not a product feature.
 
 ## Documents
 
