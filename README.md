@@ -72,7 +72,19 @@ service. This remains a pre-production release.
 
 The command graph includes offline schema, validation, planning, diagnostics, and sanitized render
 journeys; shared production `run`, `diff`, and `exec` journeys; and authenticated artifact/report
-readers. From a directory containing your `comparo.yaml` project:
+readers. Start a project in the current directory:
+
+```console
+comparo init
+```
+
+This creates a starter `comparo.yaml` with two local Environments, a health Request, and assertion
+and comparison profiles. All starter resources are in this one file; `init` does not create a
+`.comparo/` directory. Edit its `baseUrl` values and `/health` endpoint to match your APIs.
+Use `comparo init my-project` to create it in another directory; existing manifests are never
+overwritten.
+
+From a directory containing your `comparo.yaml` project:
 
 ```console
 comparo --help

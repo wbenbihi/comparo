@@ -330,6 +330,21 @@ class CliCommandResult(msgspec.Struct, frozen=True, kw_only=True):
 
 
 @final
+class InitRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """Destination and presentation for a new starter project."""
+
+    directory: Path
+    output: CliOutputMode
+
+    def __post_init__(self) -> None:
+        """Require a local path and a closed output mode."""
+        if not isinstance(self.directory, Path):
+            raise TypeError("initialization directory must be a Path")
+        if type(self.output) is not CliOutputMode:
+            raise TypeError("initialization output mode must be typed")
+
+
+@final
 class ValidateRequest(msgspec.Struct, frozen=True, kw_only=True):
     """Framework-neutral input for configuration loading and compilation."""
 

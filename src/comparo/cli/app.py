@@ -48,6 +48,7 @@ from comparo.cli.contracts import CliRenderLimits
 from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
 from comparo.cli.contracts import ExecutionRequest
+from comparo.cli.contracts import InitRequest
 from comparo.cli.contracts import PlanRequest
 from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
@@ -1257,6 +1258,28 @@ def _register_tui_command(cli: App) -> None:
             raise _InvalidTuiLaunchError from error
 
 
+def _register_init_command(cli: App, services: CliServices) -> None:
+    """Register offline project scaffolding with the shared service boundary."""
+
+    @cli.command(name="init")
+    def init(
+        directory: Path = Path(),
+        /,
+        *,
+        output_format: OutputOption = "human",
+        color: ColorOption = "auto",
+    ) -> CliInvocation:
+        """Create a starter comparo.yaml without overwriting an existing file.
+
+        Args:
+            directory: Project directory to create or initialize; defaults to the current directory.
+            output_format: Human or deterministic JSON output.
+            color: Terminal color behavior for human messages.
+        """
+        request = InitRequest(directory=directory, output=CliOutputMode(output_format))
+        return _invocation(services.init(request), color)
+
+
 def build_app(services: CliServices) -> App:
     """Build an isolated command graph around injected framework-neutral services."""
     cli = App(
@@ -1275,6 +1298,7 @@ def build_app(services: CliServices) -> App:
     _register_execution_commands(cli, services)
     _register_render_command(cli, services)
     _register_tui_command(cli)
+    _register_init_command(cli, services)
 
     @schema.command(name="config")
     def schema_config(*, color: ColorOption = "auto") -> CliInvocation:

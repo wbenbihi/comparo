@@ -16,6 +16,7 @@ rather than falling back to pathname-based file access on Windows.
 
 | Command | Effects | Purpose |
 | --- | --- | --- |
+| `comparo init [DIRECTORY]` | local writes | Create a starter project without overwriting an existing manifest. |
 | `comparo schema …` | none | Print versioned configuration, policy, artifact, report, or generated CLI schemas. |
 | `comparo validate` | local reads | Discover and compile a project. |
 | `comparo plan` | local reads | Compile and inspect a deterministic admitted plan. |
@@ -47,6 +48,39 @@ project/policy YAML, HTTP capture/decode, and artifact byte/count ceilings expos
 commands; plus `--maximum-report-entries` and `--maximum-outstanding-preparations`.
 The retired interface’s input/output/history limit flags are no longer accepted. See the
 [TUI guide](tui.md#launch-limits-and-artifact-root).
+
+## Start a project
+
+```console
+comparo init
+```
+
+This creates a self-contained `comparo.yaml` in the current directory, with baseline and candidate
+Environments, a GET `/health` Request, an HTTP 200 assertion, a status-code diff, a strict gate,
+and a reusable `compare-health` ExecutionProfile. Edit the `baseUrl` values (initially
+`http://localhost:8000` and `http://localhost:8001`) and endpoint to match your APIs.
+
+```console
+comparo validate
+comparo plan
+comparo diff
+comparo
+```
+
+`validate` and `plan` work offline immediately; `diff` needs your configured API servers to be
+running. The initial diff compares status codes; add selectors to compare response bodies or
+headers as needed.
+
+All starter resources are YAML documents in the same `comparo.yaml` file. Although the Project
+declares `spec.data: .comparo`, `init` does **not** create that directory; the starter works without
+it. As the project grows, create `.comparo/` and move resource documents into separate YAML files
+there, leaving the Project document in `comparo.yaml`. Move rather than copy the documents so
+each resource remains defined only once.
+
+`comparo init my-project` creates the directory if needed; run the following commands from that
+directory. Initialization never overwrites an existing `comparo.yaml`, including symlinks, and
+makes no HTTP requests. Use `--format json` for a machine-readable result. Shell completion is
+configured separately with `comparo completion`.
 
 ## Trust and ExecutionPolicy
 
