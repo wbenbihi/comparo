@@ -6,6 +6,7 @@ import json
 import sys
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version
 from io import BytesIO
 from io import StringIO
 from pathlib import Path
@@ -481,7 +482,7 @@ def test_plan_and_render_help_disclose_authority_and_specific_render_limits() ->
 def test_version_comes_from_installed_distribution() -> None:
     code, stdout, stderr = _invoke(["--version"])
     assert code == 0
-    assert stdout.strip() == "0.2.0"
+    assert stdout.strip() == version("comparo")
     assert stderr == ""
 
 
@@ -907,7 +908,7 @@ def test_run_callback_preserves_shared_options_and_every_execution_limit() -> No
     assert request.approve_mutations
     assert request.persist
     assert request.artifact_root == Path("artifacts")
-    assert request.tool_version == "0.2.0"
+    assert request.tool_version == version("comparo")
     runtime = request.limits
     assert tuple(
         getattr(runtime, field) for field in runtime.__struct_fields__ if field != "artifact"
