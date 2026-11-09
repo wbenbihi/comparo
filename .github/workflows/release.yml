@@ -20,7 +20,8 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Allow the full coverage gate plus release build and publication checks.
+    timeout-minutes: 35
     permissions:
       contents: write
     outputs:
@@ -68,7 +69,7 @@ jobs:
           uv run --frozen ruff format --check .
           uv run --frozen mypy
           uv run --frozen lint-imports
-          uv run --frozen python -m pytest --cov --cov-report=term-missing
+          uv run --frozen python -m pytest --cov --cov-report=term-missing --durations=25
 
       - name: Plan semantic release
         id: plan

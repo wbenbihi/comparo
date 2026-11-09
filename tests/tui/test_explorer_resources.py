@@ -797,6 +797,16 @@ async def test_project_resource_uses_two_environment_cards_and_explicit_sections
             field for field in detail.resolved.value.fields if field.path == ("variables", "client")
         )
         assert (client_field.value, client_field.tone) == ("comparo-tui", "value.text")
+        # Worker completion updates the model before Textual recomposes its widgets.
+        await _wait_until(
+            pilot,
+            lambda: any(
+                "client  comparo-tui" in str(item.content)
+                for project in app.query(ProjectResourceDetails)
+                for item in project.query(Static)
+                if item.has_class("resource-setting-heading")
+            ),
+        )
         resolved_project = app.query_one(ProjectResourceDetails)
         resolved_headings = {
             str(item.content)
