@@ -3,6 +3,7 @@
 from typing import override
 
 from textual.app import ComposeResult
+from textual.content import Content
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
@@ -33,7 +34,7 @@ class KeyValueList(Widget):
         for idx, field in enumerate(self.entries):
             if idx and idx < len(self.entries) and self._separators:
                 yield Static(classes="kv-sep")
-            yield Static(field.key, classes="kv-key")
+            yield Static(Content(field.key), classes="kv-key")
             value = Static(field.value, classes="kv-value")
             if field.tone:
                 value.add_class(f"tone-{field.tone}")

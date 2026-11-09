@@ -15,7 +15,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Coverage-instrumented Textual tests exceed 15 minutes on hosted runners.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -44,7 +45,7 @@ jobs:
         run: uv run --frozen lint-imports
 
       - name: Tests
-        run: uv run --frozen python -m pytest --cov --cov-report=term-missing
+        run: uv run --frozen python -m pytest --cov --cov-report=term-missing --durations=25
 
       - name: Build distributions
         run: uv build
@@ -84,4 +85,4 @@ jobs:
           version: "0.11.21"
 
       - name: Run compatibility tests
-        run: uv run --frozen python -m pytest
+        run: uv run --frozen python -m pytest --durations=25

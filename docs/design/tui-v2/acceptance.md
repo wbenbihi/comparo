@@ -1,6 +1,6 @@
 # TUI v2 acceptance matrix
 
-Updated implementation mapping: **2026-10-31**. This is an acceptance checklist, not a pass
+Updated implementation mapping: **2026-11-05**. This is an acceptance checklist, not a pass
 certificate. See [current QA](../../../design-qa.md) for evidence. Compare/Report reference captions
 map to Launch/Reports; use the canonical component library, including its disclosure and selectors.
 
@@ -67,7 +67,21 @@ before presentation.
 6. Change theme and density, exercise no-color semantics, and verify that no execution setting or
    project file changes.
 
+## Explorer 0.4.0 regression journeys
+
+- Resolve a standalone Value with no consumers and no Environment; preserve public nested values
+  and mask secrets/derived secrets. Missing inputs must not conceal unrelated fields.
+- Browse unused and multiply-used Matrices without choosing a consumer; page data cases, return
+  from Source/Graph and reject stale worker output.
+- Select a nested Body leaf in JSON, verify its path/directive/declaration, and copy only masked
+  data. Inspect boolean and masked fields together in dark/light/no-color modes.
+- Expand nested Schema objects/items, required fields, local cross-schema references and cycles;
+  update the source pointer inspector and label remote/sample-validation capabilities honestly.
+- Follow resource links and return with filter, cursor, focus and scroll restored. Native Textual
+  Buttons must not be imported directly by resource inspectors.
+
 ## Build gate
 
-Ruff, formatting, strict mypy, import-linter, the full test suite, 100 percent statement and branch
-coverage, screenshot acceptance, and distribution verification must pass before handoff.
+Ruff, formatting, strict mypy, import-linter, the full test suite, the repository-wide 95 percent
+combined statement/branch coverage floor, screenshot acceptance, and distribution verification
+must pass before handoff. Preserve existing coverage; the floor is not a reduction target.

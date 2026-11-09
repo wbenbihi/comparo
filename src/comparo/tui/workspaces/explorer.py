@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from typing import ClassVar
 from typing import Protocol
@@ -23,8 +24,12 @@ from comparo.tui.components.actionbar import ActionBar
 from comparo.tui.components.explorernavigator import ExplorerNavigator
 from comparo.tui.components.panel import Panel
 from comparo.tui.components.resourcedetail import ResourceDetailOverview
+from comparo.tui.components.resourcelinks import OpenResource
+from comparo.tui.components.resources.matrix_browser import MatrixBrowser
+from comparo.tui.explorer_navigation import ExplorerNavigation
 from comparo.tui.explorer_projection import resolved_view
 from comparo.tui.launch_handoff import UseInLaunch
+from comparo.tui.matrix_navigation import MatrixNavigation
 from comparo.tui.models.explorer import ExplorerCatalog
 from comparo.tui.models.explorer import ResourceEntry
 from comparo.tui.models.explorer import build_catalog
@@ -53,11 +58,11 @@ from comparo.tui.models.resource import toggle_overview_mode
 from comparo.tui.models.resource import unavailable_resolved
 from comparo.tui.models.resource import with_health_check
 from comparo.tui.models.resource_presenters import environment_health_check_targets
-from comparo.tui.models.resource_presenters import resource_overview_supports_resolution
 from comparo.tui.models.resource_presenters import resource_resolution_paths
 from comparo.tui.models.resource_presenters import resource_resolution_subject_id
 from comparo.tui.models.resource_presenters import resource_resolution_subject_ids
 from comparo.tui.types import ComparoScreen
+from comparo.tui.value_navigation import ValueNavigation
 
 from .base import Workspace
 
@@ -121,6 +126,9 @@ class ExplorerWorkspace(Workspace):
         self._resource_generation = 0
         self._resolution_generation = 0
         self._health = {}
+        self._navigation = ExplorerNavigation(self)
+        self._matrix_navigation = MatrixNavigation(self)
+        self._value_navigation = ValueNavigation(self)
         self.action_reload()
 
     def action_reload(self) -> None:
@@ -242,24 +250,32 @@ class ExplorerWorkspace(Workspace):
 
     def watch_selected(self) -> None:
         """Project the selection while retaining the Explorer's active view."""
-        previous = self.detail
-        representation = (
-            ResourceRepresentation.OVERVIEW if previous is None else previous.representation
-        )
-        overview_mode = ResourceOverviewMode.RAW if previous is None else previous.overview_mode
-        self._resource_generation += 1
-        self._resolution_generation += 1
-        if self.catalog is None or self.selected is None:
-            self.detail = None
-            self.app.refresh_bindings()
-            return
-        entry = self.catalog.entries.get(self.selected)
-        if entry is None:
-            self.detail = None
-            self.app.refresh_bindings()
-            return
-        self._select_entry(entry, representation, overview_mode)
-        self.app.refresh_bindings()
+        self._navigation.selected_changed()
+
+    def on_matrix_browser_ready(self, event: MatrixBrowser.Ready) -> None:
+        """Restore the Matrix browser and prepare its explicit context."""
+        event.stop()
+        if type(event) is MatrixBrowser.Ready:
+            self._matrix_navigation.ready(event.browser)
+
+    def on_matrix_browser_changed(self, event: MatrixBrowser.Changed) -> None:
+        """Inspect the newly selected case through the workspace controller."""
+        event.stop()
+        self._matrix_navigation.changed(event.browser)
+
+    def on_matrix_browser_gone(self, event: MatrixBrowser.Gone) -> None:
+        """Release inspection owned by a removed Matrix browser."""
+        event.stop()
+        self._matrix_navigation.gone(event.browser)
+
+    def on_open_resource(self, event: OpenResource) -> None:
+        """Route explicit relationship activation through workspace navigation."""
+        event.stop()
+        self._navigation.follow(event)
+
+    def action_resource_back(self) -> None:
+        """Return to the preceding explicit resource visit."""
+        self._navigation.back()
 
     def _select_entry(
         self,
@@ -268,36 +284,16 @@ class ExplorerWorkspace(Workspace):
         overview_mode: ResourceOverviewMode,
     ) -> None:
         """Build one exact detail row and restore the workspace-owned view."""
-        detail = initial_detail(entry, self.execution_environment)
+        detail = replace(
+            initial_detail(entry, self.execution_environment),
+            overview_mode=overview_mode,
+            schema_catalog=self._navigation.schema_catalog(entry),
+        )
         record = self._health.get(entry.key)
         if record is not None and record[0] == environment_health_check_targets(entry):
             detail = with_health_check(detail, record[1])
         self.detail = detail
-        self._restore_resource_view(representation, overview_mode)
-
-    def _restore_resource_view(
-        self,
-        representation: ResourceRepresentation,
-        overview_mode: ResourceOverviewMode,
-    ) -> None:
-        """Apply the prior workspace view to a newly selected resource."""
-        detail = self.detail
-        if detail is None:
-            return
-        if representation is ResourceRepresentation.AUTHORED:
-            self._apply_resource_action(ResourceActionId.AUTHORED)
-            return
-        if representation is ResourceRepresentation.EFFECTIVE:
-            self._apply_resource_action(ResourceActionId.EFFECTIVE)
-            return
-        if representation is ResourceRepresentation.DEPENDENCIES:
-            self.detail = select_representation(detail, ResourceRepresentation.DEPENDENCIES)
-            return
-        if representation is ResourceRepresentation.RESOLVED:
-            self.detail = select_representation(detail, ResourceRepresentation.RESOLVED)
-            return
-        if overview_mode is ResourceOverviewMode.RESOLVED:
-            self._load_resolved_overview(detail)
+        self._navigation.restore_resource_view(representation, overview_mode)
 
     # --------------------------------------------------------- resource views
 
@@ -313,7 +309,7 @@ class ExplorerWorkspace(Workspace):
         if detail is None:
             return
         if action is ResourceActionId.OVERVIEW:
-            self.detail = select_representation(detail, ResourceRepresentation.OVERVIEW)
+            self._navigation.show_overview()
             return
         if action is ResourceActionId.AUTHORED:
             if detail.authored.value is not None:
@@ -437,15 +433,12 @@ class ExplorerWorkspace(Workspace):
     @override
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Expose contextual resource commands only when their capability exists."""
+        if action == "resource_back":
+            return self._navigation.can_go_back
         if action == "resource_view":
             return self.detail is not None
         if action == "toggle_resource_resolution":
-            detail = self.detail
-            return (
-                detail is not None
-                and resolution_environment(detail) is not None
-                and resource_overview_supports_resolution(detail.entry)
-            )
+            return self._navigation.can_resolve()
         if action == "set_execution_environment":
             detail = self.detail
             return detail is not None and detail.entry.summary.coordinate.kind == "Environment"
@@ -477,7 +470,7 @@ class ExplorerWorkspace(Workspace):
         if detail is None:
             return
         if view == "overview":
-            self.detail = select_representation(detail, ResourceRepresentation.OVERVIEW)
+            self._navigation.show_overview()
         elif view == "source":
             self._apply_resource_action(ResourceActionId.AUTHORED)
         elif view == "dependencies":
@@ -498,6 +491,8 @@ class ExplorerWorkspace(Workspace):
 
     def _load_resolved_overview(self, detail: ResourceDetail) -> None:
         """Load the selected resource's masked overlay in its proper context."""
+        if self._value_navigation.activate(detail) or self._matrix_navigation.activate(detail):
+            return
         environment = resolution_environment(detail)
         if environment is None:
             self.detail = toggle_overview_mode(detail)
@@ -511,7 +506,6 @@ class ExplorerWorkspace(Workspace):
             return
         if detail.entry.summary.coordinate.kind in {
             "Matrix",
-            "Value",
             "ExecutionProfile",
             "AssertionProfile",
             "DiffProfile",

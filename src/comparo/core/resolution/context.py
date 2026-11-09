@@ -12,6 +12,7 @@ from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.identity import DefinitionRef
 from comparo.core.domain.identity import ResourceKind
 from comparo.core.domain.lifecycle import CancellationSource
+from comparo.core.domain.scopes import EnvironmentScope
 from comparo.core.domain.scopes import RunScope
 from comparo.core.domain.scopes import RuntimeScope
 from comparo.core.domain.scopes import run_scope_of
@@ -32,6 +33,7 @@ from comparo.core.planning.models import is_definition_handle
 from comparo.core.resolution.cache import SingleFlightCache
 from comparo.core.resolution.control import RunCancellation
 from comparo.core.resolution.generation import DeterministicGenerator
+from comparo.core.resolution.inputs import ResolutionInputs
 from comparo.core.resolution.models import CellInputs
 from comparo.core.resolution.models import EnvironmentSnapshot
 from comparo.core.resolution.models import ExternalProviderSource
@@ -95,7 +97,7 @@ class RunContext:
         "_file_provider",
         "_generation_cache",
         "_generator",
-        "_prepared",
+        "_inputs",
         "_providers",
         "_registry",
         "_resolver",
@@ -109,7 +111,7 @@ class RunContext:
     def __init__(
         self,
         *,
-        prepared: PreparedRun,
+        prepared: PreparedRun | ResolutionInputs,
         environment_snapshots: tuple[EnvironmentSnapshot, ...],
         clock: RunClock,
         generator: GeneratedValueProvider,
@@ -121,9 +123,12 @@ class RunContext:
         cancellation: RunCancellation | None = None,
     ) -> None:
         """Create one isolated context from already admitted and snapshotted inputs."""
-        if type(prepared) is not PreparedRun:
-            raise TypeError("run context requires a PreparedRun")
-        validate_environment_snapshots(prepared, environment_snapshots)
+        if type(prepared) not in {PreparedRun, ResolutionInputs}:
+            raise TypeError("run context requires a PreparedRun or ResolutionInputs")
+        inputs = (
+            ResolutionInputs.from_prepared(prepared) if type(prepared) is PreparedRun else prepared
+        )
+        validate_environment_snapshots(inputs, environment_snapshots)
         _validate_provider_collection(external_providers)
         if type(safety) is not tuple or any(not is_definition_handle(item) for item in safety):
             raise TypeError("run context safety must be an immutable definition-handle tuple")
@@ -133,8 +138,8 @@ class RunContext:
             for item in safety
         ):
             raise ValueError("run context safety handles must identify SafetyProfile")
-        self._prepared = prepared
-        self._run = RunScope(run_id=prepared.invocation.run_id)
+        self._inputs = inputs
+        self._run = inputs.run
         self._snapshots = environment_snapshots
         self._clock = clock
         self._generator = generator
@@ -231,7 +236,7 @@ class RunContext:
         request = ExternalValueRequest(
             source=source,
             scope=production_scope,
-            policy=self._prepared.authority.policy,
+            policy=self._inputs.policy,
             safety=self._safety,
         )
         outcome = await self._providers.call(
@@ -393,7 +398,7 @@ class RunContext:
             ValueNamespace.PARAMETERS,
         }:
             found_binding = namespace_binding(
-                self._prepared,
+                self._inputs,
                 dependency.namespace,
                 dependency.symbol,
                 target.scope,
@@ -407,7 +412,13 @@ class RunContext:
         source_target = ResolutionTarget(
             symbol=dependency.symbol,
             scope=production_scope,
-            namespace=dependency.namespace,
+            # Standalone parameter defaults are authored Project/Environment
+            # expressions, not runtime parameter productions in a fake cell.
+            namespace=None
+            if self._inputs.standalone
+            and dependency.namespace is ValueNamespace.PARAMETERS
+            and type(production_scope) in {RunScope, EnvironmentScope}
+            else dependency.namespace,
             cell_inputs=_scope_cell_inputs(target, production_scope),
         )
         resolved = await self._resolver.resolve(bound_expression, source_target, (*stack, token))
@@ -488,7 +499,7 @@ class RunContext:
             symbol=target.symbol,
             scope=target.scope,
             configuration=expression.provenance,
-            policy=self._prepared.authority.policy,
+            policy=self._inputs.policy,
             safety=self._safety,
             trim=expression.trim,
             maximum_bytes=expression.maximum_bytes,

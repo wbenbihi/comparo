@@ -1,7 +1,7 @@
 # Comparo TUI v2 design contract
 
 Original reference date: 2026-07-26
-Status: retained visual contract; implementation mapping updated 2026-10-31
+Status: retained visual contract; implementation mapping updated 2026-11-05
 Primary acceptance viewport: 160 columns by 52 rows
 
 This directory is the product and visual contract for the production Comparo terminal UI.
@@ -26,6 +26,11 @@ The retired alpha TUI is not a visual authority. New changes must use the existi
 component library and established glyph/color tokens while being compared with these references.
 Use Textual mechanisms through those components; do not replace them with differently styled
 built-in controls or create a second Analyze implementation.
+
+The 0.4.0 corrections are recorded in the [Explorer contract](../../explorer-0.4.0-plan.md).
+Explicit November 5 decisions supersede older captures where they differ: Value/Matrix inspection
+is standalone, resource actions use shared compact components, masked data is violet and JSON
+booleans are blue. Local schema browsing does not imply remote fetching or sample validation.
 
 ## Canonical product journey
 

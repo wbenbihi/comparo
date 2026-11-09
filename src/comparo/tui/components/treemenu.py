@@ -9,6 +9,7 @@ from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 
 from comparo.tui.models.navigation import MenuNode as MenuNode
+from comparo.tui.models.navigation import TreePosition
 
 
 class TreeMenu[T: str](Tree[T]):
@@ -78,6 +79,40 @@ class TreeMenu[T: str](Tree[T]):
         walk(self.root)
         return expanded
 
+    def capture_position(self) -> TreePosition[T]:
+        """Capture cursor, expansion and scrolling through the generic tree boundary."""
+        return TreePosition(
+            self.cursor_id, frozenset(self._expanded_ids()), self.scroll_x, self.scroll_y
+        )
+
+    def reveal(self, item: T) -> bool:
+        """Reveal a programmatic target without emitting a user highlight."""
+        node = self._by_id.get(item)
+        if node is None:
+            return False
+        parent = node.parent
+        while parent is not None:
+            parent.expand()
+            parent = parent.parent
+        # Build native row positions after expansion before reading node._line.
+        self.get_node_at_line(0)
+        with self.prevent(Tree.NodeHighlighted):
+            self.move_cursor(node)
+        self.scroll_to_node(node, animate=False)
+        return True
+
+    def restore_position(self, position: TreePosition[T], *, cursor: T | None = None) -> None:
+        """Restore surviving expansion and selection against the current tree nodes."""
+        for key, node in self._by_id.items():
+            if node.allow_expand:
+                node.expand() if key in position.expanded else node.collapse()
+        selected = position.cursor if cursor is None else cursor
+        if selected is not None:
+            self.reveal(selected)
+        self.call_after_refresh(
+            self.scroll_to, position.scroll_x, position.scroll_y, animate=False, force=True
+        )
+
     def format_node(self, node: MenuNode[T]) -> Text:
         """Format every node before Textual receives it.
 
@@ -111,6 +146,7 @@ class TreeMenu[T: str](Tree[T]):
         self._by_id = by_id
         self._built = bool(self.nodes)
         if current is not None and current in by_id:
+            self.get_node_at_line(0)
             self.move_cursor(by_id[current])
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[T]) -> None:

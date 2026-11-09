@@ -33,6 +33,7 @@ Data is intentionally accessed through different owners at different lifetimes.
 | Lifetime | Owner | Read API | Contains |
 | --- | --- | --- | --- |
 | Project catalog | caller | `inspect_project_workspace` | Safe resource/source metadata and dependency outlines |
+| Standalone inspection | one `inspect_value` call | `application.value_inspection.inspect_value` | Bounded public/masked Value or Matrix data, no Compare handle |
 | Prepared comparison | `CompareService` | review, occurrence/rule/composition/resolved/preview inspections | Exact retained admitted plan, no effects yet |
 | Current run | `RunService` → `ExecutionSession` | `list`, `inspect`, `after` | Coalesced counters, typed occurrence coordinates, recent events, bounded live facts |
 | Retained terminal run | `RunService` | `result`, `result_page` | Safe production outcome and independently paged artifact fact collections |
@@ -106,6 +107,44 @@ The request selects the exact resource fingerprint, a field offset, and caller l
 contains value-safe typed fields and relationships from the linked compiled graph. It is not a
 resolved runtime value.
 
+### Standalone Value and Matrix inspection
+
+`application.value_inspection.inspect_value` is an async resource-inspection entry point:
+
+```python
+await inspect_value(
+    workspace, resource, environment,
+    policy_path=policy_path,
+    policy_limits=policy_limits,
+    settings=settings,
+    limits=projection_limits,
+    case_id=None,
+    start_case=0,
+)
+```
+
+`workspace` is `ProjectWorkspaceRequest`; `resource` and optional `environment` are exact
+`ResourceCoordinate` values. The resource must be Value or Matrix. Configuration is compiled off
+the event loop, fingerprints are checked and policy-confined providers are closed before return.
+The call does not prepare a Compare handle, require a consumer or execute a Request.
+
+The immutable `ValueInspection` contains `fields`, closed `diagnostics`, `incomplete`, and an
+optional `MatrixCaseWindow`. Each field has a structural path and either a public/masked
+`ResolvedValueNode` or `unavailable=True`. Sibling failures do not conceal successful public
+fields. Project defaults and active-Environment inputs are available; consumer-only runtime inputs
+are not invented. Provider-backed/generated values are inspection samples. Cancellation propagates
+and cleanup runs; frontends must also reject results for an obsolete selection/environment.
+
+Matrix expansion uses core semantics with a 10,000-case cap. The returned window has `cases`,
+`total`, `start` and `selected`, with at most 50 cases per page. Value projection uses caller
+limits; Explorer requests 64 nodes, 4 KiB per scalar and depth 32. Frontends keep only safe
+selection coordinates between views. `matrix_inspection` remains an execution-bound inspection
+API for other callers; it is not Explorer's case browser.
+
+Schema browsing uses admitted `ProjectOutlineField` facts and a catalog of local Schema outlines,
+not HTTP fetching or sample validation. Safe `origins` on outline fields identify compiled
+configuration declarations for the Body path inspector; they never contain live values.
+
 ## Compare preparation and inspection
 
 `CompareService` is a bounded owner of admitted plans. Its normal lifecycle is:
@@ -133,7 +172,7 @@ The retained handle supports these non-effectful reads before start:
 | `list_comparisons(handle, controls, start_ordinal=..., maximum_comparisons=...)` | `PlanComparisonWindow` | Directed baseline/candidate occurrence coordinates |
 | `list_rules(handle, controls, start_ordinal=..., maximum_rules=...)` | `PlanRuleWindow` | Compiled assertion/diff rule identities, selectors, operations, and origins |
 
-Resolved inspection targets bind the plan fingerprint, execution ordinal, Environment, Matrix
+Execution-bound resolved inspection targets bind the plan fingerprint, execution ordinal, Environment, Matrix
 cell/case inputs, effective Request overrides, and a value/field path. Sensitive values are
 irreversibly masked. Public scalar/container values use bounded nodes and a projection
 fingerprint. Batch results keep each target's success/diagnostics independent.

@@ -60,6 +60,7 @@ def filter_bindings() -> list[BindingType]:
 def explorer_bindings() -> list[BindingType]:
     """Build bindings for the Explorer workspace."""
     return [
+        Binding("escape", "resource_back", "Back"),
         Binding(FILTER_KEY, "focus_filter", "Filter", key_display=FILTER_KEY),
         Binding(LEGEND_KEY, "toggle_legend", "Legend", key_display=LEGEND_KEY),
         *(
@@ -98,6 +99,11 @@ def explorer_bindings() -> list[BindingType]:
 # Compatibility aliases for callers that imported the original Project-only names.
 PROJECT_VIEW_KEYS = RESOURCE_VIEW_KEYS
 PROJECT_RESOLUTION_KEY = RESOURCE_RESOLUTION_KEY
+
+
+def resource_link_bindings() -> list[BindingType]:
+    """Expose native activation consistently for all resource links."""
+    return [Binding("enter", "select_cursor", "Open relation")]
 
 
 def resource_detail_bindings() -> list[BindingType]:

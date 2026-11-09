@@ -6,12 +6,14 @@ from typing import override
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.content import Content
 
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.inspector import RecordInspector
+from comparo.tui.components.list import Field
 from comparo.tui.components.separator import Separator
 from comparo.tui.components.table import Column
 from comparo.tui.components.table import Record
-from comparo.tui.components.table import Table
 from comparo.tui.components.typography import Hint
 from comparo.tui.models.remaining_resource_presenters import ScenarioOverview
 from comparo.tui.models.remaining_resource_presenters import scenario_overview
@@ -47,43 +49,34 @@ class ScenarioStepsBody(Vertical):
         if not self._overview.steps:
             yield Hint("This Scenario has no inspectable steps.")
             return
-        yield Table(
-            columns=(
-                Column("ordinal", "#", width=4),
-                Column("step", "Step"),
-                Column("request", "Request"),
-                Column("after", "After"),
-            ),
-            records=tuple(
-                Record(
-                    f"step:{index}",
-                    (
-                        str(index + 1),
+        records = []
+        details = {}
+        for index, step in enumerate(self._overview.steps):
+            identity = f"step:{index}"
+            records.append(Record(identity, (str(index + 1), step.id, step.request)))
+            fields = [
+                Field("Step", Content(step.id)),
+                Field("Request", Content(step.request)),
+                Field("After", Content(step.after)),
+            ]
+            fields.extend(
+                Field(
+                    " / ".join(item.path),
+                    Content(
                         resolved_overview_value(
-                            self._resolved,
-                            (*step.definition.path, "id"),
-                            step.id,
-                        ),
-                        resolved_overview_value(
-                            self._resolved,
-                            (*step.definition.path, "request"),
-                            step.request,
-                        ),
-                        resolved_overview_value(
-                            self._resolved,
-                            (*step.definition.path, "after"),
-                            step.after,
-                        ),
+                            self._resolved, (*step.definition.path, *item.path), item.value
+                        )
                     ),
                 )
-                for index, step in enumerate(self._overview.steps)
-            ),
+                for item in step.definition.details
+            )
+            details[identity] = tuple(fields)
+        yield RecordInspector(
+            (Column("ordinal", "#", width=4), Column("step", "Step"), Column("request", "Request")),
+            tuple(records),
+            details,
+            title="Selected step",
             classes="scenario-steps-table",
-        )
-        yield ResourceSettingsBody(
-            tuple(step.definition for step in self._overview.steps),
-            empty="This Scenario has no inspectable step configuration.",
-            resolved=self._resolved,
         )
 
 

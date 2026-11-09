@@ -94,6 +94,16 @@ credential-shaped headers/query fields and URLs, secret interpolations, and YAML
 Ordinary structure such as endpoints remains readable. If parsing or compilation cannot provide
 trustworthy spans, masking fails closed by replacing every non-whitespace source character.
 
+### Standalone Explorer sampling
+
+A Value/Matrix inspection branches from the compiled catalog into `application.value_inspection`.
+It checks exact resource/environment fingerprints, loads policy, captures selected Environment
+inputs, creates `ResolutionInputs` and uses the normal masked resolver. It returns bounded public
+nodes, secret masks and local unavailable fields, then closes providers. Matrix compilation builds
+data cases without a Compare plan. Schema navigation expands only already-admitted local outlines.
+Request Body resolution still uses its existing execution-aware preparation, but the frontend
+renders document paths and declaration origins rather than requiring plan navigation.
+
 ## 2. Invocation, precedence, and planning
 
 ```text

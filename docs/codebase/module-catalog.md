@@ -36,6 +36,8 @@ adapters, catches unsafe exceptions, and returns immutable renderer-independent 
 | `evaluation_assertions`, `evaluation_diffs`, `evaluation_items`, `evaluation_selectors` | Lower the typed assertion and semantic diff catalogs into pure-kernel inputs |
 | `evaluation_binding` | Composes selectors, assertions, semantic diff pipelines, gates, schemas, and budgets into runtime evaluation |
 | `execution_session` | Async session, cancellation, bounded occurrence/event progress, and terminal summaries |
+| `matrix_inspection` | Execution-bound Matrix case/occurrence projections for callers needing a prepared context; not the standalone Explorer path |
+| `value_inspection` | Standalone public/masked Value and Matrix-case sampling with optional Environment, bounded pages and provider cleanup |
 | `inspection` | Safe coordinates and projections for diagnostics, plans, resources, policies, and artifacts |
 | `plan_inspection` | Top-level safe `PreparedRun` inspection assembly |
 | `plan_inspection_authority` | ExecutionPolicy, HTTP, values, filesystem, schema, and artifact authority projections |
@@ -248,6 +250,7 @@ filesystem, decoding, or serialization I/O.
 | `provider_runtime` | Contains provider exceptions, validates output, adds taint, and maps canonical results |
 | `ports` | File, external value, generation, YAML decode, and clock protocols |
 | `cache` | Shielded single-flight effect cache by exact source/scope key |
+| `inputs` | Typed `ResolutionInputs` and `PreparedRun` adapter; standalone defaults without synthetic execution coordinates |
 | `scopes` | Declared lifetime to concrete consumer-coordinate projection |
 | `snapshots` | Effective value layers, Matrix cell inputs, and Environment snapshot lookup |
 | `conversions` | Explicit string/bytes/JSON/YAML/integer/number/boolean/duration/size conversions |
@@ -357,6 +360,9 @@ not the architectural source of truth for terminal behavior; frontends share app
 | `rendering` | Rich terminal rendering of safe diagnostics, plans, results, and reports |
 
 
+`cli.initialization` validates and exclusively publishes one starter manifest for `comparo init`;
+it does not create the optional resource directory or overwrite a manifest.
+
 ## Canonical terminal adapter
 
 The canonical frontend is `comparo.tui`; old versioned implementations are removed.
@@ -367,6 +373,11 @@ The canonical frontend is `comparo.tui`; old versioned implementations are remov
 | `backend` | Application-service facade and run/preparation ownership |
 | `preferences`, `shortcuts` | Validated user-owned preferences, atomic persistence and effective key labels |
 | `workspaces/explorer`, `explorer_projection` | Resource/context browsing and masked projection adaptation |
+| `explorer_navigation`, `value_navigation`, `matrix_navigation` | Reversible resource history and latest-wins standalone inspection workers |
+| `models/body_document`, `models/schema_document`, `models/resource_links` | Safe document rows, bounded local-reference schema structure and typed resource links |
+| `components/inspector`, `resourcelinks`, `viewposition` | Responsive paired panes, relationship activation and value-free cursor/focus/scroll restoration |
+| `components/resources/request_body`, `request_summary`, `schema_tree`, `matrix_browser` | Kind-specific body/path, HTTP summary, schema and case inspection |
+| `matrix_backend` | Existing execution-bound case adapter; not the standalone Explorer route |
 | `launch_handoff` | Exact-revision Explore → Launch transfer, without execution |
 | `workspaces/launch`, `components/launchconfig`, `launchsummary`, `launchprogress`, `runview` | Target, plan checkpoint, live/frozen execution state and Analyze handoff |
 | `components/profilesave` | Explicit authored YAML/destination review before application-owned profile publication |

@@ -6,6 +6,7 @@ import json
 import sys
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version
 from io import BytesIO
 from io import StringIO
 from pathlib import Path
@@ -31,6 +32,7 @@ from comparo.cli.contracts import CliPayloadKind
 from comparo.cli.contracts import CliReportFormat
 from comparo.cli.contracts import DoctorRequest
 from comparo.cli.contracts import ExecutionRequest
+from comparo.cli.contracts import InitRequest
 from comparo.cli.contracts import PlanRequest
 from comparo.cli.contracts import RenderRequest
 from comparo.cli.contracts import ReportRequest
@@ -64,6 +66,11 @@ class _StaticServices:
         self.artifact_blob_request: ArtifactBlobRequest | None = None
         self.report_request: ReportRequest | None = None
         self.render_request: RenderRequest | None = None
+        self.init_request: InitRequest | None = None
+
+    def init(self, request: InitRequest) -> CliCommandResult:
+        self.init_request = request
+        return self.result
 
     def configuration_schema(self) -> CliCommandResult:
         return self.result
@@ -194,6 +201,18 @@ def test_root_help_is_generated_without_running_services(arguments: list[str]) -
     assert "exec" in stdout
     assert "render" in stdout
     assert "tui" in stdout
+    assert "init" in stdout
+    assert stderr == ""
+
+
+def test_init_builds_a_typed_request_without_direct_filesystem_effects() -> None:
+    services = _StaticServices()
+    code, stdout, stderr = _invoke(["init", "new-project", "--format", "json"], services=services)
+    assert code == 0
+    assert services.init_request == InitRequest(
+        directory=Path("new-project"), output=CliOutputMode.JSON
+    )
+    assert "static result" in stdout
     assert stderr == ""
 
 
@@ -463,7 +482,7 @@ def test_plan_and_render_help_disclose_authority_and_specific_render_limits() ->
 def test_version_comes_from_installed_distribution() -> None:
     code, stdout, stderr = _invoke(["--version"])
     assert code == 0
-    assert stdout.strip() == "0.2.0"
+    assert stdout.strip() == version("comparo")
     assert stderr == ""
 
 
@@ -889,7 +908,7 @@ def test_run_callback_preserves_shared_options_and_every_execution_limit() -> No
     assert request.approve_mutations
     assert request.persist
     assert request.artifact_root == Path("artifacts")
-    assert request.tool_version == "0.2.0"
+    assert request.tool_version == version("comparo")
     runtime = request.limits
     assert tuple(
         getattr(runtime, field) for field in runtime.__struct_fields__ if field != "artifact"

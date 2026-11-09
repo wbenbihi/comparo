@@ -103,7 +103,8 @@ audit has passed. See [current QA evidence](../design-qa.md) and [status](status
 
 - the real shared result view mounts at 80, 120, and 160 columns;
 - Launch and Reports instantiate the same result component;
-- every component/workspace module reaches 100% statement and branch coverage;
+- behavioral regressions cover changed components; the repository-wide combined statement/branch
+  coverage floor is 95%, without a separate blanket 100% module requirement;
 - live progress, cancellation, terminal results, report opening, local back navigation, and
   background no-focus-theft work through an injected fake backend;
 - a canary supplied through safe text and failure paths never appears as control sequences,

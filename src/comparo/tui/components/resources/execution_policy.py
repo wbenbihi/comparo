@@ -4,8 +4,10 @@ from typing import ClassVar
 from typing import override
 
 from textual.app import ComposeResult
+from textual.containers import Vertical
 
 from comparo.tui.components.badge import BadgeTone
+from comparo.tui.components.inspector import InspectorColumns
 from comparo.tui.components.separator import Separator
 from comparo.tui.components.typography import Hint
 from comparo.tui.models.remaining_resource_presenters import execution_policy_overview
@@ -38,16 +40,21 @@ class ExecutionPolicyResourceDetails(BaseKindResourceDetails):
             "ExecutionPolicy is loaded outside project discovery. Project resources cannot grant "
             "or expand this authority."
         )
-        yield Separator(label="Planning", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.planning,
-            empty="No planning authority projection is available.",
-        )
-        yield Separator(label="HTTP authority", align="left", classes="resource-section-heading")
-        yield ResourceSettingsBody(
-            overview.http,
-            empty="No HTTP authority projection is available.",
-        )
+        with InspectorColumns():
+            with Vertical():
+                yield Separator(label="Planning", align="left", classes="resource-section-heading")
+                yield ResourceSettingsBody(
+                    overview.planning,
+                    empty="No planning authority projection is available.",
+                )
+            with Vertical():
+                yield Separator(
+                    label="HTTP authority", align="left", classes="resource-section-heading"
+                )
+                yield ResourceSettingsBody(
+                    overview.http,
+                    empty="No HTTP authority projection is available.",
+                )
         yield Separator(label="Value sources", align="left", classes="resource-section-heading")
         yield ResourceSettingsBody(
             overview.values,

@@ -797,6 +797,16 @@ async def test_project_resource_uses_two_environment_cards_and_explicit_sections
             field for field in detail.resolved.value.fields if field.path == ("variables", "client")
         )
         assert (client_field.value, client_field.tone) == ("comparo-tui", "value.text")
+        # Worker completion updates the model before Textual recomposes its widgets.
+        await _wait_until(
+            pilot,
+            lambda: any(
+                "client  comparo-tui" in str(item.content)
+                for project in app.query(ProjectResourceDetails)
+                for item in project.query(Static)
+                if item.has_class("resource-setting-heading")
+            ),
+        )
         resolved_project = app.query_one(ProjectResourceDetails)
         resolved_headings = {
             str(item.content)
@@ -1448,8 +1458,9 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
         request_details = app.query_one(RequestResourceDetails)
         assert len(app.query(RequestResourceDetails)) == 1
         tabbed = request_details.query_one("#request-tabs", TabbedContent)
-        assert tabbed.active == "request-url"
+        assert tabbed.active == "request-summary"
         assert [pane.id for pane in request_details.query(TabPane)] == [
+            "request-summary",
             "request-url",
             "request-query",
             "request-headers",
@@ -1459,7 +1470,8 @@ async def test_resource_host_loads_views_and_request_targets() -> None:
             "request-runtime",
             "request-contracts",
         ]
-        assert len(request_details.query(RequestTabBody)) == 8
+        assert len(request_details.query(RequestTabBody)) == 7
+        assert len(request_details.query("RequestBody")) == 1
         assert len(app.query(ResourceSettingList)) == 5
         body_empty = request_details.query_one("#request-body .request-tab-empty", Static)
         assert str(body_empty.content) == "This Request has no body."

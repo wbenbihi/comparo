@@ -37,6 +37,7 @@ class CliPayloadKind(StrEnum):
     TEXT = "text"
     JSON = "json"
     MARKDOWN = "markdown"
+    RICH_MARKDOWN = "rich-markdown"
     HTML = "html"
     RST = "rst"
     BINARY = "binary"
@@ -327,6 +328,24 @@ class CliCommandResult(msgspec.Struct, frozen=True, kw_only=True):
             not human and (self.messages or empty_document)
         ):
             raise ValueError("CLI result must contain exactly its selected output representation")
+
+
+@final
+class InitRequest(msgspec.Struct, frozen=True, kw_only=True):
+    """Destination and presentation for a new starter project."""
+
+    directory: Path
+    output: CliOutputMode
+    layout: str = "single"
+
+    def __post_init__(self) -> None:
+        """Require a local path and a closed output mode."""
+        if not isinstance(self.directory, Path):
+            raise TypeError("initialization directory must be a Path")
+        if type(self.output) is not CliOutputMode:
+            raise TypeError("initialization output mode must be typed")
+        if self.layout not in {"single", "split"}:
+            raise ValueError("initialization layout must be single or split")
 
 
 @final

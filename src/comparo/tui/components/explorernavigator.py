@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import ClassVar
 from typing import override
@@ -23,10 +24,20 @@ from comparo.tui.models.explorer import ResourceEntry
 from comparo.tui.models.explorer import catalog_nodes
 from comparo.tui.models.explorer import legend_items
 from comparo.tui.models.navigation import MenuNode
+from comparo.tui.models.navigation import TreePosition
 from comparo.tui.theme import style
 
 if TYPE_CHECKING:
     from comparo.application.plan_inspection_identity import ResourceCoordinate
+
+
+@dataclass(frozen=True)
+class ExplorerNavigatorPosition:
+    """Local filter and tree location retained for relationship navigation."""
+
+    filter_text: str
+    tree: TreePosition[str]
+    filter_focused: bool
 
 
 class ExplorerResourceTree(TreeMenu[str]):
@@ -137,6 +148,36 @@ class ExplorerNavigator(Vertical):
         """Move focus to the navigator's filter."""
         self.query_one(FilterInput).focus()
 
+    def capture_position(self) -> ExplorerNavigatorPosition:
+        """Retain local navigation state without exposing child mechanics."""
+        field = self.query_one(FilterInput)
+        return ExplorerNavigatorPosition(
+            field.value,
+            self.query_one(ExplorerResourceTree).capture_position(),
+            field.has_focus_within,
+        )
+
+    def reveal_resource(self, key: str) -> None:
+        """Clear the local filter and reveal an explicitly opened resource."""
+        self.query_one(FilterInput).restore_value("")
+        tree = self.query_one(ExplorerResourceTree)
+        tree.filter_text = ""
+        tree.reveal(key)
+
+    def restore_position(self, position: ExplorerNavigatorPosition, key: str) -> None:
+        """Restore a previous view using the resource's current revision key."""
+        self.query_one(FilterInput).restore_value(position.filter_text)
+        tree = self.query_one(ExplorerResourceTree)
+        tree.filter_text = position.filter_text
+        tree.restore_position(position.tree, cursor=key)
+
+    def restore_focus(self, position: ExplorerNavigatorPosition) -> None:
+        """Restore the navigator region that owned focus before navigation."""
+        if position.filter_focused:
+            self.focus_filter()
+        else:
+            self.focus_tree()
+
     def on_filter_input_changed(self, event: FilterInput.Changed) -> None:
         """Apply the live local filter without exposing tree mechanics."""
         event.stop()
@@ -158,6 +199,8 @@ class ExplorerNavigator(Vertical):
         if event.menu is not tree:
             return
         event.stop()
+        if event.item != tree.cursor_id:
+            return
         catalog = self.catalog
         entry = catalog.entries.get(event.item) if catalog is not None else None
         if entry is not None:

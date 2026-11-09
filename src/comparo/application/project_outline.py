@@ -37,6 +37,7 @@ from comparo.core.domain.expressions import LookupExpr
 from comparo.core.domain.expressions import ObjectExpr
 from comparo.core.domain.expressions import OptionalExpr
 from comparo.core.domain.expressions import SensitiveLiteralExpr
+from comparo.core.domain.expressions import is_value_expression
 from comparo.core.domain.gates.types import EnvironmentRole
 from comparo.core.domain.gates.types import GateSeverity
 from comparo.core.domain.http.fields import HeaderName
@@ -124,6 +125,7 @@ class ProjectOutlineField(msgspec.Struct, frozen=True, kw_only=True):
     exact_value: str | None = None
     exact_kind: str | None = None
     reference: ResourceCoordinate | None = None
+    origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Require a fully typed, renderer-independent row."""
@@ -221,7 +223,29 @@ def outline_resource(
     )
 
 
-def _outline_node(  # noqa: C901 - exhaustive closed canonical/value-expression dispatch
+def _outline_node(
+    node: _Node,
+    path: tuple[str, ...],
+    fields: list[ProjectOutlineField],
+    relationships: dict[tuple[str, str, str], ProjectRelationship],
+    owner: ResourceIdentity,
+) -> None:
+    """Attach value-free declaration provenance to each expression's structural row."""
+    start = len(fields)
+    _outline_node_content(node, path, fields, relationships, owner)
+    if is_value_expression(node) and start < len(fields):
+        origins = []
+        for origin in node.provenance.entries:
+            label = origin.kind.value
+            if origin.resource is not None:
+                label += f" {origin.resource.kind.value}/{origin.resource.resource_id.value}"
+            if origin.location is not None:
+                label += f" · {origin.location.source_id.value}:{origin.location.line.value}"
+            origins.append(label)
+        fields[start] = msgspec.structs.replace(fields[start], origins=tuple(origins))
+
+
+def _outline_node_content(  # noqa: C901 - exhaustive closed canonical/value-expression dispatch
     node: _Node,
     path: tuple[str, ...],
     fields: list[ProjectOutlineField],
@@ -907,8 +931,19 @@ def _safe_schema_exact_display(
     if not path:
         return None
     keyword = path[-1]
+    if any(part in {"examples", "default", "enum", "const"} for part in path[:-1]):
+        return None
+    if keyword in {"$ref", "$id", "$schema", "$anchor"} and type(value) is JsonString:
+        try:
+            parsed = urlsplit(value.value)
+            if parsed.username or parsed.password or parsed.query:
+                return None
+        except ValueError:
+            return None
+        return _bounded_exact_text(value.value)
     if type(value) is JsonString and (
-        keyword in {"type", "format"} or (len(path) == 2 and path[0] == "required")
+        keyword in {"type", "format", "title", "description"}
+        or (len(path) >= 2 and path[-2] == "required")
     ):
         return _bounded_exact_text(value.value)
     if keyword in {
