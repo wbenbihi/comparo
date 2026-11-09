@@ -62,15 +62,33 @@ branch protection. GitHub assets use the ordinary Actions token. PyPI publishing
 job using OIDC Trusted Publishing and the `pypi` environment; `RELEASE_TOKEN` is not a PyPI credential.
 
 The generated version commit starts normal CI, while a release-job guard prevents recursive release.
+That follow-up CI is additional evidence, not the publication gate: Release must qualify its exact
+local version commit on Python 3.13 and 3.14 before pushing it or its tag. The Python 3.13 gate
+includes lint, types, architecture and coverage; the isolated Python 3.14 gate runs the full suite.
+Either failure stops the job and prevents GitHub assets and the dependent PyPI job from publishing.
+Recovery of an existing tag runs both gates against that exact tag as well.
+
+## 0.4.0 compatibility incident
+
+The 0.4.0 PR passed both Python compatibility jobs, but the release workflow independently checked
+only Python 3.13. It published to PyPI on 2026-11-09 at 17:15 UTC. The generated version commit's
+Python 3.14 CI subsequently failed at 17:20 UTC in the resolved-resource navigation journey with
+`ValueError: No Tab with id '--content-tab-request-summary'`. Its 3.13 and coverage jobs passed.
+The missing pre-publication 3.14 gate meant this failure could not stop publication.
+
+The corrected workflow stages the version locally first, validates that version on both supported
+Python versions, and publishes only after both succeed. Workflow regressions exercise failures in
+each interpreter gate and check that every Python version in the CI matrix is required before the
+publication steps. Existing release tags and PyPI files are not overwritten to apply a correction.
 
 ## After CI and review
 
 1. Review the concrete changes, resolve CI failures and obtain the required approvals.
 2. Merge to `main`, preserving the feature release signal and focused history where repository
    rules allow. **Merging is the publication trigger**; creating a branch or PR is not.
-3. Release revalidates source, derives the version, and creates the version/changelog commit and
-   tag locally on the runner.
-4. It rebuilds distributions after that commit and verifies version identity, archive membership,
+3. Release derives the version and creates the version/changelog commit and tag locally on the runner.
+4. It validates that exact candidate on Python 3.13 and 3.14, then rebuilds distributions and verifies
+   version identity, archive membership,
    integrity and the installed wheel. Embedded build SHA must match the release commit and the
    modified flag must be false.
 5. Only then does it atomically push the version commit/tag and create the GitHub release. The

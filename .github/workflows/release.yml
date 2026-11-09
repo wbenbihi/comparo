@@ -20,8 +20,8 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    # Allow the full coverage gate plus release build and publication checks.
-    timeout-minutes: 35
+    # Qualify the generated version commit on both supported Python versions before publishing.
+    timeout-minutes: 45
     permissions:
       contents: write
     outputs:
@@ -61,15 +61,8 @@ jobs:
           python-version: "3.13"
           version: "0.11.21"
 
-      - name: Verify reviewed source
-        run: |
-          uv sync --frozen
-          uv lock --check
-          uv run --frozen ruff check .
-          uv run --frozen ruff format --check .
-          uv run --frozen mypy
-          uv run --frozen lint-imports
-          uv run --frozen python -m pytest --cov --cov-report=term-missing --durations=25
+      - name: Install release tooling
+        run: uv sync --frozen
 
       - name: Plan semantic release
         id: plan
@@ -110,6 +103,26 @@ jobs:
           git config user.name github-actions
           git config user.email actions@users.noreply.github.com
           uv run --frozen semantic-release version --no-push --no-vcs-release
+
+      # The version commit is still local. PR/main CI cannot qualify this new SHA;
+      # both gates must succeed here before any tag, release asset, or PyPI upload.
+      # Recovery runs qualify the exact existing tag through these same gates.
+      - name: Verify release candidate on Python 3.13
+        if: steps.plan.outputs.released == 'true'
+        env:
+          UV_PYTHON: "3.13"
+        run: |
+          uv sync --frozen
+          uv lock --check
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
+          uv run --frozen mypy
+          uv run --frozen lint-imports
+          uv run --frozen python -m pytest --cov --cov-report=term-missing --durations=25
+
+      - name: Verify release candidate on Python 3.14
+        if: steps.plan.outputs.released == 'true'
+        run: uv run --isolated --frozen --python 3.14 python -m pytest --durations=25
 
       # Semantic release performs its initial build before creating the version commit.
       # Rebuild from the tagged commit so the shipped SHA describes the released source.
