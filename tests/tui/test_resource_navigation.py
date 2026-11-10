@@ -18,6 +18,7 @@ from comparo.tui.components.filter import FilterInput
 from comparo.tui.components.resourcedetail import OverviewRepresentation
 from comparo.tui.components.resourcelinks import OpenResource
 from comparo.tui.components.resourcelinks import ResourceLinksTable
+from comparo.tui.components.resources.request import RequestResourceDetails
 from comparo.tui.components.resources.shared import ResourceDependencyTree
 from comparo.tui.models.resource import ResourceRepresentation
 from comparo.tui.models.resource_links import linked_entry
@@ -358,6 +359,9 @@ def test_resolved_mode_survives_graph_navigation_and_back(tmp_path: Path) -> Non
                 await pilot.pause(0.01)
             assert workspace.detail is not None
             assert str(workspace.detail.resolved.phase) == InspectionPhase.READY
+            # The worker's model can be ready while the Request tabs are still mounting.
+            await pilot.pause()
+            assert app.query_one(RequestResourceDetails).resource is workspace.detail
             workspace.action_resource_view("dependencies")
             await pilot.pause()
             graph = app.query_one(ResourceDependencyTree)
@@ -381,5 +385,11 @@ def test_resolved_mode_survives_graph_navigation_and_back(tmp_path: Path) -> Non
                 await pilot.pause(0.01)
             assert str(workspace.detail.resolved.phase) == InspectionPhase.READY
             assert workspace.detail.overview_mode is ResourceOverviewMode.RESOLVED
+            # Finish the visible journey before run_test tears down the widget tree.
+            await pilot.pause()
+            assert app.query_one(RequestResourceDetails).resource is workspace.detail
+            tabs = app.query_one("#request-tabs", TabbedContent)
+            assert tabs.active == "request-summary"
+            assert tabs.get_tab("request-summary").is_mounted
 
     asyncio.run(journey())
